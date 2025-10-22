@@ -21,7 +21,7 @@ use cloud_resource_controller::KubernetesResourceReader;
 use futures::TryFutureExt;
 use futures::stream::{BoxStream, StreamExt};
 use k8s_openapi::DeepMerge;
-use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec};
+use k8s_openapi::api::apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy};
 use k8s_openapi::api::core::v1::{
     Affinity, Capabilities, Container, ContainerPort, EnvVar, EnvVarSource, EphemeralVolumeSource,
     NodeAffinity, NodeSelector, NodeSelectorRequirement, NodeSelectorTerm, ObjectFieldSelector,
@@ -37,7 +37,7 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{
     LabelSelector, LabelSelectorRequirement, OwnerReference,
 };
 use kube::ResourceExt;
-use kube::api::{Api, DeleteParams, ObjectMeta, Patch, PatchParams};
+use kube::api::{Api, DeleteParams, ObjectMeta, PartialObjectMetaExt, Patch, PatchParams};
 use kube::client::Client;
 use kube::error::Error as K8sError;
 use kube::runtime::{WatchStreamExt, watcher};
@@ -1106,7 +1106,8 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut pod_template_spec = PodTemplateSpec {
             metadata: Some(ObjectMeta {
                 labels: Some(labels.clone()),
-                annotations: Some(pod_annotations), // Do not delete, we insert into it below.
+                // Only set `annotations` _after_ we have computed the pod template hash, to
+                // avoid that annotation changes cause pod replacements.
                 ..Default::default()
             }),
             spec: Some(PodSpec {
@@ -1177,17 +1178,12 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let mut hasher = Sha256::new();
         hasher.update(pod_template_json);
         let pod_template_hash = format!("{:x}", hasher.finalize());
-        pod_template_spec
-            .metadata
-            .as_mut()
-            .unwrap()
-            .annotations
-            .as_mut()
-            .unwrap()
-            .insert(
-                POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
-                pod_template_hash.clone(),
-            );
+        pod_annotations.insert(
+            POD_TEMPLATE_HASH_ANNOTATION.to_owned(),
+            pod_template_hash.clone(),
+        );
+
+        pod_template_spec.metadata.as_mut().unwrap().annotations = Some(pod_annotations);
 
         let stateful_set = StatefulSet {
             metadata: ObjectMeta {
@@ -1202,6 +1198,10 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                 service_name: Some(name.clone()),
                 replicas: Some(scale.into()),
                 template: pod_template_spec,
+                update_strategy: Some(StatefulSetUpdateStrategy {
+                    type_: Some("OnDelete".to_owned()),
+                    ..Default::default()
+                }),
                 pod_management_policy: Some("Parallel".to_string()),
                 volume_claim_templates,
                 ..Default::default()
@@ -1582,6 +1582,10 @@ impl OrchestratorWorker {
             .get_or_insert(vec![])
             .extend(self.owner_references.iter().cloned());
 
+        let ss_spec = desc.stateful_set.spec.as_ref().unwrap();
+        let pod_metadata = ss_spec.template.metadata.as_ref().unwrap();
+        let pod_annotations = pod_metadata.annotations.clone();
+
         self.service_api
             .patch(
                 &desc.name,
@@ -1597,10 +1601,16 @@ impl OrchestratorWorker {
             )
             .await?;
 
-        // Explicitly delete any pods in the stateful set that don't match the
-        // template. In theory, Kubernetes would do this automatically, but
-        // in practice we have observed that it does not.
-        // See: https://github.com/kubernetes/kubernetes/issues/67250
+        // We manage pod recreation manually, using the OnDelete StatefulSet update strategy, for
+        // two reasons:
+        //  * Kubernetes doesn't always automatically replace StatefulSet pods when their specs
+        //    change, see https://github.com/kubernetes/kubernetes#67250.
+        //  * Kubernetes replaces StatefulSet pods when their annotations change, which is not
+        //    something we want as it could cause unavailability.
+        //
+        // Our pod recreation policy is simple: If a pod's template hash changed, delete it, and
+        // let the StatefulSet controller recreate it. Otherwise, patch the existing pod's
+        // annotations to line up with the ones in the spec.
         for pod_id in 0..desc.scale {
             let pod_name = format!("{}-{pod_id}", desc.name);
             let pod = match self.pod_api.get(&pod_name).await {
@@ -1609,18 +1619,35 @@ impl OrchestratorWorker {
                 Err(kube::Error::Api(e)) if e.code == 404 => continue,
                 Err(e) => return Err(e),
             };
-            if pod.annotations().get(POD_TEMPLATE_HASH_ANNOTATION) != Some(&desc.pod_template_hash)
+
+            let result = if pod.annotations().get(POD_TEMPLATE_HASH_ANNOTATION)
+                != Some(&desc.pod_template_hash)
             {
-                match self
-                    .pod_api
+                self.pod_api
                     .delete(&pod_name, &DeleteParams::default())
                     .await
-                {
-                    Ok(_) => (),
-                    // Pod got deleted while we were looking at it.
-                    Err(kube::Error::Api(e)) if e.code == 404 => (),
-                    Err(e) => return Err(e),
+                    .map(|_| ())
+            } else {
+                let metadata = ObjectMeta {
+                    annotations: pod_annotations.clone(),
+                    ..Default::default()
                 }
+                .into_request_partial::<Pod>();
+                self.pod_api
+                    .patch_metadata(
+                        &pod_name,
+                        &PatchParams::apply(FIELD_MANAGER).force(),
+                        &Patch::Apply(&metadata),
+                    )
+                    .await
+                    .map(|_| ())
+            };
+
+            match result {
+                Ok(()) => (),
+                // Pod was deleted concurrently.
+                Err(kube::Error::Api(e)) if e.code == 404 => continue,
+                Err(e) => return Err(e),
             }
         }
 
