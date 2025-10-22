@@ -193,7 +193,7 @@ replica.
 
 ```sql
 ALTER CLUSTER c1
-SET (SIZE '100CC') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 The `ALTER` statement is blocking and will return only when the new replica
@@ -285,7 +285,7 @@ CLUSTER` command with the `WAIT UNTIL READY` [option](#with-options):
 
 ```mzsql
 ALTER CLUSTER c1
-SET (SIZE '100CC') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 {{< include-md file="shared-content/alter-cluster-wait-until-ready-note.md" >}}
@@ -294,7 +294,7 @@ Alternatively, you can alter the cluster size immediately, without waiting, by
 running the `ALTER CLUSTER` command:
 
 ```mzsql
-ALTER CLUSTER c1 SET (SIZE '100cc');
+ALTER CLUSTER c1 SET (SIZE 'M.1-xsmall');
 ```
 
 This will incur downtime when the cluster contains objects that need

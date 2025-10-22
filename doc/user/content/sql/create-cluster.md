@@ -280,7 +280,7 @@ you can configure a cluster to automatically turn on and off using the
 
 ```mzsql
 CREATE CLUSTER my_scheduled_cluster (
-  SIZE = '3200cc',
+  SIZE = 'M.1-large',
   SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 );
 ```
@@ -366,20 +366,18 @@ Any commands attributed to scheduled refreshes will be marked with
 
 Clusters have several known limitations:
 
-* When a cluster of size `3200cc` or larger uses multiple replicas, those
-  replicas are not guaranteed to be spread evenly across the underlying cloud
-  provider's availability zones.
-
-We plan to remove these restrictions in future versions of Materialize.
+* When a cluster using legacy cc size of `3200cc` or larger uses multiple
+  replicas, those replicas are not guaranteed to be spread evenly across the
+  underlying cloud provider's availability zones.
 
 ## Examples
 
 ### Basic
 
-Create a cluster with two `400cc` replicas:
+Create a cluster with two `M.1-large` replicas:
 
 ```mzsql
-CREATE CLUSTER c1 (SIZE = '400cc', REPLICATION FACTOR = 2);
+CREATE CLUSTER c1 (SIZE = 'M.1-large', REPLICATION FACTOR = 2);
 ```
 
 ### Empty
@@ -387,7 +385,7 @@ CREATE CLUSTER c1 (SIZE = '400cc', REPLICATION FACTOR = 2);
 Create a cluster with no replicas:
 
 ```mzsql
-CREATE CLUSTER c1 (SIZE '100cc', REPLICATION FACTOR = 0);
+CREATE CLUSTER c1 (SIZE 'M.1-xsmall', REPLICATION FACTOR = 0);
 ```
 
 You can later add replicas to this cluster with [`ALTER CLUSTER`].

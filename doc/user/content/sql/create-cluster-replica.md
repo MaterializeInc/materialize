@@ -126,7 +126,7 @@ machines had computed.
 ## Example
 
 ```mzsql
-CREATE CLUSTER REPLICA c1.r1 (SIZE = '400cc');
+CREATE CLUSTER REPLICA c1.r1 (SIZE = 'M.1-large');
 ```
 
 ## Privileges
