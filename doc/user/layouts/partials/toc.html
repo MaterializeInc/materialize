@@ -44,53 +44,72 @@
 <script>
   // Regenerate TOC to include headings from tab-panes
   document.addEventListener("DOMContentLoaded", function() {
-    const tocNav = document.getElementById("TableOfContents");
-    if (!tocNav) return;
+    // Wait for tabs to be initialized first
+    setTimeout(function() {
+      const tocNav = document.getElementById("TableOfContents");
+      if (!tocNav) return;
 
-    // Find all h2 and h3 headings in the main content, including those in tab-panes
-    const headings = document.querySelectorAll(".content h2, .content h3");
-    if (headings.length === 0) return;
+      // Find all h2, h3, and h4 headings in the main content, including those in tab-panes
+      const headings = document.querySelectorAll(".content h2, .content h3, .content h4");
+      if (headings.length === 0) return;
 
-    // Build a hierarchical structure
-    const tocItems = [];
-    let currentH2 = null;
+      // Build a hierarchical structure
+      const tocItems = [];
+      let currentH2 = null;
+      let currentH3 = null;
 
-    headings.forEach(heading => {
-      if (!heading.id) return; // Skip headings without IDs
+      headings.forEach(heading => {
+        if (!heading.id) return; // Skip headings without IDs
 
-      const level = heading.tagName.toLowerCase();
-      const item = {
-        id: heading.id,
-        text: heading.textContent,
-        level: level
-      };
+        const level = heading.tagName.toLowerCase();
+        const item = {
+          id: heading.id,
+          text: heading.textContent,
+          level: level
+        };
 
-      if (level === 'h2') {
-        currentH2 = { ...item, children: [] };
-        tocItems.push(currentH2);
-      } else if (level === 'h3' && currentH2) {
-        currentH2.children.push(item);
-      }
-    });
-
-    // Generate TOC HTML
-    if (tocItems.length > 0) {
-      let tocHTML = '<ul>';
-      tocItems.forEach(h2Item => {
-        tocHTML += `<li><a href="#${h2Item.id}">${h2Item.text}</a>`;
-        if (h2Item.children.length > 0) {
-          tocHTML += '<ul>';
-          h2Item.children.forEach(h3Item => {
-            tocHTML += `<li><a href="#${h3Item.id}">${h3Item.text}</a></li>`;
-          });
-          tocHTML += '</ul>';
+        if (level === 'h2') {
+          currentH2 = { ...item, children: [] };
+          currentH3 = null;
+          tocItems.push(currentH2);
+        } else if (level === 'h3' && currentH2) {
+          currentH3 = { ...item, children: [] };
+          currentH2.children.push(currentH3);
+        } else if (level === 'h4' && currentH3) {
+          currentH3.children.push(item);
+        } else if (level === 'h4' && currentH2 && !currentH3) {
+          // h4 directly under h2 (no h3 in between)
+          currentH2.children.push(item);
         }
-        tocHTML += '</li>';
       });
-      tocHTML += '</ul>';
 
-      tocNav.innerHTML = tocHTML;
-    }
+      // Generate TOC HTML
+      if (tocItems.length > 0) {
+        let tocHTML = '<ul>';
+        tocItems.forEach(h2Item => {
+          tocHTML += `<li><a href="#${h2Item.id}">${h2Item.text}</a>`;
+          if (h2Item.children.length > 0) {
+            tocHTML += '<ul>';
+            h2Item.children.forEach(h3Item => {
+              tocHTML += `<li><a href="#${h3Item.id}">${h3Item.text}</a>`;
+              if (h3Item.children && h3Item.children.length > 0) {
+                tocHTML += '<ul>';
+                h3Item.children.forEach(h4Item => {
+                  tocHTML += `<li><a href="#${h4Item.id}">${h4Item.text}</a></li>`;
+                });
+                tocHTML += '</ul>';
+              }
+              tocHTML += '</li>';
+            });
+            tocHTML += '</ul>';
+          }
+          tocHTML += '</li>';
+        });
+        tocHTML += '</ul>';
+
+        tocNav.innerHTML = tocHTML;
+      }
+    }, 50);
   });
 
   // A custom "scrollspy" plugin that highlights the TOC link for the
@@ -107,11 +126,24 @@
 
   function headingOffsets() {
     const SLOP = 100;
-    const headings = $(".content h2, .content h3");
-    let offsets = headings.toArray().map((h) => ({
-      id: h.id,
-      offset: h.offsetTop - 65,  // 75 if banner is displayed, 65 otherwise
-    }));
+    const headings = $(".content h2, .content h3, .content h4");
+
+    // Filter out headings that are inside inactive tab-panes
+    const visibleHeadings = headings.toArray().filter((h) => {
+      const tabPane = h.closest('.tab-pane');
+      // Include if not in a tab-pane, or if in an active tab-pane
+      return !tabPane || tabPane.classList.contains('active');
+    });
+
+    let offsets = visibleHeadings.map((h) => {
+      // Calculate absolute position from top of document
+      const rect = h.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      return {
+        id: h.id,
+        offset: rect.top + scrollTop - 65,  // 75 if banner is displayed, 65 otherwise
+      };
+    });
     const cutoff = $(document).height() - $(window).height() - SLOP;
     const firstBad = offsets.findIndex((o) => o.offset > cutoff);
 
@@ -127,16 +159,23 @@
     const scroll = $(window).scrollTop();
     const offsets = headingOffsets();
     let activeId = null;
-    if (offsets.length > 0 ) {
-      activeId = scroll == 0 ? null : offsets[offsets.length - 1].id;
-    }
 
-    for (let i = 0; i < offsets.length && scroll > 0 ; i++) {
-      if (offsets[i].offset > scroll) {
-        activeId = offsets[i].id;
-        break;
+    // Don't highlight anything if we're at the very top of the page
+    // This prevents the first tab's heading from being highlighted on page load
+    if (scroll > 50) {
+      // Find the last heading we've scrolled past
+      // This ensures we prefer headings in document order
+      for (let i = offsets.length - 1; i >= 0; i--) {
+        const headingScrollPosition = offsets[i].offset - 30; // 30px to account for the fixed header
+
+        // A heading is "active" when its position is above current scroll
+        if (headingScrollPosition <= scroll) {
+          activeId = offsets[i].id;
+          break;
+        }
       }
     }
+
     $(".toc .active").removeClass("active");
     if (activeId) $(`.toc [href="#${activeId}"]`).addClass("active");
   });
@@ -148,20 +187,24 @@
   });
 
   // Trigger an initial hash change event to handle scrolling to the page's
-  // initial hash.
-  $(() => $(window).trigger("hashchange"));
+  // initial hash, but only if there's actually a hash in the URL.
+  $(() => {
+    if (window.location.hash) {
+      $(window).trigger("hashchange");
+    }
+  });
 
   // Prevent double clicking on a TOC link from scrolling the page if we're
   // already on that TOC link's section, as we won't get a hashchange event
   // to fix up the scroll offset.
   $(".toc a").click(function (e) {
-    console.log($(this).attr("href"), window.location.hash);
     if ($(this).attr("href") == window.location.hash) e.preventDefault();
   });
 
   // Activate tab when clicking on a TOC link that points to content within a tab
   $(document).on("click", ".toc a", function(e) {
-    const targetId = $(this).attr("href").substring(1); // Remove the # from href
+    const $clickedLink = $(this);
+    const targetId = $clickedLink.attr("href").substring(1); // Remove the # from href
     const targetElement = document.getElementById(targetId);
 
     if (targetElement) {
@@ -169,6 +212,9 @@
       const tabPane = targetElement.closest(".tab-pane");
 
       if (tabPane) {
+        // Prevent default anchor behavior - we'll handle scrolling manually
+        e.preventDefault();
+
         // Find the parent tab group
         const tabGroup = tabPane.closest(".code-tabs");
 
@@ -194,6 +240,21 @@
               navItems[tabIndex].classList.add("active");
             }
             tabPane.classList.add("active");
+
+            // Scroll to the target heading after tab is activated
+            setTimeout(() => {
+              const rect = targetElement.getBoundingClientRect();
+              const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+              // Add extra offset (80px) to ensure this heading is clearly the active one
+              // when there are multiple headings close together (e.g., h2 followed by h3)
+              const targetOffset = rect.top + scrollTop - 80;
+              window.scrollTo({ top: targetOffset, behavior: 'smooth' });
+
+              // Update TOC highlighting after scrolling
+              setTimeout(() => {
+                $(window).trigger('scroll');
+              }, 50);
+            }, 50);
           }
         }
       }
