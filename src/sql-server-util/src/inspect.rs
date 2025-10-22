@@ -737,10 +737,16 @@ fn deserialize_table_columns_to_raw_tables(
 /// Return a [`Stream`] that is the entire snapshot of the specified table.
 pub fn snapshot(
     client: &mut Client,
-    schema: &str,
-    table: &str,
+    table: &SqlServerTableRaw,
 ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> {
-    let query = format!("SELECT * FROM {schema}.{table};");
+    let schema_name = &table.schema_name;
+    let table_name = &table.name;
+    let cols = table
+        .columns
+        .iter()
+        .map(|SqlServerColumnRaw { name, .. }| format!("[{name}]"))
+        .join(",");
+    let query = format!("SELECT {cols} FROM [{schema_name}].[{table_name}];");
     client.query_streaming(query, &[])
 }
 
@@ -750,7 +756,7 @@ pub async fn snapshot_size(
     schema: &str,
     table: &str,
 ) -> Result<usize, SqlServerError> {
-    let query = format!("SELECT COUNT(*) FROM {schema}.{table};");
+    let query = format!("SELECT COUNT(*) FROM [{schema}].[{table}];");
     let result = client.query(query, &[]).await?;
 
     match &result[..] {
