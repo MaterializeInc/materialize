@@ -317,7 +317,7 @@ operation, we recommend turning the cluster on ahead of the scheduled time to
 allow hydration to complete. This can be controlled using the `HYDRATION
 TIME ESTIMATE` clause.
 
-#### Introspection
+#### Scheduling strategy
 
 To check the scheduling strategy associated with a cluster, you can query the
 [`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
@@ -381,18 +381,6 @@ Create a cluster with two `400cc` replicas:
 ```mzsql
 CREATE CLUSTER c1 (SIZE = '400cc', REPLICATION FACTOR = 2);
 ```
-
-### Introspection disabled
-
-Create a cluster with a single replica and introspection disabled:
-
-```mzsql
-CREATE CLUSTER c (SIZE = '100cc', INTROSPECTION INTERVAL = 0);
-```
-
-Disabling introspection can yield a small performance improvement, but you lose
-the ability to run [troubleshooting queries](/ops/troubleshooting/) against
-that cluster replica.
 
 ### Empty
 

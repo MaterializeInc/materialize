@@ -22,23 +22,7 @@ rows:
       [Replication factor](/sql/create-cluster#replication-factor) for details.
 
       Default: `1`
-  - Field: "`INTROSPECTION INTERVAL`"
-    Value: "interval"
-    Description: |
 
-      The interval at which to collect introspection data. See
-      [Troubleshooting](/ops/troubleshooting) for details about introspection
-      data. The special value `0` entirely disables the gathering of
-      introspection data.
-
-      Default: `1s`
-  - Field: "`INTROSPECTION DEBUGGING`"
-    Value: "bool"
-    Description: |
-
-      Indicates whether to introspect the gathering of the introspection data.
-
-      Default: `FALSE`
   - Field: "`MANAGED`"
     Value: "bool"
     Description: >-

@@ -23,8 +23,6 @@ To set a cluster configuration:
   SET (
       SIZE = <text>,
       REPLICATION FACTOR = <int>,
-      INTROSPECTION INTERVAL = <interval>,
-      INTROSPECTION DEBUGGING = <bool>,
       MANAGED = <bool>,
       SCHEDULE = { MANUAL | ON REFRESH (...) }
   )
@@ -41,8 +39,6 @@ To reset a cluster configuration back to its default value:
   ALTER CLUSTER <cluster_name>
   RESET (
       REPLICATION FACTOR,
-      INTROSPECTION INTERVAL,
-      INTROSPECTION DEBUGGING,
       MANAGED,
       SCHEDULE
   )

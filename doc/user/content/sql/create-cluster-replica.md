@@ -48,31 +48,65 @@ The `SIZE` option for replicas is identical to the [`SIZE` option for
 clusters](/sql/create-cluster/#size) option, except that the size applies only
 to the new replica.
 
-### Credit usage
+{{< tabs >}}
+{{< tab "M.1 Clusters" >}}
+{{< yaml-table data="m1_cluster_sizing" >}}
 
-The replica will consume credits at a rate determined by its size:
+{{< /tab >}}
 
-Size      | Legacy size  | Credits per hour
-----------|--------------|-----------------
-`25cc`    | `3xsmall`    | 0.25
-`50cc`    | `2xsmall`    | 0.5
-`100cc`   | `xsmall`     | 1
-`200cc`   | `small`      | 2
-`300cc`   | &nbsp;       | 3
-`400cc`   | `medium`     | 4
-`600cc`   | &nbsp;       | 6
-`800cc`   | `large`      | 8
-`1200cc`  | &nbsp;       | 12
-`1600cc`  | `xlarge`     | 16
-`3200cc`  | `2xlarge`    | 32
-`6400cc`  | `3xlarge`    | 64
-`128C`    | `4xlarge`    | 128
-`256C`    | `5xlarge`    | 256
-`512C`    | `6xlarge`    | 512
+{{< tab "Legacy cc Clusters" >}}
 
-Credit usage is measured at a one second granularity. Credit usage begins when a
-`CREATE CLUSTER REPLICA` provisions the replica and ends when a [`DROP CLUSTER
-REPLICA`] statement deprovisions the replica.
+Materialize offers the following legacy cc cluster sizes:
+
+{{< tip >}}
+In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
+offer better performance per credit for nearly all workloads. We recommend using
+M.1 sizes for all new clusters, and recommend migrating existing
+legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
+customers during the transition period as we move to deprecate legacy sizes.
+
+The legacy size information is provided for completeness.
+{{< /tip >}}
+
+* `25cc`
+* `50cc`
+* `100cc`
+* `200cc`
+* `300cc`
+* `400cc`
+* `600cc`
+* `800cc`
+* `1200cc`
+* `1600cc`
+* `3200cc`
+* `6400cc`
+* `128C`
+* `256C`
+* `512C`
+
+The resource allocations are proportional to the number in the size name. For
+example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
+cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
+size `400cc`. To determine the specific resource allocations for a size,
+query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
+
+{{< warning >}}
+The values in the `mz_cluster_replica_sizes` table may change at any
+time. You should not rely on them for any kind of capacity planning.
+{{< /warning >}}
+
+Clusters of larger sizes can process data faster and handle larger data volumes.
+{{< /tab >}}
+{{< /tabs >}}
+
+See also:
+
+- [Materialize service consumption
+  table](https://materialize.com/pdfs/pricing.pdf).
+
+- [Blog:Scaling Beyond Memory: How Materialize Uses Swap for Larger
+  Workloads](https://materialize.com/blog/scaling-beyond-memory/).
+
 
 ### Homogeneous vs. heterogeneous hardware provisioning
 
