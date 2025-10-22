@@ -124,7 +124,7 @@ displays cluster resource utilization and sizing advice.
 {{< tab "Legacy cc Clusters" >}}
 
 {{< tip >}}
-In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
+In most cases, you **should not** use legacy sizes. [M.1 sizes](#available-sizes)
 offer better performance per credit for nearly all workloads. We recommend using
 M.1 sizes for all new clusters, and recommend migrating existing
 legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
