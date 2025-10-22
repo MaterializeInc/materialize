@@ -438,7 +438,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                                 data_output
                                     .give_fueled(
                                         &data_cap_set[0],
-                                        ((*partition_idx, Err(error.clone().into())), Lsn::minimum(), Diff::ONE),
+                                        ((*partition_idx, Err(error.clone().into())), ddl_event.lsn, Diff::ONE),
                                     )
                                     .await;
                             }
