@@ -11,8 +11,7 @@ menu:
     weight: 5
 ---
 
-Materialize is the live data layer for apps and AI agents. With Materialize, you
-can use SQL to create up-to-the-second views on fast changing data.
+Materialize is the live data layer for apps and AI agents.
 
 To keep results up-to-date as new data arrives, Materialize incrementally
 updates results as it ingests data rather than recalculating results from
