@@ -335,7 +335,9 @@ def create_zero_downtime_basic(
                 tag=None,
                 deploy_generation=1,
                 mz_service="mz_2",
-                system_parameter_defaults=get_default_system_parameters(None),
+                system_parameter_defaults=get_default_system_parameters(
+                    self.base_version()
+                ),
             ),
             *wait_ready_and_promote("mz_2"),
             Validate(self, mz_service="mz_2"),
