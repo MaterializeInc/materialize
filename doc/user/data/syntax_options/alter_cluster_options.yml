@@ -59,4 +59,4 @@ rows:
     Value: "[`MANUAL`,`ON REFRESH`]"
     Description: |
       The [scheduling type](/sql/create-cluster/#scheduling) for the cluster.
-      <br>Default: `MANUAL`
+      Default: `MANUAL`
