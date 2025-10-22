@@ -69,10 +69,31 @@ Clusters are commonly used to isolate different classes of workloads. For
 example, you could place your development workloads in a cluster named
 `dev` and your production workloads in a cluster named `prod`.
 
+<a name="legacy-sizes"></a>
+
 ### Size
 
-The `SIZE` option determines the amount of compute resources (CPU, memory, and
-disk) available to the cluster. Valid sizes are:
+The `SIZE` option determines the amount of compute resources available to the
+cluster.
+
+{{< tabs >}}
+{{< tab "M.1 Clusters" >}}
+{{< yaml-table data="m1_cluster_sizing" >}}
+
+{{< /tab >}}
+{{< tab "Legacy cc Clusters" >}}
+
+Materialize offers the following legacy cc cluster sizes:
+
+{{< tip >}}
+In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
+offer better performance per credit for nearly all workloads. We recommend using
+M.1 sizes for all new clusters, and recommend migrating existing
+legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
+customers during the transition period as we move to deprecate legacy sizes.
+
+The legacy size information is provided for completeness.
+{{< /tip >}}
 
 * `25cc`
 * `50cc`
@@ -94,7 +115,7 @@ The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_cluster_replica_sizes`] table.
+query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` table may change at any
@@ -102,31 +123,21 @@ time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
+{{< /tab >}}
+{{< tab "Legacy t-shirt Clusters" >}}
 
-#### Cluster resizing
+Materialize also offers some legacy t-shirt cluster sizes for upsert sources.
 
-You can change the size of a cluster to respond to changes in your workload
-using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
-the cluster is hosting, this operation **might incur downtime**.
-
-See the reference documentation for [`ALTER
-CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
-on cluster resizing.
-
-#### Legacy sizes
-
-Materialize also offers some legacy sizes. Clusters using legacy sizes run on
-older hardware without local disks attached.
-
-In most cases, you **should not** use legacy sizes. [Standard sizes](#size)
+{{< tip >}}
+In most cases, you **should not** use legacy t-shirt sizes. [M.1 sizes](#size)
 offer better performance per credit for nearly all workloads. We recommend using
-standard sizes for all new clusters, and recommend migrating existing
-legacy-sized clusters to standard sizes. In many cases, migrating from
-legacy to standard sizes will result in a 25-50% cost reduction.
+M.1 sizes for all new clusters, and recommend migrating existing
+legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
+customers during the transition period as we move to deprecate legacy sizes.
 
-However, certain rare workloads exhibit better performance per credit on legacy
-sizes. Materialize is committed to supporting these workloads on legacy sizes
-until they have equivalent or better performance per credit on standard sizes.
+The legacy size information is provided for completeness.
+
+{{< /tip >}}
 
 {{< if-past "2024-04-15" >}}
 {{< warning >}}
@@ -150,8 +161,28 @@ When legacy sizes are enabled for a region, the following sizes are available:
 * `5xlarge`
 * `6xlarge`
 
-The correspondence between non-legacy sizes and legacy sizes is shown in the [credit
-usage table](#credit-usage).
+{{< /tab >}}
+{{< /tabs >}}
+
+See also:
+
+- [Materialize service consumption
+  table](https://materialize.com/pdfs/pricing.pdf).
+
+- [Blog:Scaling Beyond Memory: How Materialize Uses Swap for Larger
+  Workloads](https://materialize.com/blog/scaling-beyond-memory/).
+
+#### Cluster resizing
+
+You can change the size of a cluster to respond to changes in your workload
+using [`ALTER CLUSTER`](/sql/alter-cluster). Depending on the type of objects
+the cluster is hosting, this operation **might incur downtime**.
+
+See the reference documentation for [`ALTER
+CLUSTER`](/sql/alter-cluster#zero-downtime-cluster-resizing) for more details
+on cluster resizing.
+
+
 
 ### Replication factor
 
@@ -249,7 +280,7 @@ you can configure a cluster to automatically turn on and off using the
 
 ```mzsql
 CREATE CLUSTER my_scheduled_cluster (
-  SIZE = '3200cc',
+  SIZE = 'M.1-large',
   SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour')
 );
 ```
@@ -286,7 +317,7 @@ operation, we recommend turning the cluster on ahead of the scheduled time to
 allow hydration to complete. This can be controlled using the `HYDRATION
 TIME ESTIMATE` clause.
 
-#### Introspection
+#### Scheduling strategy
 
 To check the scheduling strategy associated with a cluster, you can query the
 [`mz_internal.mz_cluster_schedules`](/sql/system-catalog/mz_internal/#mz_cluster_schedules)
@@ -335,40 +366,26 @@ Any commands attributed to scheduled refreshes will be marked with
 
 Clusters have several known limitations:
 
-* When a cluster of size `3200cc` or larger uses multiple replicas, those
-  replicas are not guaranteed to be spread evenly across the underlying cloud
-  provider's availability zones.
-
-We plan to remove these restrictions in future versions of Materialize.
+* When a cluster using legacy cc size of `3200cc` or larger uses multiple
+  replicas, those replicas are not guaranteed to be spread evenly across the
+  underlying cloud provider's availability zones.
 
 ## Examples
 
 ### Basic
 
-Create a cluster with two `400cc` replicas:
+Create a cluster with two `M.1-large` replicas:
 
 ```mzsql
-CREATE CLUSTER c1 (SIZE = '400cc', REPLICATION FACTOR = 2);
+CREATE CLUSTER c1 (SIZE = 'M.1-large', REPLICATION FACTOR = 2);
 ```
-
-### Introspection disabled
-
-Create a cluster with a single replica and introspection disabled:
-
-```mzsql
-CREATE CLUSTER c (SIZE = '100cc', INTROSPECTION INTERVAL = 0);
-```
-
-Disabling introspection can yield a small performance improvement, but you lose
-the ability to run [troubleshooting queries](/ops/troubleshooting/) against
-that cluster replica.
 
 ### Empty
 
 Create a cluster with no replicas:
 
 ```mzsql
-CREATE CLUSTER c1 (SIZE '100cc', REPLICATION FACTOR = 0);
+CREATE CLUSTER c1 (SIZE 'M.1-xsmall', REPLICATION FACTOR = 0);
 ```
 
 You can later add replicas to this cluster with [`ALTER CLUSTER`].

@@ -23,8 +23,6 @@ To set a cluster configuration:
   SET (
       SIZE = <text>,
       REPLICATION FACTOR = <int>,
-      INTROSPECTION INTERVAL = <interval>,
-      INTROSPECTION DEBUGGING = <bool>,
       MANAGED = <bool>,
       SCHEDULE = { MANUAL | ON REFRESH (...) }
   )
@@ -41,8 +39,6 @@ To reset a cluster configuration back to its default value:
   ALTER CLUSTER <cluster_name>
   RESET (
       REPLICATION FACTOR,
-      INTROSPECTION INTERVAL,
-      INTROSPECTION DEBUGGING,
       MANAGED,
       SCHEDULE
   )
@@ -92,7 +88,7 @@ To swap the name of this cluster with another cluster:
 
 ### Cluster configuration
 
-{{% alter-cluster/alter-cluster-options %}}
+{{% yaml-table data="syntax_options/alter_cluster_options" %}}
 
 ### `WITH` options
 
@@ -114,20 +110,69 @@ displays cluster resource utilization and sizing advice.
 
 {{< /tip >}}
 
-#### Resource allocation
+#### Available sizes
 
-The allocation of resources increases proportionally to the size of the cluster.
-For example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as
-a cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster
-of size `400cc`.
+{{< tabs >}}
+{{< tab "M.1 Clusters" >}}
+{{< yaml-table data="m1_cluster_sizing" >}}
+
+{{< /tab >}}
+{{< tab "Legacy cc Clusters" >}}
+
+{{< tip >}}
+In most cases, you **should not** use legacy sizes. [M.1 sizes](#available-sizes)
+offer better performance per credit for nearly all workloads. We recommend using
+M.1 sizes for all new clusters, and recommend migrating existing
+legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
+customers during the transition period as we move to deprecate legacy sizes.
+
+The legacy size information is provided for completeness.
+{{< /tip >}}
+
+Valid legacy cc cluster sizes are:
+
+* `25cc`
+* `50cc`
+* `100cc`
+* `200cc`
+* `300cc`
+* `400cc`
+* `600cc`
+* `800cc`
+* `1200cc`
+* `1600cc`
+* `3200cc`
+* `6400cc`
+* `128C`
+* `256C`
+* `512C`
+
+For clusters using legacy cc sizes, resource allocations are proportional to the
+number in the size name. For example, a cluster of size `600cc` has 2x as much
+CPU, memory, and disk as a cluster of size `300cc`, and 1.5x as much CPU,
+memory, and disk as a cluster of size `400cc`.
+
+Clusters of larger sizes can process data faster and handle larger data volumes.
+{{< /tab >}}
+{{< /tabs >}}
+
+See also:
+
+- [Materialize service consumption
+  table](https://materialize.com/pdfs/pricing.pdf).
+
+- [Blog:Scaling Beyond Memory: How Materialize Uses Swap for Larger
+  Workloads](https://materialize.com/blog/scaling-beyond-memory/).
+
+#### Resource allocation
 
 To determine the specific resource allocation for a given cluster size, query
 the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes)
 system catalog table.
 
 {{< warning >}}
-The values in the `mz_cluster_replica_sizes` system catalog table may change at
-any time. You should not rely on them for any kind of capacity planning.
+The values in the `mz_cluster_replica_sizes` table may change at any
+time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
 #### Downtime
@@ -148,7 +193,7 @@ replica.
 
 ```sql
 ALTER CLUSTER c1
-SET (SIZE '100CC') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 The `ALTER` statement is blocking and will return only when the new replica
@@ -240,7 +285,7 @@ CLUSTER` command with the `WAIT UNTIL READY` [option](#with-options):
 
 ```mzsql
 ALTER CLUSTER c1
-SET (SIZE '100CC') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE 'M.1-xsmall') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 {{< include-md file="shared-content/alter-cluster-wait-until-ready-note.md" >}}
@@ -249,7 +294,7 @@ Alternatively, you can alter the cluster size immediately, without waiting, by
 running the `ALTER CLUSTER` command:
 
 ```mzsql
-ALTER CLUSTER c1 SET (SIZE '100cc');
+ALTER CLUSTER c1 SET (SIZE 'M.1-xsmall');
 ```
 
 This will incur downtime when the cluster contains objects that need
