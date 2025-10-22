@@ -89,6 +89,13 @@ impl SqlColumnType {
                     );
                 };
 
+                if fields.len() != other_fields.len() {
+                    bail!(
+                        "Can't union types: {:?} and {:?}",
+                        self.scalar_type,
+                        other.scalar_type
+                    );
+                }
                 let mut union_fields = Vec::with_capacity(fields.len());
                 for ((name, typ), (other_name, other_typ)) in
                     fields.iter().zip_eq(other_fields.iter())

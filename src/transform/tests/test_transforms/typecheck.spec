@@ -226,7 +226,6 @@ mismatched column types: couldn't compute union of column types in LetRec
       got Int64
 expected Bool?
   Bool is a not a subtype of Int64
-  Bool? is nullable but Int64 is not
 ----
 ----
 
