@@ -73,21 +73,27 @@ example, you could place your development workloads in a cluster named
 
 ### Size
 
-The `SIZE` option determines the amount of compute resources (CPU, memory, and
-disk) available to the cluster.
-{{< tabs >}}
-{{< tab "M1 Clusters" >}}
-{{< yaml-table data="m1_cluster_sizing" >}}
+The `SIZE` option determines the amount of compute resources available to the
+cluster.
 
-{{< note >}}
-During the free trial, only the **M.1-nano**, **M.1-micro**, and **M.1-xsmall**
-sizes are available.
-{{< /note >}}
+{{< tabs >}}
+{{< tab "M.1 Clusters" >}}
+{{< yaml-table data="m1_cluster_sizing" >}}
 
 {{< /tab >}}
 {{< tab "Legacy cc Clusters" >}}
 
-Valid legacy cc cluster sizes are:
+Materialize offers the following legacy cc cluster sizes:
+
+{{< tip >}}
+In most cases, you **should not** use legacy sizes. [M.1 sizes](#size)
+offer better performance per credit for nearly all workloads. We recommend using
+M.1 sizes for all new clusters, and recommend migrating existing
+legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
+customers during the transition period as we move to deprecate legacy sizes.
+
+The legacy size information is provided for completeness.
+{{< /tip >}}
 
 * `25cc`
 * `50cc`
@@ -109,7 +115,7 @@ The resource allocations are proportional to the number in the size name. For
 example, a cluster of size `600cc` has 2x as much CPU, memory, and disk as a
 cluster of size `300cc`, and 1.5x as much CPU, memory, and disk as a cluster of
 size `400cc`. To determine the specific resource allocations for a size,
-query the [`mz_cluster_replica_sizes`] table.
+query the [`mz_cluster_replica_sizes`](/sql/system-catalog/mz_catalog/#mz_cluster_replica_sizes) table.
 
 {{< warning >}}
 The values in the `mz_cluster_replica_sizes` table may change at any
@@ -118,20 +124,20 @@ time. You should not rely on them for any kind of capacity planning.
 
 Clusters of larger sizes can process data faster and handle larger data volumes.
 {{< /tab >}}
-{{< tab "Legacy T-shirt Clusters" >}}
+{{< tab "Legacy t-shirt Clusters" >}}
 
-Materialize also offers some legacy t-shirt sizes. Clusters using legacy t-shirt
-sizes run on older hardware without local disks attached.
+Materialize also offers some legacy t-shirt cluster sizes for upsert sources.
 
-In most cases, you **should not** use legacy t-shirt sizes. [Standard
-sizes](#size) offer better performance per credit for nearly all workloads. We
-recommend using standard sizes for all new clusters, and recommend migrating
-existing legacy-sized clusters to standard sizes. In many cases, migrating from
-legacy to standard sizes will result in a 25-50% cost reduction.
+{{< tip >}}
+In most cases, you **should not** use legacy t-shirt sizes. [M.1 sizes](#size)
+offer better performance per credit for nearly all workloads. We recommend using
+M.1 sizes for all new clusters, and recommend migrating existing
+legacy-sized clusters to M.1 sizes. Materialize is committed to supporting
+customers during the transition period as we move to deprecate legacy sizes.
 
-However, certain rare workloads exhibit better performance per credit on legacy
-sizes. Materialize is committed to supporting these workloads on legacy sizes
-until they have equivalent or better performance per credit on standard sizes.
+The legacy size information is provided for completeness.
+
+{{< /tip >}}
 
 {{< if-past "2024-04-15" >}}
 {{< warning >}}
@@ -155,10 +161,16 @@ When legacy sizes are enabled for a region, the following sizes are available:
 * `5xlarge`
 * `6xlarge`
 
-The correspondence between legacy cc sizes and legacy t-shirt sizes is shown in
-the [credit usage table](#credit-usage).
 {{< /tab >}}
 {{< /tabs >}}
+
+See also:
+
+- [Materialize service consumption
+  table](https://materialize.com/pdfs/pricing.pdf).
+
+- [Blog:Scaling Beyond Memory: How Materialize Uses Swap for Larger
+  Workloads](https://materialize.com/blog/scaling-beyond-memory/).
 
 #### Cluster resizing
 

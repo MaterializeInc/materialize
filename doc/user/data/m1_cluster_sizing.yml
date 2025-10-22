@@ -1,69 +1,88 @@
 columns:
   - column: "Cluster size"
   - column: "Compute Credits/Hour"
-  - column: "Per Process Capacity"
-  - column: "Processes"
+  - column: "Total Capacity"
+  - column: "Notes"
+
 rows:
   - Cluster size: "**M.1-nano**"
     "Compute Credits/Hour": "0.75"
-    Per Process Capacity: "26 GiB"
-    Processes: "1"
+    Total Capacity: "26 GiB"
+    Per Process Capacity: "26 GiB" # Not displayed;just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
+
   - Cluster size: "**M.1-micro**"
     "Compute Credits/Hour": "1.5"
-    Per Process Capacity: "53 GiB"
-    Processes: "1"
+    Total Capacity: "53 GiB"
+    Per Process Capacity: "53 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-xsmall**"
     "Compute Credits/Hour": "3"
-    Per Process Capacity: "106 GiB"
-    Processes: "1"
+    Total Capacity: "106 GiB"
+    Per Process Capacity: "106 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-small**"
     "Compute Credits/Hour": "6"
-    Per Process Capacity: "212 GiB"
-    Processes: "1"
+    Total Capacity: "212 GiB"
+    Per Process Capacity: "212 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
+
   - Cluster size: "**M.1-medium**"
     "Compute Credits/Hour": "9"
-    Per Process Capacity: "318 GiB"
-    Processes: "1"
+    Total Capacity: "318 GiB"
+    Per Process Capacity: "318 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
 
   - Cluster size: "**M.1-large**"
     "Compute Credits/Hour": "12"
-    Per Process Capacity: "424 GiB"
-    Processes: "1"
+    Total Capacity: "424 GiB"
+    Per Process Capacity: "424 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
+
   - Cluster size: "**M.1-1.5xlarge**"
     "Compute Credits/Hour": "18"
-    Per Process Capacity: "636 GiB"
-    Processes: "1"
+    Total Capacity: "636 GiB"
+    Per Process Capacity: "636 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-2xlarge**"
     "Compute Credits/Hour": "24"
-    Per Process Capacity: "849 GiB"
-    Processes: "1"
+    Total Capacity: "849 GiB"
+    Per Process Capacity: "849 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
 
   - Cluster size: "**M.1-3xlarge**"
     "Compute Credits/Hour": "36"
-    Per Process Capacity: "1273 GiB"
-    Processes: "1"
+    Total Capacity: "1273 GiB"
+    Per Process Capacity: "1273 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
 
   - Cluster size: "**M.1-4xlarge**"
     "Compute Credits/Hour": "48"
-    Per Process Capacity: "1645 GiB"
-    Processes: "1"
+    Total Capacity: "1645 GiB"
+    Per Process Capacity: "1645 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-8xlarge**"
     "Compute Credits/Hour": "96"
-    Per Process Capacity: "3290 GiB"
-    Processes: "1"
+    Total Capacity: "3290 GiB"
+    Per Process Capacity: "3290 GiB" # Not displayed; just to keep the math clear
+    Processes: "1" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-16xlarge**"
     "Compute Credits/Hour": "192"
-    Per Process Capacity: "3290 GiB"
-    Processes: "1"
+    Total Capacity: "6580 GiB"
+    Per Process Capacity: "3290 GiB" # Not displayed; just to keep the math clear
+    Processes: "2" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-32xlarge**"
     "Compute Credits/Hour": "384"
-    Per Process Capacity: "3290 GiB"
-    Processes: "1"
+    Total Capacity: "13160 GiB"
+    Per Process Capacity: "3290 GiB" # Not displayed; just to keep the math clear
+    Processes: "4" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-64xlarge**"
     "Compute Credits/Hour": "768"
-    Per Process Capacity: "3290 GiB"
-    Processes: "1"
+    Total Capacity: "26320 GiB"
+    Per Process Capacity: "3290 GiB" # Not displayed; just to keep the math clear
+    Processes: "8" # Not displayed; just to keep the math clear
   - Cluster size: "**M.1-128xlarge**"
     "Compute Credits/Hour": "1536"
-    Per Process Capacity: "3290 GiB"
-    Processes: "1"
+    Total Capacity: "52640 GiB"
+    Per Process Capacity: "3290 GiB" # Not displayed; just to keep the math clear
+    Processes: "16" # Not displayed; just to keep the math clear
