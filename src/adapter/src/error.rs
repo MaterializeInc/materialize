@@ -737,7 +737,7 @@ impl fmt::Display for AdapterError {
             } => {
                 write!(
                     f,
-                    "{dependency_kind} '{dependency_id}' was dropped while executing a statement"
+                    "{dependency_kind} '{dependency_id}' was dropped"
                 )
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
