@@ -938,7 +938,8 @@ impl Typecheck {
                     let id = Id::Local(id.clone());
                     if let Some(ctx_typ) = ctx.get_mut(&id) {
                         for (base_col, input_col) in ctx_typ.iter_mut().zip_eq(typ) {
-                            let diffs = column_subtype_difference(base_col, &input_col).into_iter().filter_map(|diff| diff.ignore_nullability()).collect_vec();
+                            // we explicitly include nullability information---we expect an EXACT match
+                            let diffs = column_subtype_difference(base_col, &input_col);
                             if !diffs.is_empty() {
                                  return Err(TypeError::MismatchColumn {
                                         source: expr,
