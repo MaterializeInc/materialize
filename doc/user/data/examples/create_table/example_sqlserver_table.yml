@@ -1,0 +1,99 @@
+- name: "syntax"
+  description: |
+    To create a table from a [source](/sql/create-source/) connected (via native
+    connector) to an external SQL Server:
+
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)
+    [WITH (
+        EXCLUDE COLUMNS (<column_name> [, ...])
+      | PARTITION BY (<column_name> [, ...])
+      [, ...]
+    )]
+    ;
+
+- name: "syntax-options"
+  description: |
+    {{< note >}}
+
+    - {{< include-md file="shared-content/create-table-from-source-readonly.md"
+    >}}
+
+    - {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md"
+      >}}
+
+    - {{< include-md file="shared-content/sql-server-snapshot-latency.md" >}}
+
+    {{< /note >}}
+
+    {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_sqlserver" %}}
+
+    For examples, see [Create a table (SQL Server source)](/sql/create-table/sql-server/#create-a-table-sql-server-source).
+
+- name: "create-table"
+  description: |
+
+    To create new **read-only** tables from a source table, use the `CREATE
+    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement. The
+    following example creates **read-only** tables `items` and `orders` from the
+    upstream SQL Server source's `sales.items` and `sales.orders` tables (the schema is `sales`).
+
+    {{< note >}}
+
+    - Although the example creates the tables with the same names as the
+    upstream tables, the tables in Materialize can have names that differ from
+    the referenced table names.
+
+    - For supported SQL Server data types, refer to [supported
+    types](/sql/create-table/sql-server/#supported-data-types).
+
+    - You can create multiple tables that reference the same upstream table.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+      - In the upstream SQL Server, you have defined:
+        - replication user and password with the appropriate access.
+        - a publication named `mz_source` for the `items` and `orders` tables.
+      - In Materialize:
+        - You have created a secret for the SQL Server password.
+        - You have defined the connection to the upstream SQL Server.
+        - You have used the connection to create a source.
+
+       For example (substitute with your configuration):
+          CREATE SECRET sqlserverpass AS '<replication user password>'; -- substitute
+          CREATE CONNECTION sqlserver_connection TO SQL SERVER (
+            HOST '<hostname>',          -- substitute
+            DATABASE <db>,              -- substitute
+            USER <replication user>,    -- substitute
+            PASSWORD SECRET sqlserverpass
+            -- [, <network security configuration> ]
+          );
+
+          CREATE SOURCE sql_server_source
+          FROM SQL SERVER CONNECTION sqlserver_connection;
+    */
+
+    CREATE TABLE items
+    FROM SOURCE sql_server_source(REFERENCE sales.items)
+    ;
+    CREATE TABLE orders
+    FROM SOURCE sql_server_source(REFERENCE sales.orders)
+    ;
+
+  results: |
+    {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+- name: "read-from-table"
+  code: |
+    SELECT * FROM items;
+
+- name: "create-view-from-tables"
+  code: |
+    CREATE VIEW orders_view AS
+    SELECT o.*,i.price,o.quantity * i.price as subtotal
+    FROM orders as o
+    JOIN items as i
+    ON o.item = i.item;

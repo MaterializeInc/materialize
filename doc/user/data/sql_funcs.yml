@@ -134,7 +134,7 @@
         Builds a map from a list of records whose fields are two elements, the
         first of which is `text`. In the face of duplicate keys, `map_build` retains
         value from the record in the latest positition. This function is
-        purpose-built to process [Kafka headers](/sql/create-source/kafka/#headers).
+        purpose-built to process [Kafka headers](/sql/create-source-v1/kafka/#headers).
       version-added: v0.86
     - signature: 'map_agg(keys: text, values: T) -> map[text=>T]'
       description: Aggregate keys and values (including nulls) as a map

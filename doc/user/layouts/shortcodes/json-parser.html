@@ -1,7 +1,3 @@
-Manually parsing JSON-formatted data in SQL can be tedious. 🫠 You can use the
-widget below to <b>automatically</b> turn a sample JSON payload into a parsing
-view with the individual fields mapped to columns.
-
 <div class="json_widget">
     <div class="json">
         <textarea title="JSON sample" id="json_sample" placeholder="JSON sample">
@@ -13,9 +9,12 @@ view with the individual fields mapped to columns.
     </div>
     <span class="input_container">
         <span class="input_container-text">
-            <input title="View Name" id="view_name" placeholder="View Name" value="my_view">
+            <label for="relation">Enter your relation name</label>
             <input title="Relation Name" id="source_name" placeholder="Relation Name" value="my_source">
+            <label for="column">Enter your JSON column name</label>
             <input title="JSON Column Name" id="column_name" placeholder="JSON Column Name" value="json_column">
+            <label for="view">Enter your view/materialized view name</label>
+            <input title="View Name" id="view_name" placeholder="View Name" value="my_view">
         </span>
     <fieldset title="Target object type" class="input_container-radio">
         <legend>Target object type</legend>

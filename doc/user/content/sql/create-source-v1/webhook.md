@@ -4,11 +4,14 @@ description: "Ingesting data into Materialize with HTTP requests"
 pagerank: 50
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-v1'
     identifier: webhook
     name: Webhook
     weight: 40
 ---
+
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-table/webhook/)" >}}
 
 {{% create-source/intro %}}
 Webhook sources expose a [public URL](#webhook-url) that allows your applications to push webhook events into Materialize.

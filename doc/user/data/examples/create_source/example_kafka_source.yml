@@ -1,0 +1,50 @@
+- name: "syntax"
+  description: |
+    To create a source from a Kafka topic:
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <source_name>
+    [IN CLUSTER <cluster_name>]
+    FROM KAFKA CONNECTION <connection_name> (TOPIC '<topic_name>'
+      [, GROUP ID PREFIX '<group_id_prefix>']
+      [, START OFFSET (<partition1_offset>, ...)]
+      [, START TIMESTAMP <timestamp>]
+    );
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/create_source/create_source_options_kafka" %}}
+- name: "create-source"
+  description: |
+    Once you have configured the upstream Kafka, network security, and created
+    the connection, you can create the source. In this example, the connection
+    to Kafka is `kafka_connection` and the topic
+    is `purchases`.
+
+  code: |
+      CREATE SOURCE kafka_source
+      FROM KAFKA CONNECTION kafka_connection (TOPIC 'purchases');
+
+- name: "create-table"
+  description: |
+    After a source is created, you can create a table from the source. In this
+    example, assume the messages are JSON records.
+  code: |
+    CREATE TABLE purchases
+    FROM SOURCE kafka_source
+    FORMAT JSON
+    ;
+  results: |
+    See [`CREATE TABLE`](/sql/create-table/kafka/) for more details.
+
+- name: "create-source-with-offsets"
+  description: |
+    You can specify the start offset for each partition when creating the
+    source. The following example assumes 3 partitions and specifies three
+    distinct offsets for each partition.
+  code: |
+    -- In the first partition, start reading from the earliest offset;
+    -- the second partition, start reading from offset 10;
+    -- and the third partition, start reading from offset 100.
+    CREATE SOURCE kafka_offset
+    FROM KAFKA CONNECTION kafka_connection (TOPIC 'data',
+         START OFFSET (0, 10, 100)
+    );

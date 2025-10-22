@@ -12,7 +12,7 @@ menu:
 ---
 
 This page shows you how to stream data from a self-hosted PostgreSQL database to
-Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
+Materialize using the [PostgreSQL source](/sql/create-source-v1/postgres/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}

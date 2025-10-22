@@ -1,0 +1,37 @@
+- name: "syntax"
+  description: |
+    To create a source from an external PostgreSQL:
+
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <source_name>
+    [IN CLUSTER <cluster_name>]
+    FROM POSTGRES CONNECTION <connection_name> (PUBLICATION '<publication_name>')
+    ;
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/create_source/create_source_options_postgres" %}}
+- name: "create-source"
+  description: |
+
+    Once you have configured the upstream PostgreSQL, network security, and
+    created the connection, you can create the source. In this example, the
+    PostgreSQL publication is `mz_source` and the connection to PostgreSQL is
+    `pg_connection`.
+
+  code: |
+    CREATE SOURCE pg_source
+    FROM POSTGRES CONNECTION pg_connection (
+      PUBLICATION 'mz_source'
+    );
+
+- name: "create-table"
+  description: |
+    After a source is created, you can reference specific replicatedtable(s)
+    from the source create tables in Materialize.
+  code: |
+    CREATE TABLE items
+    FROM SOURCE pg_source(REFERENCE public.items)
+    ;
+  results: |
+
+    See [`CREATE TABLE`](/sql/create-table/postgres/) for more details.

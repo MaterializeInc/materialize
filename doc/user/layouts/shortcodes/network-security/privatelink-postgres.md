@@ -134,4 +134,4 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-This PostgreSQL connection can then be reused across multiple [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/postgres/) statements.
+This PostgreSQL connection can then be reused across multiple [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source-v1/postgres/) statements.

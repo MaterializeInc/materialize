@@ -35,7 +35,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 ```
 
 You can reuse this Kafka connection across multiple [`CREATE
-SOURCE`](/sql/create-source/kafka/) statements.
+SOURCE`](/sql/create-source-v1/kafka/) statements.
 
 {{< /tab >}}
 {{< tab "PostgreSQL">}}
@@ -53,7 +53,7 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 );
 ```
 
-You can reuse this PostgreSQL connection across multiple [`CREATE SOURCE`](/sql/create-source/postgres/)
+You can reuse this PostgreSQL connection across multiple [`CREATE SOURCE`](/sql/create-source-v1/postgres/)
 statements:
 
 ```mzsql
@@ -73,7 +73,7 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-You can reuse this MySQL connection across multiple [`CREATE SOURCE`](/sql/create-source/postgres/)
+You can reuse this MySQL connection across multiple [`CREATE SOURCE`](/sql/create-source-v1/postgres/)
 statements.
 
 {{< /tab >}}
@@ -84,6 +84,6 @@ statements.
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka/)
-- [`CREATE SOURCE`: MySQL](/sql/create-source/mysql)
-- [`CREATE SOURCE`: PostgreSQL](/sql/create-source/postgres/)
+- [`CREATE SOURCE`: Kafka](/sql/create-source-v1/kafka/)
+- [`CREATE SOURCE`: MySQL](/sql/create-source-v1/mysql)
+- [`CREATE SOURCE`: PostgreSQL](/sql/create-source-v1/postgres/)

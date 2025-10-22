@@ -1,0 +1,122 @@
+- name: "syntax"
+  description: |
+    To create a table (and the associated **public** webhook URL) that is
+    populated with data **POST**ed to the associated webhook URL:
+
+    {{< warning >}}
+    The webhook URL is returned in a `NOTICE` message with the
+    form: `NOTICE:  URL to POST data is
+    'https://<host>/api/webhook/<database>/<schema>/<table_name>'`. This is a
+    public URL that is open to the internet and has no security.
+    {{< /warning >}}
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name>
+    FROM WEBHOOK
+      BODY FORMAT <TEXT | JSON [ARRAY] | BYTES>
+      [ INCLUDE <header_option> ]
+      -- <header_option> can be:
+      -- INCLUDE HEADER <header_name> AS <col_name> [BYTES] [, ... ]
+      -- | INCLUDE HEADERS [ ([NOT] <header_name> [, [NOT] <header_name> [, ...] ]) ]
+      [ CHECK (
+          [ WITH (<BODY|HEADERS|SECRET <secret_name>> [AS <alias>] [BYTES] [, ... ]) ]
+          <check_expression>
+      ) ]
+      ;
+
+- name: "syntax-options"
+  description: |
+
+    {{< note >}}
+    {{< include-md file="shared-content/create-table-from-webhook-readonly.md" >}}
+    {{< /note >}}
+
+    {{% yaml-table data="syntax_options/create_table/create_table_options_webhook_populated"
+    %}}
+
+    The webhook message is stored in the `body` column.
+
+- name: "create-table"
+  description: |
+
+    The following example creates a table (and the associated **public** webhook
+    URL) that is populated with data **POST**ed to the associated webhook URL of
+    the form `https://<host>/api/webhook/<database>/<schema>/<table_name>`.
+
+    {{< warning >}}
+    This is a public URL that is open to the internet and has no security.
+    {{< /warning >}}
+
+  code: |
+    -- Creates both the webhook and the table
+    CREATE TABLE product_msgs FROM WEBHOOK BODY FORMAT JSON ARRAY
+    CHECK (
+        WITH (HEADERS)
+        constant_time_eq(headers->'content-type', 'application/json')
+    );
+
+  results: |
+    Upon success, the command returns a `NOTICE` message containing the
+    <red>**public**</red> Webhook URL:
+
+    ```
+    NOTICE:  URL to POST data is 'https://<host>/api/webhook/master/public/product_msgs'
+    ```
+
+- name: "post-to-webhook"
+  description: |
+    To post to the webhook, you can use the `curl` command:
+  code: |
+        curl -H 'Content-type:application/json' \
+             -d '{"item": "mat", "qty": 50, "tags": ["blue"], "size": {"h": 27.9, "w": 35.5, "uom": "cm"}}' \
+             -X POST http://<host>/api/webhook/<database>/<schema>/product_msgs
+
+- name: "read-from-table"
+  description: |
+    You can query the table:
+  code: |
+    SELECT * FROM product_msgs;
+  results: |
+    The query from the table returns with 1 column named `body` of type `text`:
+
+    ```
+                                              body
+    -----------------------------------------------------------------------------------------
+    {"item":"mat","qty":50,"size":{"h":27.9,"uom":"cm","w":35.5},"tags":["blue"]}
+    ```
+
+- name: "create-a-view-from-table"
+  description: |
+    You can create a view on the table to parse the `body` column into a more
+    structured format. For example, the following creates a view that parses
+    each field in JSON into a separate column:
+
+    {{< tip >}}
+    To help create the view definition, you can use the [JSON parsing
+    widget](/sql/types/jsonb/#parsing).
+    {{< /tip >}}
+
+  code: |
+    CREATE VIEW product_view AS SELECT
+        body->>'item' AS item,
+        (body->>'qty')::numeric AS qty,
+        body->'tags'->0 AS tags_0,
+        body->'tags'->1 AS tags_1,
+        (body->'size'->>'h')::numeric AS size_h,
+        (body->'size'->>'w')::numeric AS size_w,
+        body->'size'->>'uom' AS size_uom
+    FROM product_msgs;
+
+  results: |
+    After creating the view, you can read from the view to get the parsed data:
+
+    ```mzsql
+    SELECT * FROM product_view;
+    ```
+
+    The view returns the following:
+    ```
+      item   | qty | tags_0  | tags_1 | size_h | size_w | size_uom
+    ---------+-----+---------+--------+--------+--------+----------
+    mat      |  50 | "blue"  |        |   27.9 |   35.5 | cm
+    ```

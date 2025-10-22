@@ -9,7 +9,7 @@ menu:
 ---
 
 This page shows you how to stream data from [Google Cloud SQL for MySQL](https://cloud.google.com/sql/MySQL)
-to Materialize using the[MySQL source](/sql/create-source/mysql/).
+to Materialize using the[MySQL source](/sql/create-source-v1/mysql/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}

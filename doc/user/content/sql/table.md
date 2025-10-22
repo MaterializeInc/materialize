@@ -6,12 +6,13 @@ menu:
     parent: commands
 ---
 
-The `TABLE` expression retrieves all rows from a single table.
+The `TABLE` expression retrieves all rows from a single table/view/materialized view.
 
 ## Syntax
 
 ```mzsql
 TABLE <table_name>
+;
 ```
 
 ## Details

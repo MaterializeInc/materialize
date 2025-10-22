@@ -1,0 +1,31 @@
+{{- $is_new := .Get "is_new" -}}
+{{- $include_blurb := .Get "include_blurb" -}}
+{{- $other_ref := .Get "other_ref" | markdownify -}}
+<div class="annotation">
+  <div class="annotation-title">
+    Disambiguation
+  </div>
+  <div>
+    {{ if $include_blurb }}
+      {{ if $is_new }}
+      This page reflects the new syntax which allows Materialize to handle
+      upstream DDL changes without downtime.
+
+      For the deprecated syntax, see the {{ $other_ref }}.
+      {{ else }}
+      This page reflects the legacy syntax, which requires downtime to
+      handle upstream DDL changes.
+
+      For the new syntax which can handle DDL changes to the upstream tables
+      without downtime, see the {{ $other_ref }}.
+      {{ end }}
+    {{ else }}
+      {{ if $is_new }}
+      This page reflects the new syntax. For the legacy syntax, see the {{ $other_ref }}.
+      {{ else }}
+      This page reflects the legacy syntax. For the new syntax, see
+      {{ $other_ref }}.
+      {{ end }}
+    {{ end }}
+  </div>
+</div>

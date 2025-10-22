@@ -1,4 +1,4 @@
-Replicating tables that contain **unsupported [data types](/sql/types/)** is possible via the [`EXCLUDE COLUMNS` option](/sql/create-source/sql-server/#handling-unsupported-types) for the
+Replicating tables that contain **unsupported [data types](/sql/types/)** is possible via the [`EXCLUDE COLUMNS` option](/sql/create-source-v1/sql-server/#handling-unsupported-types) for the
 following types:
 
 <ul style="column-count: 3">

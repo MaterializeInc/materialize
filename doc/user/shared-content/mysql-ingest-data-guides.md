@@ -1,0 +1,5 @@
+- [Amazon Aurora for MySQL](/ingest-data/mysql/amazon-aurora/)
+- [Amazon RDS for MySQL](/ingest-data/mysql/amazon-rds/)
+- [Azure DB for MySQL](/ingest-data/mysql/azure-db/)
+- [Google Cloud SQL for MySQL](/ingest-data/mysql/google-cloud-sql/)
+- [Self-hosted MySQL](/ingest-data/mysql/self-hosted/)

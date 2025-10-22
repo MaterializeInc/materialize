@@ -1,0 +1,149 @@
+- name: "syntax"
+  description: |
+    To create a read-only table from a  [Kafka source](/sql/create-source/kafka/),
+    where the messages are CSV records with the specified number of columns:
+
+    {{< note >}}
+    - The columns are named `column1`, `column2`...`columnN`. You can specify
+      alternative column names by listing the new column names after the table
+      name `(<col_name1>, <col_name2>, ...)`.
+    - The data is decoded as [`text`](/sql/types/text).
+    {{< /note >}}
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name> [(<col_name> [, ...])]
+    FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
+    FORMAT CSV WITH <num> COLUMNS [DELIMITED BY <char>]
+    [INCLUDE PARTITION [AS <name>] | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE]              --  Default.  Uses the append-only envelope.
+    [WITH (PARTITION BY (<column_name> [, ...]))]
+    ;
+- name: "syntax-options"
+  description: |
+    {{% yaml-table
+    data="syntax_options/create_table/create_table_options_source_populated_kafka_csv"
+    %}}
+
+- name: "create-table"
+  description: |
+    Materialize supports ingesting Kafka messages that are CSV records.
+
+    To create new **read-only** tables from Kafka messages that are CSV records,
+    use the `CREATE TABLE ... FROM SOURCE ... FORMAT CSV` statement. The
+    following example creates a **read-only** table `customer_events` from the
+    Kafka topic `customer_events`.
+
+    {{< note >}}
+
+    You can create multiple tables that reference the same topic.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+      - In the upstream Kafka:
+        - You have configured Kafka with:
+          - SASL SCRAM-SHA-256 authentication
+          - A user and password with the appropriate access
+        - Your Kafka producer uses CSV format for the topic `customer_events`
+      - In Materialize:
+        - You have created a secret for the Kafka password.
+        - You have defined the connection to the upstream Kafka.
+        - You have used the connection to create a source.
+
+        Example setup in Materialize:
+
+          CREATE SECRET IF NOT EXISTS kafka_secret AS '<password>';
+          CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (
+            BROKER '<broker host>:9092',
+            SECURITY PROTOCOL = 'SASL_PLAINTEXT',
+            SASL MECHANISMS = 'SCRAM-SHA-256',
+            SASL USERNAME = '<kafka_user>',
+            SASL PASSWORD = SECRET kafka_secret
+          );
+
+          CREATE SOURCE kafka_csv_source
+          FROM KAFKA CONNECTION kafka_connection (TOPIC 'customer_events');
+    */
+
+    CREATE TABLE customer_events
+    FROM SOURCE kafka_csv_source
+    FORMAT CSV WITH 5 COLUMNS
+    ;
+  results: |
+    {{< note >}}
+
+    - By default, the columns are named `column1`, `column2`...`columnN`. You
+    can specify alternative column names by listing the new column names after
+    the table name `... <table_name>(<col_name1>, <col_name2>, ...)`.
+
+    - The data is decoded as [`text`](/sql/types/text).
+
+    {{< /note >}}
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/) command:
+  code: |
+    SHOW COLUMNS FROM customer_events;
+  results: |
+    The results should display information on the table column(s). For CSV
+    messages, the data is decoded as [`text`](/sql/types/text).
+
+- name: "read-from-table"
+  description: |
+    {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md" >}}
+
+    Once the snapshotting process completes, you can query the table:
+  code: |
+    SELECT * FROM customer_events;
+  results: |
+    The query from the table shows the columns have the default names `column1`, `column2`...`column5` of type [`text`](/sql/types/text):
+
+    ```
+    column1 | column2  | column3 | column4 |       column5
+    --------+----------+---------+---------+----------------------
+    10001   | login    |         | success | 2025-08-29T08:15:00Z
+    10004   | logout   |         | success | 2025-08-29T08:20:05Z
+    10005   | search   |         | success | 2025-08-29T08:21:30Z
+    10002   | checkout | 29.99   | success | 2025-08-29T08:16:42Z
+    10003   | checkout | 75.50   | failure | 2025-08-29T08:18:10Z
+    ```
+
+- name: "create-table-with-colnames"
+  description: |
+    You can specify alternative column names by listing the new column names
+    after the table name `... <table_name>(<col_name1>, <col_name2>, ...)`:
+
+    {{< note >}}
+    You can create multiple tables that reference the same topic.
+    {{< /note >}}
+
+  code: |
+    CREATE TABLE customer_events2(customer_id, event_type, amount, status, timestamp)
+    FROM SOURCE kafka_csv_source
+    FORMAT CSV WITH 5 COLUMNS
+    ;
+- name: "read-from-table-with-colnames"
+  description: |
+    Once the snapshotting process completes, you can query the table:
+  code: |
+    SELECT * FROM customer_events2;
+  results: |
+    The query from the table shows the columns have the specified names:
+
+    ```
+    customer_id | event_type | amount | status  |      timestamp
+    ------------+------------+--------+---------+----------------------
+    10001       | login      |        | success | 2025-08-29T08:15:00Z
+    10004       | logout     |        | success | 2025-08-29T08:20:05Z
+    10005       | search     |        | success | 2025-08-29T08:21:30Z
+    10002       | checkout   | 29.99  | success | 2025-08-29T08:16:42Z
+    10003       | checkout   | 75.50  | failure | 2025-08-29T08:18:10Z
+    ```
+
+    For CSV messages, the data is decoded as [`text`](/sql/types/text).

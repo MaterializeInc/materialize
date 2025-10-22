@@ -4,7 +4,7 @@ description: "Using Materialize's built-in load generators"
 pagerank: 50
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-v1'
     identifier: load-generator
     name: Load generator
     weight: 40

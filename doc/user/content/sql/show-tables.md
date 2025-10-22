@@ -6,17 +6,15 @@ menu:
     parent: commands
 ---
 
-`SHOW TABLES` returns a list of all tables available in Materialize.
+`SHOW TABLES` returns a list of tables (including [tables created from sources
+and webhooks](/sql/create-table/)) from a schema.
 
 ## Syntax
 
-```mzsql
-SHOW TABLES [FROM <schema_name>]
-```
+{{% include-example file="examples/show_tables" example="syntax" %}}
 
-Option                 | Description
------------------------|------------
-**FROM** <schema_name> | If specified, only show tables from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+{{% include-example file="examples/show_tables" example="syntax-options"
+ %}}
 
 ## Details
 
@@ -26,7 +24,8 @@ Option                 | Description
 
 ## Examples
 
-### Show user-created tables
+### Show tables from the current schema
+
 ```mzsql
 SHOW TABLES;
 ```

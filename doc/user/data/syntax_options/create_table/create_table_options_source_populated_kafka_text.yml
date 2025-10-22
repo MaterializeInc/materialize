@@ -1,0 +1,73 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "**IF NOT EXISTS**"
+    "Description": |
+      *Optional.* If specified, do not throw an error if the table with the same
+      name already exists. Instead, issue a notice and skip the table creation.
+
+      {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the [source](/sql/create-source/kafka/) created for the Kafka topic.
+
+  - "Parameter": "**(REFERENCE <ref_object>)**"
+    "Description": |
+
+      *Optional.* If specified, the topic (which should match the topic
+      specified in the source) from which to create the table. You can create
+      multiple tables from the same reference object.
+
+      To find the reference objects available in your
+      [source](/sql/create-source/), you can use the following query,
+      substituting your source name for `<source_name>`:
+
+      <br>
+
+      ```mzsql
+      SELECT refs.*
+      FROM mz_internal.mz_source_references refs, mz_sources s
+      WHERE s.name = '<source_name>' -- substitute with your source name
+      AND refs.source_id = s.id;
+      ```
+
+  - "Parameter": |
+      **INCLUDE \<include_option\>**
+    "Description": |
+
+      *Optional.* If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | **PARTITION [AS \<name\>]** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause.
+      | **OFFSET [AS \<name\>]** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause.
+      | **TIMESTAMP [AS \<name\>]** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.
+      | **HEADERS [AS \<name\>]** | Include a `headers` column containing the Kafka message headers as a list of records of type `(key text, value bytea)`. The column can be renamed with the optional **AS** *name* clause.
+      | **HEADER \<key\> AS \<name\> [**BYTES**]** | Include a *name* column containing the Kafka message header *key* parsed as a UTF-8 string. To expose the header value as `bytea`, use the `BYTES` option.
+
+  - "Parameter": |
+      **ENVELOPE \<envelope\>**
+    "Description": |
+
+      *Optional.* If specified, use the specified envelope.
+
+      | Envelope | Description |
+      |----------|-------------|
+      | **NONE** | *Default*. Use an append-only envelope. This means that records will only be appended and cannot be updated or deleted.
+
+  - "Parameter": "**WITH (<with_option>[,...])**"
+    "Description": |
+      The following `<with_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | <a name="partition-by"></a>`PARTITION BY (<column> [, ...])` | {{< include-md file="shared-content/partition-by-option-description.md" >}} |

@@ -243,7 +243,7 @@ Below are the recommended ways to work around this.
 
 ### Creating an auction load generator
 
-As an example, we'll create a [auction load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) that emits a row every second:
+As an example, we'll create a [auction load generator](/sql/create-source-v1/load-generator/#creating-an-auction-load-generator) that emits a row every second:
 
 ```mzsql
 CREATE SOURCE auction FROM LOAD GENERATOR AUCTION FOR ALL TABLES;

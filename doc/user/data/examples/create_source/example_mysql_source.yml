@@ -1,0 +1,35 @@
+- name: "syntax"
+  description: |
+    To create a source from an external MySQL:
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <source_name>
+    [IN CLUSTER <cluster_name>]
+    FROM MYSQL CONNECTION <connection_name>
+    ;
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/create_source/create_source_options_mysql" %}}
+- name: "create-source"
+  description: |
+    Once you have configured the upstream MySQL, network security, and
+    created the connection, you can create the source. In this example, the connection to MySQL is
+    `mysql_connection`.
+
+  code: |
+    CREATE SOURCE mysql_source
+    FROM MYSQL CONNECTION mysql_connection;
+
+- name: "create-table"
+  description: |
+    After a source is created, you can reference specific replicatedtable(s)
+    from the source create tables in Materialize.
+  code: |
+    CREATE TABLE items
+    FROM SOURCE mysql_source(REFERENCE public.items)
+    ;
+    CREATE TABLE orders
+    FROM SOURCE mysql_source(REFERENCE public.orders)
+    ;
+  results: |
+
+    See [`CREATE TABLE`](/sql/create-table/mysql/) for more details.

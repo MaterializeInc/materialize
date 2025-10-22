@@ -1,0 +1,74 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "**IF NOT EXISTS**"
+    "Description": |
+      *Optional.* If specified, do not throw an error if a source with the same
+      name already exists. Instead, issue a notice and skip the source creation.
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the source to create. Names for sources must follow the
+      [naming guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "**IN CLUSTER** `<cluster_name>`"
+    "Description": |
+      *Optional.* The [cluster](/sql/create-cluster) to maintain this source. Otherwise, the source will be created in the active cluster.
+
+      {{< tip >}}
+      If possible, use a cluster dedicated just for sources. See also
+      [Operational guidelines](/manage/operational-guidelines/#sources).
+      {{< /tip >}}
+
+  - "Parameter": "`<connection_name>`"
+    "Description": |
+      The name of the Kafka connection to use for the source. For details
+      on creating connections, check the [`CREATE
+      CONNECTION`](/sql/create-connection/#kafka) documentation page.
+
+      A connection is **reusable** across multiple `CREATE SOURCE` statements.
+
+  - "Parameter": "`<topic_name>`"
+    "Description": |
+      The name of the Kafka topic to subscribe to.
+
+  - "Parameter": "`<group_id_prefix>`"
+    "Description": |
+      *Optional.* The prefix of the consumer group ID to use. See [Monitoring consumer
+      lag](#monitoring-consumer-lag) for details.
+
+      Default: materialize-{REGION-ID}-{CONNECTION-ID}-{SOURCE-ID}
+
+  - "Parameter": "`START OFFSET (<partition1_offset>, ...)`"
+    "Description": |
+      *Optional.* Read partition(s) from the specified offset. You cannot update the offsets once a source has been created; you will need to recreate the source. Offset values must be zero or positive integers.
+
+      - If fewer offsets than partitions are provided, the remaining partitions
+      will start at offset 0. This is true if you provide START OFFSET (1) or
+      START OFFSET (1, ...).
+      - Providing more offsets than partitions is not supported.
+
+  - "Parameter": "`START TIMESTAMP <timestamp>`"
+    "Description": |
+      *Optional.* Use the specified value to set the start offset based on the
+      Kafka timestamp:
+
+      - For positive values, the timestamp is expressed in milliseconds since
+      epoch (e.g. `1759784465032` for `2025-10-06T21:01:05.032Z`).
+
+      - For negative values, the timestamp is interpreted as relative to the
+      current system time in milliseconds (e.g. `-1000` means 1000 ms ago).
+
+      The offset for each partition will be the earliest offset whose timestamp
+      is greater than or equal to the given timestamp in the corresponding
+      partition. If no such offset exists for a partition, the partition's end
+      offset will be used.
+
+      - The `START TIMESTAMP` is a property of the source; it is calculated
+        _once_ at the time of the `CREATE SOURCE` statement. This means that the computed start offsets will be the **same** for all views
+        depending on the source and **stable** across restarts.
+
+      - If you need to limit the amount of data maintained as state after source
+        creation, consider using [temporal
+        filters](/sql/patterns/temporal-filters/) instead.

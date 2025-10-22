@@ -104,14 +104,14 @@ See also [Naming restrictions](/sql/identifiers/#naming-restrictions).
 
 [Sources](/concepts/sources/) are external systems from which Materialize reads
 in data. This tutorial uses Materialize's [sample `Auction` load
-generator](/sql/create-source/load-generator/#auction) to create the source.
+generator](/sql/create-source-v1/load-generator/#auction) to create the source.
 
 1. Create the [source](/concepts/sources "External systems from which
    Materialize reads data.") using the [`CREATE SOURCE`](/sql/create-source/)
    command.
 
    For the [sample `Auction` load
-   generator](/sql/create-source/load-generator/#auction), the quickstart uses
+   generator](/sql/create-source-v1/load-generator/#auction), the quickstart uses
    [`CREATE SOURCE`](/sql/create-source/) with the `FROM LOAD GENERATOR` clause
    that works specifically with Materialize's sample data generators. The
    tutorial specifies that the generator should emit new data every 1s.

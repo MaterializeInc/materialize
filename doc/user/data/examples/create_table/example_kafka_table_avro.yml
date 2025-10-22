@@ -1,0 +1,137 @@
+- name: "syntax"
+  description: |
+    To create a read-only table from a [Kafka source](/sql/create-source/),
+    where messages use Avro encoding and schemas are managed in the Confluent
+    Schema Registry:
+
+    {{< tip >}}
+    By default, the table contains the columns specified in the value schema.
+    {{< /tip >}}
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+        [KEY STRATEGY <strategy>]
+        [VALUE STRATEGY <strategy>]
+    [INCLUDE
+        KEY [AS <name>] | PARTITION [AS <name>] | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE  --  Default.  Uses the append-only envelope.
+      | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
+      | DEBEZIUM
+    ]
+    [WITH (PARTITION BY (<column_name> [, ...]))]
+    ;
+
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_avro" %}}
+
+- name: "create-table"
+  description: |
+    Materialize supports ingesting Kafka messages encoded in
+    Avro using the schema from the Confluent Schema Registry.
+
+    To create new **read-only** tables from Kafka messages encoded in Avro, use
+    the `CREATE TABLE ... FROM SOURCE ... FORMAT AVRO USING CONFLUENT SCHEMA
+    REGISTRY CONNECTION` syntax. The following example creates a
+    **read-only** table `user_events` from the Kafka topic `user.events`.
+
+    {{< note >}}
+
+    You can create multiple tables that reference the same topic.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+       For Kafka:
+        - You have configured Kafka with:
+          - SASL SCRAM-SHA-256 authentication
+          - A user and password with the appropriate access
+        - Your Kafka producer writes Avro-encoded messages to the topic `user.events`.
+        - Your Kafka producer registered schemas to Confluent Schema Registry.
+       In Materialize:
+        - You have created a secret for the Kafka password.
+        - You have defined the connection to the upstream Kafka.
+        - You have used the connection to create a source.
+        - You have created a connection to Confluent Schema Registry.
+
+        Example setup in Materialize:
+
+          CREATE SECRET kafka_secret AS '<password>';
+          CREATE CONNECTION kafka_connection TO KAFKA (
+            BROKER '<broker host>:9092',
+            SECURITY PROTOCOL = 'SASL_PLAINTEXT',
+            SASL MECHANISMS = 'SCRAM-SHA-256',
+            SASL USERNAME = '<kafka_user>',
+            SASL PASSWORD = SECRET kafka_secret
+          );
+
+          CREATE SOURCE kafka_avro_source
+          FROM KAFKA CONNECTION kafka_connection (TOPIC 'user.events');
+
+          CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
+            URL 'http://schema-registry:8081'
+          );
+    */
+
+    CREATE TABLE user_events
+    FROM SOURCE kafka_avro_source
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+    ;
+
+- name: "show-tables"
+  description: |
+    To verify that the table has been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the table `user_events`:
+
+    ```hc {hl_lines="3"}
+    | name        | comment |
+    | ----------- | ------- |
+    | user_events |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/) command:
+  code: |
+    SHOW COLUMNS FROM user_events;
+  results: |
+    The results should display information on the table columns.
+
+- name: "read-from-table"
+  description: |
+    {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md" >}}
+
+    Once the snapshotting process completes, you can query the table:
+  code: |
+    SELECT * FROM user_events;
+
+- name: "create-view-from-tables"
+  code: |
+    CREATE VIEW orders_view AS
+    SELECT o.*,i.price,o.quantity * i.price as subtotal
+    FROM orders as o
+    JOIN items as i
+    ON o.item = i.item;
+
+- name: "include-key-envelope-append-only"
+  description: |
+    The following example creates a table from `kafka_avro_source` with the
+    `INCLUDE KEY` option. The example uses the default envelope (i.e., `None`
+    which corresponds to the append-only envelope).
+  code: |
+    CREATE TABLE user_events_w_key
+    FROM SOURCE kafka_avro_source
+    FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_connection
+    INCLUDE KEY
+    ;

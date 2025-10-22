@@ -559,10 +559,10 @@ Field            | Type                 | Meaning
 `name`           | [`text`]             | The name of the source.
 `type`           | [`text`]             | The type of the source: `kafka`, `mysql`, `postgres`, `load-generator`, `progress`, or `subsource`.
 `connection_id`  | [`text`]             | The ID of the connection associated with the source, if any. Corresponds to [`mz_connections.id`](/sql/system-catalog/mz_catalog/#mz_connections).
-`size`           | [`text`]             | *Deprecated* The [size](/sql/create-source/#sizing-a-source) of the source.
-`envelope_type`  | [`text`]             | For Kafka sources, the [envelope](/sql/create-source/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types.
-`key_format`     | [`text`]             | For Kafka sources, the [format](/sql/create-source/#formats) of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
-`value_format`     | [`text`]           | For Kafka sources, the [format](/sql/create-source/#formats) of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
+`size`           | [`text`]             | *Deprecated* The [size](/sql/create-source-v1/#sizing-a-source) of the source.
+`envelope_type`  | [`text`]             | For Kafka sources, the [envelope](/sql/create-source-v1/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types.
+`key_format`     | [`text`]             | For Kafka sources, the [format](/sql/create-source-v1/#formats) of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`.
+`value_format`     | [`text`]           | For Kafka sources, the [format](/sql/create-source-v1/#formats) of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types.
 `cluster_id`     | [`text`]             | The ID of the cluster maintaining the source. Corresponds to [`mz_clusters.id`](/sql/system-catalog/mz_catalog/#mz_clusters).
 `owner_id`       | [`text`]             | The role ID of the owner of the source. Corresponds to [`mz_roles.id`](/sql/system-catalog/mz_catalog/#mz_roles).
 `privileges`     | [`mz_aclitem array`] | The privileges granted on the source.

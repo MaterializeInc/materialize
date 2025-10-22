@@ -12,7 +12,7 @@ menu:
 ---
 
 This page shows you how to stream data from [Amazon Aurora for PostgreSQL](https://aws.amazon.com/rds/aurora/)
-to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
+to Materialize using the [PostgreSQL source](/sql/create-source-v1/postgres/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}

@@ -174,7 +174,7 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 ## Creating a source
 
 The Kafka connection created in the previous section can then be reused across
-multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements:
+multiple [`CREATE SOURCE`](/sql/create-source-v1/kafka/) statements:
 
 ```mzsql
 CREATE SOURCE json_source
@@ -189,4 +189,4 @@ cluster, use the `IN CLUSTER` clause.
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)
+- [`CREATE SOURCE`: Kafka](/sql/create-source-v1/kafka)

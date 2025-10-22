@@ -1,0 +1,13 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+  - Option: "**FROM** <schema_name>"
+    Description: |
+      If specified, show tables from the specified schema. Defaults to first resolvable schema in the search path; i.e., current schema. For available schemas, see [`SHOW SCHEMAS`](/sql/show-schemas/).
+  - Option: "**ON** <source_name>"
+    Description: |
+      If specified, only show tables created from the specified source.
+      Depending on the current search path, specify a fully-qualified source
+      name(`<db>.<schema>.<source>`), qualified source name
+      (`<schema>.<source>`), or unqualified source name (`<source>`).

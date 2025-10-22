@@ -1,0 +1,88 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "**IF NOT EXISTS**"
+    "Description": |
+      *Optional.* If specified, do not throw an error if the table with the same
+      name already exists. Instead, issue a notice and skip the table creation.
+
+      {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "`<col_name>`"
+    "Description": |
+
+      <a name="value_format_csv_only"></a>
+      **For `VALUE FORMAT CSV` only**.
+      If specified, use the specified names for the columns to create.  Names for columns must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+      By default, the columns are named `column1`, `column2`...`columnN`.
+
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the [source](/sql/create-source/kafka/) created for the Kafka topic.
+
+  - "Parameter": "**(REFERENCE <ref_object>)**"
+    "Description": |
+
+      *Optional.* If specified, the topic (which should match the topic
+      specified in the source) from which to create the table. You can create
+      multiple tables from the same reference object.
+
+      To find the reference objects available in your
+      [source](/sql/create-source/), you can use the following query,
+      substituting your source name for `<source_name>`:
+
+      <br>
+
+      ```mzsql
+      SELECT refs.*
+      FROM mz_internal.mz_source_references refs, mz_sources s
+      WHERE s.name = '<source_name>' -- substitute with your source name
+      AND refs.source_id = s.id;
+      ```
+
+  - "Parameter": |
+      **FORMAT \<format\> |
+      KEY FORMAT \<format\> VALUE FORMAT \<format\>**
+    "Description": |
+
+      *Optional.* If specified, use the specified format to decode the data. The following `<format>`s are supported:
+
+      | Format | Description |
+      |--------|-------------|
+      | `AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <csr_connection> [KEY STRATEGY <strategy> VALUE STRATEGY <strategy>]` | Decode the data as Avro, specifying the [Confluent Schema Registry connection](/sql/create-connection/#confluent-schema-registry) to use. You can also specify the `KEY STRATEGY` and `VALUE STRATEGY` to use: <table> <thead> <tr> <th>Strategy</th> <th>Description</th> </tr> </thead> <tbody> <tr> <td><code>LATEST</code></td> <td>(Default) Use the latest writer schema from the schema registry as the reader schema.</td> </tr> <tr> <td><code>ID</code></td> <td>Use a specific schema from the registry.</td> </tr> <tr> <td><code>INLINE</code></td> <td>Use the inline schema.</td> </tr> </tbody> </table>|
+      | `JSON` | Decode the data as JSON. |
+      | `TEXT` | Decode the data as TEXT. |
+      | `BYTES` | Decode the data as BYTES. |
+      | `CSV WITH <num> COLUMNS DELIMITED BY <char>` | Parse the data as CSV with a specified number of columns and a specified delimiter. By default, the columns are named `column1`, `column2`...`columnN`. You can [specify alternative column names after the table name `(<column_name1>, <column_name2>, ...)`](#value_format_csv_only). <br><br> The data is decoded as [`text`](/sql/types/text). You can convert the data to other to other types using explicit [casts](/sql/functions/cast/) when creating views.|
+
+      {{< include-md file="shared-content/kafka-format-envelope-compat-table.md"
+      >}}
+
+      For more information, see [Creating a source](/sql/create-source/kafka/).
+
+  - "Parameter": |
+      **INCLUDE \<include_option\>**
+    "Description": |
+
+      *Optional.* If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+      {{< yaml-table
+      data="syntax_options/create_table/key_value_include_options" >}}
+
+  - "Parameter": |
+      **ENVELOPE \<envelope\>**
+    "Description": |
+
+      *Optional.* If specified, use the specified envelope. The following `<envelope>`s are supported:
+
+      {{< yaml-table data="syntax_options/create_table/kafka_envelopes" >}}
+
+      {{< include-md file="shared-content/kafka-format-envelope-compat-table.md" >}}

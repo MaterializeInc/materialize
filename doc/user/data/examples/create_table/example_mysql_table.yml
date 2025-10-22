@@ -1,0 +1,127 @@
+- name: "syntax"
+  description: |
+    To create a table from a [source](/sql/create-source/) connected (via native
+    connector) to an external MySQL:
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)
+    [WITH (
+        TEXT COLUMNS (<column_name> [, ...])
+      | EXCLUDE COLUMNS (<column_name> [, ...])
+      | PARTITION BY (<column_name> [, ...])
+      [, ...]
+    )]
+    ;
+
+- name: "syntax-options"
+  description: |
+
+    {{< note >}}
+
+    - {{< include-md file="shared-content/create-table-from-source-readonly.md"
+    >}}
+
+    - {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md"
+      >}}
+
+    {{< /note >}}
+
+    {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_mysql" %}}
+
+    For examples, see [Create a table (MySQL source)](/sql/create-table/mysql/#create-a-table-mysql-source).
+
+- name: "create-table"
+  description: |
+    To create new **read-only** tables from a source table, use the `CREATE
+    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement. The following example creates **read-only** tables `items` and `orders` from
+    the MySQL source's `public.items` and `public.orders` tables (the schema is `public`).
+
+    {{< note >}}
+
+    - Although the example creates the tables with the same names as the
+    upstream tables, the tables in Materialize can have names that differ from
+    the referenced table names.
+
+    - For supported MySQL data types, refer to [supported
+    types](/sql/create-table/mysql/#supported-data-types).
+
+    - You can create multiple tables that reference the same upstream table.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+      - In the upstream MySQL, you have:
+        - Enabled GTID-based binlog replication
+        - Defined a replication user and password with the appropriate access.
+      - In Materialize,
+        - You have created a secret for the MySQL password.
+        - You have defined the connection to the upstream MySQL.
+        - You have used the connection to create a source.
+
+        For example (substitute with your configuration):
+          CREATE SECRET mysql_password AS '<replication user password>'; -- substitute
+          CREATE CONNECTION mysql_connection TO MYSQL (
+            HOST '<hostname>',          -- substitute
+            USER <replication user>,    -- substitute
+            PASSWORD SECRET mysql_password
+            -- [, <network security configuration> ]
+          );
+
+          CREATE SOURCE mysql_source
+          FROM MYSQL CONNECTION mysql_connection;
+    */
+
+    CREATE TABLE items
+    FROM SOURCE mysql_source(REFERENCE public.items)
+    ;
+    CREATE TABLE orders
+    FROM SOURCE mysql_source(REFERENCE public.orders)
+    ;
+
+  results: |
+    {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+
+- name: "show-tables"
+  description: |
+    To verify that the table has been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the tables `items` and `orders`:
+
+    ```hc {hl_lines="3-4"}
+    | name        | comment |
+    | ----------- | ------- |
+    | items       |         |
+    | orders      |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/) command:
+  code: |
+    SHOW COLUMNS FROM items;
+    SHOW COLUMNS FROM orders;
+  results: |
+    The results should display information on the table columns. The types
+    should match those from the upstream table as the example assumes the
+    upstream table only contains columns with data types that are supported in
+    Materialize.
+
+    For the list of supported MySQL data types, refer to [supported
+    types](#upstream-sources-and-supported-data-types).
+
+- name: "read-from-table"
+  code: |
+    SELECT * FROM items;
+
+- name: "create-view-from-tables"
+  code: |
+    CREATE VIEW orders_view AS
+    SELECT o.*,i.price,o.quantity * i.price as subtotal
+    FROM orders as o
+    JOIN items as i
+    ON o.item = i.item;

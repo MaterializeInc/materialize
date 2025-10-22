@@ -62,7 +62,7 @@ CREATE SOURCE webhook_demo FROM WEBHOOK
 ```
 
 After a successful run, the command returns a `NOTICE` message containing the
-unique [webhook URL](/sql/create-source/webhook/#webhook-url)
+unique [webhook URL](/sql/create-source-v1/webhook/#webhook-url)
 that allows you to `POST` events to the source. Copy and store it. You will need
 it for the next step.
 
@@ -138,5 +138,5 @@ DROP SECRET demo_webhook;
 
 ## Next steps
 
-To get started with your own data, check out the [reference documentation](/sql/create-source/webhook/)
+To get started with your own data, check out the [reference documentation](/sql/create-source-v1/webhook/)
 for the webhook source.

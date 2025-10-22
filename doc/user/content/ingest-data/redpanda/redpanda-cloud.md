@@ -279,7 +279,7 @@ Privatelink connection you created earlier:
 ## Step 6. Start ingesting data
 
 Once you have created the connection, you can use the connection in the [`CREATE
-SOURCE`](/sql/create-source/) command to your Redpanda Cloud cluster and start
+SOURCE`](/sql/create-source-v1/) command to your Redpanda Cloud cluster and start
 ingesting data from your target topic. By default, the source will be created in
 the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
 

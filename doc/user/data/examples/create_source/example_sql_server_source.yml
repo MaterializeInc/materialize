@@ -1,0 +1,31 @@
+- name: "syntax"
+  description: |
+    To create a source from an external SQL Server:
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <source_name>
+    [IN CLUSTER <cluster_name>]
+    FROM SQL SERVER CONNECTION <connection_name>
+    ;
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/create_source/create_source_options_sql_server" %}}
+- name: "create-source"
+  description: |
+    Once you have configured the upstream SQL Server, network security, and
+    created the connection, you can create the source. In this example, the
+    connection to SQL Server is `sql_server_connection`.
+  code: |
+    CREATE SOURCE sql_server_source
+    FROM SQL SERVER CONNECTION sql_server_connection
+    ;
+
+- name: "create-table"
+  description: |
+    After a source is created, you can reference specific replicated table(s)
+    from the source create tables in Materialize.
+  code: |
+    CREATE TABLE items
+    FROM SOURCE sql_server_source(REFERENCE sales.items)
+    ;
+  results: |
+    See [`CREATE TABLE`](/sql/create-table/sql-server/) for more details.

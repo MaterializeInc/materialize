@@ -82,7 +82,7 @@ of 0.0000411 USD per GB/hr, 1 TB stored for one month (730 hrs) equates to 30
 USD.
 
 Most data in Materialize is continually compacted, with the exception of
-[append-only sources](/sql/create-source/#append-only-envelope). As such, the
+[append-only sources](/sql/create-source-v1/#append-only-envelope). As such, the
 total state stored in Materialize tends to grow at a rate that is more similar
 to OLTP databases than cloud data warehouses.
 

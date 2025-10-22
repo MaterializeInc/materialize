@@ -1,0 +1,44 @@
+columns:
+  - column: "envelope"
+  - column: "description"
+
+rows:
+  - envelope: "`NONE`"
+    description: |
+      *Default*. Use an append-only envelope. The append-only envelope
+      treats all records as inserts. That is, records are
+      only appended; they cannot be updated or deleted.
+
+  - envelope: "`DEBEZIUM`"
+    description: |
+      Use the Debezium envelope. This envelope uses a diff envelope to handle
+      CRUD operations.
+
+      {{< note >}}
+      -  Materialize only supports Avro-encoded Debezium records.
+      - This envelope can lead to **high memory utilization** in
+      the cluster maintaining the source. Materialize can automatically offload
+      processing to disk as needed. For more information, see [spilling to
+      disk](#spilling-to-disk).
+      - Cannot use with the `INCLUDE KEY` option. Debezium envelope includes all keys.
+      {{< /note >}}
+
+      For more information, see [Debezium envelope](#envelopes).
+  - envelope: "`UPSERT`"
+    description: |
+      Use the upsert envelope. This envelope uses message keys to handle CRUD
+      operations.
+
+      {{< note >}}
+      - `ENVELOPE UPSERT` is required to consume [log compacted
+      topics](https://docs.confluent.io/platform/current/kafka/design.html#log-compaction).
+
+      - `ENVELOPE UPSERT` can lead to high memory and disk utilization in the
+      cluster maintaining the source. We recommend using a standard-sized
+      cluster, rather than a legacy-sized cluster, to automatically spill the
+      workload to disk. See [spilling to disk](#spilling-to-disk) for details.
+      {{< /note >}}
+
+      To handle value decoding errors, include the `(VALUE DECODING
+      ERRORS = INLINE)` option. For more information, see [Value decoding
+      errors](#value-decoding-errors).

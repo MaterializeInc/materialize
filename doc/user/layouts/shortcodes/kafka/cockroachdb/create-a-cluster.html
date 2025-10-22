@@ -20,8 +20,8 @@ topics in your Kafka (or Kafka-API compatible) broker.
 
     A cluster of [size](/sql/create-cluster/#size) `100cc` should be enough to
     accommodate multiple Kafka sources, depending on the source
-    characteristics (e.g., sources with [`ENVELOPE UPSERT`](/sql/create-source/#upsert-envelope)
-    or [`ENVELOPE DEBEZIUM`](/sql/create-source/#debezium-envelope) will be more
+    characteristics (e.g., sources with [`ENVELOPE UPSERT`](/sql/create-source-v1/#upsert-envelope)
+    or [`ENVELOPE DEBEZIUM`](/sql/create-source-v1/#debezium-envelope) will be more
     memory-intensive) and the upstream traffic patterns. You can readjust the
     size of the cluster at any time using the [`ALTER CLUSTER`](/sql/alter-cluster) command:
 

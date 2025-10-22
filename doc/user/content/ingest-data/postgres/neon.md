@@ -18,7 +18,7 @@ separates compute and storage to offer features like **autoscaling**,
 **branching** and **bottomless storage**.
 
 This page shows you how to stream data from a Neon database to Materialize using
-the [PostgreSQL source](/sql/create-source/postgres/).
+the [PostgreSQL source](/sql/create-source-v1/postgres/).
 
 ## Before you begin
 

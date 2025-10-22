@@ -155,7 +155,7 @@ made available to us (e.g., querying PostgreSQL for the replication slot's LSN).
     systems (e.g., sources like Kafka, MySQL, and PostgreSQL). Real-time recency
     queries do not offer any form of guarantee when querying Materialize-local
     objects, such as [`LOAD
-    GENERATOR`sources](/sql/create-source/load-generator/) sources or system
+    GENERATOR`sources](/sql/create-source-v1/load-generator/) sources or system
     tables.
 -   Each real-time recency query connects to each external source transitively
     referenced in the query. The more external sources that are referenced, the

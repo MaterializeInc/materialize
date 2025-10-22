@@ -42,5 +42,5 @@ Materialize supports **Redpanda 24.1+** and is compatible with most common Redpa
 
 ## Related pages
 
-- [`CREATE SOURCE`](/sql/create-source/kafka/)
+- [`CREATE SOURCE`](/sql/create-source-v1/kafka/)
 - [`CREATE SINK`](/sql/create-sink/)

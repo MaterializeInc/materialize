@@ -1,0 +1,92 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "**IF NOT EXISTS**"
+    "Description": |
+      *Optional.* If specified, do not throw an error if the table with the same
+      name already exists. Instead, issue a notice and skip the table creation.
+
+      {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the [source](/sql/create-source/kafka/) created for the Kafka topic.
+
+  - "Parameter": "**(REFERENCE <ref_object>)**"
+    "Description": |
+
+      *Optional.* If specified, the topic for which to create the table. If the
+      topic name includes a period (`.`), use double-quotes ("example.topic").
+      To ensure that the topic name matches that specified in the source, omit.
+
+      You can create multiple tables from the same reference object.
+
+      To find the reference objects available in your
+      [source](/sql/create-source/), you can use the following query,
+      substituting your source name for `<source_name>`:
+
+      ```mzsql
+      SELECT refs.*
+      FROM mz_internal.mz_source_references refs, mz_sources s
+      WHERE s.name = '<source_name>' -- substitute with your source name
+      AND refs.source_id = s.id;
+      ```
+
+  - "Parameter": "**<csr_connection>**"
+    "Description": |
+
+      The [Confluent Schema Registry
+      connection](/sql/create-connection/#confluent-schema-registry) to use to
+      decode the data.
+
+  - "Parameter": |
+      **KEY STRATEGY \<strategy\> VALUE STRATEGY \<strategy\>**
+    "Description": |
+
+      Optional. Specify the `<strategy>` to use for the key and value schemas.
+
+      | Strategy | Description |
+      |--------|-------------|
+      | **LATEST** | (Default) Use the latest writer schema from the schema registry as the reader schema. |
+      | **ID** | Use a specific schema from the registry. |
+      | **INLINE** | Use the inline schema. |
+
+  - "Parameter": |
+      **INCLUDE \<include_option\>**
+    "Description": |
+
+      *Optional.* If specified, include the additional information as column(s) in the table. The following `<include_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | **KEY [AS \<name\>]** | Include a column containing the Kafka message key. If the key is encoded using a format that includes schemas, the column will take its name from the schema. For unnamed formats (e.g. `TEXT`), the column will be named `key`. The column can be renamed with the optional **AS** *name* statement.
+      | **PARTITION [AS \<name\>]** | Include a `partition` column containing the Kafka message partition. The column can be renamed with the optional **AS** *name* clause.
+      | **OFFSET [AS \<name\>]** | Include an `offset` column containing the Kafka message offset. The column can be renamed with the optional **AS** *name* clause.
+      | **TIMESTAMP [AS \<name\>]** | Include a `timestamp` column containing the Kafka message timestamp. The column can be renamed with the optional **AS** *name* clause. <br><br>Note that the timestamp of a Kafka message depends on how the topic and its producers are configured. See the [Confluent documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time) for details.
+      | **HEADERS [AS \<name\>]** | Include a `headers` column containing the Kafka message headers as a list of records of type `(key text, value bytea)`. The column can be renamed with the optional **AS** *name* clause.
+      | **HEADER \<key\> AS \<name\> [**BYTES**]** | Include a *name* column containing the Kafka message header *key* parsed as a UTF-8 string. To expose the header value as `bytea`, use the `BYTES` option.
+
+  - "Parameter": |
+      **ENVELOPE \<envelope\>**
+    "Description": |
+
+      *Optional.* If specified, use the specified envelope:
+
+      {{< yaml-table data="syntax_options/create_table/kafka_envelopes" >}}
+
+  - "Parameter": "**WITH (<with_option>[,...])**"
+    "Description": |
+
+      The following `<with_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | `PARTITION BY (<column> [, ...])` | {{< include-md
+      file="shared-content/partition-by-option-description.md" >}} |

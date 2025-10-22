@@ -64,7 +64,7 @@ see the [Terraform module repository](https://github.com/MaterializeInc/terrafor
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)
+- [`CREATE SOURCE`: Kafka](/sql/create-source-v1/kafka)
 - Integration guides: [Self-hosted
   PostgreSQL](/ingest-data/postgres/self-hosted/), [Amazon RDS for
   PostgreSQL](/ingest-data/postgres/amazon-rds/), [Self-hosted

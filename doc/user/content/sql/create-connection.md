@@ -1134,7 +1134,7 @@ The privileges required to execute this statement are:
 [`ALTER CONNECTION`]: /sql/alter-connection
 [`CREATE SOURCE`]: /sql/create-source
 [`CREATE SINK`]: /sql/create-sink
-[`FORMAT`]: /sql/create-source/#formats
+[`FORMAT`]: /sql/create-source-v1/#formats
 [`mz_aws_privatelink_connections`]: /sql/system-catalog/mz_catalog/#mz_aws_privatelink_connections
 [`mz_connections`]: /sql/system-catalog/mz_catalog/#mz_connections
 [`mz_ssh_tunnel_connections`]: /sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections

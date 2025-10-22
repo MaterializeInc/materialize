@@ -11,7 +11,7 @@ menu:
 
 ## Change Data Capture (CDC)
 
-Materialize supports SQL Server as a real-time data source. The [SQL Server source](/sql/create-source/sql-server/)
+Materialize supports SQL Server as a real-time data source. The [SQL Server source](/sql/create-source-v1/sql-server/)
 uses SQL Server's change data capture feature to **continually ingest changes**
 resulting from CRUD operations in the upstream database. The native support for
 SQL Server Change Data Capture (CDC) in Materialize gives you the following benefits:

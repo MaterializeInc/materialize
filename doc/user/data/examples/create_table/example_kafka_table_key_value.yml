@@ -1,0 +1,140 @@
+- name: "syntax"
+  description: |
+
+    By default, the message key is decoded using the same format as the message
+    value. However, you can specify different formats for the key and value usin
+    the `KEY FORMAT` and `VALUE FORMAT` syntax.
+
+    To create a read-only table from a [Kafka
+    source](/sql/create-source/kafka/), where you specify the key and value
+    encodings explicitly:
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name> [(<col_name> [, ...])]
+    -- col_names are optional and  only for VALUE FORMAT CSV
+    FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
+    KEY FORMAT <format1> VALUE FORMAT <format2>
+    -- <format1> and <format2> can be:
+      -- AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION <conn_name>
+      --     [KEY STRATEGY <strategy>]
+      --     [VALUE STRATEGY <strategy>]
+      -- | CSV WITH <num> COLUMNS DELIMITED BY <char>
+      -- | JSON | TEXT | BYTES
+    [INCLUDE
+        KEY [AS <name>] | PARTITION [AS <name>] | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE
+        NONE  --  Default.  Uses the append-only envelope.
+      | DEBEZIUM
+      | UPSERT [(VALUE DECODING ERRORS = INLINE [AS name])]
+    ]
+    ;
+
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_key_value"
+    %}}
+
+- name: "create-table"
+  description: |
+    Materialize supports ingesting Kafka messages with different encoding formats for the key and value.
+
+    To create a read-only table from a [Kafka
+    source](/sql/create-source/kafka/), where you specify the key and value
+    encodings explicitly:
+
+    To create new **read-only** tables from Kafka messages where you specify
+    different key and value encodings, use the `CREATE TABLE ... FROM SOURCE ...
+    FORMAT KEY FORMAT VALUE FORMAT` syntax. The following example creates a
+    **read-only** table `user_events` from the Kafka topic `user.events` where the key is encoded in `TEXT` and the value is encoded in JSON:
+
+    {{< note >}}
+
+    You can create multiple tables that reference the same topic.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+       For Kafka:
+        - You have configured Kafka with:
+          - SASL SCRAM-SHA-256 authentication
+          - A user and password with the appropriate access
+        - Your Kafka producer writes to the topic `user.events` using:
+          - `TEXT` format for the key and
+          - `JSON` format for the value.
+       In Materialize:
+        - You have created a secret for the Kafka password.
+        - You have defined the connection to the upstream Kafka.
+        - You have used the connection to create a source.
+
+        Example setup in Materialize:
+
+          CREATE SECRET kafka_secret AS '<password>';
+          CREATE CONNECTION kafka_connection TO KAFKA (
+            BROKER '<broker host>:9092',
+            SECURITY PROTOCOL = 'SASL_PLAINTEXT',
+            SASL MECHANISMS = 'SCRAM-SHA-256',
+            SASL USERNAME = '<kafka_user>',
+            SASL PASSWORD = SECRET kafka_secret
+          );
+
+          CREATE SOURCE kafka_key_value_source
+          FROM KAFKA CONNECTION kafka_connection (TOPIC 'user.events');
+
+    */
+
+    CREATE TABLE user_events
+    FROM SOURCE kafka_key_value_source
+    KEY FORMAT TEXT VALUE FORMAT JSON
+    INCLUDE KEY AS user_id
+    ;
+
+- name: "read-from-table"
+  description: |
+    {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md" >}}
+
+    Once the snapshotting process completes, you can query the table:
+  code: |
+    SELECT * FROM user_events;
+
+  results: |
+    The query from the table returns the following:
+
+    ```
+      user_id   |                                                  data
+    ------------+--------------------------------------------------------------------------------------------------------
+     user-12345 | {"event":"page_view","timestamp":"2025-09-04T12:34:56Z","url":"https://docs.example.com"}
+     user-56789 | {"event":"page_view","timestamp":"2025-09-04T12:35:00Z","url":"https://docs.example.com/install/"}
+     user-12345 | {"event":"page_view","timestamp":"2025-09-04T12:35:10Z","url":"https://docs.example.com/get-started/"}
+    ```
+
+- name: "create-a-view-from-table"
+  description: |
+    For JSON messages, the message is stored in a single column named `data` of
+    type [`jsonb`](/sql/types/jsonb/). You can create a view on the table to
+    parse the JSON data into a more structured format. For example, the
+    following creates a view that parses each field in JSON into a separate
+    column:
+
+    {{< tip >}}
+    To help create the view definition, you can use the [JSON parsing
+    widget](/sql/types/jsonb/#parsing). For typecasting timestamps, you can use the [`try_parse_monotonic_iso8601_timestamp`](/sql/functions/#try_parse_monotonic_iso8601_timestamp) function.
+    {{< /tip >}}
+
+  code: |
+    CREATE VIEW parsed_user_events_view AS SELECT
+        user_id,
+        data->>'event' AS event,
+        try_parse_monotonic_iso8601_timestamp(data->>'timestamp') AS timestamp,
+        data->>'url' AS url
+    FROM user_events
+    ;
+  results: |
+    After creating the view, you can read from the view to get the parsed data:
+    ```mzsql
+    SELECT * FROM parsed_user_events_view;
+    ```

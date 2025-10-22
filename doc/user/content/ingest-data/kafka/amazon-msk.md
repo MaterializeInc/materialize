@@ -127,7 +127,7 @@ Configure your Kafka network to allow Materialize to connect:
 ## Creating a source
 
 The Kafka connection created in the previous section can then be reused across
-multiple [`CREATE SOURCE`](/sql/create-source/kafka/) statements. By default,
+multiple [`CREATE SOURCE`](/sql/create-source-v1/kafka/) statements. By default,
 the source will be created in the active cluster; to use a different cluster,
 use the `IN CLUSTER` clause.
 
@@ -144,4 +144,4 @@ that you have successfully connected Materialize to your cluster.
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka)
+- [`CREATE SOURCE`: Kafka](/sql/create-source-v1/kafka)

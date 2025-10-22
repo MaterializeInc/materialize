@@ -9,7 +9,7 @@ menu:
 ---
 
 This page shows you how to stream data from [Amazon RDS for MySQL](https://aws.amazon.com/rds/mysql/)
-to Materialize using the [MySQL source](/sql/create-source/mysql).
+to Materialize using the [MySQL source](/sql/create-source-v1/mysql).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
@@ -54,7 +54,7 @@ enables binary logging (`log_bin`).
     is **Available** in the RDS Console.
 
 1. In addition to the step above, you **must** also ensure that
-   [binlog retention](/sql/create-source/mysql/#binlog-retention) is set to a
+   [binlog retention](/sql/create-source-v1/mysql/#binlog-retention) is set to a
    reasonable value. To check the current value of the [`binlog retention hours`](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/mysql-stored-proc-configuring.html#mysql_rds_set_configuration-usage-notes.binlog-retention-hours)
    configuration parameter, connect to your RDS instance and run:
 

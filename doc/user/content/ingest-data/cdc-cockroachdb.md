@@ -50,7 +50,7 @@ whether users are on CockroachDB core or enterprise."
 [Changefeeds](https://www.cockroachlabs.com/docs/stable/change-data-capture-overview)
 capture row-level changes resulting from `INSERT`, `UPDATE`, and `DELETE`
 operations against CockroachDB tables and publish them as events to Kafka
-(or other Kafka API-compatible broker). You can then use the [Kafka source](/sql/create-source/kafka/#using-debezium)
+(or other Kafka API-compatible broker). You can then use the [Kafka source](/sql/create-source-v1/kafka/#using-debezium)
 to consume these changefeed events into Materialize, making the data available
 for transformation.
 
@@ -135,7 +135,7 @@ guidance.
 
 ## 3. Start ingesting data
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
+1. Use the [`CREATE SOURCE`](/sql/create-source-v1/) command to connect Materialize
    to your Kafka broker and start ingesting data from the target topic:
 
    ```mzsql

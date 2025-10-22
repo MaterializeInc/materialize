@@ -11,7 +11,7 @@ aliases:
 ---
 
 This page shows you how to stream data from a self-hosted SQL Server database
-to Materialize using the [SQL Server Source](/sql/create-source/sql-server/).
+to Materialize using the [SQL Server Source](/sql/create-source-v1/sql-server/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}

@@ -12,7 +12,7 @@ menu:
 ---
 
 This page shows you how to stream data from [Azure DB for PostgreSQL](https://azure.microsoft.com/en-us/products/postgresql)
-to Materialize using the [PostgreSQL source](/sql/create-source/postgres/).
+to Materialize using the [PostgreSQL source](/sql/create-source-v1/postgres/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}

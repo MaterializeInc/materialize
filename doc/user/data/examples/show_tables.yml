@@ -1,0 +1,6 @@
+- name: "syntax"
+  code: |
+    SHOW TABLES [FROM <schema_name>] [ ON <source_name> ];
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/show_tables_options" %}}

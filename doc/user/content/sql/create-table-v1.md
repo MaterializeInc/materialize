@@ -1,12 +1,12 @@
 ---
-title: "CREATE TABLE"
+title: "CREATE TABLE (v1)"
 description: "`CREATE TABLE` creates a table that is persisted in durable storage."
-pagerank: 40
 menu:
   # This should also have a "non-content entry" under Reference, which is
   # configured in doc/user/config.toml
   main:
     parent: 'commands'
+    identifier: create-table-deprecated
 ---
 
 `CREATE TABLE` defines a table that is persisted in durable storage and can be

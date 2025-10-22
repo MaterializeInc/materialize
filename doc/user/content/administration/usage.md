@@ -58,6 +58,6 @@ datasets plus the size of any materialized views, with some overhead from
 uncompacted data and system metrics.
 
 Most data in Materialize is continually compacted, with the exception of
-[append-only sources](/sql/create-source/#append-only-envelope). As such, the
+[append-only sources](/sql/create-source-v1/#append-only-envelope). As such, the
 total state stored in Materialize tends to grow at a rate that is more similar
 to OLTP databases than cloud data warehouses.

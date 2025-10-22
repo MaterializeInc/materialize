@@ -8,7 +8,7 @@ aliases:
 [Striim](https://www.striim.com/) is a real-time data integration platform that
 offers a variety of connectors for databases, messaging systems, and other data
 sources. This guide walks through the steps to ingest Striim Change Data
-Capture (CDC) into Materialize using the [Kafka source](/sql/create-source/kafka/).
+Capture (CDC) into Materialize using the [Kafka source](/sql/create-source-v1/kafka/).
 
 ## Before you begin
 
@@ -115,7 +115,7 @@ scenarios, we recommend separating your workloads into multiple clusters for
     );
     ```
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/kafka/) command to connect
+1. Use the [`CREATE SOURCE`](/sql/create-source-v1/kafka/) command to connect
    Materialize to your Kafka broker and schema registry using the connections you
    created in the previous step.
 
@@ -143,4 +143,4 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 - [`CREATE SECRET`](/sql/create-secret)
 - [`CREATE CONNECTION`](/sql/create-connection/)
-- [`CREATE SOURCE`: Kafka](/sql/create-source/kafka/)
+- [`CREATE SOURCE`: Kafka](/sql/create-source-v1/kafka/)

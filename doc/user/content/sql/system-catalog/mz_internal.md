@@ -696,9 +696,9 @@ table and the corresponding upstream Kafka topic being ingested.
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the table. Corresponds to [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `topic`             | [`text`]         | The topic being ingested. |
-| `envelope_type`     | [`text`]         | The [envelope](/sql/create-source/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types. |
-| `key_format`        | [`text`]         | The [format](/sql/create-source/#formats) of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`. |
-| `value_format`      | [`text`]         | The [format](/sql/create-source/#formats) of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types. |
+| `envelope_type`     | [`text`]         | The [envelope](/sql/create-source-v1/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types. |
+| `key_format`        | [`text`]         | The [format](/sql/create-source-v1/#formats) of the Kafka message key: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`. |
+| `value_format`      | [`text`]         | The [format](/sql/create-source-v1/#formats) of the Kafka message value: `avro`, `protobuf`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types. |
 
 <!--
 ## `mz_prepared_statement_history`

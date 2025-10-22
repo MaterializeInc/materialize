@@ -15,7 +15,7 @@ instead of error.
 This allows `try_parse_monotonic_iso8601_timestamp` to be used with
 the [temporal filter pushdown] feature on `text` timestamps.
 This is particularly useful when working with
-[JSON sources](/sql/create-source/#json),
+[JSON sources](/sql/create-source-v1/#json),
 or other external data sources that store timestamps as strings.
 
 Specifically, the accepted format is `YYYY-MM-DDThh:mm:ss.sssZ`:

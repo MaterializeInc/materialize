@@ -386,7 +386,7 @@ Then the `X` and `Y` operators will be combined into a single, more efficient op
 
 ## Examples
 
-For the following examples, let's assume that you have [the auction house load generator](/sql/create-source/load-generator/#creating-an-auction-load-generator) created in your current environment.
+For the following examples, let's assume that you have [the auction house load generator](/sql/create-source-v1/load-generator/#creating-an-auction-load-generator) created in your current environment.
 
 ### Explaining a `SELECT` query
 

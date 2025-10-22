@@ -6,12 +6,12 @@ menu:
     parent: "webhooks"
     name: "Stripe"
 aliases:
-  - /sql/create-source/webhook/#connecting-with-stripe
+  - /sql/create-source-v1/webhook/#connecting-with-stripe
   - /ingest-data/stripe/
 ---
 
 This guide walks through the steps to ingest data from [Stripe](https://stripe.com/)
-into Materialize using the [Webhook source](/sql/create-source/webhook/).
+into Materialize using the [Webhook source](/sql/create-source-v1/webhook/).
 
 {{< tip >}}
 {{< guided-tour-blurb-for-ingest-data >}}
@@ -50,7 +50,7 @@ Change the `<secret_value>` to a unique value that only you know and store it in
 
 ## Step 3. Set up a webhook source
 
-Using the secret from the previous step, create a [webhook source](/sql/create-source/webhook/)
+Using the secret from the previous step, create a [webhook source](/sql/create-source-v1/webhook/)
 in Materialize to ingest data from Stripe. By default, the source will be
 created in the active cluster; to use a different cluster, use the `IN
 CLUSTER` clause.
@@ -91,7 +91,7 @@ FROM WEBHOOK
 ```
 
 After a successful run, the command returns a `NOTICE` message containing the
-unique [webhook URL](/sql/create-source/webhook/#webhook-url)
+unique [webhook URL](/sql/create-source-v1/webhook/#webhook-url)
 that allows you to `POST` events to the source. Copy and store it. You will need
 it for the next step.
 
@@ -178,7 +178,7 @@ pushdown](/transform-data/patterns/temporal-filters/#temporal-filter-pushdown).
 With the vast amount of data processed and potential network issues, it's not
 uncommon to receive duplicate records. You can use the `DISTINCT ON` clause to
 efficiently remove duplicates. For more details, refer to the webhook source
-[reference documentation](/sql/create-source/webhook/#handling-duplicated-and-partial-events).
+[reference documentation](/sql/create-source-v1/webhook/#handling-duplicated-and-partial-events).
 
 ## Next steps
 
@@ -186,4 +186,4 @@ With Materialize ingesting your Stripe data, you can start exploring it,
 computing real-time results that stay up-to-date as new data arrives, and
 serving results efficiently. For more details, check out the
 [Stripe documentation](https://stripe.com/docs/webhooks) and the
-[webhook source reference documentation](/sql/create-source/webhook/).
+[webhook source reference documentation](/sql/create-source-v1/webhook/).

@@ -1,0 +1,96 @@
+- name: "syntax"
+  description: |
+    Creates a read-only table from a [Kafka source](/sql/create-source/kafka/),
+    where the messages are decoded either as text (`FORMAT TEXT`) or bytes
+    (`FORMAT BYTES`).
+
+    By default, creates a table with 1 column:
+    - If `FORMAT TEXT`, the column name is `text` of type `text`.
+    - If `FORMAT BYTES`, the column name is `data` of type `bytea`.
+
+  code: |
+    CREATE TABLE [IF NOT EXISTS] <table_name> FROM SOURCE <source_name> [(REFERENCE <ref_object>)]
+    FORMAT  <TEXT | BYTES>
+    [INCLUDE
+      PARTITION [AS <name>] | OFFSET [AS <name>]
+      | TIMESTAMP [AS <name>] | HEADERS [AS <name>] | HEADER <key_name> AS <name> [BYTES]
+      [, ...]
+    ]
+    [ENVELOPE NONE]              --  Default.  Uses the append-only envelope.
+    [WITH (PARTITION BY (<column_name> [, ...]))]
+    ;
+
+- name: "syntax-options"
+  description: |
+    {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_kafka_text"
+    %}}
+
+    For examples, see [Create a table (Kafka source: Format
+    TEXT)](/sql/create-table/kafka/#create-a-table-kafka-source-format-text).
+- name: "create-table"
+  description: |
+    Materialize supports ingesting Kafka messages decoded as text.
+
+    To create new **read-only** tables from Kafka messages decoded as text, use
+    the `CREATE TABLE ... FROM SOURCE ... FORMAT TEXT` statement. The following
+    example creates a **read-only** table `audit_events` from the Kafka topic
+    `audit_events`.
+
+    {{< note >}}
+
+    You can create multiple tables that reference the same topic.
+
+    {{< /note >}}
+
+  code: |
+    /* This example assumes:
+      - In the upstream Kafka:
+        - You have configured Kafka with:
+          - SASL SCRAM-SHA-256 authentication
+          - A user and password with the appropriate access
+        - Your Kafka producer uses text format for the topic `audit_events`
+      - In Materialize:
+        - You have created a secret for the Kafka password.
+        - You have defined the connection to the upstream Kafka.
+        - You have used the connection to create a source.
+
+        Example setup in Materialize:
+
+          CREATE SECRET kafka_secret AS '<password>';
+          CREATE CONNECTION kafka_connection TO KAFKA (
+            BROKER '<broker host>:9092',
+            SECURITY PROTOCOL = 'SASL_PLAINTEXT',
+            SASL MECHANISMS = 'SCRAM-SHA-256',
+            SASL USERNAME = '<kafka_user>',
+            SASL PASSWORD = SECRET kafka_secret
+          );
+
+          CREATE SOURCE kafka_text_source
+          FROM KAFKA CONNECTION kafka_connection (TOPIC 'audit_events');
+    */
+
+    CREATE TABLE audit_events
+    FROM SOURCE kafka_text_source
+    FORMAT TEXT
+    ;
+  results: |
+    By default, creates a table with 1 column named `text` of type `text`.
+
+- name: "read-from-table"
+  description: |
+    {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md" >}}
+
+    Once the snapshotting process completes, you can query the table:
+  code: |
+    SELECT * FROM audit_events;
+  results: |
+    The query from the table returns with 1 column named `text` of type `text`:
+
+    ```
+                                                      text
+    --------------------------------------------------------------------------------------------------------
+    [INFO] 2025-05-20 10:15:00 - User 12345 logged in from IP 192.168.1.85 SessionID: cccc-0000-efgh-5678
+    [INFO] 2025-05-20 10:15:05 - User 56789 logged in from IP 192.168.1.80 SessionID: zzzz-1234-efgh-5678
+    [INFO] 2025-05-20 10:15:00 - User 12345 logged in from IP 192.168.1.100 SessionID: abcd-1234-efgh-5678
+    ```

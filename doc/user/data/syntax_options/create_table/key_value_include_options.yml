@@ -1,0 +1,89 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+  - Option: "**KEY [AS <name>]**"
+    Description: |
+
+      Include a column that contains the Kafka message key:
+
+      - If the key is encoded using a format that includes schemas, the column
+      will take its name from the schema.
+
+      - If the value format is `CSV` and you have [specified the column
+      names](/sql/create-table/kafka/#value_format_csv_only) `(<column_name1>,
+      <column_name2>, ...)`, the column will take the **first** column name
+      `<column_name1>` even if you specify the `AS` clause.
+
+      - For others, the column will be named `key`. The column can be renamed
+      with the optional **AS** *name* statement.
+
+      {{< note >}}
+      - Not available with the `DEBEZIUM` envelope as the `DEBEZIUM` envelope
+      includes all keys.
+
+      {{< /note >}}
+      {{< tip >}}
+      The `UPSERT` envelope always includes keys
+      {{< /tip >}}
+
+
+  - Option: "**PARTITION [AS <name>]**"
+    Description: |
+
+      Include a `partition` column containing the Kafka message partition. The
+      column can be renamed with the optional **AS** *name* clause with the
+      following exception:
+
+      If the value format is `CSV` and you have [specified the column
+      names](/sql/create-table/kafka/#value_format_csv_only) `(<column_name1>,
+      <column_name2>, ...)`, if the specified columns include a name in the
+      position of the partition column, the column will take the specified name
+      even if include the `AS` clause.
+
+  - Option: "**OFFSET [AS <name>]**"
+    Description: |
+
+      Include an `offset` column containing the Kafka message offset. The column
+      can be renamed with the optional **AS** *name* clause with the following
+      exception:
+
+      If the value format is `CSV` and you have [specified the column
+      names](/sql/create-table/kafka/#value_format_csv_only) `(<column_name1>,
+      <column_name2>, ...)`, if the specified columns include a name in the
+      position of the offset column, the column will take the specified name
+      even if include the `AS` clause.
+  - Option: "**TIMESTAMP [AS <name>]**"
+    Description: |
+
+      Include a `timestamp` column containing the Kafka message timestamp. The
+      column can be renamed with the optional **AS** *name* clause with the
+      following exception:
+
+      If the value format is `CSV` and you have [specified the column
+      names](/sql/create-table/kafka/#value_format_csv_only) `(<column_name1>,
+      <column_name2>, ...)`, if the specified columns include a name in the
+      position of the timestamp column, the column will take the specified name
+      even if include the `AS` clause.
+
+      {{< note >}}
+      The timestamp of a Kafka message depends on how the topic and its
+      producers are configured. See the [Confluent
+      documentation](https://docs.confluent.io/3.0.0/streams/concepts.html?#time)
+      for details.
+      {{< /note >}}
+  - Option: "**HEADERS [AS <name>]**"
+    Description: |
+
+      Include a `headers` column containing the Kafka message headers as a list
+      of records of type `(key text, value bytea)`. The column can be renamed
+      with the optional **AS** *name* clause with the following exception:
+
+      If the value format is `CSV` and you have [specified the column
+      names](/sql/create-table/kafka/#value_format_csv_only) `(<column_name1>,
+      <column_name2>, ...)`, if the specified columns include a name in the
+      position of the headers column, the column will take the specified name
+      even if include the `AS` clause.
+  - Option: "**HEADER <key> AS <name> [**BYTES**]**"
+    Description: |
+      Include a *name* column containing the Kafka message header *key* parsed as a UTF-8 string. To expose the header value as `bytea`, use the `BYTES` option.

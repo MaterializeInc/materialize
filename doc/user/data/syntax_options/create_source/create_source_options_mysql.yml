@@ -1,0 +1,30 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "**IF NOT EXISTS**"
+    "Description": |
+      *Optional.* If specified, do not throw an error if a source with the same
+      name already exists. Instead, issue a notice and skip the source creation.
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the source to create. Names for sources must follow the
+      [naming guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "**IN CLUSTER** `<cluster_name>`"
+    "Description": |
+      *Optional.* The [cluster](/sql/create-cluster) to maintain this source. Otherwise, the source will be created in the active cluster.
+
+      {{< tip >}}
+      If possible, use a cluster dedicated just for sources. See also
+      [Operational guidelines](/manage/operational-guidelines/#sources).
+      {{< /tip >}}
+
+  - "Parameter": "`<connection_name>`"
+    "Description": |
+      The name of the MySQL connection to use for the source. For details
+      on creating connections, check the [`CREATE
+      CONNECTION`](/sql/create-connection/#mysql) documentation page.
+
+      A connection is **reusable** across multiple `CREATE SOURCE` statements.

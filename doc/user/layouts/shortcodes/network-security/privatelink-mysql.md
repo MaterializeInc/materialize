@@ -134,4 +134,4 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-This MySQL connection can then be reused across multiple [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/mysql/) statements.
+This MySQL connection can then be reused across multiple [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source-v1/mysql/) statements.
