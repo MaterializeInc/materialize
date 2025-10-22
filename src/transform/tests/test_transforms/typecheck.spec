@@ -222,7 +222,7 @@ Return
     Get l1
 
 
-mismatched column types: couldn't compute union of column types in let rec: Can't union types: Bool and Int64
+mismatched column types: couldn't compute union of column types in LetRec
       got Int64
 expected Bool?
   Bool is a not a subtype of Int64
@@ -413,7 +413,7 @@ Reduce group_by=[#0] aggregates=[max(#1), min(#1), sum(distinct #1)] monotonic e
     - ("a", 2)
     - ("a", 4)
 ----
-(String, Int64, Int64, Numeric { max_scale: Some(NumericMaxScale(0)) })
+(String, Int64, Int64, Numeric { max_scale: None })
 
 # empty output type (no keys!)
 typecheck
