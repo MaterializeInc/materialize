@@ -27,7 +27,7 @@ a private Kafka cluster and then handles the authentication to outside parties.
 
 When working with [kafka-proxy](https://github.com/grepplabs/kafka-proxy)
 there are a few patterns to consider when it comes to listener configuration
-and network security.  
+and network security.
 
 #### Dynamic Listeners (random port)
 
@@ -62,5 +62,4 @@ configured with TLS support and the connection can be setup with
 `SSL CERTIFICATE AUTHORITY` options.
 
 {{< /tab >}}
-
 {{< /tabs >}}
