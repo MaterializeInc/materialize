@@ -11,7 +11,7 @@ FROM golang:1.24.0 as builder
 COPY no_fsync.patch /
 RUN apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git patch \
-    && git clone --depth=1 --branch RELEASE.2025-07-23T15-54-02Z https://github.com/minio/minio.git \
+    && git clone --depth=1 --branch RELEASE.2025-10-15T17-29-55Z https://github.com/minio/minio.git \
     && cd minio \
     && patch -p1 < /no_fsync.patch \
     && go build -o /out/minio .
