@@ -178,8 +178,6 @@ pub enum CastType {
     Natural,
     /// This cast was generated with the `TEXT COLUMNS` option.
     Text,
-    /// This cast was generated with the `EXCLUDE COLUMNS` option.
-    Exclude,
 }
 
 /// The details of a source export from a postgres source.
@@ -187,7 +185,7 @@ pub enum CastType {
 pub struct PostgresSourceExportDetails {
     /// The cast expressions to convert the incoming string encoded rows to
     /// their target types
-    pub column_casts: Vec<(CastType, Option<MirScalarExpr>)>,
+    pub column_casts: Vec<(CastType, MirScalarExpr)>,
     pub table: PostgresTableDesc,
 }
 

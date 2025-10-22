@@ -82,9 +82,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use differential_dataflow::AsCollection;
 use futures::{FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
 use mz_ore::future::InTask;
-use mz_ore::iter::IteratorExt;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
@@ -172,7 +170,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
     let reader_table_info = table_info.clone();
     let (button, transient_errors) = builder.build_fallible(move |caps| {
-        let table_info = reader_table_info;
+        let mut table_info = reader_table_info;
         let busy_signal = Arc::clone(&config.busy_signal);
         Box::pin(SignaledFuture::new(busy_signal, async move {
             let (id, worker_id) = (config.id, config.worker_id);
@@ -418,7 +416,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 table_info.clone(),
             );
 
-            let mut errored = HashSet::new();
             // Instead of downgrading the capability for every transaction we process we only do it
             // if we're about to yield, which is checked at the bottom of the loop. This avoids
             // creating excessive progress tracking traffic when there are multiple small
@@ -438,10 +435,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                 stream.by_ref(),
                                 &*metadata_client,
                                 commit_lsn,
-                                &table_info,
+                                &mut table_info,
                                 &metrics,
                                 &connection.publication,
-                                &mut errored
                             ));
 
                             trace!(
@@ -516,7 +512,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                     output_index,
                                     error,
                                 } => {
-                                    if errored.contains(&output_index) {
+                                    let table = table_info.get_mut(&oid).unwrap();
+                                    if table.remove(&output_index).is_none() {
                                         continue;
                                     }
 
@@ -526,7 +523,6 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                                         Diff::ONE,
                                     );
                                     data_output.give_fueled(&data_cap_set[0], update).await;
-                                    errored.insert(output_index);
                                 }
                             }
                         }
@@ -834,10 +830,9 @@ fn extract_transaction<'a>(
     > + 'a,
     metadata_client: &'a Client,
     commit_lsn: MzOffset,
-    table_info: &'a BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
+    table_info: &'a mut BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: &'a PgSourceMetrics,
     publication: &'a str,
-    errored_outputs: &'a mut HashSet<usize>,
 ) -> impl AsyncStream<Item = Result<(u32, usize, Result<Row, DefiniteError>, Diff), TransientError>> + 'a
 {
     use LogicalReplicationMessage::*;
@@ -865,50 +860,47 @@ fn extract_transaction<'a>(
                 Relation(body) if !table_info.contains_key(&body.rel_id()) => metrics.ignored.inc(),
                 Insert(body) => {
                     metrics.inserts.inc();
-                    let row = unpack_tuple(body.tuple().tuple_data(), &mut row);
                     let rel = body.rel_id();
-                    for ((output, _), row) in table_info
-                        .get(&rel)
-                        .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                        .into_iter()
-                        .flatten()
-                        .repeat_clone(row)
-                    {
+                    for (output, info) in table_info.get(&rel).into_iter().flatten() {
+                        let tuple_data = body.tuple().tuple_data();
+                        let Some(ref projection) = info.projection else {
+                            panic!("missing projection for {rel}");
+                        };
+                        let datums = projection.iter().map(|idx| &tuple_data[*idx]);
+                        let row = unpack_tuple(datums, &mut row);
                         yield (rel, *output, row, Diff::ONE);
                     }
                 }
                 Update(body) => match body.old_tuple() {
                     Some(old_tuple) => {
                         metrics.updates.inc();
-                        // If the new tuple contains unchanged toast values we reference the old ones
-                        let new_tuple =
-                            std::iter::zip(body.new_tuple().tuple_data(), old_tuple.tuple_data())
-                                .map(|(new, old)| match new {
-                                    TupleData::UnchangedToast => old,
-                                    _ => new,
-                                });
-                        let old_row = unpack_tuple(old_tuple.tuple_data(), &mut row);
-                        let new_row = unpack_tuple(new_tuple, &mut row);
+                        let new_tuple = body.new_tuple();
                         let rel = body.rel_id();
-                        for ((output, _), (old_row, new_row)) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                            .repeat_clone((old_row, new_row))
-                        {
+                        for (output, info) in table_info.get(&rel).into_iter().flatten() {
+                            let Some(ref projection) = info.projection else {
+                                panic!("missing projection for {rel}");
+                            };
+                            let old_tuple =
+                                projection.iter().map(|idx| &old_tuple.tuple_data()[*idx]);
+                            // If the new tuple contains unchanged toast values we reference the old ones
+                            let new_tuple = std::iter::zip(
+                                projection.iter().map(|idx| &new_tuple.tuple_data()[*idx]),
+                                old_tuple.clone(),
+                            )
+                            .map(|(new, old)| match new {
+                                TupleData::UnchangedToast => old,
+                                _ => new,
+                            });
+                            let old_row = unpack_tuple(old_tuple, &mut row);
+                            let new_row = unpack_tuple(new_tuple, &mut row);
+
                             yield (rel, *output, old_row, Diff::MINUS_ONE);
                             yield (rel, *output, new_row, Diff::ONE);
                         }
                     }
                     None => {
                         let rel = body.rel_id();
-                        for (output, _) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                        {
+                        for (output, _) in table_info.get(&rel).into_iter().flatten() {
                             yield (
                                 rel,
                                 *output,
@@ -921,26 +913,19 @@ fn extract_transaction<'a>(
                 Delete(body) => match body.old_tuple() {
                     Some(old_tuple) => {
                         metrics.deletes.inc();
-                        let row = unpack_tuple(old_tuple.tuple_data(), &mut row);
                         let rel = body.rel_id();
-                        for ((output, _), row) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                            .repeat_clone(row)
-                        {
+                        for (output, info) in table_info.get(&rel).into_iter().flatten() {
+                            let Some(ref projection) = info.projection else {
+                                panic!("missing projection for {rel}");
+                            };
+                            let datums = projection.iter().map(|idx| &old_tuple.tuple_data()[*idx]);
+                            let row = unpack_tuple(datums, &mut row);
                             yield (rel, *output, row, Diff::MINUS_ONE);
                         }
                     }
                     None => {
                         let rel = body.rel_id();
-                        for (output, _) in table_info
-                            .get(&rel)
-                            .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                            .into_iter()
-                            .flatten()
-                        {
+                        for (output, _) in table_info.get(&rel).into_iter().flatten() {
                             yield (
                                 rel,
                                 *output,
@@ -952,67 +937,67 @@ fn extract_transaction<'a>(
                 },
                 Relation(body) => {
                     let rel_id = body.rel_id();
-                    let valid_outputs = table_info
-                        .get(&rel_id)
-                        .map(|o| o.iter().filter(|(o, _)| !errored_outputs.contains(o)))
-                        .into_iter()
-                        .flatten()
-                        .collect::<Vec<_>>();
-                    if valid_outputs.len() > 0 {
+                    if let Some(outputs) = table_info.get_mut(&body.rel_id()) {
                         // Because the replication stream doesn't include columns' attnums, we need
                         // to check the current local schema against the current remote schema to
                         // ensure e.g. we haven't received a schema update with the same terminal
                         // column name which is actually a different column.
-                        let oids = std::iter::once(rel_id)
-                            .chain(table_info.keys().copied())
-                            .collect::<Vec<_>>();
                         let upstream_info = mz_postgres_util::publication_info(
                             metadata_client,
                             publication,
-                            Some(&oids),
+                            Some(&[rel_id]),
                         )
                         .await?;
 
-                        for (output_index, output) in valid_outputs {
-                            if let Err(err) =
-                                verify_schema(rel_id, &output.desc, &upstream_info, &output.casts)
-                            {
-                                errored_outputs.insert(*output_index);
-                                yield (rel_id, *output_index, Err(err), Diff::ONE);
-                            }
+                        let mut schema_errors = vec![];
 
-                            // Error any dropped tables.
-                            for (oid, outputs) in table_info {
-                                if !upstream_info.contains_key(oid) {
-                                    for output in outputs.keys() {
-                                        if errored_outputs.insert(*output) {
-                                            // Minimize the number of excessive errors
-                                            // this will generate.
-                                            yield (
-                                                *oid,
-                                                *output,
-                                                Err(DefiniteError::TableDropped),
-                                                Diff::ONE,
-                                            );
-                                        }
-                                    }
+                        outputs.retain(|output_index, info| {
+                            match verify_schema(rel_id, info, &upstream_info) {
+                                Ok(()) => true,
+                                Err(err) => {
+                                    schema_errors.push((
+                                        rel_id,
+                                        *output_index,
+                                        Err(err),
+                                        Diff::ONE,
+                                    ));
+                                    false
                                 }
                             }
+                        });
+                        // Recalculate projection vector for the retained valid outputs. Here we
+                        // must use the column names in the RelationBody message and not the
+                        // upstream_info obtained above, since that one represents the current
+                        // schema upstream which may be many versions head of the one we're about
+                        // to receive after this Relation message.
+                        let column_positions: BTreeMap<_, _> = body
+                            .columns()
+                            .iter()
+                            .enumerate()
+                            .map(|(idx, col)| (col.name().unwrap(), idx))
+                            .collect();
+                        for info in outputs.values_mut() {
+                            let mut projection = vec![];
+                            for col in info.desc.columns.iter() {
+                                projection.push(column_positions[&*col.name]);
+                            }
+                            info.projection = Some(projection);
+                        }
+                        for schema_error in schema_errors {
+                            yield schema_error;
                         }
                     }
                 }
                 Truncate(body) => {
                     for &rel_id in body.rel_ids() {
-                        if let Some(outputs) = table_info.get(&rel_id) {
-                            for (output, _) in outputs {
-                                if errored_outputs.insert(*output) {
-                                    yield (
-                                        rel_id,
-                                        *output,
-                                        Err(DefiniteError::TableTruncated),
-                                        Diff::ONE,
-                                    );
-                                }
+                        if let Some(outputs) = table_info.get_mut(&rel_id) {
+                            for (output, _) in std::mem::take(outputs) {
+                                yield (
+                                    rel_id,
+                                    output,
+                                    Err(DefiniteError::TableTruncated),
+                                    Diff::ONE,
+                                );
                             }
                         }
                     }
@@ -1137,10 +1122,8 @@ fn spawn_schema_validator(
             };
 
             for (&oid, outputs) in table_info.iter() {
-                for (&output_index, output_info) in outputs {
-                    let expected_desc = &output_info.desc;
-                    let casts = &output_info.casts;
-                    if let Err(error) = verify_schema(oid, expected_desc, &upstream_info, casts) {
+                for (&output_index, info) in outputs {
+                    if let Err(error) = verify_schema(oid, info, &upstream_info) {
                         trace!(
                             %source_id,
                             "schema of output index {output_index} for oid {oid} invalid",

@@ -142,6 +142,7 @@ use std::time::Duration;
 use anyhow::bail;
 use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
+use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -219,7 +220,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];
     // A filtered table info containing only the tables that this worker should snapshot.
-    let mut reader_table_info = BTreeMap::new();
+    let mut worker_table_info = BTreeMap::new();
     // A collecction of `SourceStatistics` to update for a given Oid. Same info exists in reader_table_info,
     // but this avoids having to iterate + map each time the statistics are needed.
     let mut export_statistics = BTreeMap::new();
@@ -231,21 +232,17 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             }
             all_outputs.push(output_index);
             if config.responsible_for(*table) {
-                reader_table_info
+                worker_table_info
                     .entry(*table)
                     .or_insert_with(BTreeMap::new)
-                    .insert(output_index, (output.desc.clone(), output.casts.clone()));
-
-                let statistics = config
-                    .statistics
-                    .get(&output.export_id)
-                    .expect("statistics are initialized")
-                    .clone();
-                export_statistics
-                    .entry(*table)
-                    .or_insert_with(Vec::new)
-                    .push(statistics);
+                    .insert(output_index, output.clone());
             }
+            let statistics = config
+                .statistics
+                .get(&output.export_id)
+                .expect("statistics are initialized")
+                .clone();
+            export_statistics.insert((*table, output_index), statistics);
         }
     }
 
@@ -266,7 +263,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 %id,
                 "timely-{worker_id} initializing table reader \
                     with {} tables to snapshot",
-                    reader_table_info.len()
+                    worker_table_info.len()
             );
 
             let connection_config = connection
@@ -371,7 +368,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
 
             let upstream_info = {
-                let table_oids = reader_table_info.keys().copied().collect::<Vec<_>>();
+                let table_oids = worker_table_info.keys().copied().collect::<Vec<_>>();
                 // As part of retrieving the schema info, RLS policies are checked to ensure the
                 // snapshot can successfully read the tables. RLS policy errors are treated as
                 // transient, as the customer can simply add the BYPASSRLS to the PG account
@@ -387,7 +384,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                     // nothing else to do. These errors are not retractable.
                     Err(PostgresError::PublicationMissing(publication)) => {
                         let err = DefiniteError::PublicationDropped(publication);
-                        for (oid, outputs) in reader_table_info.iter() {
+                        for (oid, outputs) in worker_table_info.iter() {
                             // Produce a definite error here and then exit to ensure
                             // a missing publication doesn't generate a transient
                             // error and restart this dataflow indefinitely.
@@ -416,101 +413,59 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 }
             };
 
-            let worker_tables = reader_table_info
-                .iter()
-                .map(|(_, outputs)| {
-                    // just use the first output's desc since the fields accessed here should
-                    // be the same for all outputs
-                    let desc = &outputs.values().next().expect("at least 1").0;
-                    (
-                        format!(
-                            "{}.{}",
-                            Ident::new_unchecked(desc.namespace.clone()).to_ast_string_simple(),
-                            Ident::new_unchecked(desc.name.clone()).to_ast_string_simple()
-                        ),
-                        desc.oid.clone(),
-                        outputs.len(),
-                        export_statistics.get(&desc.oid).unwrap(),
-                    )
-                })
-                .collect();
+            report_snapshot_size(&client, &worker_table_info, metrics, &config, &export_statistics).await?;
 
-            report_snapshot_size(&client, worker_tables, metrics, &config).await?;
-
-            for (&oid, outputs) in reader_table_info.iter() {
-                let mut table_name = None;
-                let mut output_indexes = vec![];
-                for (output_index, (expected_desc, casts)) in outputs.iter() {
-                    match verify_schema(oid, expected_desc, &upstream_info, casts) {
-                        Ok(()) => {
-                            if table_name.is_none() {
-                                table_name = Some((
-                                    expected_desc.namespace.clone(),
-                                    expected_desc.name.clone(),
-                                ));
-                            }
-                            output_indexes.push(output_index);
-                        }
-                        Err(err) => {
-                            raw_handle
-                                .give_fueled(
-                                    &data_cap_set[0],
-                                    (
-                                        (oid, *output_index, Err(err.into())),
-                                        MzOffset::minimum(),
-                                       Diff::ONE,
-                                    ),
-                                )
-                                .await;
-                            continue;
-                        }
-                    };
-                }
-
-                let (namespace, table) = match table_name {
-                    Some(t) => t,
-                    None => {
-                        // all outputs errored for this table
+            for (&oid, outputs) in worker_table_info.iter() {
+                for (&output_index, info) in outputs.iter() {
+                    if let Err(err) = verify_schema(oid, info, &upstream_info) {
+                        raw_handle
+                            .give_fueled(
+                                &data_cap_set[0],
+                                (
+                                    (oid, output_index, Err(err.into())),
+                                    MzOffset::minimum(),
+                                    Diff::ONE,
+                                ),
+                            )
+                            .await;
                         continue;
                     }
-                };
 
-                trace!(
-                    %id,
-                    "timely-{worker_id} snapshotting table {:?}({oid}) @ {snapshot_lsn}",
-                    table
-                );
+                    trace!(
+                        %id,
+                        "timely-{worker_id} snapshotting table {:?}({oid}) @ {snapshot_lsn}",
+                        info.desc.name
+                    );
 
-                // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
-                // emulate's PG's rules for name formatting.
-                let query = format!(
-                    "COPY {}.{} TO STDOUT (FORMAT TEXT, DELIMITER '\t')",
-                    Ident::new_unchecked(namespace).to_ast_string_simple(),
-                    Ident::new_unchecked(table).to_ast_string_simple(),
-                );
-                let mut stream = pin!(client.copy_out_simple(&query).await?);
+                    // To handle quoted/keyword names, we can use `Ident`'s AST printing, which
+                    // emulate's PG's rules for name formatting.
+                    let namespace = Ident::new_unchecked(&info.desc.namespace).to_ast_string_stable();
+                    let table = Ident::new_unchecked(&info.desc.name).to_ast_string_stable();
+                    let column_list = info
+                        .desc
+                        .columns
+                        .iter()
+                        .map(|c| Ident::new_unchecked(&c.name).to_ast_string_stable())
+                        .join(",");
+                    let query = format!("COPY {namespace}.{table} ({column_list}) \
+                        TO STDOUT (FORMAT TEXT, DELIMITER '\t')");
+                    let mut stream = pin!(client.copy_out_simple(&query).await?);
 
-                let mut snapshot_staged = 0;
-                let mut update = ((oid, 0, Ok(vec![])), MzOffset::minimum(), Diff::ONE);
-                while let Some(bytes) = stream.try_next().await? {
-                    let data = update.0 .2.as_mut().unwrap();
-                    data.clear();
-                    data.extend_from_slice(&bytes);
-                    for output_index in &output_indexes {
-                        update.0 .1 = **output_index;
+                    let mut snapshot_staged = 0;
+                    let mut update = ((oid, output_index, Ok(vec![])), MzOffset::minimum(), Diff::ONE);
+                    while let Some(bytes) = stream.try_next().await? {
+                        let data = update.0 .2.as_mut().unwrap();
+                        data.clear();
+                        data.extend_from_slice(&bytes);
                         raw_handle.give_fueled(&data_cap_set[0], &update).await;
-                    }
-                    snapshot_staged += 1;
-                    if snapshot_staged % 1000 == 0 {
-                        for export_stat in export_statistics.get(&oid).unwrap() {
-                            export_stat.set_snapshot_records_staged(snapshot_staged);
+                        snapshot_staged += 1;
+                        if snapshot_staged % 1000 == 0 {
+                            export_statistics[&(oid, output_index)].set_snapshot_records_staged(snapshot_staged);
                         }
                     }
-                }
-                // final update for snapshot_staged, using the staged values as the total is an estimate
-                for export_stat in export_statistics.get(&oid).unwrap() {
-                    export_stat.set_snapshot_records_staged(snapshot_staged);
-                    export_stat.set_snapshot_records_known(snapshot_staged);
+                    // final update for snapshot_staged, using the staged values as the total is an estimate
+                    export_statistics[&(oid, output_index)].set_snapshot_records_staged(snapshot_staged);
+                    export_statistics[&(oid, output_index)].set_snapshot_records_known(snapshot_staged);
                 }
             }
 
@@ -520,9 +475,9 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
             // idea to read the replication stream concurrently with the snapshot but it actually
             // leads to a lot of data being staged for the future, which needlesly consumed memory
             // in the cluster.
-            for output in reader_table_info.values() {
-                for (output_index, (desc, _)) in output {
-                    trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", desc.name);
+            for output in worker_table_info.values() {
+                for (output_index, info) in output {
+                    trace!(%id, "timely-{worker_id} producing rewind request for table {} output {output_index}", info.desc.name);
                     let req = RewindRequest { output_index: *output_index, snapshot_lsn };
                     rewinds_handle.give(&rewind_cap_set[0], req);
                 }
@@ -704,20 +659,30 @@ fn decode_copy_row(data: &[u8], col_len: usize, row: &mut Row) -> Result<(), Def
 /// Record the sizes of the tables being snapshotted in `PgSnapshotMetrics` and emit snapshot statistics for each export.
 async fn report_snapshot_size(
     client: &Client,
-    // The table names, oids, number of outputs, and export_ids for this table owned by this worker.
-    tables: Vec<(String, Oid, usize, &Vec<SourceStatistics>)>,
+    worker_table_info: &BTreeMap<u32, BTreeMap<usize, SourceOutputInfo>>,
     metrics: PgSnapshotMetrics,
     config: &RawSourceCreationConfig,
+    export_statistics: &BTreeMap<(u32, usize), SourceStatistics>,
 ) -> Result<(), anyhow::Error> {
     // TODO(guswynn): delete unused configs
     let snapshot_config = config.config.parameters.pg_snapshot_config;
 
-    for (table, oid, _, export_stats) in tables {
-        let stats = collect_table_statistics(client, snapshot_config, &table, oid).await?;
+    for (&oid, outputs) in worker_table_info {
+        // Use the first output's desc to make the table name since it is the same for all outputs
+        let Some((_, info)) = outputs.first_key_value() else {
+            continue;
+        };
+        let table = format!(
+            "{}.{}",
+            Ident::new_unchecked(info.desc.namespace.clone()).to_ast_string_simple(),
+            Ident::new_unchecked(info.desc.name.clone()).to_ast_string_simple()
+        );
+        let stats =
+            collect_table_statistics(client, snapshot_config, &table, info.desc.oid).await?;
         metrics.record_table_count_latency(table, stats.count_latency);
-        for export_stat in export_stats {
-            export_stat.set_snapshot_records_known(stats.count);
-            export_stat.set_snapshot_records_staged(0);
+        for &output_index in outputs.keys() {
+            export_statistics[&(oid, output_index)].set_snapshot_records_known(stats.count);
+            export_statistics[&(oid, output_index)].set_snapshot_records_staged(0);
         }
     }
     Ok(())

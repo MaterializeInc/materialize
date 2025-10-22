@@ -11,6 +11,8 @@
 # Test postgres EXCLUDE COLUMNS support
 #
 
+> CREATE CLUSTER storage SIZE '${arg.default-replica-size}'
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
@@ -33,6 +35,7 @@ INSERT INTO enum_table VALUES ('var1', 1), ('var0', 0);
 ALTER TABLE enum_table REPLICA IDENTITY FULL;
 
 > CREATE SOURCE mz_source
+  IN CLUSTER storage
   FROM POSTGRES CONNECTION pg (PUBLICATION mz_source);
 
 ! CREATE TABLE enum_table FROM SOURCE "mz_source" (REFERENCE enum_table);
@@ -60,3 +63,54 @@ INSERT INTO enum_table VALUES ('var1', 3), ('var0', 2);
 1
 2
 3
+
+# We now test dropping the excluded column upstream. We want to test that
+# Materialize behaves correctly both during snapshotting and during
+# replication.
+
+# First we remove all replicas from the cluster so that we can set up the
+# objects the way we want.
+> ALTER CLUSTER storage SET (REPLICATION FACTOR 0)
+
+# Create a new table from the source with the same excluded tables. This table
+# will have to perform its snapshot against the upstream schema with the column
+# dropped.
+> CREATE TABLE enum_table2
+  FROM SOURCE mz_source (REFERENCE public.enum_table)
+  WITH (EXCLUDE COLUMNS (a));
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+ALTER TABLE enum_table DROP COLUMN a;
+
+# Re-add a replica and verify enum_table and enum_table2 have the expected data
+> ALTER CLUSTER storage SET (REPLICATION FACTOR 1)
+
+> SELECT * FROM enum_table;
+0
+1
+2
+3
+
+> SELECT * FROM enum_table2;
+0
+1
+2
+3
+
+$ postgres-execute connection=postgres://postgres:postgres@postgres
+INSERT INTO enum_table VALUES (4);
+
+# Verify replication ingestion works as expected
+> SELECT * FROM enum_table;
+0
+1
+2
+3
+4
+
+> SELECT * FROM enum_table2;
+0
+1
+2
+3
+4
