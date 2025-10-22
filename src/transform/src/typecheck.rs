@@ -884,7 +884,7 @@ impl Typecheck {
                     }
 
                     for (base_col, input_col) in t_base.iter_mut().zip_eq(t_input) {
-                        let diffs = column_subtype_difference(base_col, &input_col).into_iter().filter_map(|diff| diff.ignore_nullability()).collect_vec();
+                        let diffs = scalar_subtype_difference(&base_col.scalar_type, &input_col.scalar_type);
                         if !diffs.is_empty() {
                              return Err(TypeError::MismatchColumn {
                                     source: expr,
@@ -938,8 +938,8 @@ impl Typecheck {
                     let id = Id::Local(id.clone());
                     if let Some(ctx_typ) = ctx.get_mut(&id) {
                         for (base_col, input_col) in ctx_typ.iter_mut().zip_eq(typ) {
-                            // we explicitly include nullability information---we expect an EXACT match
-                            let diffs = column_subtype_difference(base_col, &input_col);
+                            // we expect an EXACT match, but don't care about nullability
+                            let diffs = scalar_subtype_difference(&base_col.scalar_type, &input_col.scalar_type);
                             if !diffs.is_empty() {
                                  return Err(TypeError::MismatchColumn {
                                         source: expr,
@@ -1020,14 +1020,14 @@ impl Typecheck {
                         }
 
                         for (base_col, input_col) in ctx_typ.iter_mut().zip_eq(typ) {
-                            let diffs = column_subtype_difference(base_col, &input_col)
-                                .into_iter()
-                                .filter_map(|diff| diff.ignore_nullability())
-                                .collect_vec();
+                            let diffs = scalar_subtype_difference(
+                                &base_col.scalar_type,
+                                &input_col.scalar_type,
+                            );
                             if !diffs.is_empty() {
                                 return Err(TypeError::MismatchColumn {
                                     source: expr,
-                                    got: input_col.clone(),
+                                    got: input_col,
                                     expected: base_col.clone(),
                                     diffs,
                                     message:
@@ -1203,10 +1203,8 @@ impl Typecheck {
                 let mut then_type = tc.typecheck_scalar(then, source, column_types)?;
                 let else_type = tc.typecheck_scalar(els, source, column_types)?;
 
-                let diffs = column_subtype_difference(&then_type, &else_type)
-                    .into_iter()
-                    .filter_map(|diff| diff.ignore_nullability())
-                    .collect_vec();
+                let diffs =
+                    scalar_subtype_difference(&then_type.scalar_type, &else_type.scalar_type);
                 if !diffs.is_empty() {
                     return Err(TypeError::MismatchColumn {
                         source,
@@ -1216,6 +1214,7 @@ impl Typecheck {
                         message: "couldn't compute union of column types for If".to_string(),
                     });
                 }
+
                 then_type.nullable |= else_type.nullable;
                 Ok(then_type)
             }
