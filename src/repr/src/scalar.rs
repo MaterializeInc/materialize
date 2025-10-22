@@ -3968,12 +3968,8 @@ impl Arbitrary for ReprScalarType {
             Just(ReprScalarType::Numeric).boxed(),
             Just(ReprScalarType::Date).boxed(),
             Just(ReprScalarType::Time).boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::Timestamp { precision })
-                .boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
-                .boxed(),
+            Just(ReprScalarType::Timestamp).boxed(),
+            Just(ReprScalarType::TimestampTz).boxed(),
             Just(ReprScalarType::MzTimestamp).boxed(),
             Just(ReprScalarType::Interval).boxed(),
             Just(ReprScalarType::Bytes).boxed(),
@@ -3995,12 +3991,8 @@ impl Arbitrary for ReprScalarType {
             Just(ReprScalarType::Int64).boxed(),
             Just(ReprScalarType::Date).boxed(),
             Just(ReprScalarType::Numeric).boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::Timestamp { precision })
-                .boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
-                .boxed(),
+            Just(ReprScalarType::Timestamp).boxed(),
+            Just(ReprScalarType::TimestampTz).boxed(),
         ]);
         let range = range_leaf
             .prop_map(|inner_type| ReprScalarType::Range {
@@ -4086,12 +4078,8 @@ pub enum ReprScalarType {
     Numeric,
     Date,
     Time,
-    Timestamp {
-        precision: Option<TimestampPrecision>,
-    },
-    TimestampTz {
-        precision: Option<TimestampPrecision>,
-    },
+    Timestamp,
+    TimestampTz,
     MzTimestamp,
     Interval,
     Bytes,
@@ -4100,18 +4088,10 @@ pub enum ReprScalarType {
     Uuid,
     Array(Box<ReprScalarType>),
     Int2Vector, // differs from Array enough to stick around
-    List {
-        element_type: Box<ReprScalarType>,
-    },
-    Record {
-        fields: Box<[ReprColumnType]>,
-    },
-    Map {
-        value_type: Box<ReprScalarType>,
-    },
-    Range {
-        element_type: Box<ReprScalarType>,
-    },
+    List { element_type: Box<ReprScalarType> },
+    Record { fields: Box<[ReprColumnType]> },
+    Map { value_type: Box<ReprScalarType> },
+    Range { element_type: Box<ReprScalarType> },
     MzAclItem,
     AclItem,
 }
@@ -4131,12 +4111,8 @@ impl From<&SqlScalarType> for ReprScalarType {
             SqlScalarType::Numeric { max_scale: _ } => ReprScalarType::Numeric,
             SqlScalarType::Date => ReprScalarType::Date,
             SqlScalarType::Time => ReprScalarType::Time,
-            SqlScalarType::Timestamp { precision } => ReprScalarType::Timestamp {
-                precision: *precision,
-            },
-            SqlScalarType::TimestampTz { precision } => ReprScalarType::TimestampTz {
-                precision: *precision,
-            },
+            SqlScalarType::Timestamp { precision: _ } => ReprScalarType::Timestamp,
+            SqlScalarType::TimestampTz { precision: _ } => ReprScalarType::TimestampTz,
             SqlScalarType::Interval => ReprScalarType::Interval,
             SqlScalarType::PgLegacyChar => ReprScalarType::UInt8,
             SqlScalarType::PgLegacyName => ReprScalarType::String,
@@ -4217,12 +4193,8 @@ impl SqlScalarType {
             ReprScalarType::Numeric => SqlScalarType::Numeric { max_scale: None },
             ReprScalarType::Date => SqlScalarType::Date,
             ReprScalarType::Time => SqlScalarType::Time,
-            ReprScalarType::Timestamp { precision } => SqlScalarType::Timestamp {
-                precision: *precision,
-            },
-            ReprScalarType::TimestampTz { precision } => SqlScalarType::TimestampTz {
-                precision: *precision,
-            },
+            ReprScalarType::Timestamp => SqlScalarType::Timestamp { precision: None },
+            ReprScalarType::TimestampTz => SqlScalarType::TimestampTz { precision: None },
             ReprScalarType::MzTimestamp => SqlScalarType::MzTimestamp,
             ReprScalarType::Interval => SqlScalarType::Interval,
             ReprScalarType::Bytes => SqlScalarType::Bytes,
@@ -5006,6 +4978,19 @@ mod tests {
             // For example, many SqlScalarType variants map to ReprScalarType::String.
             let sql_type = SqlScalarType::from_repr(&repr_type);
             assert_eq!(repr_type, ReprScalarType::from(&sql_type));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10000))]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn sql_type_base_eq_implies_repr_type_eq(sql_type1 in any::<SqlScalarType>(), sql_type2 in any::<SqlScalarType>()) {
+            let repr_type1 = ReprScalarType::from(&sql_type1);
+            let repr_type2 = ReprScalarType::from(&sql_type2);
+            if sql_type1.base_eq(&sql_type2) {
+                assert_eq!(repr_type1, repr_type2);
+            }
         }
     }
 
