@@ -857,12 +857,10 @@ class ResolvedImage:
 
     def is_published_if_necessary(self) -> bool:
         """Report whether the image exists on Docker Hub if it is publishable."""
-        # TODO: Put back the original implementation
-        return self.publish
-        # if self.publish and is_docker_image_pushed(self.spec()):
-        #     ui.say(f"{self.spec()} already exists")
-        #     return True
-        # return False
+        if self.publish and is_docker_image_pushed(self.spec()):
+            ui.say(f"{self.spec()} already exists")
+            return True
+        return False
 
     def run(
         self,
@@ -968,6 +966,8 @@ class ResolvedImage:
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
+        # This exists to make sure all hashes from before we had a GHCR mirror are invalidated, so that we rebuild when an image doesn't exist on GHCR yet
+        self_hash.update(b"mirror=ghcr")
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -1084,9 +1084,7 @@ class DependencySet:
                     )
                 )
 
-            # TODO: Reenable
-            # deps_to_build = [dep for dep, should_build in futures if should_build]
-            deps_to_build = [dep for dep, should_build in futures]
+            deps_to_build = [dep for dep, should_build in futures if should_build]
 
         prep = self._prepare_batch(deps_to_build)
         if pre_build:
@@ -1177,7 +1175,7 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = (
             "ghcr.io/materializeinc/materialize"
-            if ui.env_is_truthy("CI")
+            if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR")
             else "materialize"
         ),
         image_prefix: str = "",
@@ -1283,7 +1281,7 @@ class Repository:
             "--image-registry",
             default=(
                 "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("CI")
+                if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR")
                 else "materialize"
             ),
             help="the Docker image registry to pull images from and push images to",

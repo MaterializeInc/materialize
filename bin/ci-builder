@@ -167,10 +167,9 @@ print(hash.decode())
 cache_tag=cache-$flavor-$rust_version-$arch_go
 
 image_registry="materialize"
-# TODO: Reenable
-# if is_truthy "${CI:-0}"; then
-#     image_registry="ghcr.io/materializeinc/materialize"
-# fi
+if is_truthy "${CI:-0}" || is_truthy "${MZ_GHCR:-0}"; then
+    image_registry="ghcr.io/materializeinc/materialize"
+fi
 
 case "$cmd" in
     build)
