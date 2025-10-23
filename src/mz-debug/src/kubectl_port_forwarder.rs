@@ -20,6 +20,7 @@ use k8s_openapi::api::apps::v1::StatefulSet;
 use k8s_openapi::api::core::v1::{Service, ServicePort};
 use kube::api::ListParams;
 use kube::{Api, Client};
+use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
 use tokio::io::AsyncBufReadExt;
 
 use tracing::info;
@@ -129,62 +130,76 @@ pub struct ServiceInfo {
     pub namespace: String,
 }
 
-/// Returns ServiceInfo for balancerd
+/// Returns the Materialize CR for the given instance
+async fn get_materialize_cr(
+    client: &Client,
+    k8s_namespace: &String,
+    mz_instance_name: &String,
+) -> Result<Materialize> {
+    let materializes_api: Api<Materialize> = Api::namespaced(client.clone(), k8s_namespace);
+
+    let mz_cr = materializes_api
+        .get(mz_instance_name)
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to get Materialize CR {} in namespace {}",
+                mz_instance_name, k8s_namespace
+            )
+        })?;
+
+    Ok(mz_cr)
+}
+
+/// Returns ServiceInfo for the active environmentd service
 pub async fn find_environmentd_service(
     client: &Client,
     k8s_namespace: &String,
     mz_instance_name: &String,
 ) -> Result<ServiceInfo> {
+    // Get the Materialize CR to extract the resource ID
+    let mz_cr = get_materialize_cr(client, k8s_namespace, mz_instance_name).await?;
+    let resource_id = mz_cr.resource_id();
+
+    // The environmentd service name is always mz${resource_id}-environmentd
+    let service_name = format!("mz{}-environmentd", resource_id);
+
     let services_api: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
 
-    let label_filter = format!(
-        // mz-resource-id is used to identify environmentd services
-        "materialize.cloud/mz-resource-id,materialize.cloud/organization-name={}",
-        mz_instance_name
-    );
+    let service = services_api.get(&service_name).await.with_context(|| {
+        format!(
+            "Failed to get environmentd service {} in namespace {}",
+            service_name, k8s_namespace
+        )
+    })?;
 
-    let services = services_api
-        .list(&ListParams::default().labels(&label_filter))
-        .await
-        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
+    let service_ports = service
+        .spec
+        .as_ref()
+        .and_then(|spec| spec.ports.clone())
+        .ok_or_else(|| anyhow::anyhow!("Service {} has no ports defined", service_name))?;
 
-    // Find the first sql service that contains environmentd
-    let maybe_service =
-        services
-            .iter()
-            .find_map(|service| match (&service.metadata.name, &service.spec) {
-                (Some(service_name), Some(spec)) => {
-                    // TODO (debug_tool3): This could match both the generation service and the globally active one. We should use the active one.
-                    if !service_name.to_lowercase().contains("environmentd") {
-                        return None;
-                    }
-
-                    if let Some(ports) = &spec.ports {
-                        Some(ServiceInfo {
-                            service_name: service_name.clone(),
-                            service_ports: ports.clone(),
-                            namespace: k8s_namespace.clone(),
-                        })
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            });
-
-    if let Some(service) = maybe_service {
-        return Ok(service);
-    }
-
-    Err(anyhow::anyhow!("Could not find environmentd service"))
+    Ok(ServiceInfo {
+        service_name,
+        service_ports,
+        namespace: k8s_namespace.clone(),
+    })
 }
 
-/// Returns Vec<(service_name, ports)> for cluster services
+/// Returns Vec<(service_name, ports)> for cluster services from the active generation
 pub async fn find_cluster_services(
     client: &Client,
     k8s_namespace: &String,
     mz_instance_name: &String,
 ) -> Result<Vec<ServiceInfo>> {
+    // Get the Materialize CR to extract the active generation
+    let mz_cr = get_materialize_cr(client, k8s_namespace, mz_instance_name).await?;
+    let active_generation = mz_cr
+        .status
+        .as_ref()
+        .map(|status| status.active_generation)
+        .ok_or_else(|| anyhow::anyhow!("Materialize CR has no status"))?;
+
     let services: Api<Service> = Api::namespaced(client.clone(), k8s_namespace);
     let services = services
         .list(&ListParams::default())
@@ -199,7 +214,7 @@ pub async fn find_cluster_services(
     let statefulsets = statefulsets_api
         .list(&ListParams::default().labels(&organization_name_filter))
         .await
-        .with_context(|| format!("Failed to list services in namespace {}", k8s_namespace))?;
+        .with_context(|| format!("Failed to list statefulsets in namespace {}", k8s_namespace))?;
 
     let cluster_services: Vec<ServiceInfo> = services
         .iter()
@@ -214,22 +229,33 @@ pub async fn find_cluster_services(
                 return None;
             }
 
-            // Check if the owner reference points to environmentd StatefulSet in the same mz instance
+            // Check if the owner reference points to an environmentd StatefulSet
             let envd_statefulset_reference_name = service
                 .metadata
                 .owner_references
                 .as_ref()?
                 .iter()
-                //  There should only be one StatefulSet reference to environmentd
+                // There should only be one StatefulSet reference to environmentd
                 .find(|owner_reference| owner_reference.kind == "StatefulSet")?
                 .name
                 .clone();
 
-            if !statefulsets
-                .iter()
-                .filter_map(|statefulset| statefulset.metadata.name.clone())
-                .any(|name| name == envd_statefulset_reference_name)
-            {
+            // Find the StatefulSet that owns this service and check if it matches the active generation
+            let matching_statefulset = statefulsets.iter().find(|statefulset| {
+                statefulset.metadata.name.as_ref() == Some(&envd_statefulset_reference_name)
+            })?;
+
+            // Filter by active generation - only include services whose owner StatefulSet
+            // has metadata.generation matching the Materialize CR's active_generation
+            let statefulset_generation = matching_statefulset
+                .metadata
+                .annotations
+                .as_ref()?
+                .get("materialize.cloud/generation")?
+                .parse::<i64>()
+                .ok()?;
+            let active_generation_i64 = i64::try_from(active_generation).ok()?;
+            if statefulset_generation != active_generation_i64 {
                 return None;
             }
 
@@ -245,7 +271,10 @@ pub async fn find_cluster_services(
         return Ok(cluster_services);
     }
 
-    Err(anyhow::anyhow!("Could not find cluster services"))
+    Err(anyhow::anyhow!(
+        "Could not find cluster services for active generation {}",
+        active_generation
+    ))
 }
 
 /// Creates a port forwarder for the external pg wire port of environmentd.
