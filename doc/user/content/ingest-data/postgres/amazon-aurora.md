@@ -331,7 +331,7 @@ your networking configuration.
    file="examples/ingest_data/postgres/create_connection_ssh_cloud"
    example="create-ssh-tunnel-connection" indent="true"%}}
 
-1. {{% include-example
+   {{% include-example
    file="examples/ingest_data/postgres/create_connection_ssh_cloud"
    example="create-ssh-tunnel-connection-options" %}}
 
