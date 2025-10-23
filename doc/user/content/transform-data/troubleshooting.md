@@ -183,7 +183,7 @@ on, taking longer to return. As an example, if you issue a lot of
 resource-intensive queries at once, that might spike the CPU.
 
 The measure of cluster busyness is CPU. You can monitor CPU usage in the
-[Materialize console](https://console.materialize.com/) by clicking
+[Materialize console](/console/) by clicking
 the **"Clusters"** tab in the navigation bar, and clicking into the cluster.
 You can also grab CPU usage from the system catalog using SQL:
 
@@ -244,7 +244,7 @@ If your cluster replica is CPU-maxed out (~100% CPU usage), your query may be bl
 
 We recommend setting [Alerting thresholds](https://materialize.com/docs/manage/monitor/alerting/#thresholds) to notify your team when a cluster is reaching its capacity. Please note that these are recommendations, and some configurations may reach unstable memory utilization levels sooner than the thresholds.
 
-To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](https://materialize.com/docs/console/clusters/), go to [https://console.materialize.com/](https://console.materialize.com/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
+To see Memory Utilization and CPU usage for your cluster replica in the [Materialize console](https://materialize.com/docs/console/clusters/), go to [https://console.materialize.com/](/console/), click the **“Clusters”** tab in the navigation bar, and click on the cluster name.
 
 #### Address
 
@@ -274,7 +274,7 @@ attribute performance information to each LIR operator.
 Materialize stores a (sampled) log of the SQL statements that are issued against
 your Materialize region in the last **three days**, along with various metadata
 about these statements. You can access this log via the **"Query history"** tab
-in the [Materialize console](https://console.materialize.com/). You can filter
+in the [Materialize console](/console/). You can filter
 and sort statements by type, duration, and other dimensions.
 
 This data is also available via the

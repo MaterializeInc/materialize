@@ -9,7 +9,7 @@ menus:
     identifier: 'console'
 ---
 
-The [Materialize Console](https://console.materialize.com/) is a graphical user
+The Materialize Console is a graphical user
 interface for working with Materialize. From the Console, you can create and
 manage your clusters and sources, issue SQL queries, explore your objects, and
 view billing information.

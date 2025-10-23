@@ -29,7 +29,7 @@ the account.
 
 ## Materialize Console
 
-1. [Log in to the Materialize Console](https://console.materialize.com/).
+1. [Log in to the Materialize Console](/console/).
 
 1. In the side navigation bar, click **+ Create New** > **App Password**.
 

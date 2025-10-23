@@ -77,7 +77,7 @@ to connect:
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/) or your preferred SQL
+1. In the [SQL Shell](/console/) or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -220,7 +220,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](https://console.materialize.com/), or your preferred
+    1. In the [SQL Shell](/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
@@ -272,7 +272,7 @@ start by selecting the relevant option.
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [Materialize console's SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    SECRET`](/sql/create-secret/) command to securely store the password for the
    `materialize` PostgreSQL user you created
@@ -334,7 +334,7 @@ start by selecting the relevant option.
 
 {{< tab "Use AWS PrivateLink">}}
 
-1. In the [SQL Shell](https://console.materialize.com/),
+1. In the [SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
    AWS PrivateLink connection:
@@ -439,7 +439,7 @@ details for Materialize to use:
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [SQL Shell](https://console.materialize.com/),
+1. In the [SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
    tunnel connection:
