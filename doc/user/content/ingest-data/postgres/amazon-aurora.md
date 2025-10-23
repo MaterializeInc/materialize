@@ -77,7 +77,7 @@ to connect:
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [SQL Shell](https://console.materialize.com/) or your preferred SQL
+1. In the [SQL Shell](/console/) or your preferred SQL
    client connected to Materialize, find the static egress IP addresses for the
    Materialize region you are running in:
 
@@ -220,7 +220,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 1. Configure the SSH bastion host to allow traffic only from Materialize.
 
-    1. In the [SQL Shell](https://console.materialize.com/), or your preferred
+    1. In the [SQL Shell](/console/), or your preferred
        SQL client connected to Materialize, get the static egress IP addresses for
        the Materialize region you are running in:
 
@@ -249,7 +249,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 ## C. Ingest data in Materialize
 
-### 1. (Optional) Create a cluster
+### 1. (Recommended) Create a cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your PostgreSQL
@@ -258,21 +258,17 @@ scenarios, we recommend separating your workloads into multiple clusters for
 [resource isolation](/sql/create-cluster/#resource-isolation).
 {{< /note >}}
 
-
 {{% postgres-direct/create-a-cluster %}}
 
-### 2. Start ingesting data
+### 2. Create a connection.
 
-Now that you've configured your database network and created an ingestion
-cluster, you can connect Materialize to your PostgreSQL database and start
-ingesting data. The exact steps depend on your networking configuration, so
-start by selecting the relevant option.
+With the network configured, create a connection in Materialize to the upstream database.
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the [Materialize console's SQL Shell](https://console.materialize.com/),
+1. In the [Materialize console's SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    SECRET`](/sql/create-secret/) command to securely store the password for the
    `materialize` PostgreSQL user you created
@@ -334,7 +330,7 @@ start by selecting the relevant option.
 
 {{< tab "Use AWS PrivateLink">}}
 
-1. In the [SQL Shell](https://console.materialize.com/),
+1. In the [SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
    AWS PrivateLink connection:
@@ -418,28 +414,11 @@ details for Materialize to use:
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Aurora instance via AWS PrivateLink and start ingesting data from the
-   publication you created
-   [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
-
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [SQL Shell](https://console.materialize.com/),
+1. In the [SQL Shell](/console/),
    or your preferred SQL client connected to Materialize, use the [`CREATE
    CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
    tunnel connection:
@@ -521,31 +500,20 @@ password for the `materialize` PostgreSQL user you created [earlier](#2-create-a
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize.
 
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Aurora instance and start ingesting data from the publication you
-   created [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
-
 {{< /tab >}}
 
 {{< /tabs >}}
 
-### 3. Monitor the ingestion status
+### 3. Start ingesting data.
+
+{{< include-md file="shared-content/ingest-data/ingest-data-postgres-step.md"
+>}}
+
+### 4. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-### 4. Right-size the cluster
+### 5. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 

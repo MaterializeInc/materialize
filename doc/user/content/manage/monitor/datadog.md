@@ -45,7 +45,7 @@ which has been tried and tested in production environments.
 
 
 1. In the configuration file, define the connection to your Materialize region
-   under `connections` using the credentials provided in the [Materialize Console](https://console.materialize.com/).
+   under `connections` using the credentials provided in the [Materialize Console](/console/).
 
    {{< note >}}
    You must escape the special `@` character in `USER` for a successful

@@ -1,0 +1,21 @@
+{{ $operator_helm_chart_version := site.Data.self_managed.latest_versions.operator_helm_chart_version }}
+{{ $environmentd_version := site.Data.self_managed.latest_versions.environmentd_version }}
+
+```shell
+mz_operator_version=self-managed-{{ $operator_helm_chart_version}}
+mz_version={{ $environmentd_version }}
+
+curl -o sample-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
+curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/testing/postgres.yaml
+curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/testing/minio.yaml
+curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/testing/materialize.yaml
+```
+
+- `sample-values.yaml`: Used to configure the Materialize Operator.
+- `sample-postgres.yaml`: Used to configure PostgreSQL as the metadata
+  database.
+- `sample-minio.yaml`: Used to configure minIO as the blob storage.
+- `sample-materialize.yaml`: Used to configure Materialize instance.
+
+These configuration files are for local evaluation/testing purposes only and
+not intended for production use.

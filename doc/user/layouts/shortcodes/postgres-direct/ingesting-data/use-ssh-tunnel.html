@@ -55,14 +55,3 @@
     - Replace `<host>` with your PostgreSQL endpoint.
 
     - Replace `<database>` with the name of the database containing the tables you want to replicate to Materialize.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize to your PostgreSQL instance and start ingesting data from the publication you created [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    To ingest data from specific schemas or tables in your publication, use `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR ALL TABLES`.

@@ -381,7 +381,7 @@ ORDER BY mas.size DESC;
  16318559 | ArrangeBy[[Column(0)]]-errors   | Dataflow: materialize.public.num_bids_idx |       0 | 0 bytes
 ```
 
-In the [Materialize Console](https://console.materialize.com),
+In the [Materialize Console](/console/),
 
 - The [**Cluster Overview**](/console/clusters/) page displays the cluster
   resource utilization for a selected cluster as well as the resource intensive

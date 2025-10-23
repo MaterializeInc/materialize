@@ -134,7 +134,7 @@ On the **Connection Settings** page:
 With the source set up in Materialize and the webhook destination configured in
 Rudderstack, you can now query the incoming data:
 
-1. [In the Materialize console](https://console.materialize.com/), navigate to
+1. [In the Materialize console](/console/), navigate to
    the **SQL Shell**.
 
 1. Use SQL queries to inspect and analyze the incoming data:

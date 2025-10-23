@@ -60,7 +60,7 @@ Emulator does not provide the full experience of using Materialize.
 ## Step 0. Open the SQL Shell
 
 - If you have a Materialize account, navigate to the [Materialize
-  Console](https://console.materialize.com/) and sign in. By default, you should
+  Console](/console/) and sign in. By default, you should
   be in the SQL Shell. If you're already signed in, you can access the SQL Shell in the left-hand menu.
 
 - If you are using the Materialize Emulator, open the Materialize Console in
@@ -603,7 +603,7 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
 To get started ingesting your own data from an external system like Kafka, MySQL
 or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
-navigate to **Data** > **Sources** > **New source** in the [Materialize Console](https://console.materialize.com/)
+navigate to **Data** > **Sources** > **New source** in the [Materialize Console](/console/)
 to create your first source.
 
 For help getting started with your data or other questions about Materialize,

@@ -1,15 +1,15 @@
 ---
 title: "Free trial FAQs"
-description: "Answers to frequently asked questions about Materialize free trials"
+description: "Answers to frequently asked questions about Materialize Cloud free trials"
 menu:
   main:
     parent: "about"
     weight: 20
 ---
 
-When you [sign up for Materialize](https://materialize.com/register/), you get a
-free trial account so you can explore the product and start building! This page
-answers some frequently asked questions about free trials.
+When you [sign up for Materialize Cloud](https://materialize.com/register/), you
+get a free trial account so you can explore the product and start building! This
+page answers some frequently asked questions about free trials.
 
 {{< tip >}}
 For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
@@ -42,7 +42,7 @@ is under the rate limit of 4 credits per hour.
 
 To continue using Materialize, you can upgrade to a paid, [On Demand
 plan](https://materialize.com/pdfs/on-demand-terms.pdf) from the billing section
-of the [Materialize console](https://console.materialize.com/). Otherwise,
+of the [Materialize console](/console/). Otherwise,
 Materialize will delete your resources and data at the end of the trial period.
 
 ## How do I monitor my credit consumption rate?

@@ -5,7 +5,7 @@ disable_toc: true
 menu:
   main:
     parent: "manage-terraform"
-    weight: 25
+    weight: 50
 ---
 
 Materialize does not directly integrate with external secret stores, but it's possible to manage this integration via Terraform.

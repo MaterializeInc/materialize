@@ -254,8 +254,7 @@ table.inline-headings {
     .level-4 a {
 
 
-        &:hover,
-        &.active {
+        &:hover {
             border-left: 2px solid  var(--highlight);
         }
     }

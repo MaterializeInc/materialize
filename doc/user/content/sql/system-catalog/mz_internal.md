@@ -174,7 +174,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 
 ## `mz_cluster_replica_metrics_history`
 
-{{< warn-if-unreleased v0.116 >}}
 The `mz_cluster_replica_metrics_history` table records resource utilization metrics
 for all processes of all extant cluster replicas.
 
@@ -208,7 +207,6 @@ of each process in each cluster replica in the system.
 
 ## `mz_cluster_replica_status_history`
 
-{{< warn-if-unreleased v0.116 >}}
 The `mz_cluster_replica_status_history` table records status changes
 for all processes of all extant cluster replicas.
 
@@ -240,7 +238,6 @@ At this time, we do not make any guarantees about the exactness or freshness of 
 
 ## `mz_cluster_replica_utilization_history`
 
-{{< warn-if-unreleased v0.116 >}}
 The `mz_cluster_replica_utilization_history` view records resource utilization metrics
 for all processes of all extant cluster replicas, as a percentage of the total resource allocation.
 

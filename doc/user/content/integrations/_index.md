@@ -13,7 +13,7 @@ menu:
   main:
     identifier: "integrations"
     name: "Tools and integrations"
-    weight: 25
+    weight: 70
 ---
 
 Materialize is **wire-compatible** with PostgreSQL and can integrate with many

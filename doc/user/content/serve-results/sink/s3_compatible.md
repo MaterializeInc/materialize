@@ -22,7 +22,7 @@ Cloud Storage, or Cloudflare R2.
 
 ## Step 1. Create a connection
 
-1. In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+1. In the [SQL Shell](/console/), or your preferred SQL
    client connected to Materialize, create an [AWS connection](/sql/create-connection/#aws),
    replacing `<ACCESS_KEY_ID>` and  `<SECRET_ACCESS_KEY>` with the credentials for your bucket. The AWS
    connection can be used to connect to any S3 compatible object storage service, by specifying the endpoint and the region.

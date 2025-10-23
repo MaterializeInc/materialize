@@ -1,6 +1,6 @@
 ---
-title: "Disaster recovery"
-description: "Learn about various disaster recovery (DR) strategies for Materialize."
+title: "Disaster recovery (Cloud)"
+description: "Learn about various disaster recovery (DR) strategies for Materialize Cloud."
 disable_list: true
 menu:
   main:

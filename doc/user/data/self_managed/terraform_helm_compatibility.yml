@@ -1,0 +1,53 @@
+columns:
+  - column: "terraform-helm-materialize"
+  - column: "Notes"
+  - column: "Release date"
+
+rows:
+  - "terraform-helm-materialize": "v0.1.26"
+    "Notes": |
+      - Uses as default Materialize Operator version: `v0.159.1`
+      - Uses as default environmentd version: `v0.147.17`
+    "Release date": "2025-10-14"
+
+  - "terraform-helm-materialize": "v0.1.25"
+    "Notes": |
+      - Uses as default Materialize Operator version: `v0.159.1`
+      - Uses as default environmentd version: `v0.147.17`
+    "Release date": "2025-9-10"
+
+  - "terraform-helm-materialize": "v0.1.16"
+    "Notes": |
+      - Adds support for passing in additional `environmentd` configuration options.
+      - Adds support for password authentication.
+      - Uses as default Materialize Operator version: `v25.2.0`
+      - Uses as default environmentd version: `v0.147.0`
+    "Release date": "2025-05-15"
+
+  - "terraform-helm-materialize": "v0.1.15"
+    "Notes": |
+      - Adds support for passing in additional `environmentd` configuration options.
+      - Uses as default Materialize Operator version: `v25.1.12`
+      - Uses as default environmentd version: `v0.130.13`
+    "Release date": "2025-05-15"
+
+  - "terraform-helm-materialize": "v0.1.14"
+    "Notes": |
+
+      - Uses as default Materialize Operator version: `v25.1.12`
+      - Uses as default environmentd version: `v0.130.13`
+    "Release date": "2025-05-15"
+
+  - "terraform-helm-materialize": "v0.1.13"
+    "Notes": |
+
+      - Uses as default Materialize Operator version: `v25.1.11`
+      - Uses as default environmentd version: `v0.130.12`
+    "Release date": "2025-05-15"
+
+  - "terraform-helm-materialize": "v0.1.12"
+    "Notes": |
+
+      - Uses as default Materialize Operator version: `v25.1.7`
+      - Uses as default environmentd version: `v0.130.8`
+    "Release date": "2025-04-08"

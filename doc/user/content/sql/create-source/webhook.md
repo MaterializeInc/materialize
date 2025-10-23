@@ -82,7 +82,7 @@ https://<HOST>/api/webhook/<database>/<schema>/<src_name>
 
 A breakdown of each component is as follows:
 
-- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](https://console.materialize.com/).
+- `<HOST>`: The Materialize instance URL, which can be found on the [Materialize console](/console/).
 - `<database>`: The name of the database where the source is created (default is `materialize`).
 - `<schema>`: The schema name where the source gets created (default is `public`).
 - `<src_name>`: The name you provided for your source at the time of creation.

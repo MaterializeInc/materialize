@@ -9,7 +9,7 @@ menu:
     identifier: console-admin
 ---
 
-The [Materialize Console](https://console.materialize.com/) provides an
+The [Materialize Console](/console/) provides an
 **Admin** section where you can manage client credentials and, for
 administrators, review your usage and billing information.
 

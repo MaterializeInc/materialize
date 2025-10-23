@@ -4,7 +4,7 @@ description: "Serving results from Materialize"
 disable_list: true
 menus:
   main:
-    weight: 13
+    weight: 15
     identifier: 'serve-results'
 ---
 

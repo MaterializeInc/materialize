@@ -10,7 +10,7 @@ menu:
 ---
 
 You can manage your user profile and account settings from the [Materialize
-Console](https://console.materialize.com/).
+Console](/console/).
 
 ![Image of the user profile menu](/images/console/console-user-profile.png
 "User profile menu")

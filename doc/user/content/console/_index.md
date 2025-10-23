@@ -5,11 +5,12 @@ disable_list: true
 disable_toc: true
 menus:
   main:
-    weight: 5
+    parent: "get-started"
+    weight: 25
     identifier: 'console'
 ---
 
-The [Materialize Console](https://console.materialize.com/) is a graphical user
+The [Materialize Console](/console/) is a graphical user
 interface for working with Materialize. From the Console, you can create and
 manage your clusters and sources, issue SQL queries, explore your objects, and
 view billing information.

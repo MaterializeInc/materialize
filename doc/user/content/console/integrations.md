@@ -9,7 +9,7 @@ menu:
     identifier: console-integrations
 ---
 
-The [Materialize Console](https://console.materialize.com/) provides an
+The [Materialize Console](/console/) provides an
 **Integrations** page that lists the supported 3rd party integrations,
 specifying:
 

@@ -65,8 +65,6 @@ Field          | Type       | Meaning
 
 ### `mz_cluster_replica_frontiers`
 
-{{< warn-if-unreleased "v0.118" >}}
-
 The `mz_cluster_replica_frontiers` table describes the per-replica frontiers of
 sources, sinks, materialized views, indexes, and subscriptions in the system,
 as observed from the coordinator.
@@ -296,7 +294,6 @@ Field                | Type     | Meaning
 
 ### `mz_kafka_sources`
 
-{{< warn-if-unreleased v0.115 >}}
 The `mz_kafka_sources` table contains a row for each Kafka source in the system.
 
 This table was previously in the `mz_internal` schema. All queries previously referencing
@@ -416,8 +413,6 @@ Field       | Type                 | Meaning
 `privileges`| [`mz_aclitem array`] | The privileges belonging to the relation.
 
 ### `mz_recent_storage_usage`
-
-{{< warn-if-unreleased "v0.113" >}}
 
 The `mz_recent_storage_usage` table describes the storage utilization of each
 table, source, and materialized view in the system in the most recent storage

@@ -74,7 +74,7 @@ However, introducing recursive CTEs complicates the situation as follows:
 
 Let's consider a very simple schema consisting of `users` that belong to a
 hierarchy of geographical `areas` and exchange `transfers` between each other.
-Use the [SQL Shell](https://console.materialize.com/) to run the sequence of
+Use the [SQL Shell](/console/) to run the sequence of
 commands below.
 
 
