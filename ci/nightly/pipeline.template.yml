@@ -72,7 +72,16 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-16cpu-32gb
-        branches: "main"
+        branches: "main *build*"
+
+      - id: build-rust-latest-beta-release
+        label: "Build with Latest Rust Beta (Release)"
+        command: bin/ci-builder run stable ci/test/rust-beta-build.sh --release
+        depends_on: []
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-x86-64-dedi-48cpu-192gb
+        branches: "main *build*"
 
       - id: devel-docker-tags
         label: Tag development docker images
