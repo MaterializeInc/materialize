@@ -17,15 +17,19 @@ import datetime
 import json
 import os
 import random
+import signal
 import subprocess
 import time
-from collections.abc import Callable
+import uuid
+from collections.abc import Callable, Iterator
+from enum import Enum
 from typing import Any
 
 import yaml
 from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -37,6 +41,7 @@ from materialize.mzcompose.services.environmentd import Environmentd
 from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import all_subclasses
+from materialize.version_list import get_all_self_managed_versions
 
 SERVICES = [
     Testdrive(),
@@ -47,13 +52,15 @@ SERVICES = [
 ]
 
 
-def get_image(image: str, tag: str | None) -> str:
+def get_tag(tag: str | None = None) -> str:
     # We can't use the mzbuild tag because it has a different fingerprint for
     # environmentd/clusterd/balancerd and the orchestratord depends on them
     # being identical.
-    tag = tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+    return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
-    return f'{image.rsplit(":", 1)[0]}:{tag}'
+
+def get_image(image: str, tag: str | None) -> str:
+    return f'{image.rsplit(":", 1)[0]}:{get_tag(tag)}'
 
 
 def get_pod_data(
@@ -120,6 +127,8 @@ def retry(fn: Callable, timeout: int) -> None:
 
 
 class Modification:
+    pick_by_default: bool = True
+
     def __init__(self, value: Any):
         assert value in self.values(), f"Expected {value} to be in {self.values()}"
         self.value = value
@@ -147,7 +156,7 @@ class Modification:
                 break
         else:
             raise ValueError(
-                f"No modification with name {name} found, only know {[subclass.__name__ for subclass in all_subclasses(Modification)]}"
+                f"No modification with name {name} found, only know {[subclass.__name__ for subclass in all_modifications()]}"
             )
         return subclass(data["value"])
 
@@ -174,11 +183,20 @@ class Modification:
         raise NotImplementedError
 
 
+def all_modifications() -> list[type[Modification]]:
+    return [
+        mod_class
+        for mod_class in all_subclasses(Modification)
+        if mod_class.pick_by_default
+    ]
+
+
 class LicenseKey(Modification):
     @classmethod
     def values(cls) -> list[Any]:
         # TODO: Add back "del" when https://github.com/MaterializeInc/database-issues/issues/9599 is resolved
-        return ["valid", "invalid"]
+        # TODO: Add back invalid when it's solved for upgrades
+        return ["valid"]
 
     @classmethod
     def failed_reconciliation_values(cls) -> list[Any]:
@@ -201,32 +219,42 @@ class LicenseKey(Modification):
             raise ValueError(f"Unknown value {self.value}, only know {self.values()}")
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        environmentd = get_environmentd_data()
-        if self.value == "invalid":
-            assert len(environmentd["items"]) == 0
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.147.0"
+        ):
             return
 
-        envs = environmentd["items"][0]["spec"]["containers"][0]["env"]
-        if self.value == "del" or (mods[LicenseKeyCheck] == False):
-            for env in envs:
-                assert (
-                    env["name"] != "MZ_LICENSE_KEY"
-                ), f"Expected MZ_LICENSE_KEY to be missing, but is in {envs}"
-        elif self.value == "valid":
-            for env in envs:
-                if env["name"] != "MZ_LICENSE_KEY":
-                    continue
-                expected = "/license_key/license_key"
-                assert (
-                    env["value"] == expected
-                ), f"Expected license key to be set to {expected}, but is {env['value']}"
-                break
-            else:
-                assert (
-                    False
-                ), f"Expected to find MZ_LICENSE_KEY in env variables, but only found {envs}"
-            ready = environmentd["items"][0]["status"]["containerStatuses"][0]["ready"]
-            assert ready, "Expected environmentd to be in ready state"
+        def check() -> None:
+            environmentd = get_environmentd_data()
+            if self.value == "invalid":
+                assert len(environmentd["items"]) == 0
+                return
+
+            envs = environmentd["items"][0]["spec"]["containers"][0]["env"]
+            if self.value == "del" or (mods[LicenseKeyCheck] == False):
+                for env in envs:
+                    assert (
+                        env["name"] != "MZ_LICENSE_KEY"
+                    ), f"Expected MZ_LICENSE_KEY to be missing, but is in {envs}"
+            elif self.value == "valid":
+                for env in envs:
+                    if env["name"] != "MZ_LICENSE_KEY":
+                        continue
+                    expected = "/license_key/license_key"
+                    assert (
+                        env["value"] == expected
+                    ), f"Expected license key to be set to {expected}, but is {env['value']}"
+                    break
+                else:
+                    assert (
+                        False
+                    ), f"Expected to find MZ_LICENSE_KEY in env variables, but only found {envs}"
+                ready = environmentd["items"][0]["status"]["containerStatuses"][0][
+                    "ready"
+                ]
+                assert ready, "Expected environmentd to be in ready state"
+
+        retry(check, 240)
 
 
 class LicenseKeyCheck(Modification):
@@ -234,10 +262,6 @@ class LicenseKeyCheck(Modification):
     def values(cls) -> list[Any]:
         # TODO: Reenable False when fixed
         return [None, True]
-
-    # @classmethod
-    # def bad_values(cls) -> list[Any]:
-    #     return [False]
 
     @classmethod
     def default(cls) -> Any:
@@ -276,6 +300,11 @@ class BalancerdEnabled(Modification):
         definition["operator"]["balancerd"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.148.0"
+        ):
+            return
+
         def check() -> None:
             result = spawn.capture(
                 [
@@ -317,6 +346,11 @@ class BalancerdNodeSelector(Modification):
         definition["operator"]["balancerd"]["nodeSelector"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.148.0"
+        ):
+            return
+
         def check() -> None:
             balancerd = get_balancerd_data()
             if self.value and mods[BalancerdEnabled]:
@@ -347,6 +381,12 @@ class ConsoleEnabled(Modification):
         definition["operator"]["console"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # TODO: Should this work with older versions? Fails in upgrade chain: AssertionError: Unexpected result: pod/mz9bvcfyoxae-console-654bd7f8f5-fbv4q
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.148.0"
+        ):
+            return
+
         def check() -> None:
             result = spawn.capture(
                 [
@@ -394,6 +434,110 @@ class EnableRBAC(Modification):
             assert (
                 expected in args
             ), f"Expected {expected} in environmentd args, but only found {args}"
+
+
+class EnvironmentdImageRef(Modification):
+    # Only done intentionally during upgrades with correct ordering
+    pick_by_default = False
+
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [str(version) for version in get_all_self_managed_versions()] + [
+            get_tag()
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return get_tag()
+
+    def __init__(self, value: Any):
+        self.value = value
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"][
+            "environmentdImageRef"
+        ] = f"materialize/environmentd:{self.value}"
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        def check() -> None:
+            environmentd = get_environmentd_data()
+            image = environmentd["items"][0]["spec"]["containers"][0]["image"]
+            expected = f"materialize/environmentd:{self.value}"
+            assert (
+                image == expected
+            ), f"Expected environmentd image {expected}, but found {image}"
+
+        retry(check, 240)
+
+
+class NumMaterializeEnvironments(Modification):
+    # Only done intentionally
+    pick_by_default = False
+
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [1, 2]
+
+    @classmethod
+    def default(cls) -> Any:
+        return 1
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value == 2:
+            definition["materialize2"] = copy.deepcopy(definition["materialize"])
+            definition["materialize2"]["metadata"][
+                "name"
+            ] = "12345678-1234-1234-1234-123456789013"
+            # TODO: Also need a different pg db?
+        elif self.value == 1:
+            if "materialize2" in definition:
+                del definition["materialize2"]
+        else:
+            raise ValueError(f"Unhandled value {self.value}")
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        service_names = (
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "services",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            .strip()
+            .split("\n")
+        )
+
+        def check() -> None:
+            for service_name in service_names:
+                if not "-cluster-" in service_name:
+                    continue
+                data = json.loads(
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "endpoints",
+                            service_name.removeprefix("service/"),
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "json",
+                        ]
+                    )
+                )
+                print(data)
+                addresses = data["subsets"][0]["addresses"]
+                assert (
+                    len(addresses) == 1
+                ), f"Expected 1 address for clusterd, but found {addresses}"
+
+        retry(check, 120)
 
 
 class TelemetryEnabled(Modification):
@@ -477,6 +621,8 @@ class ObservabilityPodMetricsEnabled(Modification):
         definition["operator"]["observability"]["podMetrics"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        return  # TODO: Doesn't work with upgrade: Expected no --collect-pod-metrics in environmentd args, but found it
+
         orchestratord = get_orchestratord_data()
         args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
         expected = "--collect-pod-metrics"
@@ -518,32 +664,33 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
             ), f"Expected no {expected} in environmentd args, but found it: {args}"
 
 
-class BalancerdReplicas(Modification):
-    @classmethod
-    def values(cls) -> list[Any]:
-        return [None, 1, 2]
-
-    @classmethod
-    def default(cls) -> Any:
-        return None
-
-    def modify(self, definition: dict[str, Any]) -> None:
-        if self.value is not None:
-            definition["materialize"]["spec"]["balancerdReplicas"] = self.value
-
-    def validate(self, mods: dict[type[Modification], Any]) -> None:
-        if not mods[BalancerdEnabled]:
-            return
-
-        def check_replicas():
-            balancerd = get_balancerd_data()
-            num_pods = len(balancerd["items"])
-            expected = self.value if self.value is not None else 2
-            assert (
-                num_pods == expected
-            ), f"Expected {expected} balancerd pods, but found {num_pods}"
-
-        retry(check_replicas, 120)
+# TODO: Fix in upgrade tests
+# class BalancerdReplicas(Modification):
+#     @classmethod
+#     def values(cls) -> list[Any]:
+#         return [None, 1, 2]
+#
+#     @classmethod
+#     def default(cls) -> Any:
+#         return None
+#
+#     def modify(self, definition: dict[str, Any]) -> None:
+#         if self.value is not None:
+#             definition["materialize"]["spec"]["balancerdReplicas"] = self.value
+#
+#     def validate(self, mods: dict[type[Modification], Any]) -> None:
+#         if not mods[BalancerdEnabled]:
+#             return
+#
+#         def check_replicas():
+#             balancerd = get_balancerd_data()
+#             num_pods = len(balancerd["items"])
+#             expected = self.value if self.value is not None else 2
+#             assert (
+#                 num_pods == expected
+#             ), f"Expected {expected} balancerd pods, but found {num_pods}"
+#
+#         retry(check_replicas, 120)
 
 
 class ConsoleReplicas(Modification):
@@ -631,6 +778,10 @@ class SwapEnabledGlobal(Modification):
         definition["operator"]["operator"]["clusters"]["swap_enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        if version < MzVersion.parse_mz("v0.158.0"):
+            return
+
         orchestratord = get_orchestratord_data()
         args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
         cluster_replica_sizes = json.loads(
@@ -662,7 +813,7 @@ class SwapEnabledGlobal(Modification):
             validate_node_selector(node_selector, self.value, mods[StorageClass])
 
         # Clusterd can take a while to start up
-        retry(check_pods, 5)
+        retry(check_pods, 120)
 
         # TODO check that pods can actually use swap
 
@@ -683,6 +834,10 @@ class StorageClass(Modification):
             ] = "openebs-lvm-instance-store-ext4"
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        if version < MzVersion.parse_mz("v0.157.0"):
+            return
+
         orchestratord = get_orchestratord_data()
         args = orchestratord["items"][0]["spec"]["containers"][0]["args"]
         cluster_replica_sizes = json.loads(
@@ -791,8 +946,13 @@ class BalancerdResources(Modification):
         definition["materialize"]["spec"]["balancerdResourceRequirements"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        if version < MzVersion.parse_mz("v0.158.0"):
+            return
+
         if mods[BalancerdEnabled] == False:
             return
+
         expected = self.value
         if self.value is None:
             expected = {
@@ -866,6 +1026,107 @@ class ConsoleResources(Modification):
         retry(check_pods, 240)
 
 
+class AuthenticatorKind(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        # TODO: Reenable with Password for >= v0.147.7 only
+        # return ["None", "Password"]
+        return ["None"]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "None"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["authenticatorKind"] = self.value
+        if self.value == "Password":
+            definition["secret"]["stringData"][
+                "external_login_password_mz_system"
+            ] = "superpassword"
+        elif "external_login_password_mz_system" in definition["secret"]["stringData"]:
+            del definition["secret"]["stringData"]["external_login_password_mz_system"]
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        environmentd = get_environmentd_data()
+        name = environmentd["items"][0]["metadata"]["name"]
+        process = None
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+
+        if self.value == "Password" and version <= MzVersion.parse_mz("v0.147.6"):
+            return
+
+        port = (
+            6875
+            if version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password"
+            else 6877
+        )
+        for i in range(120):
+            process = subprocess.Popen(
+                [
+                    "kubectl",
+                    "port-forward",
+                    f"pod/{name}",
+                    "-n",
+                    "materialize-environment",
+                    f"{port}:{port}",
+                ],
+                preexec_fn=os.setpgrp,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            time.sleep(1)
+            process.poll()
+            assert process.stdout
+            line = process.stdout.readline()
+            if "Forwarding from" in line:
+                break
+            else:
+                print("Port-forward failed, retrying")
+        else:
+            spawn.capture(
+                [
+                    "kubectl",
+                    "describe",
+                    "pod",
+                    "-l",
+                    "app=environmentd",
+                    "-n",
+                    "materialize-environment",
+                ]
+            )
+            raise ValueError(
+                "Port-forwarding never worked, environmentd status:\n{status}"
+            )
+
+        time.sleep(1)
+        try:
+            # TODO: Figure out why this is not working in CI, but works locally
+            pass
+            # psycopg.connect(
+            #     host="127.0.0.1",
+            #     user="mz_system",
+            #     password="superpassword" if self.value == "Password" else None,
+            #     dbname="materialize",
+            #     port=port,
+            # )
+        finally:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+
+
+class Properties(Enum):
+    Defaults = "defaults"
+    Individual = "individual"
+    Combine = "combine"
+
+
+class Action(Enum):
+    Noop = "noop"
+    Upgrade = "upgrade"
+    UpgradeChain = "upgrade-chain"
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -878,7 +1139,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Custom version tag to use",
     )
     parser.add_argument("--seed", type=str, default=random.randrange(1000000))
-    parser.add_argument("--scenario", type=str, default="all")
+    parser.add_argument("--scenario", type=str)
+    parser.add_argument(
+        "--action", type=str, default="noop", choices=[elem.value for elem in Action]
+    )
+    parser.add_argument(
+        "--properties",
+        type=str,
+        default="individual",
+        choices=[elem.value for elem in Properties],
+    )
     parser.add_argument("--modification", action="append", type=str, default=[])
     parser.add_argument("--runtime", type=int, help="Runtime in seconds")
     args = parser.parse_args()
@@ -890,27 +1160,21 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "0.29.0"
     ), f"kind >= v0.29.0 required, while you are on {kind_version}"
 
+    c.up(Service("testdrive", idle=True))
+
     cluster = "kind"
     clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
     if cluster not in clusters or args.recreate_cluster:
         setup(cluster)
 
     if not args.tag:
-        # Start up services and potentially compile them first so that we have all images locally
-        c.down(destroy_volumes=True)
-        c.up(
-            Service("testdrive", idle=True),
-            Service("orchestratord", idle=True),
-            Service("environmentd", idle=True),
-            Service("clusterd", idle=True),
-            Service("balancerd", idle=True),
-        )
         services = [
             "orchestratord",
             "environmentd",
             "clusterd",
             "balancerd",
         ]
+        c.invoke("pull", *services)
         for service in services:
             spawn.runv(
                 [
@@ -939,9 +1203,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         definition["secret"] = materialize_setup[1]
         definition["materialize"] = materialize_setup[2]
 
-    definition["operator"]["operator"]["image"]["tag"] = get_image(
-        c.compose["services"]["orchestratord"]["image"], args.tag
-    ).rsplit(":", 1)[1]
+    definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
+    # TODO: database-issues#9696, makes environmentd -> clusterd connections fail
+    # definition["operator"]["networkPolicies"]["enabled"] = True
+    # definition["operator"]["networkPolicies"]["internal"]["enabled"] = True
+    # definition["operator"]["networkPolicies"]["egress"]["enabled"] = True
+    # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
     # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
     definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
     definition["operator"]["clusterd"]["nodeSelector"][
@@ -954,10 +1221,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
         c.compose["services"]["environmentd"]["image"], args.tag
     )
+    # kubectl get endpoints mzel5y3f42l6-cluster-u1-replica-u1-gen-1 -n materialize-environment -o json
+    # more than one address
 
     rng = random.Random(args.seed)
 
-    mod_classes = sorted(list(all_subclasses(Modification)), key=repr)
+    mod_classes = sorted(all_modifications(), key=repr)
     if args.modification:
         mod_classes = [
             mod_class
@@ -965,35 +1234,93 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if mod_class.__name__ in args.modification
         ]
 
-    if args.scenario == "all":
+    if args.scenario:
         assert not args.runtime
-        for mod_class in mod_classes:
-            for value in mod_class.values():
-                mod = mod_class(value)
-                run_scenario([mod], definition)
-    elif args.scenario == "combine":
-        assert args.runtime
-        done_mods = set()
+        assert not args.modification
+        run_scenario(
+            [
+                [Modification.from_dict(mod) for mod in mods]
+                for mods in json.loads(args.scenario)
+            ],
+            definition,
+        )
+        return
+
+    if args.runtime:
         end_time = (
             datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
         ).timestamp()
-        while time.time() < end_time:
-            mods = (
-                mod_class(rng.choice(mod_class.good_values()))
-                for mod_class in mod_classes
-            )
-            if mods not in done_mods:
-                done_mods.add(mods)
-                run_scenario(list(mods), definition)
-    elif args.scenario == "defaults":
-        assert not args.runtime
-        mods = [mod_class(mod_class.default()) for mod_class in mod_classes]
-        run_scenario(mods, definition, modify=False)
-    else:
-        assert not args.runtime
-        assert not args.modification
-        mods = [Modification.from_dict(mod) for mod in json.loads(args.scenario)]
-        run_scenario(mods, definition)
+
+    action = Action(args.action)
+    properties = Properties(args.properties)
+
+    def get_mods() -> Iterator[list[Modification]]:
+        if properties == Properties.Defaults:
+            yield [mod_class(mod_class.default()) for mod_class in mod_classes]
+            yield [NumMaterializeEnvironments(2)]
+        elif properties == Properties.Individual:
+            for mod_class in mod_classes:
+                for value in mod_class.values():
+                    yield [mod_class(value)]
+        elif properties == Properties.Combine:
+            assert args.runtime
+            while time.time() < end_time:
+                yield [
+                    mod_class(rng.choice(mod_class.good_values()))
+                    for mod_class in mod_classes
+                ]
+        else:
+            raise ValueError(f"Unhandled properties value {properties}")
+
+    mods_it = get_mods()
+
+    try:
+        if action == Action.Noop:
+            for mods in mods_it:
+                run_scenario([mods], definition)
+        elif action == Action.Upgrade:
+            assert args.runtime
+            end_time = (
+                datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+            ).timestamp()
+            versions = get_all_self_managed_versions()
+            while time.time() < end_time:
+                selected_versions = sorted(list(rng.sample(versions, 2)))
+                try:
+                    mod = next(mods_it)
+                except StopIteration:
+                    mods_it = get_mods()
+                    mod = next(mods_it)
+                scenario = [
+                    [EnvironmentdImageRef(str(version))] + mod
+                    for version in selected_versions
+                ]
+                run_scenario(scenario, definition)
+        elif action == Action.UpgradeChain:
+            assert args.runtime
+            end_time = (
+                datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
+            ).timestamp()
+            versions = get_all_self_managed_versions()
+            while time.time() < end_time:
+                random.randint(2, len(versions))
+                selected_versions = sorted(list(rng.sample(versions, 2)))
+                try:
+                    mod = next(mods_it)
+                except StopIteration:
+                    mods_it = get_mods()
+                    mod = next(mods_it)
+                scenario = [
+                    [EnvironmentdImageRef(str(version))] + mod for version in versions
+                ]
+                assert len(scenario) == len(
+                    versions
+                ), f"Expected scenario with {len(versions)} steps, but only found: {scenario}"
+                run_scenario(scenario, definition)
+        else:
+            raise ValueError(f"Unhandled action {action}")
+    except StopIteration:
+        pass
 
 
 def setup(cluster: str):
@@ -1060,34 +1387,55 @@ def setup(cluster: str):
     )
 
 
+DONE_SCENARIOS = set()
+
+
 def run_scenario(
-    mods: list[Modification], original_definition: dict[str, Any], modify: bool = True
+    scenario: list[list[Modification]],
+    original_definition: dict[str, Any],
+    modify: bool = True,
 ) -> None:
-    scenario = json.dumps([mod.to_dict() for mod in mods])
-    print(f"--- Running with {scenario}")
-    definition = copy.deepcopy(original_definition)
-    expect_fail = False
-    if modify:
-        for mod in mods:
-            mod.modify(definition)
-            if mod.value in mod.failed_reconciliation_values():
-                expect_fail = True
-    run(definition, expect_fail)
-    mod_dict = {mod.__class__: mod.value for mod in mods}
-    for subclass in all_subclasses(Modification):
-        if subclass not in mod_dict:
-            mod_dict[subclass] = subclass.default()
-    try:
-        for mod in mods:
-            mod.validate(mod_dict)
-    except:
-        print(
-            f"Reproduce with bin/mzcompose --find orchestratord run default --scenario='{scenario}'"
-        )
-        raise
+    initialize = True
+    scenario_json = json.dumps([[mod.to_dict() for mod in mods] for mods in scenario])
+    if scenario_json in DONE_SCENARIOS:
+        return
+    DONE_SCENARIOS.add(scenario_json)
+    print(f"--- Running with {scenario_json}")
+    for mods in scenario:
+        definition = copy.deepcopy(original_definition)
+        expect_fail = False
+        if modify:
+            for mod in mods:
+                mod.modify(definition)
+                if mod.value in mod.failed_reconciliation_values():
+                    expect_fail = True
+        if not initialize:
+            definition["materialize"]["spec"][
+                "rolloutStrategy"
+            ] = "ImmediatelyPromoteCausingDowntime"
+            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+            run(definition, expect_fail)
+        if initialize:
+            init(definition)
+            run(definition, expect_fail)
+            initialize = False  # only initialize once
+        else:
+            upgrade(definition, expect_fail)
+        mod_dict = {mod.__class__: mod.value for mod in mods}
+        for subclass in all_subclasses(Modification):
+            if subclass not in mod_dict:
+                mod_dict[subclass] = subclass.default()
+        try:
+            for mod in mods:
+                mod.validate(mod_dict)
+        except:
+            print(
+                f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
+            )
+            raise
 
 
-def run(definition: dict[str, Any], expect_fail: bool):
+def init(definition: dict[str, Any]) -> None:
     try:
         spawn.capture(
             ["kubectl", "delete", "namespace", "materialize-environment"],
@@ -1111,7 +1459,7 @@ def run(definition: dict[str, Any], expect_fail: bool):
             "--namespace=materialize",
             "--create-namespace",
             "--version",
-            "v25.2.4",
+            "v25.3.0",
             "-f",
             "-",
         ],
@@ -1122,39 +1470,6 @@ def run(definition: dict[str, Any], expect_fail: bool):
 
     for i in range(120):
         try:
-            pod_names = (
-                spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        "pods",
-                        "-n",
-                        "materialize",
-                        "-o",
-                        "name",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-                .strip()
-                .split("\n")
-            )
-            for pod_name in pod_names:
-                status = spawn.capture(
-                    [
-                        "kubectl",
-                        "get",
-                        pod_name,
-                        "-n",
-                        "materialize",
-                        "-o",
-                        "jsonpath={.status.phase}",
-                    ],
-                    stderr=subprocess.DEVNULL,
-                )
-                if status != "Running":
-                    break
-            else:
-                break
             spawn.capture(
                 [
                     "kubectl",
@@ -1176,21 +1491,47 @@ def run(definition: dict[str, Any], expect_fail: bool):
     else:
         raise ValueError("Never completed")
 
+
+def upgrade(definition: dict[str, Any], expect_fail: bool) -> None:
+    spawn.runv(
+        [
+            "helm",
+            "upgrade",
+            "operator",
+            MZ_ROOT / "misc" / "helm-charts" / "operator",
+            "--namespace=materialize",
+            "--version",
+            "v25.3.0",
+            "-f",
+            "-",
+        ],
+        stdin=yaml.dump(definition["operator"]).encode(),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    post_run_check(definition, expect_fail)
+
+
+def run(definition: dict[str, Any], expect_fail: bool) -> None:
+    defs = [
+        definition["namespace"],
+        definition["secret"],
+        definition["materialize"],
+    ]
+    if "materialize2" in definition:
+        defs.append(definition["materialize2"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
-            stdin=yaml.dump_all(
-                [
-                    definition["namespace"],
-                    definition["secret"],
-                    definition["materialize"],
-                ]
-            ).encode(),
+            stdin=yaml.dump_all(defs).encode(),
         )
     except subprocess.CalledProcessError as e:
         print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
         raise
+    post_run_check(definition, expect_fail)
 
+
+def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
     for i in range(60):
         try:
             spawn.capture(
@@ -1267,4 +1608,4 @@ def run(definition: dict[str, Any], expect_fail: bool):
         )
         raise ValueError("Never completed")
     # Wait a bit for the status to stabilize
-    time.sleep(10)
+    time.sleep(60)

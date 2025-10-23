@@ -134,15 +134,13 @@ cleanup() {
       ci_unimportant_heading "orchestratord test: Uploading logs..."
       K8S_CLUSTER_NAME=kind
       K8S_CONTEXT="kind-$K8S_CLUSTER_NAME"
-      for pod in $(kubectl get pods -o name | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
-          kubectl logs --prefix=true "$pod" &>> kubectl-get-logs.log || true
-          kubectl logs --previous --prefix=true "$pod" &>> kubectl-get-logs-previous.log || true
+      for pod in $(kubectl get pods -o name -n materialize | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+          kubectl logs --prefix=true "$pod" -n materialize &>> kubectl-get-logs.log || true
+          kubectl logs --previous --prefix=true "$pod" -n materialize &>> kubectl-get-logs-previous.log || true
       done
-      kubectl get events > kubectl-get-events.log || true
-      kubectl get all > kubectl-get-all.log || true
-      kubectl get events > kubectl-get-events.log || true
-      kubectl get all > kubectl-get-all.log || true
-      kubectl describe all | awk '
+      kubectl get events -n materialize > kubectl-get-events.log || true
+      kubectl get all -n materialize > kubectl-get-all.log || true
+      kubectl describe all -n materialize | awk '
         BEGIN { redact=0 }
         /^[[:space:]]*Environment:/ {
           indent = match($0, /[^ ]/) - 1
@@ -160,13 +158,35 @@ cleanup() {
         }
         { print }
       ' > kubectl-describe-all.log || true
-      kubectl get pods -o wide > kubectl-pods-with-nodes.log || true
+      kubectl get pods -o wide -n materialize > kubectl-pods-with-nodes.log || true
 
-      kubectl -n kube-system get events > kubectl-get-events-kube-system.log || true
-      kubectl -n kube-system get all > kubectl-get-all-kube-system.log || true
-      kubectl -n kube-system describe all > kubectl-describe-all-kube-system.log || true
+      for pod in $(kubectl get pods -o name -n materialize-environment | grep -v -E 'kubernetes|minio|cockroach|redpanda'); do
+          kubectl logs --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-environment.log || true
+          kubectl logs --previous --prefix=true "$pod" -n materialize-environment &>> kubectl-get-logs-previous-environment.log || true
+      done
+      kubectl get events -n materialize-environment > kubectl-get-events-environment.log || true
+      kubectl get all -n materialize-environment > kubectl-get-all-environment.log || true
+      kubectl describe all -n materialize-environment | awk '
+        BEGIN { redact=0 }
+        /^[[:space:]]*Environment:/ {
+          indent = match($0, /[^ ]/) - 1
+          print substr($0, 1, indent) "Environment: [REDACTED]"
+          redact = 1
+          next
+        }
+        redact {
+          current_indent = match($0, /[^ ]/) - 1
+          if (current_indent <= indent || NF == 0) {
+            redact = 0
+          } else {
+            next
+          }
+        }
+        { print }
+      ' > kubectl-describe-all-environment.log || true
+      kubectl get pods -o wide -n materialize-environment > kubectl-pods-with-nodes-environment.log || true
 
-      mapfile -t artifacts < <(printf "kubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-events-kube-system.log\nkubectl-get-all-kube-system.log\nkubectl-describe-all-kube-system.log\nkail-output.log\n")
+      mapfile -t artifacts < <(printf "kubectl-get-logs.log\nkubectl-get-logs-previous.log\nkubectl-get-events.log\nkubectl-get-all.log\nkubectl-describe-all.log\nkubectl-pods-with-nodes.log\nkubectl-get-logs-environment.log\nkubectl-get-logs-previous-environment.log\nkubectl-get-events-environment.log\nkubectl-get-all-environment.log\nkubectl-describe-all-environment.log\nkubectl-pods-with-nodes-environment.log\n")
       artifacts_str=$(IFS=";"; echo "${artifacts[*]}")
       buildkite-agent artifact upload "$artifacts_str"
       unset artifacts
