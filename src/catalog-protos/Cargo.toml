@@ -41,22 +41,5 @@ serde_json = "1.0.145"
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
-[package.metadata.cargo-gazelle]
-# TODO(parkmycar): Get rid of this hack by introducing a `catalog-types` crate.
-# This exists because there is a test in the `catalog` crate (`test_proto_serialization_stability`)
-# that needs both the protobuf definitions, but also some catalog types.
-additive_content = """
-filegroup(
-    name = "all_protos",
-    srcs = glob(["protos/**"]),
-)
-"""
-
-[package.metadata.cargo-gazelle.build]
-data = ["protos/**"]
-
-[package.metadata.cargo-gazelle.test.lib]
-data = ["protos/**"]
-
 [features]
 default = ["workspace-hack"]

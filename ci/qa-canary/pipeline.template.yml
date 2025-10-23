@@ -9,17 +9,12 @@
 
 priority: 40
 
-env:
-  CI_BAZEL_BUILD: 1
-  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
-
 steps:
   - id: build-aarch64
-    label: ":bazel: Build aarch64"
+    label: ":rust: Build aarch64"
     command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
     inputs:
       - "*"
-    artifact_paths: bazel-explain.log
     depends_on: []
     timeout_in_minutes: 60
     agents:

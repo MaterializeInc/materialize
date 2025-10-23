@@ -95,12 +95,12 @@ so it is executed.""",
         type=int,
         default=os.getenv("CI_PRIORITY", 0),
     )
-    parser.add_argument("pipeline", type=str)
     parser.add_argument(
-        "--bazel-remote-cache",
-        default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
-        action="store",
+        "--lto",
+        type=int,
+        default=ui.env_is_truthy("CI_LTO"),
     )
+    parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
 
     print(f"Pipeline is: {args.pipeline}")
@@ -109,24 +109,7 @@ so it is executed.""",
         raw = f.read()
     raw = raw.replace("$RUST_VERSION", rust_version())
 
-    # On 'main' or tagged branches, we use a separate remote cache that only CI can write to.
-    if os.environ["BUILDKITE_BRANCH"] == "main" or os.environ["BUILDKITE_TAG"]:
-        bazel_remote_cache = "https://bazel-remote-pa.dev.materialize.com"
-    else:
-        bazel_remote_cache = "https://bazel-remote.dev.materialize.com"
-    raw = raw.replace("$BAZEL_REMOTE_CACHE", bazel_remote_cache)
     pipeline = yaml.safe_load(raw)
-
-    bazel = pipeline.get("env", {}).get("CI_BAZEL_BUILD", 0) == 1
-    bazel_lto = (
-        pipeline.get("env", {}).get("CI_BAZEL_LTO", 0) == 1
-        or bool(os.environ["BUILDKITE_TAG"])
-        or (
-            not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
-            and args.pipeline in ("nightly", "release-qualification")
-        )
-        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
-    )
 
     hash_check: dict[Arch, tuple[str, bool]] = {}
 
@@ -139,13 +122,10 @@ so it is executed.""",
     def get_hashes(arch: Arch) -> tuple[str, bool]:
         repo = mzbuild.Repository(
             Path("."),
-            profile=mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED,
+            profile=mzbuild.Profile.RELEASE if args.lto else mzbuild.Profile.OPTIMIZED,
             arch=arch,
             coverage=args.coverage,
             sanitizer=args.sanitizer,
-            bazel=bazel,
-            bazel_remote_cache=bazel_remote_cache,
-            bazel_lto=bazel_lto,
         )
         deps = repo.resolve_dependencies(image for image in repo if image.publish)
         check = deps.check()
@@ -180,9 +160,7 @@ so it is executed.""",
                 copy.deepcopy(pipeline),
                 args.coverage,
                 args.sanitizer,
-                bazel,
-                args.bazel_remote_cache,
-                bazel_lto,
+                args.lto,
             )
         else:
             print("Trimming unchanged steps from pipeline")
@@ -190,9 +168,7 @@ so it is executed.""",
                 pipeline,
                 args.coverage,
                 args.sanitizer,
-                bazel,
-                args.bazel_remote_cache,
-                bazel_lto,
+                args.lto,
             )
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
@@ -206,7 +182,6 @@ so it is executed.""",
     set_parallelism_name(pipeline)
     check_depends_on(pipeline, args.pipeline)
     add_version_to_preflight_tests(pipeline)
-    move_build_to_bazel_lto(pipeline, bazel_lto)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
     add_cargo_test_dependency(
@@ -214,9 +189,7 @@ so it is executed.""",
         args.pipeline,
         args.coverage,
         args.sanitizer,
-        bazel,
-        args.bazel_remote_cache,
-        bazel_lto,
+        args.lto,
     )
     remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
@@ -673,9 +646,7 @@ def trim_tests_pipeline(
     pipeline: Any,
     coverage: bool,
     sanitizer: Sanitizer,
-    bazel: bool,
-    bazel_remote_cache: str,
-    bazel_lto: bool,
+    lto: bool,
 ) -> None:
     """Trim pipeline steps whose inputs have not changed in this branch.
 
@@ -693,12 +664,9 @@ def trim_tests_pipeline(
     print("--- Resolving dependencies")
     repo = mzbuild.Repository(
         Path("."),
-        profile=mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED,
+        profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
         coverage=coverage,
         sanitizer=sanitizer,
-        bazel=bazel,
-        bazel_remote_cache=bazel_remote_cache,
-        bazel_lto=bazel_lto,
     )
     deps = repo.resolve_dependencies(image for image in repo)
 
@@ -843,9 +811,7 @@ def add_cargo_test_dependency(
     pipeline_name: str,
     coverage: bool,
     sanitizer: Sanitizer,
-    bazel: bool,
-    bazel_remote_cache: str,
-    bazel_lto: bool,
+    lto: bool,
 ) -> None:
     """Cargo Test normally doesn't have to wait for the build to complete, but it requires a few images (ubuntu-base, postgres), which are rarely changed. So only add a dependency when those images are not on Dockerhub yet."""
     if pipeline_name not in ("test", "nightly"):
@@ -859,12 +825,9 @@ def add_cargo_test_dependency(
     repo = mzbuild.Repository(
         Path("."),
         arch=Arch.X86_64,
-        profile=mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED,
+        profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
         coverage=coverage,
         sanitizer=sanitizer,
-        bazel=bazel,
-        bazel_remote_cache=bazel_remote_cache,
-        bazel_lto=bazel_lto,
     )
     composition = Composition(repo, name="cargo-test")
     deps = composition.dependencies
@@ -906,20 +869,6 @@ def remove_dependencies_on_prs(
                 continue
             step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = step["depends_on"]
             del step["depends_on"]
-
-
-def move_build_to_bazel_lto(pipeline: Any, bazel_lto: bool) -> None:
-    if not bazel_lto:
-        return
-    pipeline.setdefault("env", {})["CI_BAZEL_BUILD"] = 1
-    pipeline["env"]["CI_BAZEL_LTO"] = 1
-    for step in steps(pipeline):
-        if step.get("id") == "build-x86_64":
-            step["label"] = ":bazel: Build x86_64"
-            step["agents"]["queue"] = "builder-linux-x86_64"
-        elif step.get("id") == "build-aarch64":
-            step["label"] = ":bazel: Build aarch64"
-            step["agents"]["queue"] = "builder-linux-aarch64-mem"
 
 
 def trim_builds(

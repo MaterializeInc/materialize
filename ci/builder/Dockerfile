@@ -70,7 +70,6 @@ RUN gpg --import rust.asc \
     && rm rust.asc \
     && echo "trusted-key 85AB96E6FA1BE5FE" >> ~/.gnupg/gpg.conf
 
-ARG BAZEL_VERSION
 ARG RUST_DATE
 ARG RUST_VERSION
 
@@ -81,15 +80,7 @@ RUN \
     # `/etc/passwd`, and writable home directory.
     curl -fsSL https://github.com/benesch/autouseradd/releases/download/1.3.0/autouseradd-1.3.0-$ARCH_GO.tar.gz \
     | tar xz -C / --strip-components 1 \
-    # 2. Bazel
-    #
-    # We primarily build Materialize via Bazel in CI, and Bazel pulls in its own dependencies.
-    && arch_bazel=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x86_64/") bazel_version=$(echo "$BAZEL_VERSION") \
-    && curl -fsSL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazel/releases/download/$bazel_version/bazel-$bazel_version-linux-$arch_bazel \
-    && if [ "$arch_bazel" = arm64 ]; then echo 'fac4b954e0501c2be8b9653a550b443eb85284e568d08b102977e2bf587b09d7 /usr/local/bin/bazel' | sha256sum --check; fi \
-    && if [ "$arch_bazel" = x86_64 ]; then echo '48ea0ff9d397a48add6369c261c5a4431fe6d5d5348cfb81411782fb80c388d3 /usr/local/bin/bazel' | sha256sum --check; fi \
-    && chmod +x /usr/local/bin/bazel \
-    # 3. Docker
+    # 2. Docker
     #
     # If you upgrade Docker (Compose) version here, also update it in misc/python/cli/mzcompose.py.
     && mkdir -p /usr/local/lib/docker/cli-plugins \
@@ -99,7 +90,7 @@ RUN \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-pushrm \
     && curl -fsSL https://github.com/docker/buildx/releases/download/v0.25.0/buildx-v0.25.0.linux-$ARCH_GO > /usr/local/lib/docker/cli-plugins/docker-buildx \
     && chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx \
-    # 4. Cargo
+    # 3. Cargo
     #
     # Some parts of our stack use 'cargo' to read metadata, so we install just that. Importantly we
     # do not install 'rustc' or any of the other tools, this keeps the Docker image small.

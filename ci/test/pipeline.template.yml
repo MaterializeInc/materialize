@@ -15,9 +15,6 @@
 dag: true
 
 env:
-  CI_BAZEL_BUILD: 0
-  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
-  CI_BAZEL_LTO: 0
   CARGO_BUILD_JOBS: "default"
 
 # When resources are constrained, run early since this might be blocking a PR from merging
@@ -33,7 +30,6 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -45,7 +41,6 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
@@ -56,14 +51,10 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
           queue: l-builder-linux-x86_64
-        env:
-          CI_BAZEL_BUILD: 0
-          CI_BAZEL_LTO: 0
         branches: "v*.*"
 
       - id: build-aarch64-no-lto
@@ -71,20 +62,14 @@ steps:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
-        artifact_paths: bazel-explain.log
         depends_on: []
         timeout_in_minutes: 60
         agents:
           queue: l-builder-linux-aarch64
-        env:
-          CI_BAZEL_BUILD: 0
-          CI_BAZEL_LTO: 0
         branches: "v*.*"
 
       - id: upload-debug-symbols-x86_64
         label: "Upload debug symbols for x86_64"
-        env:
-          CI_BAZEL_BUILD: 0
         command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"
@@ -98,8 +83,6 @@ steps:
 
       - id: upload-debug-symbols-aarch64
         label: "Upload debug symbols for aarch64"
-        env:
-          CI_BAZEL_BUILD: 0
         command: bin/ci-builder run stable bin/pyactivate -m materialize.ci_util.upload_debug_symbols_to_polarsignals
         inputs:
           - "*"

@@ -36,7 +36,6 @@ axum-core = { version = "0.4.5", default-features = false, features = ["tracing"
 base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
 bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
-bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
 bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
@@ -128,8 +127,8 @@ schemars = { version = "1.0.4", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
-serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
-serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde_core = { version = "1.0.228", default-features = false, features = ["alloc", "rc", "result", "std"] }
+serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
@@ -156,7 +155,6 @@ unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
-winnow = { version = "0.7.13" }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -183,7 +181,6 @@ base16ct = { version = "0.2.0", default-features = false, features = ["alloc"] }
 bindgen = { version = "0.72.1", default-features = false, features = ["runtime"] }
 bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
-bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.0" }
 bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
@@ -278,8 +275,8 @@ schemars = { version = "1.0.4", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
-serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
-serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value", "unbounded_depth"] }
+serde_core = { version = "1.0.228", default-features = false, features = ["alloc", "rc", "result", "std"] }
+serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
@@ -308,14 +305,13 @@ unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.24" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
-winnow = { version = "0.7.13" }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.16", features = ["std"] }
 
 [target.x86_64-unknown-linux-gnu.dependencies]
-camino = { version = "1.2.1", default-features = false, features = ["serde1"] }
+bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.17", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
@@ -325,14 +321,13 @@ miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd",
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 openssl = { version = "0.10.73", features = ["vendored"] }
 openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
 tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
-camino = { version = "1.2.1", default-features = false, features = ["serde1"] }
+bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.17", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
@@ -342,20 +337,18 @@ miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd",
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 openssl = { version = "0.10.73", features = ["vendored"] }
 openssl-sys = { version = "0.9.109", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
 tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.dependencies]
-camino = { version = "1.2.1", default-features = false, features = ["serde1"] }
+bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.17", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
@@ -363,13 +356,12 @@ security-framework = { version = "2.10.0", features = ["alpn"] }
 tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
-camino = { version = "1.2.1", default-features = false, features = ["serde1"] }
+bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.17", default-features = false, features = ["client-proxy", "client-proxy-system"] }
 idna = { version = "1.0.3" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
-pathdiff = { version = "0.2.3", default-features = false, features = ["camino"] }
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }

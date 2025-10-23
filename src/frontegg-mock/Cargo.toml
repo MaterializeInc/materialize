@@ -35,8 +35,5 @@ openssl = { version = "0.10.73", features = ["vendored"] }
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 
-[package.metadata.cargo-gazelle.binary.mz-frontegg-mock]
-skip = true
-
 [features]
 default = ["workspace-hack"]

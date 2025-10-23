@@ -28,7 +28,6 @@ import shutil
 import stat
 import subprocess
 import sys
-import tarfile
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, Iterator, Sequence
@@ -45,7 +44,6 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
-from materialize import bazel as bazel_utils
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -84,9 +82,6 @@ class RepositoryDetails:
         image_registry: The Docker image registry to pull images from and push
             images to.
         image_prefix: A prefix to apply to all Docker image names.
-        bazel: Whether or not to use Bazel as the build system instead of Cargo.
-        bazel_remote_cache: URL of a Bazel Remote Cache that we can build with.
-        bazel_lto: Force LTO build
     """
 
     def __init__(
@@ -98,9 +93,6 @@ class RepositoryDetails:
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
-        bazel: bool,
-        bazel_remote_cache: str | None,
-        bazel_lto: bool,
     ):
         self.root = root
         self.arch = arch
@@ -110,13 +102,6 @@ class RepositoryDetails:
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
-        self.bazel = bazel
-        self.bazel_remote_cache = bazel_remote_cache
-        self.bazel_lto = (
-            bazel_lto
-            or ui.env_is_truthy("BUILDKITE_TAG")
-            or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
-        )
 
     def build(
         self,
@@ -126,78 +111,30 @@ class RepositoryDetails:
         extra_env: dict[str, str] = {},
     ) -> list[str]:
         """Start a build invocation for the configured architecture."""
-        if self.bazel:
-            assert not channel, "Bazel doesn't support building for multiple channels."
-            return xcompile.bazel(
-                arch=self.arch,
-                subcommand=subcommand,
-                rustflags=rustflags,
-                extra_env=extra_env,
-            )
-        else:
-            return xcompile.cargo(
-                arch=self.arch,
-                channel=channel,
-                subcommand=subcommand,
-                rustflags=rustflags,
-                extra_env=extra_env,
-            )
+        return xcompile.cargo(
+            arch=self.arch,
+            channel=channel,
+            subcommand=subcommand,
+            rustflags=rustflags,
+            extra_env=extra_env,
+        )
 
     def tool(self, name: str) -> list[str]:
         """Start a binutils tool invocation for the configured architecture."""
-        if self.bazel:
-            return ["bazel", "run", f"@//misc/bazel/tools:{name}", "--"]
-        else:
-            if platform.system() != "Linux":
-                # We can't use the local tools from macOS to build a Linux executable
-                return ["bin/ci-builder", "run", "stable", name]
-            # If we're on Linux, trust that the tools are installed instead of
-            # loading the slow ci-builder. If you don't have compilation tools
-            # installed you can still run `bin/ci-builder run stable
-            # bin/mzcompose ...`, and most likely the Cargo build will already
-            # fail earlier if you don't have compilation tools installed and
-            # run without the ci-builder.
-            return [name]
+        if platform.system() != "Linux":
+            # We can't use the local tools from macOS to build a Linux executable
+            return ["bin/ci-builder", "run", "stable", name]
+        # If we're on Linux, trust that the tools are installed instead of
+        # loading the slow ci-builder. If you don't have compilation tools
+        # installed you can still run `bin/ci-builder run stable
+        # bin/mzcompose ...`, and most likely the Cargo build will already
+        # fail earlier if you don't have compilation tools installed and
+        # run without the ci-builder.
+        return [name]
 
     def cargo_target_dir(self) -> Path:
         """Determine the path to the target directory for Cargo."""
         return self.root / "target-xcompile" / xcompile.target(self.arch)
-
-    def bazel_workspace_dir(self) -> Path:
-        """Determine the path to the root of the Bazel workspace."""
-        return self.root
-
-    def bazel_config(self) -> list[str]:
-        """Returns a set of Bazel config flags to set for the build."""
-        flags = []
-
-        if self.profile == Profile.RELEASE:
-            # If we're a tagged build, then we'll use stamping to update our
-            # build info, otherwise we'll use our side channel/best-effort
-            # approach to update it.
-            if self.bazel_lto:
-                flags.append("--config=release-tagged")
-            else:
-                flags.append("--config=release-dev")
-                bazel_utils.write_git_hash()
-        elif self.profile == Profile.OPTIMIZED:
-            flags.append("--config=optimized")
-
-        if self.bazel_remote_cache:
-            flags.append(f"--remote_cache={self.bazel_remote_cache}")
-
-        if ui.env_is_truthy("CI"):
-            flags.append("--config=ci")
-
-            # Building with sanitizers causes the intermediate artifacts to be
-            # quite large so we'll skip using the RAM backed sandbox.
-            if self.sanitizer == Sanitizer.none:
-                flags.append("--config=in-mem-sandbox")
-
-        # Add flags for the Sanitizer
-        flags.extend(self.sanitizer.bazel_flags())
-
-        return flags
 
     def rewrite_builder_path_for_host(self, path: Path) -> Path:
         """Rewrite a path that is relative to the target directory inside the
@@ -396,20 +333,6 @@ class CargoPreImage(PreImage):
             # *lot* of work.
             "Cargo.lock",
             ".cargo/config",
-            # Even though we are not always building with Bazel, consider its
-            # inputs so that developers with CI_BAZEL_BUILD=0 can still
-            # download the images from Dockerhub
-            ".bazelrc",
-            "WORKSPACE",
-        }
-
-        # Bazel has some rules and additive files that aren't directly
-        # associated with a crate, but can change how it's built.
-        additive_path = self.rd.root / "misc" / "bazel"
-        additive_files = ["*.bazel", "*.bzl"]
-        inputs |= {
-            f"misc/bazel/{path}"
-            for path in git.expand_globs(additive_path, *additive_files)
         }
 
         return inputs
@@ -446,59 +369,8 @@ class CargoBuild(CargoPreImage):
         self.strip = config.pop("strip", True)
         self.extract = config.pop("extract", {})
 
-        bazel_bins = config.pop("bazel-bin")
-        self.bazel_bins = (
-            bazel_bins if isinstance(bazel_bins, dict) else {self.bins[0]: bazel_bins}
-        )
-        self.bazel_tars = config.pop("bazel-tar", {})
-
         if len(self.bins) == 0 and len(self.examples) == 0:
             raise ValueError("mzbuild config is missing pre-build target")
-        for bin in self.bins:
-            if bin not in self.bazel_bins:
-                raise ValueError(
-                    f"need to specify a 'bazel-bin' for '{bin}' at '{path}'"
-                )
-
-    @staticmethod
-    def generate_bazel_build_command(
-        rd: RepositoryDetails,
-        bins: list[str],
-        examples: list[str],
-        bazel_bins: dict[str, str],
-        bazel_tars: dict[str, str],
-    ) -> list[str]:
-        assert (
-            rd.bazel
-        ), "Programming error, tried to invoke Bazel when it is not enabled."
-        assert not rd.coverage, "Bazel doesn't support building with coverage."
-
-        rustflags = []
-        if rd.sanitizer == Sanitizer.none:
-            rustflags += ["--cfg=tokio_unstable"]
-
-        extra_env = {
-            "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
-        }
-
-        bazel_build = rd.build(
-            "build",
-            channel=None,
-            rustflags=rustflags,
-            extra_env=extra_env,
-        )
-
-        for bin in bins:
-            bazel_build.append(bazel_bins[bin])
-        for tar in bazel_tars:
-            bazel_build.append(tar)
-        # TODO(parkmycar): Make sure cargo-gazelle generates rust_binary targets for examples.
-        assert len(examples) == 0, "Bazel doesn't support building examples."
-
-        # Add extra Bazel config flags.
-        bazel_build.extend(rd.bazel_config())
-
-        return bazel_build
 
     @staticmethod
     def generate_cargo_build_command(
@@ -506,10 +378,6 @@ class CargoBuild(CargoPreImage):
         bins: list[str],
         examples: list[str],
     ) -> list[str]:
-        assert (
-            not rd.bazel
-        ), "Programming error, tried to invoke Cargo when Bazel is enabled."
-
         rustflags = (
             rustc_flags.coverage
             if rd.coverage
@@ -591,27 +459,16 @@ class CargoBuild(CargoPreImage):
         builds = cast(list[CargoBuild], cargo_builds)
         bins = set()
         examples = set()
-        bazel_bins = dict()
-        bazel_tars = dict()
         for build in builds:
             if not rd:
                 rd = build.rd
             bins.update(build.bins)
             examples.update(build.examples)
-            bazel_bins.update(build.bazel_bins)
-            bazel_tars.update(build.bazel_tars)
         assert rd
 
         ui.section(f"Common build for: {', '.join(bins | examples)}")
 
-        if rd.bazel:
-            cargo_build = cls.generate_bazel_build_command(
-                rd, list(bins), list(examples), bazel_bins, bazel_tars
-            )
-        else:
-            cargo_build = cls.generate_cargo_build_command(
-                rd, list(bins), list(examples)
-            )
+        cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
 
         spawn.runv(cargo_build, cwd=rd.root)
 
@@ -620,27 +477,11 @@ class CargoBuild(CargoPreImage):
         # instantaneous since we just compiled above with the same crates and
         # features. (We don't want to do the compile above with JSON-formatted
         # messages because it wouldn't be human readable.)
-        if rd.bazel:
-            # TODO(parkmycar): Having to assign the same compilation flags as the build process
-            # is a bit brittle. It would be better if the Bazel build process itself could
-            # output the file to a known location.
-            options = rd.bazel_config()
-            paths_to_binaries = {}
-            for bin in bins:
-                paths = bazel_utils.output_paths(bazel_bins[bin], options)
-                assert len(paths) == 1, f"{bazel_bins[bin]} output more than 1 file"
-                paths_to_binaries[bin] = paths[0]
-            for tar in bazel_tars:
-                paths = bazel_utils.output_paths(tar, options)
-                assert len(paths) == 1, f"more than one output path found for '{tar}'"
-                paths_to_binaries[tar] = paths[0]
-            prep = {"bazel": paths_to_binaries}
-        else:
-            json_output = spawn.capture(
-                cargo_build + ["--message-format=json"],
-                cwd=rd.root,
-            )
-            prep = {"cargo": json_output}
+        json_output = spawn.capture(
+            cargo_build + ["--message-format=json"],
+            cwd=rd.root,
+        )
+        prep = {"cargo": json_output}
 
         return prep
 
@@ -655,22 +496,6 @@ class CargoBuild(CargoPreImage):
             exe_path = self.path / relative_dst
             exe_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(src, exe_path)
-
-            # Bazel doesn't add write or exec permissions for built binaries
-            # but `strip` and `objcopy` need write permissions and we add exec
-            # permissions for the built Docker images.
-            current_perms = os.stat(exe_path).st_mode
-            new_perms = (
-                current_perms
-                # chmod +wx
-                | stat.S_IWUSR
-                | stat.S_IWGRP
-                | stat.S_IWOTH
-                | stat.S_IXUSR
-                | stat.S_IXGRP
-                | stat.S_IXOTH
-            )
-            os.chmod(exe_path, new_perms)
 
             if self.strip:
                 # The debug information is large enough that it slows down CI,
@@ -702,10 +527,7 @@ class CargoBuild(CargoPreImage):
                 )
 
         for bin in self.bins:
-            if "bazel" in build_output:
-                src_path = self.rd.bazel_workspace_dir() / build_output["bazel"][bin]
-            else:
-                src_path = self.rd.cargo_target_dir() / cargo_profile / bin
+            src_path = self.rd.cargo_target_dir() / cargo_profile / bin
             copy(src_path, bin)
         for example in self.examples:
             src_path = (
@@ -713,8 +535,7 @@ class CargoBuild(CargoPreImage):
             )
             copy(src_path, Path("examples") / example)
 
-        # Bazel doesn't support 'extract', instead you need to use 'bazel-tar'
-        if self.extract and "bazel" not in build_output:
+        if self.extract:
             cargo_build_json_output = build_output["cargo"]
 
             target_dir = self.rd.cargo_target_dir()
@@ -744,19 +565,6 @@ class CargoBuild(CargoPreImage):
                 for src, dst in self.extract.get(package, {}).items():
                     spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
 
-        if self.bazel_tars and "bazel" in build_output:
-            ui.section("Extracing 'bazel-tar'")
-            for tar in self.bazel_tars:
-                # Where Bazel built the tarball.
-                tar_path = self.rd.bazel_workspace_dir() / build_output["bazel"][tar]
-                # Where we need to extract it into.
-                tar_dest = self.path / self.bazel_tars[tar]
-                ui.say(f"extracing {tar_path} to {tar_dest}")
-
-                with tarfile.open(tar_path, "r") as tar_file:
-                    os.makedirs(tar_dest, exist_ok=True)
-                    tar_file.extractall(path=tar_dest)
-
         self.acquired = True
 
     def run(self, prep: dict[str, Any]) -> None:
@@ -777,11 +585,6 @@ class CargoBuild(CargoPreImage):
             )
 
         inputs = super().inputs() | set(inp for dep in deps for inp in dep.inputs())
-        # Even though we are not always building with Bazel, consider its
-        # inputs so that developers with CI_BAZEL_BUILD=0 can still
-        # download the images from Dockerhub
-        inputs |= {"BUILD.bazel"}
-
         return inputs
 
 
@@ -1256,9 +1059,9 @@ class DependencySet:
 
         Args:
             pre_build: A callback to invoke with all dependency that are going
-                       to be built locally, invoked after their cargo/bazel
-                       build is done, but before the Docker images are build
-                       and uploaded to DockerHub.
+                       to be built locally, invoked after their cargo build is
+                       done, but before the Docker images are build and
+                       uploaded to DockerHub.
         """
         num_deps = len(list(self))
         if not num_deps:
@@ -1356,15 +1159,12 @@ class Repository:
         root: Path,
         arch: Arch = Arch.host(),
         profile: Profile = (
-            Profile.RELEASE if ui.env_is_truthy("CI_BAZEL_LTO") else Profile.OPTIMIZED
+            Profile.RELEASE if ui.env_is_truthy("CI_LTO") else Profile.OPTIMIZED
         ),
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = "materialize",
         image_prefix: str = "",
-        bazel: bool = False,
-        bazel_remote_cache: str | None = None,
-        bazel_lto: bool = False,
     ):
         self.rd = RepositoryDetails(
             root,
@@ -1374,9 +1174,6 @@ class Repository:
             sanitizer,
             image_registry,
             image_prefix,
-            bazel,
-            bazel_remote_cache,
-            bazel_lto,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}
@@ -1476,21 +1273,6 @@ class Repository:
             default="",
             help="a prefix to apply to all Docker image names",
         )
-        parser.add_argument(
-            "--bazel",
-            default=ui.env_is_truthy("CI_BAZEL_BUILD"),
-            action="store_true",
-        )
-        parser.add_argument(
-            "--bazel-remote-cache",
-            default=os.getenv("CI_BAZEL_REMOTE_CACHE"),
-            action="store",
-        )
-        parser.add_argument(
-            "--bazel-lto",
-            default=ui.env_is_truthy("CI_BAZEL_LTO"),
-            action="store",
-        )
 
     @classmethod
     def from_arguments(cls, root: Path, args: argparse.Namespace) -> "Repository":
@@ -1507,9 +1289,7 @@ class Repository:
             profile = Profile.DEV
         else:
             profile = (
-                Profile.RELEASE
-                if ui.env_is_truthy("CI_BAZEL_LTO")
-                else Profile.OPTIMIZED
+                Profile.RELEASE if ui.env_is_truthy("CI_LTO") else Profile.OPTIMIZED
             )
 
         return cls(
@@ -1520,9 +1300,6 @@ class Repository:
             image_registry=args.image_registry,
             image_prefix=args.image_prefix,
             arch=args.arch,
-            bazel=args.bazel,
-            bazel_remote_cache=args.bazel_remote_cache,
-            bazel_lto=args.bazel_lto,
         )
 
     @property

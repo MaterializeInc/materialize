@@ -44,9 +44,3 @@ test = ["datadriven", "unicode-width"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.build]
-data = ["src/ast/defs.rs", "src/ast/defs/*.rs"]
-
-[package.metadata.cargo-gazelle.test.sqlparser_common]
-data = ["tests/testdata/**"]

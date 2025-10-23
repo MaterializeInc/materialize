@@ -9,7 +9,7 @@
 
 import subprocess
 
-from materialize import MZ_ROOT, mzbuild
+from materialize import MZ_ROOT, mzbuild, ui
 from materialize.cloudtest.app.application import Application
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 
@@ -43,18 +43,15 @@ class CloudtestApplicationBase(Application):
         raise NotImplementedError
 
     def acquire_images(self) -> None:
-        bazel_lto = self.bazel_lto()
+        lto = ui.env_is_truthy("CI_LTO")
         repo = mzbuild.Repository(
             self.mz_root,
             profile=(
-                (mzbuild.Profile.RELEASE if bazel_lto else mzbuild.Profile.OPTIMIZED)
+                (mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED)
                 if self.release_mode
                 else mzbuild.Profile.DEV
             ),
             coverage=self.coverage_mode(),
-            bazel=self.bazel(),
-            bazel_remote_cache=self.bazel_remote_cache(),
-            bazel_lto=bazel_lto,
         )
         for image in self.images:
             self._acquire_image(repo, image)

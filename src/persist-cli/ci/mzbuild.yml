@@ -11,5 +11,4 @@ name: maelstrom-persist
 pre-image:
   - type: cargo-build
     bin: persistcli
-    bazel-bin: "@//src/persist-cli:persistcli"
     strip: false

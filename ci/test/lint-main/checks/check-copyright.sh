@@ -21,9 +21,7 @@ files=$(git_files "$@")
 
 copyright_files=$(grep -vE \
     -e '(^|/)LICENSE$' \
-    -e '(^|/)\.(docker|git|vscode|bazel)ignore$' \
-    -e '(^|/)\.bazelrc$' \
-    -e '(^|/)\.bazelversion$' \
+    -e '(^|/)\.(docker|git|vscode)ignore$' \
     -e '(^|/)\.gitattributes$' \
     -e '(^|/)\.github/(dependabot\.yml|CODEOWNERS)$' \
     -e '(^|/)\.gitmodules$' \
@@ -47,7 +45,6 @@ copyright_files=$(grep -vE \
     -e '^ci/builder/(ssh_known_hosts|crosstool-.+\.defconfig)$' \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
-    -e '^misc/bazel/c_deps/patches/snappy-config.patch' \
     -e '^misc/completions/.*' \
     -e '^misc/mcp-materialize/uv.lock' \
     -e '^misc/mcp-materialize-agents/uv.lock' \

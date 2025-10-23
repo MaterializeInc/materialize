@@ -11,10 +11,7 @@ name: testdrive
 pre-image:
   - type: cargo-build
     bin: testdrive
-    bazel-bin: "@//src/testdrive:testdrive"
     extract:
       protobuf-src:
         bin: protobuf-bin
         include: protobuf-include
-    bazel-tar:
-      "@//src/testdrive/ci:testdrive_image_extras": "."

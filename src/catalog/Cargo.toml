@@ -73,24 +73,9 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 base64 = "0.22.1"
 insta = "1.43"
-mz-build-tools = { path = "../build-tools", default-features = false }
 
 [features]
-default = ["mz-build-tools/default", "workspace-hack"]
+default = ["workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.test.lib]
-data = ["//src/catalog-protos:all_protos", "src/durable/upgrade/snapshots/**"]
-
-[package.metadata.cargo-gazelle.test.debug]
-data = ["tests/snapshots/debug*.snap"]
-env = { INSTA_WORKSPACE_ROOT = "." }
-
-[package.metadata.cargo-gazelle.test.open]
-data = ["tests/snapshots/open*.snap"]
-env = { INSTA_WORKSPACE_ROOT = "." }
-
-[package.metadata.cargo-gazelle.test.read-write]
-env = { INSTA_WORKSPACE_ROOT = "." }

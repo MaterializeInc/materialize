@@ -15,62 +15,6 @@ from typing import Any
 import toml
 
 
-class BuildConfig:
-    """Configuration for builds of Materialize.
-
-    Most things should be configured via a tool's native configuration file,
-    e.g. `.bazelrc` or `.cargo/config.toml`. This exists for Materialize's home
-    grown tools, or to extend tools that don't support an option we need.
-
-    Looks for configuration files in `~/.config/materialize/build.toml`
-    """
-
-    def __init__(self, path: Path):
-        if path.is_file():
-            with open(path) as f:
-                raw_data = toml.load(f)
-        else:
-            raw_data = {}
-
-        self.bazel = BazelConfig(raw_data.get("bazel", {}))
-
-    @staticmethod
-    def read():
-        home = Path.home()
-        path = home / ".config" / "materialize" / "build.toml"
-
-        return BuildConfig(path)
-
-    def __str__(self):
-        return f"{self.bazel}"
-
-
-class BazelConfig:
-    """Configuration for Bazel builds.
-
-    Most configuration should go into either the repositories `.bazelrc` file
-    or documented to be included in a users' home `.bazelrc` file. This exists
-    for flags that Bazel does not have an easy way to configure itself.
-
-    [bazel]
-    remote_cache = "localhost:6889"
-    """
-
-    def __init__(self, data: dict[str, Any]):
-        self.remote_cache = data.get("remote_cache", None)
-        self.remote_cache_check_interval_minutes = data.get(
-            "remote_cache_check_interval_minutes", "5"
-        )
-
-    def __str__(self):
-        return dedent(
-            f"""
-        Bazel:
-            remote_cache = {self.remote_cache}
-        """
-        )
-
-
 class LocalState:
     """Local state persisted by a tool.
 

@@ -13,8 +13,5 @@ pre-image:
     bin:
       - persistcli
       - mz-catalog-debug
-    bazel-bin:
-      persistcli: "@//src/persist-cli:persistcli"
-      mz-catalog-debug: "@//src/catalog-debug:mz_catalog_debug"
     strip: false
 publish: true

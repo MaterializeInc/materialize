@@ -29,8 +29,6 @@ import psutil
 import psycopg
 
 from materialize import MZ_ROOT, rustc_flags, spawn, ui
-from materialize.bazel import remote_cache_arg
-from materialize.build_config import BuildConfig
 from materialize.mzcompose import (
     bootstrap_cluster_replica_size,
     cluster_replica_size_map,
@@ -201,12 +199,6 @@ def main() -> int:
         help="Path to json file with environmentd listeners configuration.",
         default=f"{MZ_ROOT}/src/materialized/ci/listener_configs/no_auth.json",
     )
-    parser.add_argument(
-        "--bazel",
-        help="Build with Bazel (not supported by all options)",
-        default=False,
-        action="store_true",
-    )
     args = parser.parse_intermixed_args()
 
     # Handle `+toolchain` like rustup.
@@ -217,10 +209,7 @@ def main() -> int:
 
     env = dict(os.environ)
     if args.program in KNOWN_PROGRAMS:
-        if args.bazel:
-            build_func = _bazel_build
-        else:
-            build_func = _cargo_build
+        build_func = _cargo_build
 
         (build_retcode, built_programs) = build_func(
             args, extra_programs=[args.program]
@@ -350,9 +339,6 @@ def main() -> int:
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
     elif args.program == "test":
-        if args.bazel:
-            raise UIError("testing with Bazel is not yet supported")
-
         (build_retcode, _) = _cargo_build(args)
         if args.build_only:
             return build_retcode
@@ -439,56 +425,6 @@ def main() -> int:
         proc = subprocess.run(command, env=env)
 
     exit(proc.returncode)
-
-
-def _bazel_build(
-    args: argparse.Namespace, extra_programs: list[str] = []
-) -> tuple[int, list[str]]:
-    config = BuildConfig.read()
-    command = _bazel_command(args, config, ["build"])
-
-    programs = [*REQUIRED_SERVICES, *extra_programs]
-    targets = [_bazel_target(program) for program in programs]
-    command += targets
-
-    completed_proc = spawn.runv(command)
-    artifacts = [str(_bazel_artifact_path(args, t)) for t in targets]
-
-    return (completed_proc.returncode, artifacts)
-
-
-def _bazel_target(program: str) -> str:
-    if program == "environmentd":
-        return "//src/environmentd:environmentd"
-    elif program == "clusterd":
-        return "//src/clusterd:clusterd"
-    elif program == "sqllogictest":
-        return "//src/sqllogictest:sqllogictest"
-    else:
-        raise UIError(f"unknown program {program}")
-
-
-def _bazel_command(
-    args: argparse.Namespace, config: BuildConfig | None, subcommands: list[str]
-) -> list[str]:
-    command = ["bazel"] + subcommands
-    sanitizer = rustc_flags.Sanitizer[args.sanitizer]
-
-    if args.release:
-        command += ["--config=optimized"]
-    if sanitizer != rustc_flags.Sanitizer.none:
-        command += sanitizer.bazel_flags()
-    if config:
-        command += remote_cache_arg(config)
-
-    return command
-
-
-def _bazel_artifact_path(args: argparse.Namespace, program: str) -> pathlib.Path:
-    cmd = _bazel_command(args, None, ["cquery", "--output=files"]) + [program]
-    raw_path = subprocess.check_output(cmd, text=True)
-    relative_path = pathlib.Path(raw_path.strip())
-    return MZ_ROOT / relative_path
 
 
 def _cargo_build(

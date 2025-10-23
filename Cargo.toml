@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "misc/bazel/cargo-gazelle",
     "src/adapter",
     "src/adapter-types",
     "src/alloc",
@@ -127,7 +126,6 @@ members = [
 # Unfortunately Cargo does not provide a more elegant way to express exclusions
 # from the workspace's default members.
 default-members = [
-    "misc/bazel/cargo-gazelle",
     "src/adapter",
     "src/adapter-types",
     "src/alloc",
@@ -364,7 +362,7 @@ iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.g
 [workspace.lints.rust]
 unknown_lints = "allow"
 non_local_definitions = "allow"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(bazel, stamped, coverage, nightly_doc_features, release, tokio_unstable)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(stamped, coverage, nightly_doc_features, release, tokio_unstable)'] }
 
 [workspace.lints.rustdoc]
 
@@ -384,6 +382,7 @@ no_effect = "warn"
 unnecessary_unwrap = "warn"
 dbg_macro = "warn"
 todo = "warn"
+wildcard_dependencies = "warn"
 zero_prefixed_literal = "warn"
 borrowed_box = "warn"
 deref_addrof = "warn"

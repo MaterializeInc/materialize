@@ -23,9 +23,6 @@ insta = { version = "1.43", features = ["serde"] }
 mz-ore = { path = "../ore", features = ["test"] }
 prettyplease = "0.2"
 
-[package.metadata.cargo-gazelle.lib]
-rustc_flags = ["-Copt-level=3"]
-
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
 

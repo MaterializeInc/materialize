@@ -52,23 +52,6 @@ class Sanitizer(Enum):
     def __str__(self) -> str:
         return self.value
 
-    def bazel_flags(self) -> list[str]:
-        """Return a set of Bazel flags to enable the sanitizer."""
-        if self == Sanitizer.address:
-            return ["--config=asan"]
-        elif self == Sanitizer.hwaddress:
-            return ["--config=hwasan"]
-        elif self == Sanitizer.cfi:
-            return ["--config=cfi"]
-        elif self == Sanitizer.thread:
-            return ["--config=tsan"]
-        elif self == Sanitizer.leak:
-            return ["--config=leak"]
-        elif self == Sanitizer.undefined:
-            return ["--config=undefined"]
-        else:
-            return []
-
 
 sanitizer = {
     Sanitizer.address: [

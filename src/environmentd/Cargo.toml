@@ -194,12 +194,3 @@ tokio-console = [
 [package.metadata.cargo-udeps.ignore]
 # sysctl is only used on macOS.
 normal = ["mz-alloc-default", "sysctl", "workspace-hack"]
-
-[package.metadata.cargo-gazelle.lib]
-compile_data = ["src/http/static/**/*", "templates/*"]
-
-[package.metadata.cargo-gazelle.build]
-data = ["src/environmentd/sys.c"]
-
-[package.metadata.cargo-gazelle.test.server]
-env = { INSTA_WORKSPACE_ROOT = "." }

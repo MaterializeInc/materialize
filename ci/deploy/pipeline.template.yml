@@ -10,11 +10,6 @@
 # Deploys are fast, do them quickly
 priority: 30
 
-env:
-  CI_BAZEL_BUILD: 1
-  CI_BAZEL_REMOTE_CACHE: $BAZEL_REMOTE_CACHE
-  CI_BAZEL_LTO: 0
-
 steps:
   - command: bin/ci-builder run nightly ci/deploy/devsite.sh
     branches: main

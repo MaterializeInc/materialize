@@ -33,8 +33,3 @@ jemalloc = ["tikv-jemallocator", "mz-prof", "mz-prof-http/jemalloc"]
 # all the Materialize binaries correctly serve heap profiling tools at the
 # `/prof` endpoints.
 normal = ["workspace-hack", "mz-prof-http"]
-
-[package.metadata.cargo-gazelle]
-# We manually write this BUILD.bazel file because we need to carefully
-# configure when `jemalloc` gets used for ASAN.
-skip_generating = true

@@ -57,9 +57,6 @@ steps:
   $bootstrap_steps
   - wait
   - label: mkpipeline
-    env:
-      CI_BAZEL_BUILD: 1
-      CI_BAZEL_REMOTE_CACHE: "https://bazel-remote.dev.materialize.com"
     command: bin/ci-builder run min bin/pyactivate -m ci.mkpipeline $pipeline $@
     priority: 200
     agents:

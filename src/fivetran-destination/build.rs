@@ -26,17 +26,10 @@ fn main() {
             .btree_map(["."]);
 
         // Bazel places the `fivetran-sdk` submodule in a slightly different place.
-        let includes_directories = if mz_build_tools::is_bazel_build() {
-            &[
-                PathBuf::from("../../../fivetran_sdk"),
-                mz_build_tools::protoc_include(),
-            ]
-        } else {
-            &[
-                PathBuf::from("../../misc/fivetran-sdk"),
-                mz_build_tools::protoc_include(),
-            ]
-        };
+        let includes_directories = &[
+            PathBuf::from("../../misc/fivetran-sdk"),
+            mz_build_tools::protoc_include(),
+        ];
 
         tonic_build::configure()
             // Enabling `emit_rerun_if_changed` will rerun the build script when

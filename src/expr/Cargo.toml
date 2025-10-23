@@ -88,9 +88,3 @@ default = ["mz-build-tools/default", "workspace-hack"]
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
-
-[package.metadata.cargo-gazelle.lib]
-# `num_enum` which depends on `proc-macro-crate` tries to read from the Cargo.toml at compile time.
-compile_data = ["Cargo.toml"]
-# Explicitly enable pipelining.
-disable_pipelining = false

@@ -15,13 +15,12 @@
 
 //! Internal utility libraries used in Build Scripts for Materialize.
 //!
-//! This exists separately from the `ore` crate because when cross compiling
-//! (or building with Bazel) build scripts get built for the host architecture,
-//! because that's where they're executed. `ore` has _many_ dependencies yet
-//! nearly none of them are used in build scripts, so we end up building a lot
-//! of unnecessary crates.
+//! This exists separately from the `ore` crate because when cross compiling build scripts get
+//! built for the host architecture, because that's where they're executed. `ore` has _many_
+//! dependencies yet nearly none of them are used in build scripts, so we end up building a lot of
+//! unnecessary crates.
 //!
-//! Moving the common utilities for build scripts into this crate, considerably
-//! improves build times.
+//! Moving the common utilities for build scripts into this crate, considerably improves build
+//! times.
 
 pub mod codegen;
