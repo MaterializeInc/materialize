@@ -167,7 +167,7 @@ impl ComputeControllerMetrics {
                 name: "mz_compute_peek_duration_seconds",
                 help: "A histogram of peek durations since restart.",
                 var_labels: ["instance_id", "result"],
-                buckets: histogram_seconds_buckets(0.000_500, 32.),
+                buckets: histogram_seconds_buckets(0.000_500, 8192.),
             )),
             connected_replica_count: metrics_registry.register(metric!(
                 name: "mz_compute_controller_connected_replica_count",
