@@ -44,9 +44,9 @@ to upgrade.
 
 {{< important >}}
 
-The following procedure performs a rolling upgrade, where both the old and new 
-Materialize instances are running before the the old instance are removed. 
-When performing a rolling upgrade, ensure you have enough resources to support 
+The following procedure performs a rolling upgrade, where both the old and new
+Materialize instances are running before the the old instance are removed.
+When performing a rolling upgrade, ensure you have enough resources to support
 having both the old and new Materialize instances running.
 
 {{</ important >}}
