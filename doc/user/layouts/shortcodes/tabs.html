@@ -1,5 +1,6 @@
 <!-- Adapted from https://discourse.gohugo.io/t/code-tabs-widget/975/7 -->
-<div class="code-tabs">
+{{ $level := .Get "level" }}
+<div class="code-tabs" {{ if $level }}data-heading-level="{{ $level }}"{{ end }}>
   <ul class="nav-tabs"></ul>
   <div class="tab-content">{{ .Inner }}</div>
 </div>
