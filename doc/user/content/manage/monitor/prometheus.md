@@ -27,7 +27,7 @@ This guide assumes you have administrative access to your Kubernetes cluster and
 ## 1. Download our Prometheus scrape configurations (`prometheus.yml`)
   Download the Prometheus scrape configurations that we'll use to configure Prometheus to collect metrics from Materialize:
   ```bash
-  curl -o prometheus_scrape_configs.yml https://raw.githubusercontent.com/prometheus-community/helm-charts/refs/heads/main/charts/prometheus/values.yaml
+   curl -o prometheus_scrape_configs.yml  https://raw.githubusercontent.com/MaterializeInc/materialize/refs/heads/self-managed-docs/v25.2/doc/user/data/monitoring/prometheus.yml
   ```
 
 
