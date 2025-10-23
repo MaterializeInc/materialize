@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use std::pin::pin;
@@ -354,7 +353,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
             // are safe to return because they're generated after authentication.
             debug!("WS request failed init: {}", e);
             let reason = match e.downcast_ref::<AdapterError>() {
-                Some(error) => Cow::Owned(error.to_string()),
+                Some(error) => error.to_string().into(),
                 None => "unauthorized".into(),
             };
             let _ = ws
@@ -385,7 +384,7 @@ async fn run_ws(state: &WsState, user: Option<AuthedUser>, peer_addr: IpAddr, mu
     ));
     for msg in msgs {
         let _ = ws
-            .send(Message::Text(
+            .send(Message::text(
                 serde_json::to_string(&msg).expect("must serialize"),
             ))
             .await;
@@ -491,7 +490,7 @@ async fn run_ws_request(
 /// Sends a single [`WebSocketResponse`] over the provided [`WebSocket`].
 async fn send_ws_response(ws: &mut WebSocket, resp: WebSocketResponse) -> Result<(), Error> {
     let msg = serde_json::to_string(&resp).unwrap();
-    let msg = Message::Text(msg);
+    let msg = Message::text(msg);
     ws.send(msg).await?;
 
     Ok(())
@@ -1104,7 +1103,7 @@ impl ResultSender for WebSocket {
             tick.tick().await;
             loop {
                 tick.tick().await;
-                if let Err(err) = self.send(Message::Ping(Vec::new())).await {
+                if let Err(err) = self.send(Message::Ping(Default::default())).await {
                     return err.into();
                 }
             }

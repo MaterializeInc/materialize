@@ -25,7 +25,6 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
-use async_trait::async_trait;
 use axum::error_handling::HandleErrorLayer;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Query, Request, State};
@@ -207,7 +206,7 @@ impl HttpServer {
                     "/hierarchical-memory",
                     routing::get(memory::handle_hierarchical_memory),
                 )
-                .route("/static/*path", routing::get(root::handle_static));
+                .route("/static/{*path}", routing::get(root::handle_static));
 
             let mut ws_router = Router::new()
                 .route("/api/experimental/sql", routing::get(sql::handle_sql_ws))
@@ -230,7 +229,7 @@ impl HttpServer {
         if routes_enabled.webhook {
             let webhook_router = Router::new()
                 .route(
-                    "/api/webhook/:database/:schema/:id",
+                    "/api/webhook/{:database}/{:schema}/{:id}",
                     routing::post(webhook::handle_webhook),
                 )
                 .with_state(WebhookState {
@@ -315,7 +314,7 @@ impl HttpServer {
                     routing::get(|| async { Redirect::temporary("/internal-console/") }),
                 )
                 .route(
-                    "/internal-console/*path",
+                    "/internal-console/{*path}",
                     routing::get(console::handle_internal_console),
                 )
                 .route(
@@ -606,7 +605,6 @@ impl AuthedClient {
     }
 }
 
-#[async_trait]
 impl<S> FromRequestParts<S> for AuthedClient
 where
     S: Send + Sync,
