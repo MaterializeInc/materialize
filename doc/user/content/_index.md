@@ -7,8 +7,7 @@ aliases:
 disable_list: true
 ---
 
-Materialize is a real-time data integration platform that enables you to use SQL
-to transform, deliver, and act on fast changing data.
+Materialize is the live data layer for apps and AI agents.
 
 ## Self-managed Materialize
 
