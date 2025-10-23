@@ -25,6 +25,7 @@ from materialize.checks.mzcompose_actions import (
 )
 from materialize.checks.scenarios import Scenario
 from materialize.mz_version import MzVersion
+from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import (
     fetch_self_managed_versions,
@@ -520,6 +521,7 @@ def upgrade_actions(
     deploy_generation: int,
     service_name: str,
     previous_service_name: str,
+    system_parameter_defaults: dict[str, str],
     should_validate: bool = True,
 ) -> list[Action]:
     return [
@@ -528,6 +530,7 @@ def upgrade_actions(
             tag=version,
             deploy_generation=deploy_generation,
             mz_service=service_name,
+            system_parameter_defaults=system_parameter_defaults,
         ),
         WaitReadyMz(service_name),
         PromoteMz(service_name),
@@ -574,7 +577,7 @@ class SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade(Scenario):
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
-
+        system_parameter_defaults = get_default_system_parameters(self.base_version())
         actions = []
         versions = self.v25_2_versions + [None]
 
@@ -595,6 +598,7 @@ class SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade(Scenario):
                             self,
                             tag=service.version,
                             mz_service=service.service_name,
+                            system_parameter_defaults=system_parameter_defaults,
                         ),
                         Initialize(self, mz_service=service.service_name),
                         Manipulate(self, phase=1, mz_service=service.service_name),
@@ -612,6 +616,7 @@ class SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade(Scenario):
                         deploy_generation,
                         service.service_name,
                         mz_services[i - 1].service_name,
+                        system_parameter_defaults=system_parameter_defaults,
                     )
                 )
 
@@ -639,6 +644,7 @@ class SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade(Scenario):
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
+        system_parameter_defaults = get_default_system_parameters(self.base_version())
 
         actions = []
         versions = self.v25_2_versions + [None]
@@ -660,6 +666,7 @@ class SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade(Scenario):
                             self,
                             tag=service.version,
                             mz_service=service.service_name,
+                            system_parameter_defaults=system_parameter_defaults,
                         ),
                         Initialize(self, mz_service=service.service_name),
                         Manipulate(self, phase=1, mz_service=service.service_name),
@@ -678,6 +685,7 @@ class SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade(Scenario):
                             deploy_generation,
                             service.service_name,
                             mz_services[i - 1].service_name,
+                            system_parameter_defaults=system_parameter_defaults,
                             # We can't validate on the first upgrade since all manipulations haven't completed yet.
                             should_validate=False,
                         )
@@ -693,6 +701,7 @@ class SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade(Scenario):
                             deploy_generation,
                             service.service_name,
                             mz_services[i - 1].service_name,
+                            system_parameter_defaults=system_parameter_defaults,
                         )
                     )
 
