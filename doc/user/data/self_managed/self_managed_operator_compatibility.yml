@@ -6,6 +6,12 @@ columns:
   - column: "Notes"
 
 rows:
+  - "Materialize Operator": "v25.2.12"
+    "orchestratord version": "v0.161.0"
+    "environmentd version": "v0.147.18"
+    "Release date": "2025-10-23"
+    "Notes": "Fix DDL lock being required when sequencing `ALTER SINK`"
+
   - "Materialize Operator": "v25.2.11"
     "orchestratord version": "v0.159.1"
     "environmentd version": "v0.147.17"
