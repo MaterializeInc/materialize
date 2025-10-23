@@ -92,11 +92,15 @@ can skip this step**. For production scenarios, we recommend configuring one of
 the network security options below.
 {{< /note >}}
 
-There are various ways to configure your database's network to allow Materialize
-to connect:
 
 {{< tabs >}}
 {{< tab "Materialize Cloud" >}}
+
+### Materialize Cloud
+
+There are various ways to configure your database's network to allow Materialize
+to connect:
+
 - **Allow Materialize IPs:** If your database is publicly accessible, you can
     configure your database's security group to allow connections from a set of
     static Materialize IP addresses.
@@ -284,6 +288,11 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 {{< /tab >}}
 {{< tab "Materialize Self-Managed" >}}
+
+### Materialize Self-managed
+
+There are various ways to configure your database’s network to allow Materialize
+to connect:
 
 {{< tabs >}}
 
