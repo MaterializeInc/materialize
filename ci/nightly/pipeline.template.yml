@@ -72,7 +72,7 @@ steps:
         timeout_in_minutes: 60
         agents:
           queue: hetzner-aarch64-16cpu-32gb
-        branches: "main"
+        branches: "main *build*"
 
   - group: Linters
     key: linters
