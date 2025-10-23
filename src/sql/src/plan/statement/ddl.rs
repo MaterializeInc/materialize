@@ -29,7 +29,6 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::num::NonNeg;
 use mz_ore::soft_panic_or_log;
 use mz_ore::str::StrExt;
-use mz_ore::vec::VecExt;
 use mz_postgres_util::tunnel::PostgresFlavor;
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;

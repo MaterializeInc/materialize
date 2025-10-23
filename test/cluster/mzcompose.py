@@ -5728,7 +5728,7 @@ def workflow_alter_sink_hang(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-                > CREATE CLUSTER test SIZE 'scale=1,workers=1'
+                > CREATE CLUSTER test SIZE '1'
                 > SET cluster = test
 
                 > CREATE TABLE t1 (a int)
@@ -5771,7 +5771,7 @@ def workflow_alter_sink_hang(c: Composition) -> None:
         c.testdrive(
             dedent(
                 """
-                > CREATE CLUSTER test2 SIZE 'scale=1,workers=1'
+                > CREATE CLUSTER test2 SIZE '1'
                 > SET cluster = test2
 
                 > SELECT * FROM t1
