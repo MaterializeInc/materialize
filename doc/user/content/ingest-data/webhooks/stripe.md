@@ -132,7 +132,7 @@ Stripe signing scheme, check out the [Stripe documentation](https://stripe.com/d
 
 ## Step 5. Validate incoming data
 
-1. [In the Materialize console](https://console.materialize.com/), navigate to
+1. [In the Materialize console](/console/), navigate to
    the **SQL Shell**.
 
 1. Use SQL queries to inspect and analyze the incoming data:

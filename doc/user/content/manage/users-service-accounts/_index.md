@@ -41,7 +41,7 @@ applications and services to Materialize.
 {{</ tip >}}
 
 As an **Organization admin**, you can create a new service account via
-the [Materialize Console](https://console.materialize.com/) or via
+the [Materialize Console](/console/) or via
 [Terraform](/manage/terraform/).
 
 {{< note >}}

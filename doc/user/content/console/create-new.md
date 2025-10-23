@@ -17,7 +17,7 @@ Materialize to read data from"), and application passwords.
 
 ![Image of the Create New Cluster flow](/images/console/console-create-new/postgresql/create-new-cluster-flow.png "Create New Cluster flow")
 
-From the [Materialize console](https://console.materialize.com/):
+From the Materialize Console:
 
 1. Click **+ Create New** and select **Cluster** to open the **New cluster**
    screen.
@@ -55,7 +55,7 @@ From the [Materialize console](https://console.materialize.com/):
 PostgreSQL](/images/console/console-create-new/postgresql/create-new-source-start.png
 "Create New Source start for PostgreSQL")
 
-From the [Materialize console](https://console.materialize.com/):
+From the Materialize Console:
 
 1. Click **+ Create New** and select **Source** to open the **New source**
    screen.

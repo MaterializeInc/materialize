@@ -93,7 +93,7 @@ Accessing usage and billing information in Materialize
 requires **administrator** privileges.
 {{</ note >}}
 
-From the [Materialize console](https://console.materialize.com/) (`Admin` >
+From the [Materialize console](/console/) (`Admin` >
 `Usage & Billing`), administrators can access their invoice. The invoice
 provides Compute and Storage usage and cost information.
 
@@ -101,7 +101,7 @@ provides Compute and Storage usage and cost information.
 
 Materialize Cloud administrators can sign up for an [On Demand
 plan](https://materialize.com/pdfs/on-demand-terms.pdf) from the billing section
-of the [Materialize console](https://console.materialize.com/). Pricing is
+of the [Materialize console](/console/). Pricing is
 usage-based and is billed on a monthly basis. Invoices will be sent to the
 account email and paid via the card on file on the first of the month. If you
 have questions about billing or are interested in converting to an annual
