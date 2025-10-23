@@ -8,8 +8,6 @@ h3,
 h4,
 h5,
 h6 {
-    color: var(--important);
-    font-weight: 500;
     line-height: 1.2;
 
     code {
@@ -24,6 +22,11 @@ h6 {
     }
 }
 
+h1, h2, h3 {
+    font-weight: 500;
+    color: var(--important);
+}
+
 h1 {
     font-size: var(--h1);
     margin-bottom: var(--xx-small);
@@ -36,16 +39,26 @@ h2 {
 
 h3 {
     font-size: var(--h3);
+    font-weight: 600;
     margin: var(--small) 0 var(--nano);
 }
 
-.tab-pane h3 {
-    margin: 0;
+div.tab-pane > h3 {
+    margin: var(--nano) 0;
+}
+
+h4, h5, h6 {
+    font-weight: 600;
+    color: var(--font-h4);
 }
 
 h4 {
     font-size: var(--h4);
     margin: var(--small) 0 var(--nano);
+}
+
+div.tab-pane > h4 {
+    margin: var(--nano) 0;
 }
 
 h5 {
@@ -251,8 +264,8 @@ p+p {
 
         &::before {
             content: "";
-            width: 48px;
-            height: 48px;
+            width: 32px;
+            height: 32px;
             position: absolute;
             top: rem(2);
             background-size: contain;
@@ -261,8 +274,14 @@ p+p {
         &.book,
         &.bulb,
         &.doc,
+        &.materialize,
         &.touch {
             padding-top: rem(8);
+        }
+
+        &.materialize::before {
+            background-image: url("../images/materialize_favicon_32.png");
+            margin-left: -10px;
         }
 
         &.book::before {
@@ -283,6 +302,7 @@ p+p {
 
         .title {
             text-transform: uppercase;
+            font-size: 12px;
             font-weight: 500;
             color: var(--important);
             margin-bottom: var(--nano);
@@ -546,8 +566,7 @@ p+p {
     }
 
     .annotation {
-        border: 4px solid var(--annotation-border);
-        background: var(--annotation-bg);
+        border: 1px solid var(--annotation-border);
 
         a {
             &:hover,
@@ -752,7 +771,7 @@ p+p {
     .nav-tabs {
         list-style: none;
         padding: 0;
-        border-bottom: 1px solid #9c86e0;
+
         display: flex;
         overflow-x: auto;
         // white-space: nowrap;
@@ -763,7 +782,12 @@ p+p {
             padding: 0;
             position: relative;
             bottom: -1px;
-            background: var(--gray-lightest);
+            background: var(--bg);
+            border-top: 1px solid var(--highlight);
+            border-left: 1px solid var(--highlight);
+            border-right: 1px solid var(--highlight);
+            border-radius: 2px 2px 2px 2px;
+            background: var(--tab-bg);
 
             a {
                 color: var(--body);
@@ -788,13 +812,14 @@ p+p {
             }
 
             &.active {
-                background: var(--bg);
+
                 border-radius: 2px 2px 0 0;
                 border: 1px solid #9c86e0;
                 border-bottom-color: var(--bg);
 
                 a {
                     color: var(--highlight);
+                    background: var(--tab-selected-bg);
                 }
             }
         }
@@ -807,6 +832,9 @@ p+p {
 
         &.active {
             display: block;
+            border-radius: 0 0 rem(1) rem(1);
+            border: 1px solid #9c86e0;
+            padding: rem(0.8) rem(0.5) rem(0.6) rem(0.6);
         }
     }
 
@@ -1232,9 +1260,4 @@ sup {
     a {
         color: var(--link);
     }
-}
-
-// Remove the bottom border from the last row of a nested table
-table table tr:last-child {
-    border-bottom: none;
 }

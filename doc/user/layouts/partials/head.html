@@ -132,10 +132,24 @@ document.addEventListener("DOMContentLoaded", function () {
       child.classList.contains("tab-pane")
     );
 
+    // Check if headings should be added to tab panes
+    const headingLevel = tabGroup.getAttribute("data-heading-level");
+
     // Create tab navigation
     tabPanes.forEach((pane, index) => {
       const title = pane.getAttribute("title") || `Tab ${index + 1}`;
       const paneId = pane.getAttribute("id");
+
+      // Add heading inside tab pane if level is specified
+      if (headingLevel) {
+        const level = parseInt(headingLevel);
+        if (level >= 1 && level <= 6) {
+          const heading = document.createElement(`h${level}`);
+          heading.textContent = title;
+          heading.id = `${paneId}-heading`;
+          pane.insertBefore(heading, pane.firstChild);
+        }
+      }
 
       const tab = document.createElement("li");
       tab.className = "nav-item";
@@ -165,7 +179,11 @@ document.addEventListener("DOMContentLoaded", function () {
       if (e.target.classList.contains("nav-link")) {
         const tabIndex = parseInt(e.target.getAttribute("data-tab"));
         if (!isNaN(tabIndex) && tabIndex >= 0 && tabIndex < tabPanes.length) {
+          const clickedTabTitle = e.target.textContent;
           activateTab(tabIndex);
+
+          // Synchronize other tab groups with the same tab title
+          syncTabsAcrossGroups(clickedTabTitle);
         }
       }
     });
@@ -184,6 +202,9 @@ document.addEventListener("DOMContentLoaded", function () {
         targetTab.classList.add("active");
         targetPane.classList.add("active");
       }
+
+      // Trigger scroll event to update TOC highlighting
+      $(window).trigger('scroll');
     }
 
     const updateOverflow = () => {
@@ -198,5 +219,43 @@ document.addEventListener("DOMContentLoaded", function () {
     navTabs.addEventListener('scroll', updateOverflow);
     window.addEventListener('resize', updateOverflow);
   });
+
+  // Function to synchronize tabs across all tab groups with matching tab titles
+  function syncTabsAcrossGroups(targetTabTitle) {
+    document.querySelectorAll(".code-tabs").forEach(function (otherTabGroup) {
+      const otherNavTabs = otherTabGroup.querySelector(".nav-tabs");
+      const otherTabContent = otherTabGroup.querySelector(".tab-content");
+      if (!otherNavTabs || !otherTabContent) return;
+
+      // Find all nav links in this tab group
+      const otherNavLinks = otherNavTabs.querySelectorAll(".nav-link");
+
+      // Look for a matching tab title
+      otherNavLinks.forEach((link, index) => {
+        if (link.textContent === targetTabTitle) {
+          // Found a match - activate this tab
+          const otherTabPanes = Array.from(otherTabContent.children).filter(child =>
+            child.classList.contains("tab-pane")
+          );
+
+          // Remove active class from all tabs and panes in this group
+          otherNavTabs.querySelectorAll(".nav-item").forEach(item => item.classList.remove("active"));
+          otherTabPanes.forEach(pane => pane.classList.remove("active"));
+
+          // Add active class to the matching tab and pane
+          const targetNavItem = link.parentElement;
+          const targetPane = otherTabPanes[index];
+
+          if (targetNavItem && targetPane) {
+            targetNavItem.classList.add("active");
+            targetPane.classList.add("active");
+          }
+        }
+      });
+    });
+
+    // Trigger scroll event to update TOC highlighting
+    $(window).trigger('scroll');
+  }
 });
 </script>

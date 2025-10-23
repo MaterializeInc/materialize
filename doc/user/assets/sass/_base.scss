@@ -11,10 +11,10 @@ $rem-scale: 0.585;
 :root {
     --nav-height: #{rem(6.5)}; // Changes to height requires changes to partials/toc.html since custom scroll logic implementation
 
-    --h1: #{rem(4.2)};
-    --h2: #{rem(2.6)};
-    --h3: #{rem(2.2)};
-    --h4: #{rem(1.8)};
+    --h1: #{rem(4.0)};
+    --h2: #{rem(2.8)};
+    --h3: #{rem(2.1)};
+    --h4: #{rem(1.7)};
     --h5: #{rem(1.6)};
     --base: #{rem(1.6)};
     --sm: #{rem(1.4)};
@@ -116,6 +116,10 @@ body.dark {
     --public-preview-border: #374e7c;
     --public-preview-after: #c0d3d8;
     --public-preview-gutter: #306dca;
+
+    --tab-bg: var(--gray-lightest);
+    --tab-selected-bg: var(--tip-after);
+    --font-h4: var(--gray-lightest);
 }
 
 body.light {
@@ -165,6 +169,10 @@ body.light {
     --public-preview-after: #c0d3d8;
     --public-preview-gutter: #186477;
     --public-preview-text: var(--black);
+
+    --tab-bg: var(--gray-lighter);
+    --tab-selected-bg: var(--tip);
+    --font-h4: var(--gray-dark);
 }
 
 *,
