@@ -15,7 +15,7 @@
 
     - To ingest data from specific schemas or tables, use the `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
 
-    - To handle [unsupported data types](#supported-types), use the `TEXT COLUMNS` or `IGNORE COLUMNS` options.
+    - To handle [unsupported data types](#supported-types), use the `TEXT COLUMNS` or `EXCLUDE COLUMNS` options.
 
 - name: "schema-changes"
   description: |
