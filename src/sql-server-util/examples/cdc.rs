@@ -42,7 +42,7 @@ use futures::StreamExt;
 use mz_ore::future::InTask;
 use mz_sql_server_util::cdc::CdcEvent;
 use mz_sql_server_util::config::TunnelConfig;
-use mz_sql_server_util::{Client, Config};
+use mz_sql_server_util::{Client, Config, LoggingSqlServerCdcMetrics};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -65,7 +65,8 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("connection 1 successful!");
 
     let capture_instances = ["materialize_t1", "materialize_t2"];
-    let mut cdc_handle = client_1.cdc(capture_instances);
+    let metrics = LoggingSqlServerCdcMetrics;
+    let mut cdc_handle = client_1.cdc(capture_instances, metrics);
 
     cdc_handle.wait_for_ready().await?;
 
