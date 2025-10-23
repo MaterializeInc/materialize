@@ -199,7 +199,7 @@ table.inline-headings {
         display: block;
         cursor: pointer;
         position: relative;
-        padding: 3px 0 3px 15px;
+        padding: 3px 30px 3px 15px;
         margin-left: 5px;
         text-decoration: none;
         word-wrap: break-word;
@@ -207,6 +207,7 @@ table.inline-headings {
 
         &.active {
             font-weight: 500;
+            background: var(--tip);
         }
 
         &:hover,
@@ -225,10 +226,11 @@ table.inline-headings {
 
         svg {
             position: absolute;
-            left: -6px;
+            right: 6px;
             top: 50%;
-            margin-top: -18px;
+            transform: translateY(-50%);
             color: var(--divider-light);
+            transition: transform 0.2s ease-out;
 
             .darker {
                 color: var(--sub);
@@ -238,6 +240,10 @@ table.inline-headings {
                 stroke-width: 2;
             }
         }
+    }
+
+    li.open > a svg {
+        transform: translateY(-50%) rotate(90deg);
     }
 
     code {
@@ -506,27 +512,6 @@ body.dark {
     .theme-switcher {
         svg {
             fill: var(--gray-dark);
-        }
-    }
-
-    li.level-2 {
-        li.level-3 {
-            ul {
-
-                &:before,
-                &:after {
-                    content: "";
-                    background-image: url("../images/level_three_transition_dark.svg");
-                }
-            }
-        }
-        ul {
-
-            &:before,
-            &:after {
-                content: "";
-                background-image: url("../images/level_three_transition_dark.svg");
-            }
         }
     }
 }
