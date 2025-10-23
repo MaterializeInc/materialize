@@ -422,6 +422,19 @@ pub mod v1alpha1 {
             false
         }
 
+        pub fn is_promoting(&self) -> bool {
+            let Some(status) = self.status.as_ref() else {
+                return false;
+            };
+            if status.conditions.is_empty() {
+                return false;
+            }
+            status
+                .conditions
+                .iter()
+                .any(|condition| condition.reason == "Promoting")
+        }
+
         pub fn update_in_progress(&self) -> bool {
             let Some(status) = self.status.as_ref() else {
                 return false;
