@@ -65,7 +65,6 @@
     GROUP BY date_trunc('day',order_date);
 
     -- Select from the materialized view
-    -- Requires SELECT on the materialized view and its underlying relations.
     SELECT * from orders_daily_totals;
 
   results: |
@@ -90,6 +89,7 @@
     ```
 
     {{< note >}}
+    If a query directly references a view or materialized view:
     {{< include-md file="shared-content/rbac/select-views-privileges.md" >}}
     {{</ note >}}
 
