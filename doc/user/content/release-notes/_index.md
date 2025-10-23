@@ -8,6 +8,12 @@ menu:
     identifier: "release-notes"
 ---
 
+## v25.2.12
+
+### Bug fixes
+- Fix DDL lock being required when sequencing `ALTER SINK`
+
+
 ## v25.2.11
 
 ### Bug fixes
