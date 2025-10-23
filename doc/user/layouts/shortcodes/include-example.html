@@ -4,19 +4,23 @@
   {{- $data = index $data . -}}
 {{- end }}
 {{- $example := .Get "example" -}}
+{{- $indent := .Get "indent" -}}
 {{- range $data }}
-{{- if eq .name $example }}
-{{ .description | markdownify }}
-
-{{- if .code }}
-
-```mzsql
-{{ .code | safeHTML }}
-```
+{{- if eq .name $example -}}
+{{ .description | markdownify -}}
+{{- if .code -}}
+{{- $code := .code -}}
+{{- if $indent }}
+{{- $code = replaceRE "(?m)^" "   " $code -}}
 {{- end }}
 
+{{ if $indent }}   {{ end -}}```mzsql
+{{ $code | safeHTML }}
+{{ if $indent }}   {{ end -}}```
+{{- end -}}
 {{- if .results }}
-{{ .results | markdownify }}
-{{- end }}
-{{- end }}
-{{- end }}
+
+{{ if $indent }}   {{ end -}}{{ .results | markdownify -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

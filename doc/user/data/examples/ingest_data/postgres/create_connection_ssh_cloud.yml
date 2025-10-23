@@ -1,0 +1,111 @@
+- name: "create-ssh-tunnel-connection"
+  description: |-
+    In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
+    client connected to Materialize, use the [`CREATE
+    CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
+    tunnel connection:
+
+  code: |
+    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+        HOST '<SSH_BASTION_HOST>',
+        PORT <SSH_BASTION_PORT>,
+        USER '<SSH_BASTION_USER>'
+    );
+
+- name: "create-ssh-tunnel-connection-options"
+  description: |-
+    - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT>` with the public IP
+    address and port of the SSH bastion host you created
+    [earlier](#b-optional-configure-network-security).
+
+    - Replace `<SSH_BASTION_USER>` with the username for the key pair you
+    created for your SSH bastion host.
+
+- name: "get-public-keys-general"
+  description: |
+    Get Materialize's public keys for the SSH tunnel connection:
+  code: |
+    SELECT * FROM mz_ssh_tunnel_connections;
+
+- name: "get-public-keys-aurora-rds-self-hosted"
+  description: |
+    Get Materialize's public keys for the SSH tunnel connection:
+  code: |
+    SELECT
+        mz_connections.name,
+        mz_ssh_tunnel_connections.*
+    FROM
+        mz_connections
+    JOIN
+        mz_ssh_tunnel_connections USING(id)
+    WHERE
+        mz_connections.name = 'ssh_connection';
+
+- name: "login-to-ssh-bastion-host"
+  description: |
+    Log in to your SSH bastion host and add Materialize's public keys to the
+    `authorized_keys` file, for example:
+
+  code: |
+    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
+    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
+
+- name: "validate-ssh-tunnel-connection"
+  description: |
+    Back in the SQL client connected to Materialize, validate the SSH tunnel
+    connection you created using the [`VALIDATE
+    CONNECTION`](/sql/validate-connection) command:
+
+  code: |
+    VALIDATE CONNECTION ssh_connection;
+  results: |
+    If no validation error is returned, move to the next step.
+
+- name: "create-secret"
+  description: |
+    Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
+    password for the `materialize` PostgreSQL user you created
+    [earlier](#2-create-a-publication-and-a-replication-user):
+
+  code: |
+    CREATE SECRET pgpass AS '<PASSWORD>';
+
+- name: "create-connection"
+  description: |
+
+    Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create another connection object, this time with database access and authentication details for Materialize to use:
+
+  code: |
+    CREATE CONNECTION pg_connection TO POSTGRES (
+      HOST '<host>',
+      PORT 5432,
+      USER 'materialize',
+      PASSWORD SECRET pgpass,
+      DATABASE '<database>',
+      SSH TUNNEL ssh_connection
+      );
+
+- name: "create-connection-options-general"
+  description: |
+    - Replace `<host>` with your PostgreSQL endpoint.
+
+    - Replace `<database>` with the name of the database containing the tables
+    you want to replicate to Materialize.
+
+- name: "create-connection-options-aurora"
+  description: |
+    - Replace `<host>` with your Aurora endpoint. To find your Aurora endpoint,
+    select your database in the AWS Management Console, and look under
+    **Connectivity & security**.
+
+    - Replace `<database>` with the name of the database containing the tables
+    you want to replicate to Materialize.
+
+- name: "create-connection-options-rds"
+  description: |
+    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint,
+    select your database in the RDS Console, and look under
+    **Connectivity & security**.
+
+    - Replace `<database>` with the name of the database containing the tables
+    you want to replicate to Materialize.

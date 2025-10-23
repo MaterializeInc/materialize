@@ -132,25 +132,74 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% postgres-direct/create-a-cluster %}}
 
-### 2. Create a connection.
+### 2. Create a connection
 
-With the network configured, create a connection in Materialize to the upstream database.
+Once you have configured your network, create a connection in Materialize per
+your networking configuration.
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
-{{% postgres-direct/ingesting-data/allow-materialize-ips %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ips_cloud"
+   example="create-secret" indent="true" %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ips_cloud"
+   example="create-connection" indent="true" %}}
+
+   {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ips_cloud"
+   example="create-connection-options-general" indent="true" %}}
+
 {{< /tab >}}
 
 {{< tab "Use an SSH tunnel">}}
-{{% postgres-direct/ingesting-data/use-ssh-tunnel %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-ssh-tunnel-connection" indent="true" %}}
+
+   {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-ssh-tunnel-connection-options" indent="true" %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="get-public-keys-general" indent="true" %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="login-to-ssh-bastion-host" indent="true" %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="validate-ssh-tunnel-connection" indent="true" %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-secret" indent="true" %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-connection" indent="true" %}}
+
+   {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-connection-options-general" indent="true" %}}
 {{< /tab >}}
 
 {{< /tabs >}}
 
-### 3. Start ingesting data.
+### 3. Start ingesting data
 
-{{< include-md file="shared-content/ingest-data/ingest-data-postgres-step.md" >}}
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source" %}}
+
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source-options" %}}
+
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud"
+example="schema-changes" %}}
 
 ### 4. Monitor the ingestion status
 
