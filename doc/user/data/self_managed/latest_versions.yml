@@ -1,7 +1,7 @@
-terraform_gcp_version: v0.5.5
-terraform_azure_version: v0.5.5
-terraform_aws_version: v0.5.5
-terraform_helm_version: v0.1.26
-operator_helm_chart_version: v25.2.11
-orchestratord_version: v0.159.1
-environmentd_version: v0.147.17
+terraform_gcp_version: v0.5.6
+terraform_azure_version: v0.5.6
+terraform_aws_version: v0.5.6
+terraform_helm_version: v0.1.27
+operator_helm_chart_version: v25.2.12
+orchestratord_version: v0.161.0
+environmentd_version: v0.147.18
