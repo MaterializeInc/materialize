@@ -21,16 +21,15 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::time::Duration;
 
-use ::timely::Container;
-use ::timely::container::{CapacityContainerBuilder, ContainerBuilder, IterContainer};
+use ::timely::container::CapacityContainerBuilder;
 use ::timely::dataflow::StreamCore;
 use ::timely::dataflow::channels::pact::Pipeline;
-use ::timely::dataflow::channels::pushers::buffer::Session;
-use ::timely::dataflow::channels::pushers::{Counter, Tee};
-use ::timely::dataflow::operators::Operator;
 use ::timely::dataflow::operators::capture::{Event, EventLink, EventPusher};
+use ::timely::dataflow::operators::generic::Session;
+use ::timely::dataflow::operators::{InputCapability, Operator};
 use ::timely::progress::Timestamp as TimelyTimestamp;
 use ::timely::scheduling::Activator;
+use ::timely::{Container, ContainerBuilder};
 use differential_dataflow::trace::Batcher;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_expr::{MirScalarExpr, permutation_for_arrangement};
@@ -47,14 +46,14 @@ pub use crate::logging::initialize::initialize;
 /// An update of value `D` at a time and with a diff.
 pub(super) type Update<D> = (D, Timestamp, Diff);
 /// A pusher for containers `C`.
-pub(super) type Pusher<C> = Counter<Timestamp, C, Tee<Timestamp, C>>;
 /// An output session for the specified container builder.
-pub(super) type OutputSession<'a, CB> =
-    Session<'a, Timestamp, CB, Pusher<<CB as ContainerBuilder>::Container>>;
+pub(super) type OutputSession<'a, 'b, CB> =
+    Session<'a, 'b, Timestamp, CB, InputCapability<Timestamp>>;
 /// An output session for vector-based containers of updates `D`, using a capacity container builder.
-pub(super) type OutputSessionVec<'a, D> = OutputSession<'a, CapacityContainerBuilder<Vec<D>>>;
+pub(super) type OutputSessionVec<'a, 'b, D> =
+    OutputSession<'a, 'b, CapacityContainerBuilder<Vec<D>>>;
 /// An output session for columnar containers of updates `D`, using a column builder.
-pub(super) type OutputSessionColumnar<'a, D> = OutputSession<'a, ColumnBuilder<D>>;
+pub(super) type OutputSessionColumnar<'a, 'b, D> = OutputSession<'a, 'b, ColumnBuilder<D>>;
 
 /// Logs events as a timely stream, with progress statements.
 struct BatchLogger<C, P>
@@ -234,14 +233,10 @@ where
     G: ::timely::dataflow::Scope<Timestamp = Timestamp>,
     B: Batcher<Time = G::Timestamp> + 'static,
     B::Input: Container + Clone + 'static,
-    B::Output: Container + IterContainer + Clone + 'static,
+    B::Output: Clone,
     CB: ContainerBuilder,
     L: Into<LogVariant>,
-    F: for<'a> FnMut(
-            <B::Output as IterContainer>::ItemRef<'a>,
-            &mut PermutedRowPacker,
-            &mut OutputSession<CB>,
-        ) + 'static,
+    F: for<'a> FnMut(B::Output, &mut PermutedRowPacker, &mut OutputSession<CB>) + 'static,
 {
     let log = log.into();
     // TODO: Use something other than the debug representation of the log variant as a name.
@@ -251,12 +246,12 @@ where
     let consolidated = consolidate_pact::<B, _, _>(input, Pipeline, c_name);
     consolidated.unary::<CB, _, _, _>(Pipeline, u_name, |_, _| {
         move |input, output| {
-            while let Some((time, data)) = input.next() {
+            input.for_each_time(|time, data| {
                 let mut session = output.session_with_builder(&time);
-                for item in data.iter().flatten().flat_map(|chunk| chunk.iter()) {
+                for item in data.flatten().flat_map(|data| data.drain(..)) {
                     logic(item, &mut packer, &mut session);
                 }
-            }
+            });
         }
     })
 }

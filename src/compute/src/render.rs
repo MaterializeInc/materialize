@@ -115,7 +115,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
@@ -900,9 +900,9 @@ where
                             // The pointstamp starts counting from 0, so we need to add 1.
                             iteration_index + 1 >= limit.max_iters.into()
                         });
-                    oks = Collection::new(in_limit);
+                    oks = VecCollection::new(in_limit);
                     if !limit.return_at_limit {
-                        err = err.concat(&Collection::new(over_limit).map(move |_data| {
+                        err = err.concat(&VecCollection::new(over_limit).map(move |_data| {
                             DataflowError::EvalError(Box::new(EvalError::LetRecLimitExceeded(
                                 format!("{}", limit.max_iters.get()).into(),
                             )))
@@ -1393,7 +1393,7 @@ where
                 }));
             }
 
-            move |input, output| {
+            move |(input, frontier), output| {
                 // Pass through inputs.
                 input.for_each(|cap, data| {
                     output.session(&cap).give_container(data);
@@ -1403,8 +1403,7 @@ where
                     return;
                 }
 
-                let frontier = input.frontier().frontier();
-                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier) {
+                if PartialOrder::less_equal(&hydration_frontier.borrow(), &frontier.frontier()) {
                     hydrated = true;
 
                     for &export_id in &export_ids {
@@ -1605,13 +1604,13 @@ where
     }
 }
 
-/// Wraps the provided `Collection` with an operator that passes through all received inputs as
+/// Wraps the provided `VecCollection` with an operator that passes through all received inputs as
 /// long as the provided `ShutdownProbe` does not announce dataflow shutdown. Once the token
 /// dataflow is shutting down, all data flowing into the operator is dropped.
 fn render_shutdown_fuse<G, D>(
-    collection: Collection<G, D, Diff>,
+    collection: VecCollection<G, D, Diff>,
     probe: ShutdownProbe,
-) -> Collection<G, D, Diff>
+) -> VecCollection<G, D, Diff>
 where
     G: Scope,
     D: Data,
@@ -1661,19 +1660,23 @@ where
     stream.unary_frontier(Pipeline, "SuppressEarlyProgress", |default_cap, _info| {
         let mut early_cap = Some(default_cap);
 
-        move |input, output| {
-            input.for_each(|data_cap, data| {
-                let mut session = if as_of.less_than(data_cap.time()) {
-                    output.session(&data_cap)
+        move |(input, frontier), output| {
+            input.for_each_time(|data_cap, data| {
+                if as_of.less_than(data_cap.time()) {
+                    let mut session = output.session(&data_cap);
+                    for data in data {
+                        session.give_container(data);
+                    }
                 } else {
                     let cap = early_cap.as_ref().expect("early_cap can't be dropped yet");
-                    output.session(cap)
-                };
-                session.give_container(data);
+                    let mut session = output.session(&cap);
+                    for data in data {
+                        session.give_container(data);
+                    }
+                }
             });
 
-            let frontier = input.frontier().frontier();
-            if !PartialOrder::less_equal(&frontier, &as_of.borrow()) {
+            if !PartialOrder::less_equal(&frontier.frontier(), &as_of.borrow()) {
                 early_cap.take();
             }
         }
@@ -1756,16 +1759,16 @@ where
                 ));
                 let shutdown = Rc::downgrade(&shutdown);
 
-                move |input, output| {
+                move |(input, frontier), output| {
                     // We've been shut down, release all resources and consume inputs.
                     if shutdown.strong_count() == 0 {
                         retained_cap = None;
                         pending_times.clear();
-                        while let Some(_) = input.next() {}
+                        input.for_each(|_, _| {});
                         return;
                     }
 
-                    while let Some((cap, data)) = input.next() {
+                    input.for_each(|cap, data| {
                         for time in data
                             .iter()
                             .flat_map(|(_, time, _)| u64::from(time).checked_add(slack_ms))
@@ -1782,7 +1785,7 @@ where
                         }) {
                             retained_cap = Some(cap.retain());
                         }
-                    }
+                    });
 
                     handle.with_frontier(|f| {
                         while pending_times
@@ -1803,7 +1806,7 @@ where
                         _ => {}
                     }
 
-                    if input.frontier.is_empty() {
+                    if frontier.is_empty() {
                         retained_cap = None;
                         pending_times.clear();
                     }
@@ -1813,7 +1816,7 @@ where
                             name,
                             info.global_id,
                             pending_times = %PendingTimesDisplay(pending_times.iter().cloned()),
-                            frontier = ?input.frontier.frontier().get(0),
+                            frontier = ?frontier.frontier().get(0),
                             probe = ?handle.with_frontier(|f| f.get(0).cloned()),
                             ?upper,
                             "pending times",

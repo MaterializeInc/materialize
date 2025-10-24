@@ -16,8 +16,8 @@ use mz_repr::{Diff, Row, Timestamp};
 use mz_timely_util::operator::StreamExt;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{Counter, Tee};
+use timely::dataflow::operators::InputCapability;
+use timely::dataflow::operators::generic::Session;
 use timely::progress::Antichain;
 
 use crate::render::DataflowError;
@@ -137,14 +137,18 @@ fn drain_through_mfp<T>(
     mfp_plan: &MfpPlan,
     until: &Antichain<Timestamp>,
     ok_output: &mut Session<
+        '_,
+        '_,
         T,
         ConsolidatingContainerBuilder<Vec<(Row, T, Diff)>>,
-        Counter<T, Vec<(Row, T, Diff)>, Tee<T, Vec<(Row, T, Diff)>>>,
+        InputCapability<T>,
     >,
     err_output: &mut Session<
+        '_,
+        '_,
         T,
         ConsolidatingContainerBuilder<Vec<(DataflowError, T, Diff)>>,
-        Counter<T, Vec<(DataflowError, T, Diff)>, Tee<T, Vec<(DataflowError, T, Diff)>>>,
+        InputCapability<T>,
     >,
     budget: &mut usize,
 ) where

@@ -9683,7 +9683,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "log",
  "multimap",
  "once_cell",
@@ -9703,7 +9703,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.10.5",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -11861,9 +11861,9 @@ dependencies = [
 
 [[package]]
 name = "timely"
-version = "0.25.0"
+version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1661f917dc0ba65f3dda4f7b9f16b1aaf42d773f89d0368377780e8b6c9e620e"
+checksum = "c60fbe7e39e5f8322db7d4844b37846a9bfd68a0c75e0fa7eef3aac86ffcada0"
 dependencies = [
  "bincode",
  "byteorder",
@@ -13392,7 +13392,7 @@ dependencies = [
  "hyper-util",
  "idna",
  "insta",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "libc",
  "libz-sys",
  "linux-raw-sys 0.4.15",

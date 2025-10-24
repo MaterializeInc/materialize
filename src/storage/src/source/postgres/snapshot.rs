@@ -197,15 +197,16 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let (feedback_handle, feedback_data) = scope.feedback(Default::default());
 
     let (raw_handle, raw_data) = builder.new_output();
-    let (rewinds_handle, rewinds) = builder.new_output();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
     // This output is used to signal to the replication operator that the replication slot has been
     // created. With the current state of execution serialization there isn't a lot of benefit
     // of splitting the snapshot and replication phases into two operators.
     // TODO(petrosagg): merge the two operators in one (while still maintaining separation as
     // functions/modules)
     let (_, slot_ready) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (snapshot_handle, snapshot) = builder.new_output();
-    let (definite_error_handle, definite_errors) = builder.new_output();
+    let (snapshot_handle, snapshot) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
 
     // This operator needs to broadcast data to itself in order to synchronize the transaction
     // snapshot. However, none of the feedback capabilities result in output messages and for the
@@ -521,9 +522,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .map::<Vec<_>, _, _>(Clone::clone)
         .unary(round_robin, "PgCastSnapshotRows", |_, _| {
             move |input, output| {
-                while let Some((time, data)) = input.next() {
+                input.for_each_time(|time, data| {
                     let mut session = output.session(&time);
-                    for ((oid, output_index, event), time, diff) in data.drain(..) {
+                    for ((oid, output_index, event), time, diff) in
+                        data.flat_map(|data| data.drain(..))
+                    {
                         let output = &table_info
                             .get(&oid)
                             .and_then(|outputs| outputs.get(&output_index))
@@ -545,7 +548,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                         session.give(((output_index, event), time, diff));
                     }
-                }
+                });
             }
         })
         .as_collection();

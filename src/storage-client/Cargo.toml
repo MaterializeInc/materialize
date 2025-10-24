@@ -39,7 +39,7 @@ rdkafka = { version = "0.29.0", features = [
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.145" }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
-timely = "0.25.0"
+timely = "0.25.1"
 tokio = { version = "1.44.1", features = [
     "fs",
     "rt",

@@ -1186,7 +1186,7 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
-        fn part_unique<T: Hash>(x: &RunPart<T>) -> String {
+        fn part_unique<T: Codec64>(x: &RunPart<T>) -> String {
             match x {
                 RunPart::Single(BatchPart::Inline {
                     updates,
@@ -1195,7 +1195,10 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
                 }) => {
                     let mut h = DefaultHasher::new();
                     updates.hash(&mut h);
-                    ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
+                    if let Some(frontier) = &ts_rewrite {
+                        h.write_usize(frontier.len());
+                        frontier.iter().for_each(|t| t.encode().hash(&mut h));
+                    }
                     h.finish().to_string()
                 }
                 other => other.printable_name().to_string(),

@@ -128,12 +128,12 @@ pub fn render<A: Allocate>(timely_worker: &mut TimelyWorker<A>) -> (Sender, Rece
             .sink(
                 Exchange::new(|(idx, _, _)| u64::cast_from(*idx)),
                 "command_channel::sink",
-                move |input| {
-                    while let Some((_cap, data)) = input.next() {
+                move |(input, _)| {
+                    input.for_each(|_time, data| {
                         for (_idx, cmd, nonce) in data.drain(..) {
                             let _ = output_tx.send((cmd, nonce));
                         }
-                    }
+                    });
                 },
             );
         }

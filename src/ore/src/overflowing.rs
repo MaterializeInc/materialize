@@ -88,8 +88,11 @@ impl<T: std::fmt::Display> std::fmt::Display for Overflowing<T> {
 mod columnar {
     use crate::overflowing::Overflowing;
     use columnar::common::PushIndexAs;
-    use columnar::{AsBytes, Clear, Columnar, Container, FromBytes, Index, IndexAs, Len, Push};
+    use columnar::{
+        AsBytes, Borrow, Clear, Columnar, Container, FromBytes, Index, IndexAs, Len, Push,
+    };
     use serde::{Deserialize, Serialize};
+    use std::ops::Range;
 
     impl<T: Columnar + Copy + Send> Columnar for Overflowing<T>
     where
@@ -121,7 +124,7 @@ mod columnar {
         }
     }
 
-    impl<T: Columnar + Copy + Send, TC: PushIndexAs<T>> Container for Overflows<T, TC>
+    impl<T: Columnar + Copy + Send, TC: PushIndexAs<T>> Borrow for Overflows<T, TC>
     where
         Overflowing<T>: From<T>,
     {
@@ -149,7 +152,16 @@ mod columnar {
         {
             item
         }
+    }
 
+    impl<T: Columnar + Copy + Send, TC: PushIndexAs<T>> Container for Overflows<T, TC>
+    where
+        Overflowing<T>: From<T>,
+    {
+        #[inline(always)]
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            self.0.extend_from_self(other.0, range);
+        }
         #[inline(always)]
         fn reserve_for<'a, I>(&mut self, selves: I)
         where

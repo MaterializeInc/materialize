@@ -33,6 +33,7 @@ use mz_timely_util::builder_async::{
     Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
 };
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Broadcast;
 use timely::dataflow::{Scope, Stream};
@@ -150,7 +151,7 @@ where
     let mut builder =
         AsyncOperatorBuilder::new("CopyToS3-initialization".to_string(), scope.clone());
 
-    let (start_handle, start_stream) = builder.new_output();
+    let (start_handle, start_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // Push all errors to the leader worker, so it early exits before doing any initialization work
     // This should be at-most 1 incoming error per-worker due to the filtering of this stream
@@ -312,7 +313,8 @@ where
     let mut builder = AsyncOperatorBuilder::new("CopyToS3-uploader".to_string(), scope.clone());
 
     let mut input_handle = builder.new_disconnected_input(&input_collection, Pipeline);
-    let (completion_handle, completion_stream) = builder.new_output();
+    let (completion_handle, completion_stream) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let mut start_handle = builder.new_input_for(&start_stream, Pipeline, &completion_handle);
 
     let button = builder.build(move |caps| async move {
