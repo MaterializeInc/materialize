@@ -31,10 +31,9 @@ use timely::communication::{Pull, Push};
 use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pact::ParallelizationContract;
+use timely::dataflow::channels::pushers::Output;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::generic::{
-    InputHandleCore, OperatorInfo, OutputBuilder, OutputBuilderSession,
-};
+use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo};
 use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
@@ -212,11 +211,49 @@ pub enum Event<T: Timestamp, C, D> {
     Progress(Antichain<T>),
 }
 
+struct AsyncOutputHandleInner<T: Timestamp, CB: ContainerBuilder> {
+    output: Output<T, CB::Container>,
+    capability: Option<Capability<T>>,
+    builder: CB,
+}
+
+impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
+    fn flush(&mut self) {
+        while let Some(container) = self.builder.finish() {
+            self.output
+                .give(self.capability.as_ref().expect("must exist"), container);
+        }
+    }
+    fn cease(&mut self) {
+        self.flush();
+        let _ = self.output.activate();
+        self.capability = None;
+    }
+
+    fn give<D>(&mut self, cap: &Capability<T>, data: D)
+    where
+        CB: PushInto<D>,
+    {
+        if let Some(capability) = &self.capability
+            && cap.time() != capability.time()
+        {
+            self.flush();
+            self.capability = Some(cap.clone());
+        }
+        if self.capability.is_none() {
+            self.capability = Some(cap.clone());
+        }
+
+        self.builder.push_into(data);
+        while let Some(container) = self.builder.extract() {
+            self.output
+                .give(self.capability.as_ref().expect("must exist"), container);
+        }
+    }
+}
+
 pub struct AsyncOutputHandle<T: Timestamp, CB: ContainerBuilder> {
-    // The field order is important here as the handle is borrowing from the wrapper. See also the
-    // safety argument in the constructor
-    handle: Rc<RefCell<OutputBuilderSession<'static, T, CB>>>,
-    wrapper: Rc<Pin<Box<OutputBuilder<T, CB>>>>,
+    inner: Rc<RefCell<AsyncOutputHandleInner<T, CB>>>,
     index: usize,
 }
 
@@ -227,8 +264,9 @@ where
 {
     #[inline]
     pub fn give_container(&self, cap: &Capability<T>, container: &mut C) {
-        let mut handle = self.handle.borrow_mut();
-        handle.session_with_builder(cap).give_container(container);
+        let mut inner = self.inner.borrow_mut();
+        inner.flush();
+        inner.output.give(cap, container);
     }
 }
 
@@ -237,50 +275,33 @@ where
     T: Timestamp,
     CB: ContainerBuilder,
 {
-    fn new(wrapper: OutputBuilder<T, CB>, index: usize) -> Self {
-        let mut wrapper = Rc::new(Box::pin(wrapper));
-        // SAFETY:
-        // get_unchecked_mut is safe because we are not moving the wrapper
-        //
-        // transmute is safe because:
-        // * We're erasing the lifetime but we guarantee through field order that the handle will
-        //   be dropped before the wrapper, thus manually enforcing the lifetime.
-        // * We never touch wrapper again after this point
-        let handle = unsafe {
-            let handle = Rc::get_mut(&mut wrapper)
-                .unwrap()
-                .as_mut()
-                .get_unchecked_mut()
-                .activate();
-            std::mem::transmute::<
-                OutputBuilderSession<'_, T, CB>,
-                OutputBuilderSession<'static, T, CB>,
-            >(handle)
+    fn new(output: Output<T, CB::Container>, index: usize) -> Self {
+        let inner = AsyncOutputHandleInner {
+            output,
+            capability: None,
+            builder: CB::default(),
         };
         Self {
-            wrapper,
-            handle: Rc::new(RefCell::new(handle)),
+            inner: Rc::new(RefCell::new(inner)),
             index,
         }
     }
 
     fn cease(&self) {
-        // TODO!
-        // self.handle.borrow_mut().cease()
+        self.inner.borrow_mut().cease();
     }
 }
 
-impl<T, C> AsyncOutputHandle<T, CapacityContainerBuilder<C>>
+impl<T, CB> AsyncOutputHandle<T, CB>
 where
     T: Timestamp,
-    C: Container + Clone + 'static,
+    CB: ContainerBuilder,
 {
     pub fn give<D>(&self, cap: &Capability<T>, data: D)
     where
-        CapacityContainerBuilder<C>: PushInto<D>,
+        CB: PushInto<D>,
     {
-        let mut handle = self.handle.borrow_mut();
-        handle.session_with_builder(cap).give(data);
+        self.inner.borrow_mut().give(cap, data);
     }
 }
 
@@ -298,12 +319,11 @@ where
         TimelyStack<D>: PushInto<D2>,
     {
         let should_yield = {
-            let mut handle = self.handle.borrow_mut();
-            let mut session = handle.session_with_builder(cap);
-            session.give(data);
-            let should_yield = session.builder().bytes.get() > Self::MAX_OUTSTANDING_BYTES;
+            let mut handle = self.inner.borrow_mut();
+            handle.give(cap, data);
+            let should_yield = handle.builder.bytes.get() > Self::MAX_OUTSTANDING_BYTES;
             if should_yield {
-                session.builder().bytes.set(0);
+                handle.builder.bytes.set(0);
             }
             should_yield
         };
@@ -316,8 +336,7 @@ where
 impl<T: Timestamp, CB: ContainerBuilder> Clone for AsyncOutputHandle<T, CB> {
     fn clone(&self) -> Self {
         Self {
-            handle: Rc::clone(&self.handle),
-            wrapper: Rc::clone(&self.wrapper),
+            inner: Rc::clone(&self.inner),
             index: self.index,
         }
     }
@@ -523,10 +542,9 @@ impl<G: Scope> OperatorBuilder<G> {
     ) {
         let index = self.builder.shape().outputs();
 
-        let (wrapper, stream) = self.builder.new_output_connection([]);
-        let wrapper = OutputBuilder::from(wrapper);
+        let (output, stream) = self.builder.new_output_connection([]);
 
-        let handle = AsyncOutputHandle::new(wrapper, index);
+        let handle = AsyncOutputHandle::new(output, index);
 
         let flush_handle = handle.clone();
         self.output_flushes
@@ -664,7 +682,7 @@ impl<G: Scope> OperatorBuilder<G> {
             + 'static,
     {
         // Create a new completely disconnected output
-        let (error_output, error_stream) = self.new_output();
+        let (error_output, error_stream) = self.new_output::<CapacityContainerBuilder<_>>();
         let button = self.build(|mut caps| async move {
             let error_cap = caps.pop().unwrap();
             let mut caps = caps
@@ -784,7 +802,7 @@ mod test {
             let input = (0..10).to_stream(scope);
 
             let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
-            let (output, output_stream) = op.new_output();
+            let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
             let mut input_handle = op.new_input_for(&input, Pipeline, &output);
 
             op.build(move |_capabilities| async move {

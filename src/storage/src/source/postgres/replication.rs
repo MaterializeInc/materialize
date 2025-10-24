@@ -101,7 +101,6 @@ use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessa
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::Operator;
@@ -614,11 +613,7 @@ async fn raw_stream<'a>(
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
-    probe_output: &'a AsyncOutputHandle<
-        MzOffset,
-        CapacityContainerBuilder<Vec<Probe<MzOffset>>>,
-        Tee<MzOffset, Vec<Probe<MzOffset>>>,
-    >,
+    probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
 ) -> Result<
     Result<

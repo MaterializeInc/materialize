@@ -19,7 +19,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use differential_dataflow::capture::{Message, Progress};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
@@ -56,8 +56,8 @@ mod protobuf;
 /// also builds a differential dataflow collection that respects the
 /// data and progress messages in the underlying CDCv2 stream.
 pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: Timestamp>(
-    input: &Collection<G, DecodeResult<FromTime>, Diff>,
-) -> (Collection<G, Row, Diff>, PressOnDropButton) {
+    input: &VecCollection<G, DecodeResult<FromTime>, Diff>,
+) -> (VecCollection<G, Row, Diff>, PressOnDropButton) {
     let channel_rx = Rc::new(RefCell::new(VecDeque::new()));
     let activator_set: Rc<RefCell<Option<SyncActivator>>> = Rc::new(RefCell::new(None));
 
@@ -454,14 +454,14 @@ async fn decode_delimited(
 /// (which is not always possible otherwise, since often gibberish strings can be interpreted as Avro,
 ///  so the only signal is how many bytes you managed to decode).
 pub fn render_decode_delimited<G: Scope, FromTime: Timestamp>(
-    input: &Collection<G, SourceOutput<FromTime>, Diff>,
+    input: &VecCollection<G, SourceOutput<FromTime>, Diff>,
     key_encoding: Option<DataEncoding>,
     value_encoding: DataEncoding,
     debug_name: String,
     metrics: DecodeMetricDefs,
     storage_configuration: StorageConfiguration,
 ) -> (
-    Collection<G, DecodeResult<FromTime>, Diff>,
+    VecCollection<G, DecodeResult<FromTime>, Diff>,
     Stream<G, HealthStatusMessage>,
 ) {
     let op_name = format!(

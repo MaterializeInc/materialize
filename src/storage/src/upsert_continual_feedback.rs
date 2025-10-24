@@ -15,7 +15,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use indexmap::map::Entry;
 use itertools::Itertools;
 use mz_repr::{Diff, GlobalId, Row};
@@ -100,10 +100,10 @@ use crate::upsert::types::{StateValue, UpsertState, UpsertStateBackend};
 /// case, our input might not be consolidated and `consolidate_chunk` is able to
 /// handle that.
 pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
-    input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
-    persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
     mut persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -112,7 +112,7 @@ pub fn upsert_inner<G: Scope, FromTime, F, Fut, US>(
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
-    Collection<G, Result<Row, DataflowError>, Diff>,
+    VecCollection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,

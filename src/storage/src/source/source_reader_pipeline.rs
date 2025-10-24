@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -177,7 +177,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
 ) -> (
     BTreeMap<
         GlobalId,
-        Collection<
+        VecCollection<
             Child<'g, G, mz_repr::Timestamp>,
             Result<SourceOutput<C::Time>, DataflowError>,
             Diff,
@@ -436,7 +436,7 @@ fn remap_operator<G, FromTime>(
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     mut ingested_upper: watch::Receiver<MutableAntichain<FromTime>>,
     remap_relation_desc: RelationDesc,
-) -> (Collection<G, FromTime, Diff>, PressOnDropButton)
+) -> (VecCollection<G, FromTime, Diff>, PressOnDropButton)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
@@ -617,7 +617,7 @@ where
 /// virtual (through persist) feedback edge so that we convert the `IntoTime` resumption frontier
 /// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
 fn reclock_committed_upper<G, FromTime>(
-    bindings: &Collection<G, FromTime, Diff>,
+    bindings: &VecCollection<G, FromTime, Diff>,
     as_of: Antichain<G::Timestamp>,
     committed_upper: &Stream<G, ()>,
     id: GlobalId,

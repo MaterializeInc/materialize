@@ -185,7 +185,7 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                 let mut cmd_index = 0;
                 let mut capability = Some(cap);
 
-                move |output: &mut OutputHandle<_, _, _>| {
+                move |output| {
                     let Some(cap) = &capability else {
                         return;
                     };
@@ -227,16 +227,16 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                     // current index of the next command.
                     let mut pending_commands = vec![(BTreeSet::new(), 0); scope.peers()];
 
-                    move |input, output: &mut OutputHandle<_, _, _>| {
+                    move |(input, frontier), output| {
                         let Some(cap) = &capability else {
                             return;
                         };
 
-                        while let Some((_cap, data)) = input.next() {
+                        input.for_each(|_time, data| {
                             for (worker_id, cmd) in data.drain(..) {
                                 pending_commands[worker_id].0.insert(cmd);
                             }
-                        }
+                        });
 
                         let mut session = output.session(cap);
                         for (commands, next_idx) in &mut pending_commands {
@@ -250,7 +250,7 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                             }
                         }
 
-                        if input.frontier().is_empty() {
+                        if frontier.is_empty() {
                             // Drop our capability to shut down.
                             capability = None;
                         }
@@ -268,10 +268,10 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                 let mut pending_commands = BTreeSet::new();
                 let mut next_idx = 0;
 
-                move |input| {
-                    while let Some((_cap, data)) = input.next() {
+                move |(input, _frontier)| {
+                    input.for_each(|_time, data| {
                         pending_commands.extend(data.drain(..));
-                    }
+                    });
 
                     while pending_commands
                         .first()

@@ -47,6 +47,7 @@ use mz_timely_util::probe::ProbeNotify;
 use mz_txn_wal::operator::{TxnsContext, txns_progress};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::ScopeParent;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
@@ -759,7 +760,7 @@ where
         format!("persist_source_backpressure({})", name),
         scope.clone(),
     );
-    let (data_output, data_stream) = builder.new_output();
+    let (data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut data_input = builder.new_disconnected_input(data, Pipeline);
     let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);
