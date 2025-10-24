@@ -26,7 +26,7 @@ use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{
     SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerQualifiedTableName, SqlServerTableRaw,
 };
-use crate::{Client, SqlServerError};
+use crate::{Client, SqlServerError, quote_identifier};
 
 /// Returns the minimum log sequence number for the specified `capture_instance`.
 ///
@@ -231,10 +231,6 @@ fn parse_lsn(result: &[tiberius::Row]) -> Result<Lsn, SqlServerError> {
 
 /// Queries the specified capture instance and returns all changes from
 /// `[start_lsn, end_lsn)`, ordered by `start_lsn` in an ascending fashion.
-///
-/// TODO(sql_server2): This presents an opportunity for SQL injection. We should create a stored
-/// procedure using `QUOTENAME` to sanitize the input for the capture instance provided by the
-/// user.
 pub fn get_changes_asc(
     client: &mut Client,
     capture_instance: &str,
@@ -244,7 +240,8 @@ pub fn get_changes_asc(
 ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> + Send {
     const START_LSN_COLUMN: &str = "__$start_lsn";
     let query = format!(
-        "SELECT * FROM cdc.fn_cdc_get_all_changes_{capture_instance}(@P1, @P2, N'{filter}') ORDER BY {START_LSN_COLUMN} ASC;"
+        "SELECT * FROM cdc.{function}(@P1, @P2, N'{filter}') ORDER BY {START_LSN_COLUMN} ASC;",
+        function = quote_identifier(&format!("fn_cdc_get_all_changes_{capture_instance}"))
     );
     client.query_streaming(
         query,
@@ -466,7 +463,11 @@ pub async fn get_cdc_table_columns(
     WHERE \
         c.object_id = OBJECT_ID(@P1) AND c.name NOT LIKE '__$%' \
     ORDER BY c.column_id;";
-    let cdc_table_name = format!("cdc.{capture_instance}_CT");
+    // Strings passed into OBJECT_ID must be escaped
+    let cdc_table_name = format!(
+        "cdc.{table_name}",
+        table_name = quote_identifier(&format!("{capture_instance}_CT"))
+    );
     let result = client.query(CDC_COLUMNS_QUERY, &[&cdc_table_name]).await?;
     let mut columns = BTreeMap::new();
     for row in result.iter() {
@@ -739,14 +740,16 @@ pub fn snapshot(
     client: &mut Client,
     table: &SqlServerTableRaw,
 ) -> impl Stream<Item = Result<tiberius::Row, SqlServerError>> {
-    let schema_name = &table.schema_name;
-    let table_name = &table.name;
     let cols = table
         .columns
         .iter()
-        .map(|SqlServerColumnRaw { name, .. }| format!("[{name}]"))
+        .map(|SqlServerColumnRaw { name, .. }| quote_identifier(name))
         .join(",");
-    let query = format!("SELECT {cols} FROM [{schema_name}].[{table_name}];");
+    let query = format!(
+        "SELECT {cols} FROM {schema_name}.{table_name};",
+        schema_name = quote_identifier(&table.schema_name),
+        table_name = quote_identifier(&table.name)
+    );
     client.query_streaming(query, &[])
 }
 
@@ -756,7 +759,11 @@ pub async fn snapshot_size(
     schema: &str,
     table: &str,
 ) -> Result<usize, SqlServerError> {
-    let query = format!("SELECT COUNT(*) FROM [{schema}].[{table}];");
+    let query = format!(
+        "SELECT COUNT(*) FROM {schema_name}.{table_name};",
+        schema_name = quote_identifier(schema),
+        table_name = quote_identifier(table)
+    );
     let result = client.query(query, &[]).await?;
 
     match &result[..] {
@@ -838,7 +845,7 @@ pub async fn validate_source_privileges<'a>(
             SCHEMA_NAME(o.schema_id) + '.' + o.name AS qualified_table_name,
             ct.capture_instance AS capture_instance,
             COALESCE(HAS_PERMS_BY_NAME(SCHEMA_NAME(o.schema_id) + '.' + o.name, 'OBJECT', 'SELECT'), 0) AS table_select,
-            COALESCE(HAS_PERMS_BY_NAME('cdc.' + ct.capture_instance + '_CT', 'OBJECT', 'SELECT'), 0) AS capture_table_select
+            COALESCE(HAS_PERMS_BY_NAME('cdc.' + QUOTENAME(ct.capture_instance + '_CT') , 'OBJECT', 'SELECT'), 0) AS capture_table_select
         FROM cdc.change_tables ct
         JOIN sys.objects o ON o.object_id = ct.source_object_id
         WHERE ct.capture_instance IN ({param_indexes});

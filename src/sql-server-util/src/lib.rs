@@ -931,3 +931,30 @@ impl SqlServerDecodeError {
         }
     }
 }
+
+/// Quotes the provided string using '[]' to match SQL Server `QUOTENAME` function. This form
+/// of quotes is unaffected by the SQL Server setting `SET QUOTED_IDENTIFIER`.
+///
+/// See:
+/// - <https://learn.microsoft.com/en-us/sql/t-sql/functions/quotename-transact-sql?view=sql-server-ver17>
+/// - <https://learn.microsoft.com/en-us/sql/t-sql/statements/set-quoted-identifier-transact-sql?view=sql-server-ver17>
+pub fn quote_identifier(ident: &str) -> String {
+    let mut quoted = ident.replace(']', "]]");
+    quoted.insert(0, '[');
+    quoted.push(']');
+    quoted
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_sql_server_escaping() {
+        assert_eq!("[]", &quote_identifier(""));
+        assert_eq!("[]]]", &quote_identifier("]"));
+        assert_eq!("[a]", &quote_identifier("a"));
+        assert_eq!("[cost(]]\u{00A3})]", &quote_identifier("cost(]\u{00A3})"));
+        assert_eq!("[[g[o[o]][]", &quote_identifier("[g[o[o]["));
+    }
+}
