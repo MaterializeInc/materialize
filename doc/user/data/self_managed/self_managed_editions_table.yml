@@ -1,0 +1,21 @@
+columns:
+  - column: "Feature"
+  - column: "Enterprise Edition"
+  - column: "Community Edition"
+rows:
+  - "Feature": "**Maximum Usage Limits (Memory)**"
+    "Enterprise Edition": None
+    "Community Edition": 24 GiB
+  - "Feature": "**Maximum Usage Limits (Disk)**"
+    "Enterprise Edition": None
+    "Community Edition": 48 GiB
+  - "Feature": "**[Support](/support/)**"
+    "Enterprise Edition": |
+      [Per terms of your license](https://materialize.com/self-managed)
+    "Community Edition": |
+      [Community slack or messenger app](/support/)
+  - "Feature": "**License**"
+    "Enterprise Edition": |
+      [Enterprise License - Contact Us](https://materialize.com/self-managed/)
+    "Community Edition": |
+      [BSL/Privacy Policy](/license/)
