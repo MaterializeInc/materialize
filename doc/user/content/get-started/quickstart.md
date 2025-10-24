@@ -4,7 +4,7 @@ description: "Learn the basics of Materialize."
 menu:
   main:
     parent: "get-started"
-    weight: 15
+    weight: 10
     name: "Quickstart"
 aliases:
   - /katacoda/

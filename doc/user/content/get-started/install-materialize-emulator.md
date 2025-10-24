@@ -4,7 +4,7 @@ description: "The Materialize Emulator is an all-in-one Docker image available o
 menu:
   main:
     parent: "get-started"
-    weight: 16
+    weight: 15
     name: "Download and run Materialize Emulator"
 
 ---
