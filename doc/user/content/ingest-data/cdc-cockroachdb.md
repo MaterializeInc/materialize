@@ -89,12 +89,8 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% kafka/cockroachdb/create-a-cluster %}}
 
-### 2. Start ingesting data
+### 2. Create a connection
 
-[//]: # "TODO(morsapaes) Incorporate all options for network security and
-authentication later on. Starting with a simplified version that is consistent
-with the PostgreSQL/MySQL guides and can be used to model other Kafka-relate
-integration guides after."
 
 Now that you've created an ingestion cluster, you can connect Materialize to
 your Kafka broker and start ingesting data. The exact steps depend on your
@@ -137,6 +133,8 @@ guidance.
     );
     ```
 
+## 3. Start ingesting data
+
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Kafka broker and start ingesting data from the target topic:
 
@@ -153,15 +151,15 @@ guidance.
     By default, the source will be created in the active cluster; to use a
     different cluster, use the `IN CLUSTER` clause.
 
-### 3. Monitor the ingestion status
+### 4. Monitor the ingestion status
 
 {{% kafka/cockroachdb/check-the-ingestion-status %}}
 
-### 4. Create a view
+### 5. Create a view
 
 {{% ingest-data/ingest-data-kafka-debezium-view %}}
 
-### 5. Create an index on the view
+### 6. Create an index on the view
 
 {{% ingest-data/ingest-data-kafka-debezium-index %}}
 
