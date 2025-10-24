@@ -4,9 +4,6 @@
   <nav role="navigation" class="sidebar">
     <ul>
       <div id="docsearch"></div>
-      <select id="version-select" class="version-dropdown" style="width: 100%; box-sizing: border-box;">
-      </select>
-      <br><br>
 
       {{ range .Site.Menus.main.ByWeight }}
       <li class="level-1 {{if .HasChildren }}has-children{{ else }}no-children{{ end }}">
@@ -67,50 +64,4 @@
   </button>
 </div>
 
-<script>
-  document.addEventListener('DOMContentLoaded', function () {
-    const versionSelect = document.getElementById('version-select');
-    const currentPath = window.location.pathname;
 
-    fetch('/docs/versions.json')
-      .then( response => {
-        if (!response.ok) {
-          throw new Error('File not found');
-        }
-        return response.json();
-      })
-      .catch(() => {
-        return fetch('{{ .Site.BaseURL }}versions.json')
-          .then(response => {
-            if (!response.ok) {
-              throw new Error('Fallback file not found');
-            }
-            return response.json();
-          });
-      })
-      .then(versions => {
-        versions.forEach(version => {
-          const option = document.createElement('option');
-          option.value = version.base_url;
-          option.textContent = version.name;
-          versionSelect.appendChild(option);
-        });
-
-        const currentVersion = versions.filter(version => currentPath.includes(version.base_url))?.at(-1)?.base_url;
-
-        if (currentVersion) {
-          versionSelect.value = currentVersion;
-        }
-
-        versionSelect.addEventListener('change', function () {
-          const baseUrl = '{{ .Site.BaseURL }}';
-          const strippedBaseUrl = baseUrl.endsWith(currentVersion) ? baseUrl.slice(0, -currentVersion.length) : baseUrl;
-          const selectedBaseUrl = strippedBaseUrl + versionSelect.value;
-          if (selectedBaseUrl) {
-            window.location.href = selectedBaseUrl;
-          }
-        });
-      })
-      .catch(error => console.error('Error fetching versions:', error));
-  });
-</script>
