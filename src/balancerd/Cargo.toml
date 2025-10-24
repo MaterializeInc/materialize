@@ -1,7 +1,7 @@
 [package]
 name = "mz-balancerd"
 description = "Balancer service."
-version = "0.162.0"
+version = "0.162.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false
