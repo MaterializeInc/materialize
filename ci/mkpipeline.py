@@ -334,7 +334,7 @@ def increase_agents_timeouts(
                 step["agents"] = {"queue": agent}
 
     if coverage:
-        pipeline["env"]["CI_COVERAGE_ENABLED"] = 1
+        pipeline.setdefault("env", {})["CI_COVERAGE_ENABLED"] = 1
 
         for step in steps(pipeline):
             # Coverage runs are slower
@@ -880,7 +880,7 @@ def remove_dependencies_on_prs(
 def move_build_to_lto(pipeline: Any, lto: bool) -> None:
     if not lto:
         return
-    pipeline["env"]["CI_LTO"] = 1
+    pipeline.setdefault("env", {})["CI_LTO"] = 1
     for step in steps(pipeline):
         # Use different queue so we don't block the fast dedicated builder
         # agents with their caches, LTO builds are very slow at linking, and
