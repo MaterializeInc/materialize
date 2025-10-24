@@ -794,10 +794,18 @@ class ResolvedImage:
                 *(["--push"] if push else ["--load"]),
             ]
 
-        spawn.runv(
-            ["docker", "login", "ghcr.io", "-u", "materialize-bot", "--password-stdin"],
-            stdin=os.environ["GITHUB_GHCR_TOKEN"].encode(),
-        )
+        if token := os.environ["GITHUB_GHCR_TOKEN"]:
+            spawn.runv(
+                [
+                    "docker",
+                    "login",
+                    "ghcr.io",
+                    "-u",
+                    "materialize-bot",
+                    "--password-stdin",
+                ],
+                stdin=token.encode(),
+            )
 
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
