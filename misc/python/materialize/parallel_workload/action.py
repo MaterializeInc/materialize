@@ -1515,7 +1515,6 @@ class FlipFlagsAction(Action):
             "compute_peek_response_stash_read_memory_budget_bytes",
             "storage_statistics_retention_duration",
             "enable_paused_cluster_readhold_downgrade",
-            "enable_mz_join_core_v2",
             "enable_with_ordinality_legacy_fallback",
             "enable_builtin_migration_schema_evolution",
         ]
