@@ -67,6 +67,7 @@ def main() -> None:
         coverage=coverage,
         sanitizer=sanitizer,
         arch=Arch(args.arch),
+        image_registry="materialize",
     )
 
     collect_and_upload_debug_data_to_polarsignals(

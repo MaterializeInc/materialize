@@ -31,6 +31,10 @@ DEFAULT_POSTGRES = (
 )
 DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
 
+IMAGE_REGISTRY = (
+    "ghcr.io/materializeinc" if ui.env_is_truthy("CI") else "materialize",
+)
+
 
 def main():
     os.chdir(MZ_ROOT)
@@ -190,7 +194,7 @@ def environment(args: argparse.Namespace):
                 cluster=args.kind_cluster_name,
             )
         image_tag = DEV_IMAGE_TAG
-    environmentd_image_ref = f"materialize/environmentd:{image_tag}"
+    environmentd_image_ref = f"{IMAGE_REGISTRY}/environmentd:{image_tag}"
 
     try:
         kubectl(
@@ -437,14 +441,14 @@ def acquire(image: str, dev: bool, cluster: str):
         [
             "docker",
             "tag",
-            f"materialize/{image}:mzbuild-{fingerprint}",
-            f"materialize/{image}:{DEV_IMAGE_TAG}",
+            f"{IMAGE_REGISTRY}/{image}:mzbuild-{fingerprint}",
+            f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
         ]
     )
     kind(
         "load",
         "docker-image",
-        f"materialize/{image}:{DEV_IMAGE_TAG}",
+        f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
         cluster=cluster,
     )
 

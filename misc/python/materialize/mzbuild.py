@@ -786,11 +786,19 @@ class ResolvedImage:
                 "-",
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
                 "-t",
-                self.spec(),
+                f"docker.io/{self.spec()}",
+                "-t",
+                f"ghcr.io/materializeinc/{self.spec()}",
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
                 str(self.image.path),
                 *(["--push"] if push else ["--load"]),
             ]
+
+        spawn.runv(
+            ["docker", "login", "ghcr.io", "-u", "materialize-bot", "--password-stdin"],
+            stdin=os.environ["GITHUB_GHCR_TOKEN"].encode(),
+        )
+
         spawn.runv(cmd, stdin=f, stdout=sys.stderr.buffer)
 
     def try_pull(self, max_retries: int) -> bool:
@@ -958,6 +966,8 @@ class ResolvedImage:
         self_hash.update(f"arch={self.image.rd.arch}".encode())
         self_hash.update(f"coverage={self.image.rd.coverage}".encode())
         self_hash.update(f"sanitizer={self.image.rd.sanitizer}".encode())
+        # This exists to make sure all hashes from before we had a GHCR mirror are invalidated, so that we rebuild when an image doesn't exist on GHCR yet
+        self_hash.update(b"mirror=ghcr")
 
         full_hash = hashlib.sha1()
         full_hash.update(self_hash.digest())
@@ -1163,7 +1173,11 @@ class Repository:
         ),
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
-        image_registry: str = "materialize",
+        image_registry: str = (
+            "ghcr.io/materializeinc/materialize"
+            if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR")
+            else "materialize"
+        ),
         image_prefix: str = "",
     ):
         self.rd = RepositoryDetails(
@@ -1265,7 +1279,11 @@ class Repository:
         )
         parser.add_argument(
             "--image-registry",
-            default="materialize",
+            default=(
+                "ghcr.io/materializeinc/materialize"
+                if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR")
+                else "materialize"
+            ),
             help="the Docker image registry to pull images from and push images to",
         )
         parser.add_argument(

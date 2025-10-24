@@ -345,7 +345,6 @@ RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.8.1/linux/$AR
 
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
-
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
@@ -356,7 +355,7 @@ ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
-# does not need to be refetched on every compile.
+# does not need to be refetched on every compilation.
 ENV CARGO_HOME=/cargo
 RUN mkdir /cargo && chmod 777 /cargo
 VOLUME /cargo
