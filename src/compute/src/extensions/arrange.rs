@@ -16,7 +16,7 @@ use differential_dataflow::operators::arrange::arrangement::arrange_core;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
-use differential_dataflow::{Collection, Data, ExchangeData, Hashable};
+use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
 use timely::Container;
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
 use timely::dataflow::operators::Operator;
@@ -112,7 +112,7 @@ where
     }
 }
 
-impl<G, K, V, R> MzArrange for Collection<G, (K, V), R>
+impl<G, K, V, R> MzArrange for VecCollection<G, (K, V), R>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -138,7 +138,7 @@ where
     }
 }
 
-impl<G, K, V, R, C> MzArrangeCore for Collection<G, (K, V), R, C>
+impl<G, C> MzArrangeCore for Collection<G, C>
 where
     G: Scope,
     G::Timestamp: Lattice,
@@ -167,10 +167,10 @@ where
 /// A specialized collection where data only has a key, but no associated value.
 ///
 /// Created by calling `collection.into()`.
-pub struct KeyCollection<G: Scope, K, R = usize>(Collection<G, K, R>);
+pub struct KeyCollection<G: Scope, K, R = usize>(VecCollection<G, K, R>);
 
-impl<G: Scope, K, R: Semigroup> From<Collection<G, K, R>> for KeyCollection<G, K, R> {
-    fn from(value: Collection<G, K, R>) -> Self {
+impl<G: Scope, K, R: Semigroup> From<VecCollection<G, K, R>> for KeyCollection<G, K, R> {
+    fn from(value: VecCollection<G, K, R>) -> Self {
         KeyCollection(value)
     }
 }
@@ -271,13 +271,13 @@ where
             let mut batches = BTreeMap::new();
 
             move |input, output| {
-                while let Some((time, data)) = input.next() {
+                input.for_each(|time, data| {
                     batches.extend(
                         data.iter()
                             .map(|batch| (Rc::as_ptr(batch), Rc::downgrade(batch))),
                     );
                     output.session(&time).give_container(data);
-                }
+                });
                 let Some(trace) = trace.upgrade() else {
                     return;
                 };

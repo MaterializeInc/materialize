@@ -177,7 +177,7 @@ use std::iter::FromIterator;
 
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, ExchangeData, consolidation};
+use differential_dataflow::{AsCollection, ExchangeData, VecCollection, consolidation};
 use mz_ore::Overflowing;
 use mz_ore::collections::CollectionExt;
 use timely::communication::{Pull, Push};
@@ -185,6 +185,7 @@ use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::CapabilitySet;
 use timely::dataflow::operators::capture::Event;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::frontier::{AntichainRef, MutableAntichain};
@@ -198,11 +199,11 @@ use timely::progress::{Antichain, Timestamp};
 /// used with timely's capture facilities to connect a collection from a foreign scope to this
 /// operator.
 pub fn reclock<G, D, FromTime, IntoTime, R>(
-    remap_collection: &Collection<G, FromTime, Overflowing<i64>>,
+    remap_collection: &VecCollection<G, FromTime, Overflowing<i64>>,
     as_of: Antichain<G::Timestamp>,
 ) -> (
     Box<dyn Push<Event<FromTime, Vec<(D, FromTime, R)>>>>,
-    Collection<G, D, R>,
+    VecCollection<G, D, R>,
 )
 where
     G: Scope<Timestamp = IntoTime>,
@@ -223,7 +224,8 @@ where
         scope.pipeline::<Event<FromTime, Vec<(D, FromTime, R)>>>(channel_id, info.address);
 
     let mut remap_input = builder.new_input(&remap_collection.inner, Pipeline);
-    let (mut output, reclocked) = builder.new_output();
+    let (output, reclocked) = builder.new_output();
+    let mut output = OutputBuilder::from(output);
 
     builder.build(move |caps| {
         let mut capset = CapabilitySet::from_elem(caps.into_element());
@@ -265,11 +267,11 @@ where
         // held capability to track the least `IntoTime` a newly received `FromTime` could possibly
         // map to and also compact the maintained `remap_trace` to that time.
         move |frontiers| {
-            let Some(cap) = capset.get(0) else {
+            let Some(cap) = capset.get(0).cloned() else {
                 return;
             };
             let mut output = output.activate();
-            let mut session = output.session(cap);
+            let mut session = output.session(&cap);
 
             // STEP 1. Accept new bindings into `pending_remap`.
             // Advance all `into` times by `as_of`, and consolidate all updates at that frontier.
@@ -669,7 +671,8 @@ mod test {
             |worker, bindings, (mut data, data_cap), reclocked| {
                 // Reclock everything at the minimum IntoTime
                 bindings.close();
-                data.session(data_cap)
+                data.activate()
+                    .session(&data_cap)
                     .give(('a', Partitioned::minimum(), Diff::ONE));
                 step(worker);
                 let extracted = reclocked.extract();
@@ -713,7 +716,7 @@ mod test {
                 }
                 bindings.advance_to(1001);
                 bindings.flush();
-                data.session(data_cap.clone()).give_iterator(
+                data.activate().session(&data_cap).give_iterator(
                     vec![
                         (1, Partitioned::new_singleton(0, 1), Diff::ONE),
                         (1, Partitioned::new_singleton(0, 1), Diff::ONE),
@@ -740,7 +743,7 @@ mod test {
                 );
 
                 // Reclock more messages for offsets 3 to the same timestamp
-                data.session(data_cap.clone()).give_iterator(
+                data.activate().session(&data_cap).give_iterator(
                     vec![
                         (3, Partitioned::new_singleton(0, 3), Diff::ONE),
                         (3, Partitioned::new_singleton(0, 3), Diff::ONE),
@@ -856,7 +859,7 @@ mod test {
                 drop(data_cap);
 
                 // Reclock offsets 1 and 2 to timestamp 1000
-                data.session(part0_cap.clone()).give_iterator(
+                data.activate().session(&part0_cap).give_iterator(
                     vec![
                         (1, Partitioned::new_singleton(0, 1), Diff::ONE),
                         (2, Partitioned::new_singleton(0, 2), Diff::ONE),
@@ -888,7 +891,7 @@ mod test {
                 );
 
                 // Reclock offsets 3 and 4 to timestamp 2000
-                data.session(part0_cap.clone()).give_iterator(
+                data.activate().session(&part0_cap).give_iterator(
                     vec![
                         (3, Partitioned::new_singleton(0, 3), Diff::ONE),
                         (3, Partitioned::new_singleton(0, 3), Diff::ONE),
@@ -958,8 +961,11 @@ mod test {
 
                 // Reclockng (0, 50) must ignore the updates on the FromTime frontier that happened at
                 // timestamp 2000 since those are completely unrelated
-                data.session(data_cap)
-                    .give((50, Partitioned::new_singleton(0, 50), Diff::ONE));
+                data.activate().session(&data_cap).give((
+                    50,
+                    Partitioned::new_singleton(0, 50),
+                    Diff::ONE,
+                ));
                 step(worker);
                 assert_eq!(
                     reclocked.try_recv(),
@@ -1015,7 +1021,8 @@ mod test {
                     bindings.update_at(from_ts, into_ts, diff);
                 }
                 bindings.close();
-                data.session(data_cap)
+                data.activate()
+                    .session(&data_cap)
                     .give_iterator(source_updates1.iter().cloned());
                 step(worker);
                 reclocked.extract()
@@ -1044,7 +1051,8 @@ mod test {
                     bindings.update_at(from_ts, into_ts, diff);
                 }
                 bindings.close();
-                data.session(data_cap)
+                data.activate()
+                    .session(&data_cap)
                     .give_iterator(source_updates.iter().cloned());
                 step(worker);
                 reclocked.extract()

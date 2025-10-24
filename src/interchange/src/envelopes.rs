@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
@@ -35,7 +35,7 @@ use crate::avro::DiffPair;
 // a given key at each timestamp.
 pub fn combine_at_timestamp<G: Scope, Tr>(
     arranged: Arranged<G, Tr>,
-) -> Collection<G, (Tr::KeyOwn, Vec<DiffPair<Tr::ValOwn>>), Diff>
+) -> VecCollection<G, (Tr::KeyOwn, Vec<DiffPair<Tr::ValOwn>>), Diff>
 where
     G::Timestamp: Lattice + Copy,
     Tr: Clone
@@ -45,9 +45,9 @@ where
         .stream
         .unary(Pipeline, "combine_at_timestamp", move |_, _| {
             move |input, output| {
-                while let Some((cap, batches)) = input.next() {
-                    let mut session = output.session(&cap);
-                    for batch in batches.drain(..) {
+                input.for_each_time(|time, batches| {
+                    let mut session = output.session(&time);
+                    for batch in batches.flat_map(IntoIterator::into_iter) {
                         let mut befores = vec![];
                         let mut afters = vec![];
 
@@ -115,7 +115,7 @@ where
                             cursor.step_key(&batch);
                         }
                     }
-                }
+                });
             }
         })
         .as_collection()

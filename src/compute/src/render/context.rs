@@ -18,7 +18,7 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
 use mz_compute_types::plan::AvailableCollections;
@@ -36,7 +36,7 @@ use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::generic::OutputHandleCore;
+use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
@@ -311,7 +311,12 @@ where
     /// If you have logic that could be applied to each record, consider using the
     /// `flat_map` methods which allows this and can reduce the work done.
     #[deprecated(note = "Use `flat_map` instead.")]
-    pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+    pub fn as_collection(
+        &self,
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq| {
             let mut datums_borrow = datums.borrow();
@@ -348,7 +353,7 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
+    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -438,7 +443,10 @@ where
     T: MzTimestamp,
     S::Timestamp: MzTimestamp + Refines<T>,
 {
-    pub collection: Option<(Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)>,
+    pub collection: Option<(
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
 
@@ -449,8 +457,8 @@ where
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
-        oks: Collection<S, Row, Diff>,
-        errs: Collection<S, DataflowError, Diff>,
+        oks: VecCollection<S, Row, Diff>,
+        errs: VecCollection<S, DataflowError, Diff>,
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
@@ -557,7 +565,10 @@ where
         &self,
         key: Option<&[MirScalarExpr]>,
         config_set: &ConfigSet,
-    ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
         // Any operator that uses this method was told to use a particular
         // collection during LIR planning, where we should have made
         // sure that that collection exists.
@@ -606,7 +617,7 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
+    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -741,8 +752,8 @@ where
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
-        Collection<S, mz_repr::Row, Diff>,
-        Collection<S, DataflowError, Diff>,
+        VecCollection<S, mz_repr::Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
     ) {
         mfp.optimize();
         let mfp_plan = mfp.clone().into_plan().unwrap();
@@ -886,12 +897,12 @@ where
     /// columns in the key are not included in the value.
     fn arrange_collection(
         name: &String,
-        oks: Collection<S, Row, Diff>,
+        oks: VecCollection<S, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
         Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        Collection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowError, Diff>,
     ) {
         // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
         // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
@@ -965,12 +976,7 @@ where
         key: Option<&C::Key<'_>>,
         logic: &mut L,
         fuel: &mut usize,
-        output: &mut OutputHandleCore<
-            '_,
-            C::Time,
-            ConsolidatingContainerBuilder<Vec<I::Item>>,
-            timely::dataflow::channels::pushers::Tee<C::Time, Vec<I::Item>>,
-        >,
+        output: &mut OutputBuilderSession<'_, C::Time, ConsolidatingContainerBuilder<Vec<I::Item>>>,
     ) where
         I: IntoIterator<Item = (D, C::Time, C::Diff)>,
         D: Data,
