@@ -96,7 +96,6 @@ the network security options below.
 {{< tabs >}}
 {{< tab "Materialize Cloud" >}}
 
-### Materialize Cloud
 
 There are various ways to configure your database's network to allow Materialize
 to connect:
@@ -289,7 +288,6 @@ configuration of resources for an SSH tunnel. For more details, see the
 {{< /tab >}}
 {{< tab "Materialize Self-Managed" >}}
 
-### Materialize Self-managed
 
 There are various ways to configure your database’s network to allow Materialize
 to connect:
