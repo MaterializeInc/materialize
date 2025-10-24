@@ -46,7 +46,7 @@ weight = 30
 
 [[menu.main]]
 identifier = "network-security"
-name = "Network security"
+name = "Network configuration"
 parent = 'ingest-data'
 weight = 35
 

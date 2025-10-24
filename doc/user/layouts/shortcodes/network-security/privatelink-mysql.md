@@ -134,10 +134,4 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-This MySQL connection can then be reused across multiple [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/mysql/) statements:
-
-```mzsql
-CREATE SOURCE mz_source
-  FROM mysql CONNECTION mysql_connection
-  FOR ALL TABLES;
-```
+This MySQL connection can then be reused across multiple [`CREATE SOURCE`](https://materialize.com/docs/sql/create-source/mysql/) statements.
