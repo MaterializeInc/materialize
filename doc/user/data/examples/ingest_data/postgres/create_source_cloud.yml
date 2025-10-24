@@ -13,11 +13,8 @@
 
 - name: "create-source-options"
   description: |
-
     - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
-
     - To ingest data from specific schemas or tables, use the `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
-
     - To handle [unsupported data types](#supported-types), use the `TEXT COLUMNS` or `EXCLUDE COLUMNS` options.
 
 - name: "schema-changes"

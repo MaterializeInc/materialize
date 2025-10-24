@@ -231,11 +231,10 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% postgres-direct/create-a-cluster %}}
 
-### 2. Start ingesting data
+### 2. Create a connection
 
-Now that you've configured your database network and created an ingestion
-cluster, you can connect Materialize to your Neon database and start
-ingesting data.
+Once you have configured your network, create a connection in Materialize per
+your networking configuration.
 
 1. Run the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
    password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-replication-user):
@@ -278,32 +277,20 @@ ingesting data.
     - Replace `<database>` with the name of the database containing the tables
       you want to replicate to Materialize (e.g., `dbname`).
 
-3. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Neon database and start ingesting data from the publication
-   you created earlier:
+### 3. Start ingesting data
 
-    ```mzsql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source" %}}
 
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source-options" %}}
 
-1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
-   and [`DROP SOURCE`](/sql/alter-source/#dropping-subsources) syntax.
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud"
+example="schema-changes" %}}
 
-### 3. Monitor the ingestion status
+### 4. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-### 4. Right-size the cluster
+### 5. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 
