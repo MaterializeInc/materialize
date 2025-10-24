@@ -1,6 +1,6 @@
 ---
-title: "Static IP addresses"
-description: "Materialize provides static IP addresses that you can use to configure egress policies in your virtual networks that target outbound traffic to Materialize."
+title: "Static IP addresses (Cloud-only)"
+description: "Materialize Cloud provides static IP addresses that you can use to configure egress policies in your virtual networks that target outbound traffic to Materialize."
 menu:
   main:
     parent: network-security
@@ -10,7 +10,7 @@ aliases:
   - /connect-sources/static-ips/
 ---
 
-Each materialize region is associated with a unique set of static egress
+Each Materialize Cloud region is associated with a unique set of static egress
 [Classless Inter-Domain Routing (CIDR)](https://aws.amazon.com/what-is/cidr/)
 blocks. All connections to the public internet initiated by your Materialize
 region will originate from an IP address in the provided blocks.

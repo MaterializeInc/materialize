@@ -48,6 +48,10 @@ can skip this step**. For production scenarios, we recommend configuring one of
 the network security options below.
 {{</ note >}}
 
+{{< tabs >}}
+
+{{< tab "Cloud">}}
+
 To establish authorized and secure connections to an AlloyDB instance, an
 authentication proxy is necessary. Google Cloud Platform provides [a guide](https://cloud.google.com/alloydb/docs/auth-proxy/connect)
 to assist you in setting up this proxy and generating a connection string that
@@ -114,6 +118,59 @@ network to allow traffic from the bastion host.
 
 1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
    proxy instance from the SSH bastion host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+{{< /tab >}}
+
+{{< tab "Self-Managed">}}
+
+To establish authorized and secure connections to an AlloyDB instance, an
+authentication proxy is necessary. Google Cloud Platform provides [a guide](https://cloud.google.com/alloydb/docs/auth-proxy/connect)
+to assist you in setting up this proxy and generating a connection string that
+can be utilized with Materialize. Further down, we will provide you with a
+tailored approach specific to integrating Materialize.
+
+{{% include-md
+file="shared-content/self-managed/configure-network-security-intro.md" %}}
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs">}}
+
+1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
+   proxy instance from Materialize IPs.
+
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+
+To create an SSH tunnel from Materialize to your database, you launch an
+instance to serve as an SSH bastion host, configure the bastion host to allow
+traffic only from Materialize, and then configure your database's private
+network to allow traffic from the bastion host.
+
+1. [Launch a GCE instance](https://cloud.google.com/compute/docs/instances/create-start-instance) to
+    serve as your SSH bastion host.
+
+    - Make sure the instance is publicly accessible and in the same VPC as your
+      database.
+    - Add a key pair and note the username. You'll use this username when
+      connecting Materialize to your bastion host.
+    - Make sure the VM has a [static public IP address](https://cloud.google.com/compute/docs/ip-addresses/reserve-static-external-ip-address).
+      You'll use this IP address when connecting Materialize to your bastion
+      host.
+
+1. Configure the SSH bastion host to allow traffic only from Materialize.
+
+1. Update your Google Cloud firewall rules to allow traffic to your AlloyDB auth
+   proxy instance from the SSH bastion host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 {{< /tab >}}
 

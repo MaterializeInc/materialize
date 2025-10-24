@@ -68,6 +68,10 @@ accessible, **you can skip this step**. For production scenarios, we recommend
 configuring one of the network security options below.
 {{</ note >}}
 
+{{< tabs >}}
+
+{{< tab "Cloud">}}
+
 There are various ways to configure your database's network to allow Materialize
 to connect:
 
@@ -103,9 +107,8 @@ Materialize can connect to a PostgreSQL database through an [AWS PrivateLink](ht
 service. Your PostgreSQL database must be running on AWS in order to use this
 option.
 
-1. #### Create a target group
-
-    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
+1. Create a dedicated [target
+    group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
     for your Postgres instance with the following details:
 
     a. Target type as **IP address**.
@@ -120,21 +123,17 @@ option.
     e. Click next, and register the respective PostgreSQL instance to the target
     group using its IP address.
 
-1. #### Create a Network Load Balancer (NLB)
+1. Create a [Network Load
+    Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
+    that is **enabled for the same subnets** that the PostgreSQL instance is in.
 
-    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
-    that is **enabled for the same subnets** that the PostgreSQL instance is
-    in.
+1. Create a [TCP
+    listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
+    for your PostgreSQL instance that forwards to the corresponding target group
+    you created.
 
-1. #### Create TCP listener
-
-    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
-    for your PostgreSQL instance that forwards to the corresponding target
-    group you created.
-
-1. #### Verify security groups and health checks
-
-    Once the TCP listener has been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
+1. Once the TCP listener has been created, make sure that the [health
+    checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
     are passing and that the target is reported as healthy.
 
     If you have set up a security group for your PostgreSQL instance, you must
@@ -151,9 +150,8 @@ option.
     targets must use the IP addresses of the clients to allow traffic. For more
     details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
 
-1. #### Create a VPC endpoint service
-
-    Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
+1. Create a VPC [endpoint
+    service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
     and associate it with the **Network Load Balancer** that you’ve just
     created.
 
@@ -166,10 +164,9 @@ option.
     Materialze will be able to seamlessly recreate and migrate endpoints as we
     work to stabilize this feature.
 
-1. #### Create an AWS PrivateLink Connection
-
-     In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the
-     endpoint service that you created in the previous step.
+1. In Materialize, create a [`AWS
+     PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that
+     references the endpoint service that you created in the previous step.
 
      ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -181,9 +178,7 @@ option.
     Update the list of the availability zones to match the ones that you are
     using in your AWS account.
 
-1. #### Configure the AWS PrivateLink service
-
-    Retrieve the AWS principal for the AWS PrivateLink connection you just
+1. Retrieve the AWS principal for the AWS PrivateLink connection you just
     created:
 
     ```mzsql
@@ -250,6 +245,50 @@ traffic from the bastion host.
 
 {{< /tabs >}}
 
+{{< /tab >}}
+
+{{< tab "Self-Managed">}}
+
+{{% include-md
+file="shared-content/self-managed/configure-network-security-intro.md" %}}
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs" >}}
+
+1. Update your database firewall rules to allow traffic from Materialize.
+
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+
+To create an SSH tunnel from Materialize to your database, you launch an VM to
+serve as an SSH bastion host, configure the bastion host to allow traffic only
+from Materialize, and then configure your database's private network to allow
+traffic from the bastion host.
+
+1. Launch a VM to serve as your SSH bastion host.
+
+    - Make sure the VM is publicly accessible and in the same VPC as your
+      database.
+    - Add a key pair and note the username. You'll use this username when
+      connecting Materialize to your bastion host.
+    - Make sure the VM has a static public IP address. You'll use this IP
+      address when connecting Materialize to your bastion host.
+
+1. Configure the SSH bastion host to allow traffic only from Materialize.
+
+1. Update your database firewall rules to allow traffic from the SSH bastion
+   host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
 ## C. Ingest data in Materialize
 
 ### 1. (Optional) Create a cluster
@@ -286,7 +325,7 @@ your networking configuration.
 
 {{< /tab >}}
 
-{{< tab "Use AWS PrivateLink">}}
+{{< tab "Use AWS PrivateLink (Cloud-only)" >}}
 
 1. {{% include-example
    file="examples/ingest_data/postgres/create_connection_privatelink_cloud"

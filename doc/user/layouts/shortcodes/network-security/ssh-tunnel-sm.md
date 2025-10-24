@@ -106,24 +106,14 @@ to retrieve the public keys for the SSH tunnel connection you just created:
     sudo systemctl restart sshd
     ```
 
-1. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your bastion host to allow SSH traffic for those IP addresses only.
+1. Ensure materialize cluster pods have network access to your SSH bastion host.
+
+1. Validate the SSH tunnel connection
+
+   To confirm that the SSH tunnel connection is correctly configured, use the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
     ```mzsql
-    SELECT * FROM mz_catalog.mz_egress_ips;
+    VALIDATE CONNECTION ssh_connection;
     ```
 
-    ```
-    XXX.140.90.33
-    XXX.198.159.213
-    XXX.100.27.23
-    ```
-
-1. To confirm that the SSH tunnel connection is correctly configured, use the
-   [`VALIDATE CONNECTION`](/sql/validate-connection) command:
-
-   ```mzsql
-   VALIDATE CONNECTION ssh_connection;
-   ```
-
-   If no validation errors are returned, the connection can be used to create a
-   source connection.
+    If no validation errors are returned, the connection can be used to create a source connection.
