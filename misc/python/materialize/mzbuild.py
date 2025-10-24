@@ -794,7 +794,7 @@ class ResolvedImage:
                 *(["--push"] if push else ["--load"]),
             ]
 
-        if token := os.environ["GITHUB_GHCR_TOKEN"]:
+        if token := os.getenv("GITHUB_GHCR_TOKEN"):
             spawn.runv(
                 [
                     "docker",
