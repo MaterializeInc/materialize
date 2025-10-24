@@ -1365,7 +1365,7 @@ steps:
     - id: cloud-canary
       label: "Canary Deploy in Staging Cloud"
       depends_on: build-aarch64
-      timeout_in_minutes: 1200
+      timeout_in_minutes: 240
       concurrency: 1
       concurrency_group: 'cloud-canary'
       agents:
@@ -1378,7 +1378,7 @@ steps:
     - id: mz-e2e
       label: "Mz E2E Test"
       depends_on: build-aarch64
-      timeout_in_minutes: 1200
+      timeout_in_minutes: 240
       concurrency: 1
       concurrency_group: 'mz-e2e-test'
       agents:
