@@ -9,10 +9,9 @@
 
 //! Descriptions of PostgreSQL objects.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::bail;
-use itertools::Itertools;
 use mz_proto::{IntoRustIfSome, RustType, TryFromProtoError};
 use proptest::prelude::any;
 use proptest_derive::Arbitrary;
@@ -80,10 +79,20 @@ impl PostgresTableDesc {
             keys: other_keys,
         } = other;
 
-        // Table columns cannot change position, so only need to ensure that
-        // `self.columns` is a prefix of `other_cols`.
-        if let Some(prefix) = other_cols.get(0..self.columns.len())
-            && self.columns.iter().zip_eq(prefix.iter()).all(|(s, o)| s.is_compatible(o, allow_type_to_change_by_col_num))
+        let other_cols_by_name = BTreeMap::from_iter(other_cols.iter().map(|c| (&c.name, c)));
+        let columns_compatible =
+            self.columns
+                .iter()
+                .all(|info| match other_cols_by_name.get(&info.name) {
+                    Some(other_info) => {
+                        let allow_type_change =
+                            allow_type_to_change_by_col_num.contains(&info.col_num);
+                        info.is_compatible(other_info, allow_type_change)
+                    }
+                    None => false,
+                });
+
+        if columns_compatible
             && &self.name == other_name
             && &self.oid == other_oid
             && &self.namespace == other_namespace
@@ -136,7 +145,7 @@ impl RustType<ProtoPostgresTableDesc> for PostgresTableDesc {
 }
 
 /// Describes a column in a [`PostgresTableDesc`].
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, Arbitrary)]
+#[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Arbitrary)]
 pub struct PostgresColumnDesc {
     /// The name of the column.
     pub name: String,
@@ -158,13 +167,7 @@ impl PostgresColumnDesc {
     /// Note that this function somewhat unnecessarily errors if the names
     /// differ; this is negotiable but we want users to understand the fixedness
     /// of names in our schemas.
-    fn is_compatible(
-        &self,
-        other: &PostgresColumnDesc,
-        allow_type_to_change_by_col_num: &BTreeSet<u16>,
-    ) -> bool {
-        let allow_type_change = allow_type_to_change_by_col_num.contains(&self.col_num);
-
+    fn is_compatible(&self, other: &PostgresColumnDesc, allow_type_change: bool) -> bool {
         self.name == other.name
             && self.col_num == other.col_num
             && (self.type_oid == other.type_oid || allow_type_change)

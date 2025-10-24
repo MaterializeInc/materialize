@@ -162,6 +162,7 @@ impl SourceRender for PostgresSourceConnection {
             );
             let output = SourceOutputInfo {
                 desc,
+                projection: None,
                 casts,
                 resume_upper,
                 export_id: id.clone(),
@@ -268,8 +269,13 @@ impl SourceRender for PostgresSourceConnection {
 
 #[derive(Clone, Debug)]
 struct SourceOutputInfo {
+    /// The expected upstream schema of this output.
     desc: PostgresTableDesc,
-    casts: Vec<(CastType, Option<MirScalarExpr>)>,
+    /// A projection of the upstream columns into the columns expected by this output. This field
+    /// is recalculated every time we observe an upstream schema change. On dataflow initialization
+    /// this field is None since we haven't yet observed any schemas.
+    projection: Option<Vec<usize>>,
+    casts: Vec<(CastType, MirScalarExpr)>,
     resume_upper: Antichain<MzOffset>,
     export_id: GlobalId,
 }
@@ -462,23 +468,26 @@ async fn fetch_max_lsn(client: &Client) -> Result<MzOffset, TransientError> {
 // with the current upstream schema `upstream_info`.
 fn verify_schema(
     oid: u32,
-    expected_desc: &PostgresTableDesc,
+    info: &SourceOutputInfo,
     upstream_info: &BTreeMap<u32, PostgresTableDesc>,
-    casts: &[(CastType, Option<MirScalarExpr>)],
 ) -> Result<(), DefiniteError> {
     let current_desc = upstream_info.get(&oid).ok_or(DefiniteError::TableDropped)?;
 
-    let allow_oids_to_change_by_col_num = expected_desc
+    let allow_oids_to_change_by_col_num = info
+        .desc
         .columns
         .iter()
-        .zip_eq(casts.iter())
+        .zip_eq(info.casts.iter())
         .flat_map(|(col, (cast_type, _))| match cast_type {
-            CastType::Exclude | CastType::Text => Some(col.col_num),
+            CastType::Text => Some(col.col_num),
             CastType::Natural => None,
         })
         .collect();
 
-    match expected_desc.determine_compatibility(current_desc, &allow_oids_to_change_by_col_num) {
+    match info
+        .desc
+        .determine_compatibility(current_desc, &allow_oids_to_change_by_col_num)
+    {
         Ok(()) => Ok(()),
         Err(err) => Err(DefiniteError::IncompatibleSchema(err.to_string())),
     }
@@ -486,19 +495,17 @@ fn verify_schema(
 
 /// Casts a text row into the target types
 fn cast_row(
-    casts: &[(CastType, Option<MirScalarExpr>)],
+    casts: &[(CastType, MirScalarExpr)],
     datums: &[Datum<'_>],
     row: &mut Row,
 ) -> Result<(), DefiniteError> {
     let arena = mz_repr::RowArena::new();
     let mut packer = row.packer();
     for (_, column_cast) in casts {
-        if let Some(column_cast) = column_cast {
-            let datum = column_cast
-                .eval(datums, &arena)
-                .map_err(DefiniteError::CastError)?;
-            packer.push(datum);
-        }
+        let datum = column_cast
+            .eval(datums, &arena)
+            .map_err(DefiniteError::CastError)?;
+        packer.push(datum);
     }
     Ok(())
 }

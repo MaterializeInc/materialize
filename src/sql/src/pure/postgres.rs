@@ -10,7 +10,6 @@
 //! Postgres utilities for SQL purification.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
 
 use mz_expr::MirScalarExpr;
 use mz_postgres_util::desc::PostgresTableDesc;
@@ -447,9 +446,14 @@ pub(super) async fn purify_source_exports(
     let source_exports = requested_exports
         .into_iter()
         .map(|r| {
-            let desc = r.meta.postgres_desc().expect("known postgres");
+            let mut desc = r.meta.postgres_desc().expect("known postgres").clone();
             let text_columns = text_column_map.remove(&desc.oid);
             let exclude_columns = exclude_column_map.remove(&desc.oid);
+
+            if let Some(exclude_cols) = &exclude_columns {
+                desc.columns.retain(|c| !exclude_cols.contains(&c.name));
+            }
+
             if let (Some(text_cols), Some(exclude_cols)) = (&text_columns, &exclude_columns) {
                 let intersection: Vec<_> = text_cols.intersection(exclude_cols).collect();
                 if !intersection.is_empty() {
@@ -473,7 +477,7 @@ pub(super) async fn purify_source_exports(
                                 .map(|s| Ident::new(s).expect("validated above"))
                                 .collect()
                         }),
-                        table: desc.clone(),
+                        table: desc,
                     },
                 },
             ))
@@ -550,8 +554,7 @@ pub(crate) fn generate_column_casts(
     scx: &StatementContext,
     table: &PostgresTableDesc,
     text_columns: &Vec<Ident>,
-    exclude_columns: &Vec<Ident>,
-) -> Result<Vec<(CastType, Option<MirScalarExpr>)>, PlanError> {
+) -> Result<Vec<(CastType, MirScalarExpr)>, PlanError> {
     // Generate the cast expressions required to convert the text encoded columns into
     // the appropriate target types, creating a Vec<MirScalarExpr>
     // The postgres source reader will then eval each of those on the incoming rows
@@ -584,7 +587,6 @@ pub(crate) fn generate_column_casts(
     };
 
     let text_columns = BTreeSet::from_iter(text_columns.iter().map(Ident::as_str));
-    let exclude_columns = BTreeSet::from_iter(exclude_columns.iter().map(Ident::as_str));
 
     // Then, for each column we will generate a MirRelationExpr that extracts the nth
     // column and casts it to the appropriate target type
@@ -597,9 +599,6 @@ pub(crate) fn generate_column_casts(
             // we'll be able to ingest its values as text in
             // storage.
             (CastType::Text, mz_pgrepr::Type::Text)
-        } else if exclude_columns.contains(column.name.as_str()) {
-            table_cast.push((CastType::Exclude, None));
-            continue;
         } else {
             match mz_pgrepr::Type::from_oid_and_typmod(column.type_oid, column.type_mod) {
                 Ok(t) => (CastType::Natural, t),
@@ -610,26 +609,21 @@ pub(crate) fn generate_column_casts(
                 Err(_) => {
                     table_cast.push((
                         CastType::Natural,
-                        Some(
-                            HirScalarExpr::call_variadic(
-                                mz_expr::VariadicFunc::ErrorIfNull,
-                                vec![
-                                    HirScalarExpr::literal_null(SqlScalarType::String),
-                                    HirScalarExpr::literal(
-                                        mz_repr::Datum::from(
-                                            format!(
-                                                "Unsupported type with OID {}",
-                                                column.type_oid
-                                            )
+                        HirScalarExpr::call_variadic(
+                            mz_expr::VariadicFunc::ErrorIfNull,
+                            vec![
+                                HirScalarExpr::literal_null(SqlScalarType::String),
+                                HirScalarExpr::literal(
+                                    mz_repr::Datum::from(
+                                        format!("Unsupported type with OID {}", column.type_oid)
                                             .as_str(),
-                                        ),
-                                        SqlScalarType::String,
                                     ),
-                                ],
-                            )
-                            .lower_uncorrelated()
-                            .expect("no correlation"),
-                        ),
+                                    SqlScalarType::String,
+                                ),
+                            ],
+                        )
+                        .lower_uncorrelated()
+                        .expect("no correlation"),
                     ));
                     continue;
                 }
@@ -639,13 +633,10 @@ pub(crate) fn generate_column_casts(
         let data_type = scx.resolve_type(ty)?;
         let scalar_type = crate::plan::query::scalar_type_from_sql(scx, &data_type)?;
 
-        let col_expr = HirScalarExpr::named_column(
-            ColumnRef {
-                level: 0,
-                column: i,
-            },
-            Arc::from(column.name.as_str()),
-        );
+        let col_expr = HirScalarExpr::unnamed_column(ColumnRef {
+            level: 0,
+            column: i,
+        });
 
         let cast_expr = plan_cast(&cast_ecx, CastContext::Explicit, col_expr, &scalar_type)?;
 
@@ -692,7 +683,7 @@ pub(crate) fn generate_column_casts(
             }
         })?;
 
-        table_cast.push((cast_type, Some(mir_cast)));
+        table_cast.push((cast_type, mir_cast));
     }
     Ok(table_cast)
 }

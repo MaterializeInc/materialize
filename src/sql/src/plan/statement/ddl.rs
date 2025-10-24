@@ -1644,7 +1644,6 @@ pub fn plan_create_subsource(
                         scx,
                         &table,
                         &text_columns,
-                        &exclude_columns,
                     )?,
                     table,
                 })
@@ -1802,7 +1801,6 @@ pub fn plan_create_table_from_source(
                     scx,
                     &table,
                     &text_columns,
-                    &exclude_columns,
                 )?,
                 table,
             })
