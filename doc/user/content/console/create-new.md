@@ -11,7 +11,7 @@ menu:
 From the Console, you can create new [clusters](/concepts/clusters/ "Isolated
 pools of compute resources (CPU, memory, and scratch disk space)"),
 [sources](/concepts/sources/ "Upstream (i.e., external) systems you want
-Materialize to read data from"), and application passwords.
+Materialize to read data from"), and, for Materialize Cloud, application passwords.
 
 ### Create new cluster
 
@@ -70,7 +70,7 @@ From the Materialize Console:
     {{</ tip >}}
 
 
-### Create new app password
+### Create new app password (Cloud-only)
 
 ![Image of the Create application
 password](/images/console/console-create-new/create-app-password.png "Create
