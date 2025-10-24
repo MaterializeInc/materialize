@@ -208,11 +208,9 @@ impl<'a> CdcStream<'a> {
         let lsn = txn.get_lsn().await?;
 
         tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
-        let schema_name = &*table.schema_name;
-        let table_name = &*table.name;
         let rows = async_stream::try_stream! {
             {
-                let snapshot_stream = crate::inspect::snapshot(txn.client, &*schema_name, &*table_name);
+                let snapshot_stream = crate::inspect::snapshot(txn.client, table);
                 tokio::pin!(snapshot_stream);
 
                 while let Some(row) = snapshot_stream.next().await {

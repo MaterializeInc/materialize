@@ -150,6 +150,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     .keys()
                     .map(|i| i.as_ref());
 
+            // TODO (maz): we can avoid this query by using SourceOutputInfo
             let snapshot_tables = mz_sql_server_util::inspect::get_tables_for_capture_instance(&mut client, snapshot_instances).await?;
 
             // validate that the restore_history_id hasn't changed
