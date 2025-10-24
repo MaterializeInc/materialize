@@ -20,10 +20,9 @@ use k8s_openapi::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
             Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
-            EnvVarSource, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
-            SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
-            Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume,
-            VolumeMount,
+            EnvVarSource, HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec,
+            Probe, SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
+            Service, ServiceAccount, ServicePort, ServiceSpec, Toleration, Volume, VolumeMount,
         },
         networking::v1::{
             IPBlock, NetworkPolicy, NetworkPolicyEgressRule, NetworkPolicyIngressRule,
@@ -1285,9 +1284,12 @@ fn create_environmentd_statefulset_object(
     let probe = Probe {
         initial_delay_seconds: Some(1),
         failure_threshold: Some(12),
-        tcp_socket: Some(TCPSocketAction {
+        http_get: Some(HTTPGetAction {
+            path: Some("/api/readyz".to_string()),
+            port: IntOrString::Int(config.environmentd_internal_http_port.into()),
             host: None,
-            port: IntOrString::Int(config.environmentd_sql_port.into()),
+            scheme: None,
+            http_headers: None,
         }),
         ..Default::default()
     };
