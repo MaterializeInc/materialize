@@ -76,9 +76,8 @@ Materialize can connect to a SQL Server database through an [AWS PrivateLink](ht
 service. Your SQL Server database must be running on AWS in order to use this
 option.
 
-1. #### Create a target group
-
-    Create a dedicated [target group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
+1. Create a dedicated [target
+    group](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-target-group.html)
     for your SQL Server instance with the following details:
 
     a. Target type as **IP address**.
@@ -93,21 +92,18 @@ option.
     e. Click next, and register the respective SQL Server instance to the target
     group using its IP address.
 
-1. #### Create a Network Load Balancer (NLB)
+1. Create a [Network Load
+    Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
+    that is **enabled for the same subnets** that the SQL Server instance is in.
 
-    Create a [Network Load Balancer](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-network-load-balancer.html)
-    that is **enabled for the same subnets** that the SQL Server instance is
-    in.
+1. Create a [TCP
+    listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
+    for your SQL Server instance that forwards to the corresponding target group
+    you created.
 
-1. #### Create TCP listener
-
-    Create a [TCP listener](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/create-listener.html)
-    for your SQL Server instance that forwards to the corresponding target
-    group you created.
-
-1. #### Verify security groups and health checks
-
-    Once the TCP listener has been created, make sure that the [health checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
+1. Verify security groups and health checks. Once the TCP listener has been
+    created, make sure that the [health
+    checks](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-health-checks.html)
     are passing and that the target is reported as healthy.
 
     If you have set up a security group for your SQL Server instance, you must
@@ -124,9 +120,8 @@ option.
     targets must use the IP addresses of the clients to allow traffic. For more
     details, check the [AWS documentation](https://docs.aws.amazon.com/elasticloadbalancing/latest/network/target-group-register-targets.html).
 
-1. #### Create a VPC endpoint service
-
-    Create a VPC [endpoint service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
+1. Create a VPC [endpoint
+    service](https://docs.aws.amazon.com/vpc/latest/privatelink/create-endpoint-service.html)
     and associate it with the **Network Load Balancer** that you’ve just
     created.
 
@@ -139,10 +134,9 @@ option.
     Materialze will be able to seamlessly recreate and migrate endpoints as we
     work to stabilize this feature.
 
-1. #### Create an AWS PrivateLink Connection
-
-     In Materialize, create a [`AWS PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that references the
-     endpoint service that you created in the previous step.
+1. In Materialize, create a [`AWS
+     PRIVATELINK`](/sql/create-connection/#aws-privatelink) connection that
+     references the endpoint service that you created in the previous step.
 
      ```mzsql
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -154,7 +148,7 @@ option.
     Update the list of the availability zones to match the ones that you are
     using in your AWS account.
 
-1. #### Configure the AWS PrivateLink service
+1. Configure the AWS PrivateLink service.
 
     Retrieve the AWS principal for the AWS PrivateLink connection you just
     created:
@@ -236,17 +230,12 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% sql-server-direct/create-a-cluster %}}
 
-### 2. Start ingesting data
 
-{{< note >}}
-For a new SQL Server source, if none of the replicating tables
-are receiving write queries, snapshotting may take up to an additional 5 minutes
-to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
-{{</ note >}}
 
-Now that you've configured your database network, you can connect Materialize to
-your SQL Server database and start ingesting data. The exact steps depend on your
-networking configuration, so start by selecting the relevant option.
+### 2. Create a connection
+
+Once you have configured your network, create a connection in Materialize per
+your networking configuration.
 
 {{< tabs >}}
 
@@ -264,11 +253,22 @@ networking configuration, so start by selecting the relevant option.
 
 {{< /tabs >}}
 
-[//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
-new progress metrics in mz_source_statistics + console monitoring, when
-available(also for PostgreSQL)."
+### 3. Start ingesting data
 
-### 3. Right-size the cluster
+{{< note >}}
+For a new SQL Server source, if none of the replicating tables
+are receiving write queries, snapshotting may take up to an additional 5 minutes
+to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
+{{</ note >}}
+
+{{% include-example file="examples/ingest_data/sql_server/create_source_cloud" example="create-source" %}}
+
+{{% include-example file="examples/ingest_data/sql_server/create_source_cloud" example="create-source-options" %}}
+
+{{% include-example file="examples/ingest_data/sql_server/create_source_cloud"
+example="schema-changes" %}}
+
+### 4. Right-size the cluster
 
 {{% sql-server-direct/right-size-the-cluster %}}
 

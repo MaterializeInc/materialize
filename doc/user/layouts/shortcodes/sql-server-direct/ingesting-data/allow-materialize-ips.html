@@ -24,25 +24,3 @@
     ```
 
     - Replace `<host>` with your SQL Server endpoint, and `<database>` with the database you'd like to connect to.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your SQL Server instance and start ingesting data:
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      FROM SQL SERVER CONNECTION sqlserver_connection
-      FOR ALL TABLES;
-    ```
-
-    - By default, the source will be created in the active cluster; to use a
-      different cluster, use the `IN CLUSTER` clause.
-
-    - To ingest data from specific tables use the `FOR TABLES
-      (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
-
-    - To handle unsupported data types, use the `TEXT COLUMNS` or `EXCLUDE
-      COLUMNS` options. Check out the [reference documentation](/sql/create-source/sql-server/#supported-types)
-      for guidance.
-
-1. After source creation, you can handle upstream [schema changes](/sql/create-source/sql-server/#schema-changes)
-   by dropping and recreating the source.
