@@ -524,6 +524,7 @@ steps:
           composition: dbt-materialize
     agents:
       queue: hetzner-aarch64-8cpu-16gb
+    skip: "database-issues#9854"
 
   - group: "Debezium tests"
     key: debezium-tests
