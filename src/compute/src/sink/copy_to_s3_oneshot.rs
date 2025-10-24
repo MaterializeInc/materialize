@@ -11,7 +11,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use differential_dataflow::{Collection, Hashable};
+use differential_dataflow::{Hashable, VecCollection};
 use mz_compute_client::protocol::response::CopyToResponse;
 use mz_compute_types::dyncfgs::{
     COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO, COPY_TO_S3_MULTIPART_PART_SIZE_BYTES,
@@ -43,9 +43,9 @@ where
         sink_id: GlobalId,
         _as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: Collection<G, Row, Diff>,
-        err_collection: Collection<G, DataflowError, Diff>,
-        _ct_times: Option<Collection<G, (), Diff>>,
+        sinked_collection: VecCollection<G, Row, Diff>,
+        err_collection: VecCollection<G, DataflowError, Diff>,
+        _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Set up a callback to communicate the result of the copy-to operation to the controller.
@@ -90,12 +90,12 @@ where
             error.unary_frontier(Pipeline, "COPY TO S3 error filtering", |_cap, _info| {
                 let up_to = sink.up_to.clone();
                 let mut received_one = false;
-                move |input, output| {
-                    while let Some((time, data)) = input.next() {
+                move |(input, _), output| {
+                    input.for_each_time(|time, data| {
                         if !up_to.less_equal(time.time()) && !received_one {
                             received_one = true;
                             output.session(&time).give_iterator(
-                                data.iter()
+                                data.flatten()
                                     .flatten()
                                     .flat_map(|chunk| chunk.iter().cloned())
                                     .next()
@@ -103,7 +103,7 @@ where
                                     .into_iter(),
                             );
                         }
-                    }
+                    });
                 }
             });
 

@@ -16,7 +16,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use columnar::{Columnar, Index, Ref};
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor};
 use mz_compute_types::plan::LirId;
@@ -24,12 +24,13 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
-use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
 use timely::Data;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::operator::empty;
 use timely::dataflow::{Scope, Stream};
 use timely::scheduling::Scheduler;
 use tracing::error;
@@ -311,39 +312,51 @@ pub(super) fn construct<S: Scheduler + 'static, G: Scope<Timestamp = Timestamp>>
 
     scope.scoped("compute logging", move |scope| {
         let enable_logging = config.enable_logging;
-        let (logs, token) = event_queue.links.mz_replay::<_, ProvidedBuilder<_>, _>(
-            scope,
-            "compute logs",
-            config.interval,
-            event_queue.activator,
-            move |mut session, mut data| {
-                // If logging is disabled, we still need to install the indexes, but we can leave them
-                // empty. We do so by immediately filtering all logs events.
-                if enable_logging {
-                    session.give_container(data.to_mut())
-                }
-            },
-        );
+        let (logs, token) = if enable_logging {
+            event_queue.links.mz_replay(
+                scope,
+                "compute logs",
+                config.interval,
+                event_queue.activator,
+            )
+        } else {
+            let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
+            (empty(scope), token)
+        };
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux = OperatorBuilder::new("Compute Logging Demux".to_string(), scope.clone());
         let mut input = demux.new_input(&logs, Pipeline);
-        let (mut export_out, export) = demux.new_output();
-        let (mut frontier_out, frontier) = demux.new_output();
-        let (mut import_frontier_out, import_frontier) = demux.new_output();
-        let (mut peek_out, peek) = demux.new_output();
-        let (mut peek_duration_out, peek_duration) = demux.new_output();
-        let (mut shutdown_duration_out, shutdown_duration) = demux.new_output();
-        let (mut arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
-        let (mut arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
-        let (mut arrangement_heap_allocations_out, arrangement_heap_allocations) =
+        let (export_out, export) = demux.new_output();
+        let mut export_out = OutputBuilder::from(export_out);
+        let (frontier_out, frontier) = demux.new_output();
+        let mut frontier_out = OutputBuilder::from(frontier_out);
+        let (import_frontier_out, import_frontier) = demux.new_output();
+        let mut import_frontier_out = OutputBuilder::from(import_frontier_out);
+        let (peek_out, peek) = demux.new_output();
+        let mut peek_out = OutputBuilder::from(peek_out);
+        let (peek_duration_out, peek_duration) = demux.new_output();
+        let mut peek_duration_out = OutputBuilder::from(peek_duration_out);
+        let (shutdown_duration_out, shutdown_duration) = demux.new_output();
+        let mut shutdown_duration_out = OutputBuilder::from(shutdown_duration_out);
+        let (arrangement_heap_size_out, arrangement_heap_size) = demux.new_output();
+        let mut arrangement_heap_size_out = OutputBuilder::from(arrangement_heap_size_out);
+        let (arrangement_heap_capacity_out, arrangement_heap_capacity) = demux.new_output();
+        let mut arrangement_heap_capacity_out = OutputBuilder::from(arrangement_heap_capacity_out);
+        let (arrangement_heap_allocations_out, arrangement_heap_allocations) =
             demux.new_output();
-        let (mut error_count_out, error_count) = demux.new_output();
-        let (mut hydration_time_out, hydration_time) = demux.new_output();
-        let (mut operator_hydration_status_out, operator_hydration_status) = demux.new_output();
-        let (mut lir_mapping_out, lir_mapping) = demux.new_output();
-        let (mut dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
+        let mut arrangement_heap_allocations_out = OutputBuilder::from(arrangement_heap_allocations_out);
+        let (error_count_out, error_count) = demux.new_output();
+        let mut error_count_out = OutputBuilder::from(error_count_out);
+        let (hydration_time_out, hydration_time) = demux.new_output();
+        let mut hydration_time_out = OutputBuilder::from(hydration_time_out);
+        let (operator_hydration_status_out, operator_hydration_status) = demux.new_output();
+        let mut operator_hydration_status_out = OutputBuilder::from(operator_hydration_status_out);
+        let (lir_mapping_out, lir_mapping) = demux.new_output();
+        let mut lir_mapping_out = OutputBuilder::from(lir_mapping_out);
+        let (dataflow_global_ids_out, dataflow_global_ids) = demux.new_output();
+        let mut dataflow_global_ids_out = OutputBuilder::from(dataflow_global_ids_out);
 
         let mut demux_state = DemuxState::new(scheduler, scope.index());
         demux.build(move |_capability| {
@@ -762,38 +775,38 @@ struct ArrangementSizeState {
 }
 
 /// Bundled output sessions used by the demux operator.
-struct DemuxOutput<'a> {
-    export: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    import_frontier: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    peek: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    peek_duration: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    shutdown_duration: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    arrangement_heap_allocations: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    arrangement_heap_capacity: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    arrangement_heap_size: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    hydration_time: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    operator_hydration_status: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    error_count: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    lir_mapping: OutputSessionColumnar<'a, Update<(Row, Row)>>,
-    dataflow_global_ids: OutputSessionColumnar<'a, Update<(Row, Row)>>,
+struct DemuxOutput<'a, 'b> {
+    export: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    frontier: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    import_frontier: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    peek: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    peek_duration: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    shutdown_duration: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_allocations: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    hydration_time: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    operator_hydration_status: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    dataflow_global_ids: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b, A: Scheduler> {
+struct DemuxHandler<'a, 'b, 'c, A: Scheduler> {
     /// State kept by the demux operator.
     state: &'a mut DemuxState<A>,
     /// State shared across log receivers.
     shared_state: &'a mut SharedLoggingState,
     /// Demux output sessions.
-    output: &'a mut DemuxOutput<'b>,
+    output: &'a mut DemuxOutput<'b, 'c>,
     /// The logging interval specifying the time granularity for the updates.
     logging_interval_ms: u128,
     /// The current event time.
     time: Duration,
 }
 
-impl<A: Scheduler> DemuxHandler<'_, '_, A> {
+impl<A: Scheduler> DemuxHandler<'_, '_, '_, A> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
@@ -1480,7 +1493,7 @@ pub(crate) trait LogDataflowErrors {
     fn log_dataflow_errors(self, logger: Logger, export_id: GlobalId) -> Self;
 }
 
-impl<G, D> LogDataflowErrors for Collection<G, D, Diff>
+impl<G, D> LogDataflowErrors for VecCollection<G, D, Diff>
 where
     G: Scope,
     D: Data,

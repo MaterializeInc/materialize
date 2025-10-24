@@ -35,7 +35,6 @@ use mz_timely_util::builder_async::{
 };
 use mz_timely_util::containers::stack::AccountedStackBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::{Antichain, Timestamp};
@@ -535,7 +534,6 @@ async fn handle_data_event(
 type StackedAsyncOutputHandle<T, D> = AsyncOutputHandle<
     T,
     AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<(D, T, Diff)>>>,
-    Tee<T, TimelyStack<(D, T, Diff)>>,
 >;
 
 /// Helper method to return a "definite" error upstream.
@@ -544,11 +542,7 @@ async fn return_definite_error(
     outputs: impl Iterator<Item = u64>,
     data_handle: StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
     data_capset: &CapabilitySet<Lsn>,
-    errs_handle: AsyncOutputHandle<
-        Lsn,
-        CapacityContainerBuilder<Vec<ReplicationError>>,
-        Tee<Lsn, Vec<ReplicationError>>,
-    >,
+    errs_handle: AsyncOutputHandle<Lsn, CapacityContainerBuilder<Vec<ReplicationError>>>,
     errs_capset: &CapabilitySet<Lsn>,
 ) {
     for output_idx in outputs {

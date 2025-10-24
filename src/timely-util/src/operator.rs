@@ -24,34 +24,20 @@ use differential_dataflow::containers::{Columnation, TimelyStack};
 use differential_dataflow::difference::{Multiply, Semigroup};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::{Batcher, Builder, Description};
-use differential_dataflow::{AsCollection, Collection, Hashable};
-use timely::container::{ContainerBuilder, DrainContainer, PushInto};
+use differential_dataflow::{AsCollection, Collection, Hashable, VecCollection};
+use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::pact::{Exchange, ParallelizationContract, Pipeline};
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::channels::pushers::buffer::Session;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::builder_rc::{
     OperatorBuilder as OperatorBuilderRc, OperatorBuilder,
 };
 use timely::dataflow::operators::generic::operator::{self, Operator};
-use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo, OutputHandleCore};
-use timely::dataflow::{Scope, ScopeParent, Stream, StreamCore};
+use timely::dataflow::operators::generic::{
+    InputHandleCore, OperatorInfo, OutputBuilder, OutputBuilderSession,
+};
+use timely::dataflow::{Scope, Stream, StreamCore};
 use timely::progress::{Antichain, Timestamp};
-use timely::{Container, Data, PartialOrder};
-
-/// A session with lifetime `'a` in a scope `G` with a container builder `CB`.
-///
-/// This is a shorthand primarily for the reason of readability.
-pub type SessionFor<'a, G, CB> = Session<
-    'a,
-    <G as ScopeParent>::Timestamp,
-    CB,
-    timely::dataflow::channels::pushers::Counter<
-        <G as ScopeParent>::Timestamp,
-        <CB as ContainerBuilder>::Container,
-        Tee<<G as ScopeParent>::Timestamp, <CB as ContainerBuilder>::Container>,
-    >,
->;
+use timely::{Container, ContainerBuilder, Data, PartialOrder};
 
 /// Extension methods for timely [`StreamCore`]s.
 pub trait StreamExt<G, C1>
@@ -84,8 +70,8 @@ where
         ) -> Box<
             dyn FnMut(
                     &mut InputHandleCore<G::Timestamp, C1, P::Puller>,
-                    &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
-                    &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
+                    &mut OutputBuilderSession<'_, G::Timestamp, DCB>,
+                    &mut OutputBuilderSession<'_, G::Timestamp, ECB>,
                 ) + 'static,
         >,
         P: ParallelizationContract<G::Timestamp, C1>;
@@ -121,7 +107,7 @@ where
     R: Semigroup,
 {
     /// Creates a new empty collection in `scope`.
-    fn empty(scope: &G) -> Collection<G, D1, R>;
+    fn empty(scope: &G) -> VecCollection<G, D1, R>;
 
     /// Like [`Collection::map`], but `logic` is allowed to fail. The first
     /// returned collection will contain successful applications of `logic`,
@@ -135,7 +121,7 @@ where
         &self,
         name: &str,
         mut logic: L,
-    ) -> (Collection<G, D2, R>, Collection<G, E, R>)
+    ) -> (VecCollection<G, D2, R>, VecCollection<G, E, R>)
     where
         DCB: ContainerBuilder<Container = Vec<(D2, G::Timestamp, R)>>
             + PushInto<(D2, G::Timestamp, R)>,
@@ -156,10 +142,7 @@ where
         &self,
         name: &str,
         logic: L,
-    ) -> (
-        Collection<G, D2, R, DCB::Container>,
-        Collection<G, E, R, ECB::Container>,
-    )
+    ) -> (Collection<G, DCB::Container>, Collection<G, ECB::Container>)
     where
         DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
         ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
@@ -174,13 +157,13 @@ where
         name: &str,
         expiration: G::Timestamp,
         token: Weak<()>,
-    ) -> Collection<G, D1, R>;
+    ) -> VecCollection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
     ///
     /// This method is most commonly used to take records containing aggregatable data (e.g. numbers to be summed)
     /// and move the data into the difference component. This will allow differential dataflow to update in-place.
-    fn explode_one<D2, R2, L>(&self, logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+    fn explode_one<D2, R2, L>(&self, logic: L) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
         D2: differential_dataflow::Data,
         R2: Semigroup + Multiply<R>,
@@ -192,7 +175,10 @@ where
     /// non-monotone exceptions, with respect to differences.
     ///
     /// The exceptions are transformed by `into_err`.
-    fn ensure_monotonic<E, IE>(&self, into_err: IE) -> (Collection<G, D1, R>, Collection<G, E, R>)
+    fn ensure_monotonic<E, IE>(
+        &self,
+        into_err: IE,
+    ) -> (VecCollection<G, D1, R>, VecCollection<G, E, R>)
     where
         E: Data,
         IE: Fn(D1, R) -> (E, R) + 'static,
@@ -244,8 +230,8 @@ where
         ) -> Box<
             dyn FnMut(
                     &mut InputHandleCore<G::Timestamp, C1, P::Puller>,
-                    &mut OutputHandleCore<G::Timestamp, DCB, Tee<G::Timestamp, DCB::Container>>,
-                    &mut OutputHandleCore<G::Timestamp, ECB, Tee<G::Timestamp, ECB::Container>>,
+                    &mut OutputBuilderSession<'_, G::Timestamp, DCB>,
+                    &mut OutputBuilderSession<'_, G::Timestamp, ECB>,
                 ) + 'static,
         >,
         P: ParallelizationContract<G::Timestamp, C1>,
@@ -256,8 +242,10 @@ where
         let operator_info = builder.operator_info();
 
         let mut input = builder.new_input(self, pact);
-        let (mut ok_output, ok_stream) = builder.new_output();
-        let (mut err_output, err_stream) = builder.new_output();
+        let (ok_output, ok_stream) = builder.new_output();
+        let mut ok_output = OutputBuilder::from(ok_output);
+        let (err_output, err_stream) = builder.new_output();
+        let mut err_output = OutputBuilder::from(err_output);
 
         builder.build(move |mut capabilities| {
             // `capabilities` should be a single-element vector.
@@ -292,13 +280,16 @@ where
     {
         self.unary_fallible::<DCB, ECB, _, _>(Pipeline, name, move |_, _| {
             Box::new(move |input, ok_output, err_output| {
-                input.for_each(|time, data| {
+                input.for_each_time(|time, data| {
                     let mut ok_session = ok_output.session_with_builder(&time);
                     let mut err_session = err_output.session_with_builder(&time);
-                    for r in data.drain().flat_map(|d1| logic(d1)) {
+                    for r in data
+                        .flat_map(DrainContainer::drain)
+                        .flat_map(|d1| logic(d1))
+                    {
                         match r {
-                            Ok(d2) => ok_session.push_into(d2),
-                            Err(e) => err_session.push_into(e),
+                            Ok(d2) => ok_session.give(d2),
+                            Err(e) => err_session.give(e),
                         }
                     }
                 })
@@ -319,12 +310,12 @@ where
             // operators from making any statement about expiration time or any following time.
             let mut cap = Some(cap.delayed(&expiration));
             let mut warned = false;
-            move |input, output| {
+            move |(input, frontier), output| {
                 if token.upgrade().is_none() {
                     // In shutdown, allow to propagate.
                     drop(cap.take());
                 } else {
-                    let frontier = input.frontier().frontier();
+                    let frontier = frontier.frontier();
                     if !frontier.less_than(&expiration) && !warned {
                         // Here, we print a warning, not an error. The state is only a liveness
                         // concern, but not relevant for correctness. Additionally, a race between
@@ -351,14 +342,14 @@ where
     }
 }
 
-impl<G, D1, R> CollectionExt<G, D1, R> for Collection<G, D1, R>
+impl<G, D1, R> CollectionExt<G, D1, R> for VecCollection<G, D1, R>
 where
     G: Scope,
     G::Timestamp: Data,
     D1: Data,
     R: Semigroup + 'static,
 {
-    fn empty(scope: &G) -> Collection<G, D1, R> {
+    fn empty(scope: &G) -> VecCollection<G, D1, R> {
         operator::empty(scope).as_collection()
     }
 
@@ -366,10 +357,7 @@ where
         &self,
         name: &str,
         mut logic: L,
-    ) -> (
-        Collection<G, D2, R, DCB::Container>,
-        Collection<G, E, R, ECB::Container>,
-    )
+    ) -> (Collection<G, DCB::Container>, Collection<G, ECB::Container>)
     where
         DCB: ContainerBuilder + PushInto<(D2, G::Timestamp, R)>,
         ECB: ContainerBuilder + PushInto<(E, G::Timestamp, R)>,
@@ -394,13 +382,16 @@ where
         name: &str,
         expiration: G::Timestamp,
         token: Weak<()>,
-    ) -> Collection<G, D1, R> {
+    ) -> VecCollection<G, D1, R> {
         self.inner
             .expire_stream_at(name, expiration, token)
             .as_collection()
     }
 
-    fn explode_one<D2, R2, L>(&self, mut logic: L) -> Collection<G, D2, <R2 as Multiply<R>>::Output>
+    fn explode_one<D2, R2, L>(
+        &self,
+        mut logic: L,
+    ) -> VecCollection<G, D2, <R2 as Multiply<R>>::Output>
     where
         D2: differential_dataflow::Data,
         R2: Semigroup + Multiply<R>,
@@ -428,7 +419,10 @@ where
             .as_collection()
     }
 
-    fn ensure_monotonic<E, IE>(&self, into_err: IE) -> (Collection<G, D1, R>, Collection<G, E, R>)
+    fn ensure_monotonic<E, IE>(
+        &self,
+        into_err: IE,
+    ) -> (VecCollection<G, D1, R>, VecCollection<G, E, R>)
     where
         E: Data,
         IE: Fn(D1, R) -> (E, R) + 'static,
@@ -560,7 +554,7 @@ where
     G: Scope,
     Ba: Batcher<Time = G::Timestamp> + 'static,
     Ba::Input: Container + Clone + 'static,
-    Ba::Output: Container + Clone,
+    Ba::Output: Clone,
     P: ParallelizationContract<G::Timestamp, Ba::Input>,
 {
     stream.unary_frontier(pact, name, |_cap, info| {
@@ -575,28 +569,28 @@ where
         let mut capabilities = Antichain::<Capability<G::Timestamp>>::new();
         let mut prev_frontier = Antichain::from_elem(G::Timestamp::minimum());
 
-        move |input, output| {
+        move |(input, frontier), output| {
             input.for_each(|cap, data| {
                 capabilities.insert(cap.retain());
                 batcher.push_container(data);
             });
 
-            if prev_frontier.borrow() != input.frontier().frontier() {
+            if prev_frontier.borrow() != frontier.frontier() {
                 if capabilities
                     .elements()
                     .iter()
-                    .any(|c| !input.frontier().less_equal(c.time()))
+                    .any(|c| !frontier.less_equal(c.time()))
                 {
                     let mut upper = Antichain::new(); // re-used allocation for sealing batches.
 
                     // For each capability not in advance of the input frontier ...
                     for (index, capability) in capabilities.elements().iter().enumerate() {
-                        if !input.frontier().less_equal(capability.time()) {
+                        if !frontier.less_equal(capability.time()) {
                             // Assemble the upper bound on times we can commit with this capabilities.
                             // We must respect the input frontier, and *subsequent* capabilities, as
                             // we are pretending to retire the capability changes one by one.
                             upper.clear();
-                            for time in input.frontier().frontier().iter() {
+                            for time in frontier.frontier().iter() {
                                 upper.insert(time.clone());
                             }
                             for other_capability in &capabilities.elements()[(index + 1)..] {
@@ -634,7 +628,7 @@ where
                 }
 
                 prev_frontier.clear();
-                prev_frontier.extend(input.frontier().frontier().iter().cloned());
+                prev_frontier.extend(frontier.frontier().iter().cloned());
             }
         }
     })
@@ -648,7 +642,7 @@ struct ConsolidateBuilder<T, I> {
 impl<T, I> Builder for ConsolidateBuilder<T, I>
 where
     T: Timestamp,
-    I: Container,
+    I: Clone,
 {
     type Input = I;
     type Time = T;
@@ -740,16 +734,17 @@ where
             .collect::<Vec<_>>();
 
         // create one output handle for the concatenated results.
-        let (mut output, result) = builder.new_output::<CB>();
+        let (output, result) = builder.new_output::<CB::Container>();
+        let mut output = OutputBuilder::<_, CB>::from(output);
 
         builder.build(move |_capability| {
             move |_frontier| {
                 let mut output = output.activate();
                 for handle in handles.iter_mut() {
-                    handle.for_each(|time, data| {
+                    handle.for_each_time(|time, data| {
                         output
                             .session_with_builder(&time)
-                            .give_iterator(data.drain());
+                            .give_iterator(data.flat_map(DrainContainer::drain));
                     })
                 }
             }
