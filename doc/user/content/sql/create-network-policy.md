@@ -8,7 +8,7 @@ menu:
 
 `CREATE NETWORK POLICY` creates a network policy that restricts access to a
 Materialize region using IP-based rules. Network policies are part of
-Materialize's framework for [access control](/manage/access-control/).
+Materialize's framework for [access control](/security/access-control/).
 
 ## Syntax
 

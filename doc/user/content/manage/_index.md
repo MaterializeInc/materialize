@@ -5,7 +5,7 @@ disable_list: true
 menu:
   main:
     identifier: "manage"
-    weight: 14
+    weight: 50
 ---
 
 This section contains various resources for managing Materialize.
@@ -18,13 +18,6 @@ This section contains various resources for managing Materialize.
 | [Monitoring and alerting](/manage/monitor/) | Guides to set up monitoring and alerting |
 | [Disaster Recovery](/manage/disaster-recovery/) | Disaster recovery strategies |
 
-## Access management guides
-
-| Guide | Description |
-|-------|-------------|
-| [User and service accounts](/manage/users-service-accounts/) | Manage user/service accounts |
-| [Access control](/manage/access-control/) | Reference for role-based access management (RBAC) |
-| [Manage network policies](/manage/manage-network-policies/) | Set up network policies |
 
 ## Manage via dbt/Terraform
 

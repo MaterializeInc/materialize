@@ -60,12 +60,12 @@ provider "materialize" {
 
 **Minimum requirements:** `terraform-provider-materialize` v0.8.1+
 
-As a best practice, we strongly recommend using [service accounts](/manage/access-control/create-service-accounts)
+As a best practice, we strongly recommend using [service accounts](/security/users-service-accounts/create-service-accounts/)
 to connect external applications to Materialize. To create a
 service account, create a new [`materialize_role`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/role)
 and associate it with a new [`materialize_app_password`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/app_password)
 of type `service`. More granular permissions for the service account can then
-be configured using [role-based access control (RBAC)](/manage/access-control/#role-based-access-control-rbac).
+be configured using [role-based access control (RBAC)](/security/access-control/#role-based-access-control-rbac).
 
 ```hcl
 # Create a service user in the aws/us-east-1 region.

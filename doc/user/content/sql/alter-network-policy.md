@@ -7,7 +7,7 @@ menu:
 ---
 
 `ALTER NETWORK POLICY` alters an existing network policy. Network policies are
-part of Materialize's framework for [access control](/manage/access-control/).
+part of Materialize's framework for [access control](/security/access-control/).
 
 Changes to a network policy will only affect new connections
 and **will not** terminate active connections.

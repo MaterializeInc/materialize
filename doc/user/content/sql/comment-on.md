@@ -28,7 +28,7 @@ The privileges required to execute this statement are:
 {{< include-md file="shared-content/sql-command-privileges/comment-on.md" >}}
 
 For more information on ownership and privileges, see [Role-based access
-control](/manage/access-control/rbac).
+control](/security/access-control/).
 
 ## Examples
 

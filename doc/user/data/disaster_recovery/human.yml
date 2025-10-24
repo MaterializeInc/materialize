@@ -7,13 +7,13 @@ rows:
     RPO: |
       Same as upstream source system. Source will need to be recreated in Materialize.
 
-      Consider using [RBAC](/manage/access-control/rbac/) to reduce the risk of
+      Consider using [RBAC](/security/access-control/) to reduce the risk of
       accidentally dropping sources.
 
     "RTO (RF1/RF2)": |
       Time to recreate the source and snapshot + time to recreate the dependent objects and rehydrate.
 
-      Consider using [RBAC](/manage/access-control/rbac/) to reduce the risk of
+      Consider using [RBAC](/security/access-control/) to reduce the risk of
       accidentally dropping sources.
 
   - Failure Type: "**Accidental materialized view/index drop**"

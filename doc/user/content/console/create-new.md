@@ -114,7 +114,7 @@ application password")
    {{< yaml-table data="console/service_account_fields" >}}
 
    See also [Create service
-   accounts](/manage/access-control/create-service-accounts/) for creating
+   accounts](/security/users-service-accounts/create-service-accounts/) for creating
    service accounts via Terraform.
 
    {{</ tab >}}

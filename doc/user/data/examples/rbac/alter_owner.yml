@@ -10,7 +10,7 @@
     As the owner, `lemon@example.com`  has all applicable privileges
     (`INSERT`/`SELECT`/`UPDATE`/`DELETE`) for the table as well as the `INSERT`
     through its membership in `view_manager` (from [Alter default privileges
-    example](/manage/access-control/manage-roles/#alter-default-privileges)).
+    example](/security/access-control/manage-roles/#alter-default-privileges)).
 
     ```none
           grantor      |      grantee      | database | schema |     name     | object_type | privilege_type
@@ -34,7 +34,7 @@
 
     The results show that the `view_manager` role has `INSERT` privileges on the
     `shared_lemon` table (from [Alter default privileges
-    example](/manage/access-control/manage-roles/#alter-default-privileges)).
+    example](/security/access-control/manage-roles/#alter-default-privileges)).
 
     ```none
           grantor      |   grantee    | database | schema |     name     | object_type | privilege_type

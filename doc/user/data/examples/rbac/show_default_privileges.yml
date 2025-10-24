@@ -2,7 +2,7 @@
   description: |
 
     To view default privileges for a
-    [user](/manage/users-service-accounts/invite-users/), run [`SHOW DEFAULT
+    [user](/security/users-service-accounts/invite-users/), run [`SHOW DEFAULT
     PRIVILEGES`](/sql/show-default-privileges) on the role named after the
     user's email:
 
@@ -21,7 +21,7 @@
   description: |
 
     To view default privileges for a [service
-    account](/manage/users-service-accounts/create-service-accounts/), run
+    account](/security/users-service-accounts/create-service-accounts/), run
     [`SHOW DEFAULT PRIVILEGES`](/sql/show-default-privileges) on the role named after the
     service account user:
 
