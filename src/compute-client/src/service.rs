@@ -7,10 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-// Tonic generates code that violates clippy lints.
-// TODO: Remove this once tonic does not produce this code anymore.
-#![allow(clippy::as_conversions, clippy::clone_on_ref_ptr)]
-
 //! Compute layer client and server.
 
 use std::collections::{BTreeMap, BTreeSet};

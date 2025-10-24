@@ -54,7 +54,6 @@ tunnel = [
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
-tonic-build = "0.12.3"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -10,25 +10,15 @@
 use std::path::PathBuf;
 
 fn main() {
-    let mut config = prost_build::Config::new();
-    config
+    prost_build::Config::new()
         .protoc_executable(mz_build_tools::protoc())
-        .btree_map(["."]);
-
-    tonic_build::configure()
-        // Enabling `emit_rerun_if_changed` will rerun the build script when
-        // anything in the include directory (..) changes. This causes quite a
-        // bit of spurious recompilation, so we disable it. The default behavior
-        // is to re-run if any file in the crate changes; that's still a bit too
-        // broad, but it's better.
-        .emit_rerun_if_changed(false)
+        .btree_map(["."])
         .extern_path(".mz_expr.scalar", "::mz_expr")
         .extern_path(".mz_postgres_util.desc", "::mz_postgres_util::desc")
         .extern_path(".mz_mysql_util", "::mz_mysql_util")
         .extern_path(".mz_sql_server_util", "::mz_sql_server_util")
         .extern_path(".mz_repr.row", "::mz_repr")
-        .compile_protos_with_config(
-            config,
+        .compile_protos(
             &[
                 "storage-types/src/errors.proto",
                 "storage-types/src/sources.proto",

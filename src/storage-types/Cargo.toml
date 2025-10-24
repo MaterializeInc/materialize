@@ -88,7 +88,6 @@ rand = "0.8.5"
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 prost-build = "0.13.5"
-tonic-build = "0.12.3"
 
 [features]
 default = ["mz-build-tools/default", "workspace-hack"]
