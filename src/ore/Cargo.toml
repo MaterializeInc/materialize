@@ -119,7 +119,7 @@ async = [
     "dep:tracing",
 ]
 bytes = ["dep:bytes", "compact_bytes", "smallvec", "smallvec/const_generics", "region", "tracing"]
-network = ["async", "dep:bytes", "smallvec", "tonic", "dep:tracing"]
+network = ["async", "dep:bytes", "smallvec", "dep:tracing"]
 panic = ["sentry-panic"]
 process = ["libc"]
 region = ["dep:lgalloc", "dep:bytemuck"]

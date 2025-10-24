@@ -17,14 +17,13 @@ use std::error::Error;
 use std::net::SocketAddr as InetSocketAddr;
 use std::pin::Pin;
 use std::str::FromStr;
-use std::task::{Context, Poll, ready};
+use std::task::{Context, Poll};
 use std::{fmt, io};
 
 use async_trait::async_trait;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{self, TcpListener, TcpStream, UnixListener, UnixStream, tcp, unix};
-use tonic::transport::server::{Connected, TcpConnectInfo, UdsConnectInfo};
 use tracing::warn;
 
 use crate::error::ErrorExt;
@@ -368,27 +367,6 @@ impl Listener {
             }
         }
     }
-
-    fn poll_accept(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Stream, io::Error>>> {
-        match self.get_mut() {
-            Listener::Tcp(listener) => {
-                let (stream, _addr) = ready!(listener.poll_accept(cx))?;
-                stream.set_nodelay(true)?;
-                Poll::Ready(Some(Ok(Stream::Tcp(stream))))
-            }
-            Listener::Unix(listener) => {
-                let (stream, _addr) = ready!(listener.poll_accept(cx))?;
-                Poll::Ready(Some(Ok(Stream::Unix(stream))))
-            }
-            #[cfg(feature = "turmoil")]
-            Listener::Turmoil(_) => {
-                unimplemented!("`turmoil::net::TcpListener::poll_accept`");
-            }
-        }
-    }
 }
 
 impl fmt::Debug for Listener {
@@ -399,14 +377,6 @@ impl fmt::Debug for Listener {
             #[cfg(feature = "turmoil")]
             Self::Turmoil(_) => f.debug_tuple("Turmoil").finish(),
         }
-    }
-}
-
-impl futures::stream::Stream for Listener {
-    type Item = Result<Stream, io::Error>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        self.poll_accept(cx)
     }
 }
 
@@ -574,22 +544,6 @@ impl AsyncWrite for Stream {
     }
 }
 
-impl Connected for Stream {
-    type ConnectInfo = ConnectInfo;
-
-    fn connect_info(&self) -> Self::ConnectInfo {
-        match self {
-            Stream::Tcp(stream) => ConnectInfo::Tcp(stream.connect_info()),
-            Stream::Unix(stream) => ConnectInfo::Unix(stream.connect_info()),
-            #[cfg(feature = "turmoil")]
-            Stream::Turmoil(stream) => ConnectInfo::Turmoil(TcpConnectInfo {
-                local_addr: stream.local_addr().ok(),
-                remote_addr: stream.peer_addr().ok(),
-            }),
-        }
-    }
-}
-
 /// Read half of a [`Stream`], created by [`Stream::split`].
 #[derive(Debug)]
 pub enum StreamReadHalf {
@@ -650,17 +604,6 @@ impl AsyncWrite for StreamWriteHalf {
             Self::Turmoil(tx) => Pin::new(tx).poll_shutdown(cx),
         }
     }
-}
-
-/// Connection information for a [`Stream`].
-#[derive(Debug, Clone)]
-pub enum ConnectInfo {
-    /// TCP connection information.
-    Tcp(TcpConnectInfo),
-    /// Unix domain socket connection information.
-    Unix(UdsConnectInfo),
-    /// `turmoil` socket conection information.
-    Turmoil(TcpConnectInfo),
 }
 
 #[cfg(test)]
