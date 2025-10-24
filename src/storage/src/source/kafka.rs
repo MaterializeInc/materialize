@@ -241,7 +241,7 @@ fn render_reader<G: Scope<Timestamp = KafkaTimestamp>>(
 
     let (data_output, stream) = builder.new_output::<AccountedStackBuilder<_>>();
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (health_output, health_stream) = builder.new_output();
+    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut metadata_input = builder.new_disconnected_input(&metadata_stream.broadcast(), Pipeline);
 
@@ -1594,8 +1594,8 @@ fn render_metadata_fetcher<G: Scope<Timestamp = KafkaTimestamp>>(
     let name = format!("KafkaMetadataFetcher({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(name, scope.clone());
 
-    let (metadata_output, metadata_stream) = builder.new_output();
-    let (probe_output, probe_stream) = builder.new_output();
+    let (metadata_output, metadata_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let button = builder.build(move |caps| async move {
         if !is_active_worker {

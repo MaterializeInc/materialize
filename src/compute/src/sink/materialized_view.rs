@@ -120,7 +120,7 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
@@ -167,9 +167,9 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        mut ok_collection: Collection<G, Row, Diff>,
-        mut err_collection: Collection<G, DataflowError, Diff>,
-        _ct_times: Option<Collection<G, (), Diff>>,
+        mut ok_collection: VecCollection<G, Row, Diff>,
+        mut err_collection: VecCollection<G, DataflowError, Diff>,
+        _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Attach probes reporting the compute frontier.
@@ -230,8 +230,8 @@ type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 pub(super) fn persist_sink<S>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    ok_collection: Collection<S, Row, Diff>,
-    err_collection: Collection<S, DataflowError, Diff>,
+    ok_collection: VecCollection<S, Row, Diff>,
+    err_collection: VecCollection<S, DataflowError, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
@@ -500,7 +500,7 @@ mod mint {
         let desired_outputs = OkErr::new(ok_output, err_output);
         let desired_output_streams = OkErr::new(ok_stream, err_stream);
 
-        let (desc_output, desc_output_stream) = op.new_output();
+        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
 
         let mut desired_inputs = OkErr {
             ok: op.new_input_for(&desired.ok, Pipeline, &desired_outputs.ok),
@@ -765,7 +765,8 @@ mod write {
         let name = operator_name(sink_id, "write");
         let mut op = OperatorBuilder::new(name, scope);
 
-        let (batches_output, batches_output_stream) = op.new_output();
+        let (batches_output, batches_output_stream) =
+            op.new_output::<CapacityContainerBuilder<_>>();
 
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.

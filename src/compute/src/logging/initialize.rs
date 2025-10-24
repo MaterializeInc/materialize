@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::logging::{DifferentialEvent, DifferentialEventBuilder};
 use mz_compute_client::logging::{LogVariant, LoggingConfig};
@@ -20,8 +20,9 @@ use mz_storage_types::errors::DataflowError;
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::operator::CollectionExt;
+use timely::ContainerBuilder;
 use timely::communication::Allocate;
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::{ContainerBuilder as _, PushInto};
 use timely::dataflow::Scope;
 use timely::logging::{TimelyEvent, TimelyEventBuilder};
 use timely::logging_core::{Logger, Registry};
@@ -157,7 +158,7 @@ impl<A: Allocate + 'static> LoggingContext<'_, A> {
 
             let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowError, Diff> =
-                    Collection::empty(scope).into();
+                    VecCollection::empty(scope).into();
                 collection
                     .mz_arrange::<ErrBatcher<_, _>, ErrBuilder<_, _>, _>("Arrange logging err")
                     .trace

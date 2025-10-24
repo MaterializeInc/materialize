@@ -124,7 +124,7 @@ pub type KeyValBatcher<K, V, T, D> =
 
 /// Timestamp trait for rendering, constraint to support [`MzData`] and [timely::progress::Timestamp].
 pub trait MzTimestamp:
-    MzData + timely::progress::Timestamp + differential_dataflow::lattice::Lattice
+    MzData + timely::progress::Timestamp + differential_dataflow::lattice::Lattice + std::hash::Hash
 {
 }
 
@@ -132,7 +132,7 @@ impl<T> MzTimestamp for T
 where
     T: MzData,
     T: timely::progress::Timestamp,
-    T: differential_dataflow::lattice::Lattice,
+    T: differential_dataflow::lattice::Lattice + std::hash::Hash,
 {
 }
 

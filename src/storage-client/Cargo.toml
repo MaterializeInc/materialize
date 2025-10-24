@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
-differential-dataflow = "0.17.0"
+differential-dataflow = "0.18.0"
 futures = "0.3.31"
 itertools = { version = "0.14.0" }
 mz-ccsr = { path = "../ccsr" }
@@ -39,7 +39,7 @@ rdkafka = { version = "0.29.0", features = [
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.145" }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
-timely = "0.24.0"
+timely = "0.25.1"
 tokio = { version = "1.44.1", features = [
     "fs",
     "rt",

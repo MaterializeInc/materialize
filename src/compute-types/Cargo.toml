@@ -10,9 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
-columnar = "0.10.2"
+columnar = "0.11.0"
 columnation = "0.1.0"
-differential-dataflow = "0.17.0"
+differential-dataflow = "0.18.0"
 itertools = "0.14.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-expr = { path = "../expr" }
@@ -20,7 +20,7 @@ mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
 serde = { version = "1.0.219", features = ["derive"] }
-timely = "0.24.0"
+timely = "0.25.1"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

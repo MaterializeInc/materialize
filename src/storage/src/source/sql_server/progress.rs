@@ -37,6 +37,7 @@ use mz_storage_types::sources::sql_server::{
     CDC_CLEANUP_CHANGE_TABLE, CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES, OFFSET_KNOWN_INTERVAL,
 };
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::Map;
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::Antichain;
@@ -64,7 +65,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     let op_name = format!("SqlServerProgress({})", config.id);
     let mut builder = AsyncOperatorBuilder::new(op_name, scope);
 
-    let (probe_output, probe_stream) = builder.new_output();
+    let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let (button, transient_errors) = builder.build_fallible::<TransientError, _>(move |caps| {
         Box::pin(async move {

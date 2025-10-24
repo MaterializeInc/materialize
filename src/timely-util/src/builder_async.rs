@@ -28,19 +28,17 @@ use differential_dataflow::containers::{Columnation, TimelyStack};
 use futures_util::Stream;
 use futures_util::task::ArcWake;
 use timely::communication::{Pull, Push};
-use timely::container::{CapacityContainerBuilder, ContainerBuilder, PushInto};
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pact::ParallelizationContract;
-use timely::dataflow::channels::pushers::Tee;
+use timely::dataflow::channels::pushers::Output;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
-use timely::dataflow::operators::generic::{
-    InputHandleCore, OperatorInfo, OutputHandleCore, OutputWrapper,
-};
+use timely::dataflow::operators::generic::{InputHandleCore, OperatorInfo};
 use timely::dataflow::operators::{Capability, CapabilitySet, InputCapability};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::{Activator, SyncActivator};
-use timely::{Bincode, Container, PartialOrder};
+use timely::{Bincode, Container, ContainerBuilder, PartialOrder};
 
 use crate::containers::stack::AccountedStackBuilder;
 
@@ -213,89 +211,113 @@ pub enum Event<T: Timestamp, C, D> {
     Progress(Antichain<T>),
 }
 
-pub struct AsyncOutputHandle<
-    T: Timestamp,
-    CB: ContainerBuilder,
-    P: Push<Message<T, CB::Container>> + 'static,
-> {
-    // The field order is important here as the handle is borrowing from the wrapper. See also the
-    // safety argument in the constructor
-    handle: Rc<RefCell<OutputHandleCore<'static, T, CB, P>>>,
-    wrapper: Rc<Pin<Box<OutputWrapper<T, CB, P>>>>,
-    index: usize,
+/// Shared part of an async output handle
+struct AsyncOutputHandleInner<T: Timestamp, CB: ContainerBuilder> {
+    /// Handle to write to the output stream.
+    output: Output<T, CB::Container>,
+    /// Current capability held by this output handle.
+    capability: Option<Capability<T>>,
+    /// Container builder to accumulate data before sending at `capability`.
+    builder: CB,
 }
 
-impl<T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
-where
-    T: Timestamp,
-    C: Container + Clone + 'static,
-    P: Push<Message<T, C>> + 'static,
-{
-    #[inline]
-    pub fn give_container(&self, cap: &Capability<T>, container: &mut C) {
-        let mut handle = self.handle.borrow_mut();
-        handle.session_with_builder(cap).give_container(container);
+impl<T: Timestamp, CB: ContainerBuilder> AsyncOutputHandleInner<T, CB> {
+    /// Write all pending data to the output stream.
+    fn flush(&mut self) {
+        while let Some(container) = self.builder.finish() {
+            self.output
+                .give(self.capability.as_ref().expect("must exist"), container);
+        }
+    }
+
+    /// Cease this output handle, flushing all pending data and releasing its capability.
+    fn cease(&mut self) {
+        self.flush();
+        let _ = self.output.activate();
+        self.capability = None;
+    }
+
+    /// Provides data at the time specified by the capability. Flushes automatically when the
+    /// capability time changes.
+    fn give<D>(&mut self, cap: &Capability<T>, data: D)
+    where
+        CB: PushInto<D>,
+    {
+        if let Some(capability) = &self.capability
+            && cap.time() != capability.time()
+        {
+            self.flush();
+            self.capability = None;
+        }
+        if self.capability.is_none() {
+            self.capability = Some(cap.clone());
+        }
+
+        self.builder.push_into(data);
+        while let Some(container) = self.builder.extract() {
+            self.output
+                .give(self.capability.as_ref().expect("must exist"), container);
+        }
     }
 }
 
-impl<T, CB, P> AsyncOutputHandle<T, CB, P>
+pub struct AsyncOutputHandle<T: Timestamp, CB: ContainerBuilder> {
+    inner: Rc<RefCell<AsyncOutputHandleInner<T, CB>>>,
+    index: usize,
+}
+
+impl<T, C> AsyncOutputHandle<T, CapacityContainerBuilder<C>>
+where
+    T: Timestamp,
+    C: Container + Clone + 'static,
+{
+    #[inline]
+    pub fn give_container(&self, cap: &Capability<T>, container: &mut C) {
+        let mut inner = self.inner.borrow_mut();
+        inner.flush();
+        inner.output.give(cap, container);
+    }
+}
+
+impl<T, CB> AsyncOutputHandle<T, CB>
 where
     T: Timestamp,
     CB: ContainerBuilder,
-    P: Push<Message<T, CB::Container>> + 'static,
 {
-    fn new(wrapper: OutputWrapper<T, CB, P>, index: usize) -> Self {
-        let mut wrapper = Rc::new(Box::pin(wrapper));
-        // SAFETY:
-        // get_unchecked_mut is safe because we are not moving the wrapper
-        //
-        // transmute is safe because:
-        // * We're erasing the lifetime but we guarantee through field order that the handle will
-        //   be dropped before the wrapper, thus manually enforcing the lifetime.
-        // * We never touch wrapper again after this point
-        let handle = unsafe {
-            let handle = Rc::get_mut(&mut wrapper)
-                .unwrap()
-                .as_mut()
-                .get_unchecked_mut()
-                .activate();
-            std::mem::transmute::<OutputHandleCore<'_, T, CB, P>, OutputHandleCore<'static, T, CB, P>>(
-                handle,
-            )
+    fn new(output: Output<T, CB::Container>, index: usize) -> Self {
+        let inner = AsyncOutputHandleInner {
+            output,
+            capability: None,
+            builder: CB::default(),
         };
         Self {
-            wrapper,
-            handle: Rc::new(RefCell::new(handle)),
+            inner: Rc::new(RefCell::new(inner)),
             index,
         }
     }
 
     fn cease(&self) {
-        self.handle.borrow_mut().cease()
+        self.inner.borrow_mut().cease();
     }
 }
 
-impl<T, C, P> AsyncOutputHandle<T, CapacityContainerBuilder<C>, P>
+impl<T, CB> AsyncOutputHandle<T, CB>
 where
     T: Timestamp,
-    C: Container + Clone + 'static,
-    P: Push<Message<T, C>> + 'static,
+    CB: ContainerBuilder,
 {
     pub fn give<D>(&self, cap: &Capability<T>, data: D)
     where
-        CapacityContainerBuilder<C>: PushInto<D>,
+        CB: PushInto<D>,
     {
-        let mut handle = self.handle.borrow_mut();
-        handle.session_with_builder(cap).give(data);
+        self.inner.borrow_mut().give(cap, data);
     }
 }
 
-impl<T, D, P>
-    AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<D>>>, P>
+impl<T, D> AsyncOutputHandle<T, AccountedStackBuilder<CapacityContainerBuilder<TimelyStack<D>>>>
 where
     D: timely::Data + Columnation,
     T: Timestamp,
-    P: Push<Message<T, TimelyStack<D>>>,
 {
     pub const MAX_OUTSTANDING_BYTES: usize = 128 * 1024 * 1024;
 
@@ -306,12 +328,11 @@ where
         TimelyStack<D>: PushInto<D2>,
     {
         let should_yield = {
-            let mut handle = self.handle.borrow_mut();
-            let mut session = handle.session_with_builder(cap);
-            session.push_into(data);
-            let should_yield = session.builder().bytes.get() > Self::MAX_OUTSTANDING_BYTES;
+            let mut handle = self.inner.borrow_mut();
+            handle.give(cap, data);
+            let should_yield = handle.builder.bytes.get() > Self::MAX_OUTSTANDING_BYTES;
             if should_yield {
-                session.builder().bytes.set(0);
+                handle.builder.bytes.set(0);
             }
             should_yield
         };
@@ -321,13 +342,10 @@ where
     }
 }
 
-impl<T: Timestamp, CB: ContainerBuilder, P: Push<Message<T, CB::Container>> + 'static> Clone
-    for AsyncOutputHandle<T, CB, P>
-{
+impl<T: Timestamp, CB: ContainerBuilder> Clone for AsyncOutputHandle<T, CB> {
     fn clone(&self) -> Self {
         Self {
-            handle: Rc::clone(&self.handle),
-            wrapper: Rc::clone(&self.wrapper),
+            inner: Rc::clone(&self.inner),
             index: self.index,
         }
     }
@@ -406,9 +424,7 @@ pub trait OutputIndex {
     fn index(&self) -> usize;
 }
 
-impl<T: Timestamp, CB: ContainerBuilder> OutputIndex
-    for AsyncOutputHandle<T, CB, Tee<T, CB::Container>>
-{
+impl<T: Timestamp, CB: ContainerBuilder> OutputIndex for AsyncOutputHandle<T, CB> {
     fn index(&self) -> usize {
         self.index
     }
@@ -530,14 +546,14 @@ impl<G: Scope> OperatorBuilder<G> {
     pub fn new_output<CB: ContainerBuilder>(
         &mut self,
     ) -> (
-        AsyncOutputHandle<G::Timestamp, CB, Tee<G::Timestamp, CB::Container>>,
+        AsyncOutputHandle<G::Timestamp, CB>,
         StreamCore<G, CB::Container>,
     ) {
         let index = self.builder.shape().outputs();
 
-        let (wrapper, stream) = self.builder.new_output_connection([]);
+        let (output, stream) = self.builder.new_output_connection([]);
 
-        let handle = AsyncOutputHandle::new(wrapper, index);
+        let handle = AsyncOutputHandle::new(output, index);
 
         let flush_handle = handle.clone();
         self.output_flushes
@@ -675,7 +691,7 @@ impl<G: Scope> OperatorBuilder<G> {
             + 'static,
     {
         // Create a new completely disconnected output
-        let (error_output, error_stream) = self.new_output();
+        let (error_output, error_stream) = self.new_output::<CapacityContainerBuilder<_>>();
         let button = self.build(|mut caps| async move {
             let error_cap = caps.pop().unwrap();
             let mut caps = caps
@@ -795,7 +811,7 @@ mod test {
             let input = (0..10).to_stream(scope);
 
             let mut op = OperatorBuilder::new("async_passthru".to_string(), input.scope());
-            let (output, output_stream) = op.new_output();
+            let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
             let mut input_handle = op.new_input_for(&input, Pipeline, &output);
 
             op.build(move |_capabilities| async move {

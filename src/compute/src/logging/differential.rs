@@ -22,12 +22,12 @@ use mz_ore::cast::CastFrom;
 use mz_repr::{Datum, Diff, Timestamp};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
-use mz_timely_util::containers::ProvidedBuilder;
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
-use timely::dataflow::channels::pushers::buffer::Session;
-use timely::dataflow::channels::pushers::{Counter, Tee};
+use timely::dataflow::operators::InputCapability;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::operator::empty;
+use timely::dataflow::operators::generic::{OutputBuilder, Session};
 use timely::dataflow::{Scope, Stream};
 
 use crate::extensions::arrange::MzArrangeCore;
@@ -62,33 +62,39 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
     scope.scoped("differential logging", move |scope| {
         let enable_logging = config.enable_logging;
-        let (logs, token) = event_queue.links
-            .mz_replay::<_, ProvidedBuilder<_>, _>(
-                scope,
-                "differential logs",
-                config.interval,
-                event_queue.activator,
-                move |mut session, mut data|{
-                    // If logging is disabled, we still need to install the indexes, but we can leave them
-                    // empty. We do so by immediately filtering all logs events.
-                    if enable_logging {
-                        session.give_container(data.to_mut())
-                    }
-                }
-            );
+        let (logs, token) = if enable_logging {
+            event_queue.links
+                .mz_replay(
+                    scope,
+                    "differential logs",
+                    config.interval,
+                    event_queue.activator,
+                )
+        } else {
+            let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
+            (empty(scope), token)
+        };
 
         // Build a demux operator that splits the replayed event stream up into the separate
         // logging streams.
         let mut demux =
             OperatorBuilder::new("Differential Logging Demux".to_string(), scope.clone());
         let mut input = demux.new_input(&logs, Pipeline);
-        let (mut batches_out, batches) = demux.new_output();
-        let (mut records_out, records) = demux.new_output();
-        let (mut sharing_out, sharing) = demux.new_output();
-        let (mut batcher_records_out, batcher_records) = demux.new_output();
-        let (mut batcher_size_out, batcher_size) = demux.new_output();
-        let (mut batcher_capacity_out, batcher_capacity) = demux.new_output();
-        let (mut batcher_allocations_out, batcher_allocations) = demux.new_output();
+        let (batches_out, batches) = demux.new_output();
+        let (records_out, records) = demux.new_output();
+        let (sharing_out, sharing) = demux.new_output();
+        let (batcher_records_out, batcher_records) = demux.new_output();
+        let (batcher_size_out, batcher_size) = demux.new_output();
+        let (batcher_capacity_out, batcher_capacity) = demux.new_output();
+        let (batcher_allocations_out, batcher_allocations) = demux.new_output();
+
+        let mut batches_out = OutputBuilder::from(batches_out);
+        let mut records_out = OutputBuilder::from(records_out);
+        let mut sharing_out = OutputBuilder::from(sharing_out);
+        let mut batcher_records_out = OutputBuilder::from(batcher_records_out);
+        let mut batcher_size_out = OutputBuilder::from(batcher_size_out);
+        let mut batcher_capacity_out = OutputBuilder::from(batcher_capacity_out);
+        let mut batcher_allocations_out = OutputBuilder::from(batcher_allocations_out);
 
         let mut demux_state = Default::default();
         demux.build(move |_capability| {
@@ -101,7 +107,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 let mut batcher_capacity = batcher_capacity_out.activate();
                 let mut batcher_allocations = batcher_allocations_out.activate();
 
-                input.for_each(|cap, data| {
+                input.for_each_time(|cap, data| {
                     let mut output_buffers = DemuxOutput {
                         batches: batches.session_with_builder(&cap),
                         records: records.session_with_builder(&cap),
@@ -112,7 +118,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                         batcher_allocations: batcher_allocations.session_with_builder(&cap),
                     };
 
-                    for (time, event) in data.drain(..) {
+                    for (time, event) in data.flat_map(|data: &mut Vec<_>| data.drain(..)) {
                         DemuxHandler {
                             state: &mut demux_state,
                             output: &mut output_buffers,
@@ -133,12 +139,14 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
                 input,
                 log,
-                move |((op, ()), time, diff), packer, session| {
-                    let data = packer.pack_slice(&[
-                        Datum::UInt64(u64::cast_from(*op)),
-                        Datum::UInt64(u64::cast_from(worker_id)),
-                    ]);
-                    session.give((data, *time, *diff))
+                move |data, packer, session| {
+                    for ((op, ()), time, diff) in data.iter() {
+                        let data = packer.pack_slice(&[
+                            Datum::UInt64(u64::cast_from(*op)),
+                            Datum::UInt64(u64::cast_from(worker_id)),
+                        ]);
+                        session.give((data, *time, *diff))
+                    }
                 },
             )
         };
@@ -186,20 +194,23 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
     })
 }
 
-type Pusher<D> =
-    Counter<Timestamp, Vec<(D, Timestamp, Diff)>, Tee<Timestamp, Vec<(D, Timestamp, Diff)>>>;
-type OutputSession<'a, D> =
-    Session<'a, Timestamp, ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>, Pusher<D>>;
+type OutputSession<'a, 'b, D> = Session<
+    'a,
+    'b,
+    Timestamp,
+    ConsolidatingContainerBuilder<Vec<(D, Timestamp, Diff)>>,
+    InputCapability<Timestamp>,
+>;
 
 /// Bundled output buffers used by the demux operator.
-struct DemuxOutput<'a> {
-    batches: OutputSession<'a, (usize, ())>,
-    records: OutputSession<'a, (usize, ())>,
-    sharing: OutputSession<'a, (usize, ())>,
-    batcher_records: OutputSession<'a, (usize, ())>,
-    batcher_size: OutputSession<'a, (usize, ())>,
-    batcher_capacity: OutputSession<'a, (usize, ())>,
-    batcher_allocations: OutputSession<'a, (usize, ())>,
+struct DemuxOutput<'a, 'b> {
+    batches: OutputSession<'a, 'b, (usize, ())>,
+    records: OutputSession<'a, 'b, (usize, ())>,
+    sharing: OutputSession<'a, 'b, (usize, ())>,
+    batcher_records: OutputSession<'a, 'b, (usize, ())>,
+    batcher_size: OutputSession<'a, 'b, (usize, ())>,
+    batcher_capacity: OutputSession<'a, 'b, (usize, ())>,
+    batcher_allocations: OutputSession<'a, 'b, (usize, ())>,
 }
 
 /// State maintained by the demux operator.
@@ -210,11 +221,11 @@ struct DemuxState {
 }
 
 /// Event handler of the demux operator.
-struct DemuxHandler<'a, 'b> {
+struct DemuxHandler<'a, 'b, 'c> {
     /// State kept by the demux operator
     state: &'a mut DemuxState,
     /// Demux output buffers.
-    output: &'a mut DemuxOutput<'b>,
+    output: &'a mut DemuxOutput<'b, 'c>,
     /// The logging interval specifying the time granularity for the updates.
     logging_interval_ms: u128,
     /// The current event time.
@@ -223,7 +234,7 @@ struct DemuxHandler<'a, 'b> {
     shared_state: &'a mut SharedLoggingState,
 }
 
-impl DemuxHandler<'_, '_> {
+impl DemuxHandler<'_, '_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {

@@ -45,7 +45,7 @@ where
     fn push_into(&mut self, item: T) {
         self.current.push(item);
         // If there is less than 10% slop with 2MB backing allocations, mint a container.
-        use columnar::Container;
+        use columnar::Borrow;
         let words = Indexed::length_in_words(&self.current.borrow());
         let round = (words + ((1 << 18) - 1)) & !((1 << 18) - 1);
         if round - words < round / 10 {
