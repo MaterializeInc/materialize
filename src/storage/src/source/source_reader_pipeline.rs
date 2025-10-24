@@ -57,6 +57,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Inspect, Leave};
 use timely::dataflow::scopes::Child;
@@ -334,11 +335,13 @@ where
         let name = format!("SourceGenericStats({})", id);
         let mut builder = OperatorBuilderRc::new(name, scope.clone());
 
-        let (mut health_output, derived_health) =
-            builder.new_output::<CapacityContainerBuilder<_>>();
+        let (health_output, derived_health) = builder.new_output();
+        let mut health_output =
+            OutputBuilder::<_, CapacityContainerBuilder<_>>::from(health_output);
         health_streams.push(derived_health);
 
-        let (mut output, new_export) = builder.new_output::<CapacityContainerBuilder<_>>();
+        let (output, new_export) = builder.new_output();
+        let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
 
         let mut input = builder.new_input(&export.inner, Pipeline);
         export_collections.insert(id, new_export.as_collection());
@@ -766,7 +769,7 @@ where
     let is_active_worker = active_worker == scope.index();
 
     let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
-    let (output, output_stream) = op.new_output();
+    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
     let mut input = op.new_input_for(progress, Pipeline, &output);
 
     op.build(|caps| async move {

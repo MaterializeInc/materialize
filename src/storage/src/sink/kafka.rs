@@ -133,6 +133,7 @@ use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -1369,7 +1370,7 @@ fn encode_collection<G: Scope>(
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
 
-    let (output, stream) = builder.new_output();
+    let (output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {

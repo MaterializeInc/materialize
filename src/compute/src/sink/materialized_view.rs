@@ -501,7 +501,7 @@ mod mint {
         let desired_outputs = OkErr::new(ok_output, err_output);
         let desired_output_streams = OkErr::new(ok_stream, err_stream);
 
-        let (desc_output, desc_output_stream) = op.new_output();
+        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
 
         let mut desired_inputs = OkErr {
             ok: op.new_input_for(&desired.ok, Pipeline, &desired_outputs.ok),
@@ -766,7 +766,8 @@ mod write {
         let name = operator_name(sink_id, "write");
         let mut op = OperatorBuilder::new(name, scope);
 
-        let (batches_output, batches_output_stream) = op.new_output();
+        let (batches_output, batches_output_stream) =
+            op.new_output::<CapacityContainerBuilder<_>>();
 
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.

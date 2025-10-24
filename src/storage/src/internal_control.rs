@@ -186,11 +186,11 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                 let mut capability = Some(cap);
 
                 move |output| {
-                    let Some(cap) = &capability else {
+                    let Some(cap) = capability.clone() else {
                         return;
                     };
 
-                    let mut session = output.session(cap);
+                    let mut session = output.session(&cap);
                     loop {
                         match input_rx.try_recv() {
                             Ok(command) => {
@@ -228,7 +228,7 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                     let mut pending_commands = vec![(BTreeSet::new(), 0); scope.peers()];
 
                     move |(input, frontier), output| {
-                        let Some(cap) = &capability else {
+                        let Some(cap) = capability.clone() else {
                             return;
                         };
 
@@ -238,7 +238,7 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                             }
                         });
 
-                        let mut session = output.session(cap);
+                        let mut session = output.session(&cap);
                         for (commands, next_idx) in &mut pending_commands {
                             while commands.first().is_some_and(|c| c.index == *next_idx) {
                                 let mut cmd = commands.pop_first().unwrap();
@@ -249,6 +249,8 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                                 cmd_index += 1;
                             }
                         }
+
+                        let _ = session;
 
                         if frontier.is_empty() {
                             // Drop our capability to shut down.

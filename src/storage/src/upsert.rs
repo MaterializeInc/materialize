@@ -427,7 +427,7 @@ where
             // A batch of received updates
             let mut updates = Vec::new();
             move |input, output| {
-                while let Some((cap, data)) = input.next() {
+                input.for_each(|cap, data| {
                     assert!(
                         data.iter().all(|(_, _, diff)| diff.is_positive()),
                         "invalid upsert input"
@@ -441,7 +441,7 @@ where
                         }
                         None => capability = Some(cap),
                     }
-                }
+                });
                 if let Some(capability) = capability.take() {
                     // Sort by (key, time, Reverse(from_time)) so that deduping by (key, time) gives
                     // the latest change for that key.

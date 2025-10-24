@@ -377,7 +377,7 @@ where
         scope.clone(),
     );
 
-    let (output, output_stream) = mint_op.new_output();
+    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
     let (data_output, data_output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
 
     // The description and the data-passthrough outputs are both driven by this input, so

@@ -65,8 +65,8 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
     let channel_tx = Rc::clone(&channel_rx);
     let activator_get = Rc::clone(&activator_set);
     let pact = Exchange::new(|(x, _, _): &(DecodeResult<FromTime>, _, _)| x.key.hashed());
-    input.inner.sink(pact, "CDCv2Unpack", move |input| {
-        while let Some((_, data)) = input.next() {
+    input.inner.sink(pact, "CDCv2Unpack", move |(input, _)| {
+        input.for_each(|_time, data| {
             // The inputs are rows containing two columns that encode an enum, i.e only one of them
             // is ever set while the other is unset. This is the convention we follow in our Avro
             // decoder. When the first field of the record is set then we have a data message.
@@ -130,7 +130,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
                 };
                 channel_tx.borrow_mut().push_back(message);
             }
-        }
+        });
         if let Some(activator) = activator_get.borrow_mut().as_mut() {
             activator.activate().unwrap()
         }

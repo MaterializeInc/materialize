@@ -142,7 +142,7 @@ where
         };
         Some((UpsertKey::from_value(value_ref, &key_indices), value))
     });
-    let (output_handle, output) = builder.new_output();
+    let (output_handle, output) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     // An output that just reports progress of the snapshot consolidation process upstream to the
     // persist source to ensure that backpressure is applied
@@ -537,10 +537,12 @@ where
     });
 
     (
-        output.as_collection().map(|result| match result {
-            Ok(ok) => Ok(ok),
-            Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(*err))),
-        }),
+        output
+            .as_collection()
+            .map(|result: UpsertValue| match result {
+                Ok(ok) => Ok(ok),
+                Err(err) => Err(DataflowError::from(EnvelopeError::Upsert(*err))),
+            }),
         health_stream,
         snapshot_stream,
         shutdown_button.press_on_drop(),

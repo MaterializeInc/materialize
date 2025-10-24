@@ -157,7 +157,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (definite_error_handle, definite_errors) = builder.new_output();
+    let (definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input =
@@ -565,9 +566,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .map::<Vec<_>, _, _>(Clone::clone)
         .unary(round_robin, "PgCastReplicationRows", |_, _| {
             move |input, output| {
-                while let Some((time, data)) = input.next() {
+                input.for_each_time(|time, data| {
                     let mut session = output.session(&time);
-                    for ((oid, output_index, event), time, diff) in data.drain(..) {
+                    for ((oid, output_index, event), time, diff) in
+                        data.flat_map(|data| data.drain(..))
+                    {
                         let output = &table_info
                             .get(&oid)
                             .and_then(|outputs| outputs.get(&output_index))
@@ -584,7 +587,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                         session.give(((output_index, event), time, diff));
                     }
-                }
+                });
             }
         })
         .as_collection();
