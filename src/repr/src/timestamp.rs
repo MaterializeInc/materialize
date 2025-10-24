@@ -149,7 +149,7 @@ mod columnar_timestamp {
     impl columnar::Container for Timestamps<Vec<Timestamp>> {
         #[inline(always)]
         fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
-            self.0.extend_from_self(&other.0, range)
+            self.0.extend_from_self(other.0, range)
         }
         #[inline(always)]
         fn reserve_for<'a, I>(&mut self, selves: I)

@@ -52,14 +52,14 @@ where
                         let mut afters = vec![];
 
                         let mut cursor = batch.cursor();
-                        while cursor.key_valid(&batch) {
-                            let k = cursor.key(&batch);
+                        while cursor.key_valid(batch) {
+                            let k = cursor.key(batch);
 
                             // Partition updates into retractions (befores)
                             // and insertions (afters).
-                            while cursor.val_valid(&batch) {
-                                let v = cursor.val(&batch);
-                                cursor.map_times(&batch, |t, diff| {
+                            while cursor.val_valid(batch) {
+                                let v = cursor.val(batch);
+                                cursor.map_times(batch, |t, diff| {
                                     let diff = Tr::owned_diff(diff);
                                     let update = (
                                         Tr::owned_time(t),
@@ -72,7 +72,7 @@ where
                                         afters.push(update);
                                     }
                                 });
-                                cursor.step_val(&batch);
+                                cursor.step_val(batch);
                             }
 
                             // Sort by timestamp.
@@ -112,7 +112,7 @@ where
                                 session.give(((Tr::owned_key(k), group), t, Diff::ONE));
                             }
 
-                            cursor.step_key(&batch);
+                            cursor.step_key(batch);
                         }
                     }
                 });

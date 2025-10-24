@@ -496,7 +496,7 @@ mod columnar {
         fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
             if !range.is_empty() {
                 // Imported bounds will be relative to this starting offset.
-                let values_len = self.values.len() as u64;
+                let values_len: u64 = self.values.len().try_into().expect("must fit");
 
                 // Push all bytes that we can, all at once.
                 let other_lower = if range.start == 0 {
@@ -505,8 +505,11 @@ mod columnar {
                     other.bounds.index_as(range.start - 1)
                 };
                 let other_upper = other.bounds.index_as(range.end - 1);
-                self.values
-                    .extend_from_self(other.values, other_lower as usize..other_upper as usize);
+                self.values.extend_from_self(
+                    other.values,
+                    usize::try_from(other_lower).expect("must fit")
+                        ..usize::try_from(other_upper).expect("must fit"),
+                );
 
                 // Each bound needs to be shifted by `values_len - other_lower`.
                 if values_len == other_lower {
