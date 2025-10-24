@@ -26,17 +26,44 @@ run_if_not_dry() {
   fi
 }
 
-VERSION=$1
+REMOTE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --version)
+      VERSION="$2"
+      shift 2
+      ;;
+    --remote)
+      REMOTE="$2"
+      shift 2
+      ;;
+    --help|-h)
+      cat <<EOF
+Usage: publish-weekly.sh --version <version> --remote <remote>
+Example: publish-weekly.sh --version v0.161.0 --remote origin
+EOF
+      exit 0
+      ;;
+    *)
+      echo "Unknown arg: $1" >&2
+      exit 2
+      ;;
+  esac
+done
 
 echo "--- Publishing Weekly Helm Chart $VERSION with Materialize $VERSION"
 rm -rf gh-pages
-git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://github.com/MaterializeInc/materialize.git gh-pages
+if is_truthy "${CI:-0}"; then
+  git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 https://github.com/MaterializeInc/materialize.git gh-pages
+else
+  git clone --branch "$GITHUB_PAGES_BRANCH" --depth 1 git@github.com:MaterializeInc/materialize.git gh-pages
+fi
 
 mkdir -p $RELEASE_DIR
 CHART=operator-weekly
 CHART_PATH="$CHARTS_DIR/$CHART"
 echo "Processing chart: $CHART version: $VERSION"
-git fetch --tags origin
+git fetch --tags "$REMOTE"
 git checkout "$VERSION"
 # Check if version already exists
 if [ -f "gh-pages/$CHART-$VERSION.tgz" ]; then
@@ -65,8 +92,11 @@ else
 fi
 # Commit and push changes
 git add .
-git config user.email "noreply@materialize.com"
-git config user.name "Buildkite"
+if is_truthy "${CI:-0}"; then
+  git config user.email "noreply@materialize.com"
+  git config user.name "Buildkite"
+  git remote set-url origin https://x-access-token:"$GITHUB_TOKEN"@github.com/MaterializeInc/materialize.git
+fi
 git commit -m "helm-charts: publish updated charts"
 git --no-pager diff HEAD~
 run_if_not_dry git push origin $GITHUB_PAGES_BRANCH
