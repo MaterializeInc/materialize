@@ -67,7 +67,7 @@ weight = 12
 [[menu.main]]
 identifier = "reference"
 name = "Reference"
-weight = 15
+weight = 80
 
 [[menu.main]]
 name = "SQL commands"
@@ -83,7 +83,7 @@ weight = 100
 [[menu.main]]
 identifier = "releases-previews"
 name = "Releases"
-weight = 65
+weight = 80
 
 [[menu.main]]
 identifier = "changelogs"
@@ -99,10 +99,10 @@ url = "https://materialize.com/changelog/"
 [[menu.main]]
 identifier = "about"
 name = "About"
-weight = 70
+weight = 90
 
 [[menu.main]]
-name = "Security overview"
+name = "Materialize Cloud Security and Compliance"
 parent = "about"
 url = "https://materialize.com/security-overview"
 weight = 25

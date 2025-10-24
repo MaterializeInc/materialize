@@ -1,0 +1,169 @@
+- name: "create-privatelink-connection-aurora"
+  description: |-
+    In the [Materialize Console's SQL Shell](/console/), or your preferred SQL
+    client connected to Materialize, use the [`CREATE
+    CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
+    AWS PrivateLink connection:
+  code: |
+    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
+      SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
+      AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
+    );
+- name: "create-privatelink-connection-options-aurora"
+  description: |
+    - Replace the `SERVICE NAME` value with the service name you noted
+    [earlier](#b-optional-configure-network-security).
+
+    - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
+      zones in your AWS account.
+
+      To find your availability zone IDs, select your database in the RDS
+      Console and click the subnets under **Connectivity & security**. For each
+      subnet, look for **Availability Zone ID** (e.g., `use1-az6`),
+      not **Availability Zone** (e.g., `us-east-1d`).
+
+- name: "create-privatelink-connection-rds-intro"
+  description: |-
+    In the [SQL Shell](https://console.materialize.com/), or your preferred SQL
+    client connected to Materialize, use the [`CREATE
+    CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
+    **in-region** or **cross-region** AWS PrivateLink connection.
+- name: "create-privatelink-connection-rds-in-region"
+  description: |-
+    ↕️ **In-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in the **same region** as
+    your Materialize environment:
+
+  code: |
+    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK ( SERVICE
+          NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
+          AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4') );
+
+- name: "create-privatelink-connection-rds-in-region-options"
+  description: |
+    - Replace the `SERVICE NAME` value with the service name you noted
+    [earlier](#b-optional-configure-network-security).
+
+    - Replace the `AVAILABILITY ZONES` list with the IDs of the availability
+    zones in your AWS account. For in-region connections the availability zones
+    of the NLB and the consumer VPC **must match**.
+
+      To find your availability zone IDs, select your database in the RDS
+      Console and click the subnets under **Connectivity & security**. For each
+      subnet, look for **Availability Zone ID** (e.g., `use1-az6`), not
+      **Availability Zone** (e.g., `us-east-1d`).
+
+- name: "create-privatelink-connection-rds-cross-region"
+  description: |-
+    ↔️ **Cross-region connections**
+
+    To connect to an AWS PrivateLink endpoint service in a **different region**
+    to the one where your Materialize environment is deployed:
+  code: |
+    CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK ( SERVICE
+    NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>', -- For
+    now, the AVAILABILITY ZONES clause **is** required, but will be -- made
+    optional in a future release. AVAILABILITY ZONES () );
+
+- name: "create-privatelink-connection-rds-cross-region-options"
+  description: |-
+    - Replace the `SERVICE NAME` value with the service name you noted
+    [earlier](#b-optional-configure-network-security).
+
+    - The service name region refers to where the endpoint service was created.
+    You **do not need** to specify `AVAILABILITY ZONES` manually — these will be
+    optimally auto-assigned when none are provided.
+
+- name: "get-principal-privatelink-connection"
+  description: |
+    Retrieve the AWS principal for the AWS PrivateLink connection you just created:
+
+  code: |
+    SELECT principal
+    FROM mz_aws_privatelink_connections plc
+    JOIN mz_connections c ON plc.id = c.id
+    WHERE c.name = 'privatelink_svc';
+
+
+- name: "get-principal-privatelink-connection-results"
+  description: |
+    The results should resemble:
+    ```
+                                     principal
+    ---------------------------------------------------------------------------
+     arn:aws:iam::664411391173:role/mz_20273b7c-2bbe-42b8-8c36-8cc179e9bbc3_u1
+    ```
+
+- name: "update-vpc-endpoint"
+  description: |
+    Update your VPC endpoint service to [accept connections from the AWS principal](https://docs.aws.amazon.com/vpc/latest/privatelink/add-endpoint-service-permissions.html).
+
+- name: "approve-connection-request"
+  description: |
+    If your AWS PrivateLink service is configured to require acceptance of
+    connection requests, [manually approve the connection request from
+    Materialize](https://docs.aws.amazon.com/vpc/latest/privatelink/configure-endpoint-service.html#accept-reject-connection-requests).
+
+  results: |
+    **Note:** It can take some time for the connection request to show up. Do
+    not move on to the next step until you've approved the connection.
+
+- name: "validate-connection"
+  description: |
+    Validate the AWS PrivateLink connection you created using the [`VALIDATE
+    CONNECTION`](/sql/validate-connection) command:
+  code: |
+    VALIDATE CONNECTION privatelink_svc;
+  results: |
+    If no validation error is returned, move to the next step.
+
+- name: "create-secret"
+  description: |
+    Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
+    password for the `materialize` PostgreSQL user you created
+    [earlier](#2-create-a-publication-and-a-replication-user):
+
+  code: |
+    CREATE SECRET pgpass AS '<PASSWORD>';
+
+- name: "create-connection"
+  description: |
+    Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
+    another connection object, this time with database access and authentication
+    details for Materialize to use:
+
+  code: |
+    CREATE CONNECTION pg_connection TO POSTGRES (
+      HOST '<host>',
+      PORT 5432,
+      USER 'materialize',
+      PASSWORD SECRET pgpass,
+      DATABASE '<database>',
+      AWS PRIVATELINK privatelink_svc
+      );
+
+- name: "create-connection-options-aurora"
+  description: |
+    - Replace `<host>` with your Aurora endpoint. To find your Aurora endpoint,
+      select your database in the AWS Management Console, and look
+      under **Connectivity & security**.
+
+    - Replace `<database>` with the name of the database containing the tables
+      you want to replicate to Materialize.
+
+- name: "create-connection-options-rds"
+  description: |
+    - Replace `<host>` with your RDS endpoint. To find your RDS endpoint, select
+    your database in the RDS Console, and look under **Connectivity &
+    security**.
+
+    - Replace `<database>` with the name of the database containing the tables
+      you want to replicate to Materialize.
+
+- name: "create-connection-options-self-hosted"
+  description: |
+    - Replace `<host>` with your database endpoint.
+
+    - Replace `<database>` with the name of the database containing the tables
+      you want to replicate to Materialize.

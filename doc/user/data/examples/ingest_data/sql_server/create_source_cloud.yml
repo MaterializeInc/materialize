@@ -1,0 +1,23 @@
+- name: "create-source"
+  description: |
+    Use the [`CREATE SOURCE`](/sql/create-source/) command to connect
+    Materialize to your SQL Server instance and start ingesting data:
+  code: |
+    CREATE SOURCE mz_source
+      FROM SQL SERVER CONNECTION sqlserver_connection
+      FOR ALL TABLES;
+
+- name: "create-source-options"
+  description: |
+    - By default, the source will be created in the active cluster; to use a
+      different cluster, use the `IN CLUSTER` clause.
+    - To ingest data from specific tables use the `FOR TABLES
+      (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
+    - To handle unsupported data types, use the `TEXT COLUMNS` or `EXCLUDE
+      COLUMNS` options. Check out the [reference
+      documentation](#supported-types) for guidance.
+
+- name: "schema-changes"
+  description: |
+    After source creation, refer to [schema changes
+    considerations](#schema-changes) for information on handling upstream schema changes.

@@ -282,7 +282,7 @@ configuration of resources for an SSH tunnel. For more details, see the
 
 ## C. Ingest data in Materialize
 
-### 1. (Optional) Create a cluster
+### 1. (Optional) Create a source cluster
 
 {{< note >}}
 If you are prototyping and already have a cluster to host your MySQL
@@ -293,14 +293,10 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% mysql-direct/create-a-cluster %}}
 
-### 2. Start ingesting data
+### 2. Create a connection
 
-[//]: # "TODO(morsapaes) MySQL connections support multiple SSL modes. We should
-adapt to that, rather than just state SSL MODE REQUIRED."
-
-Now that you've configured your database network, you can connect Materialize to
-your MySQL database and start ingesting data. The exact steps depend on your
-networking configuration, so start by selecting the relevant option.
+Once you have configured your network, create a connection in Materialize per
+your networking configuration.
 
 {{< tabs >}}
 
@@ -318,15 +314,23 @@ networking configuration, so start by selecting the relevant option.
 
 {{< /tabs >}}
 
+### 3. Start ingesting data
+
+{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source" %}}
+
+{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="create-source-options" %}}
+
+{{% include-example file="examples/ingest_data/mysql/create_source_cloud" example="schema-changes" %}}
+
 [//]: # "TODO(morsapaes) Replace these Step 6. and 7. with guidance using the
 new progress metrics in mz_source_statistics + console monitoring, when
 available (also for PostgreSQL)."
 
-### 3. Monitor the ingestion status
+### 4. Monitor the ingestion status
 
 {{% mysql-direct/check-the-ingestion-status %}}
 
-### 4. Right-size the cluster
+### 5. Right-size the cluster
 
 {{% mysql-direct/right-size-the-cluster %}}
 

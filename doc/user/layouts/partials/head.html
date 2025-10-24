@@ -121,6 +121,8 @@ toCSS | fingerprint }}
 {{/* Tabs */}}
 <script>
 document.addEventListener("DOMContentLoaded", function () {
+  let tabGroupCounter = 0;
+
   document.querySelectorAll(".code-tabs").forEach(function (tabGroup) {
     const navTabs = tabGroup.querySelector(".nav-tabs");
     const tabContent = tabGroup.querySelector(".tab-content");
@@ -132,13 +134,20 @@ document.addEventListener("DOMContentLoaded", function () {
       child.classList.contains("tab-pane")
     );
 
+    // Assign unique group ID
+    const groupId = `tabgroup-${tabGroupCounter++}`;
+
     // Check if headings should be added to tab panes
     const headingLevel = tabGroup.getAttribute("data-heading-level");
 
     // Create tab navigation
     tabPanes.forEach((pane, index) => {
       const title = pane.getAttribute("title") || `Tab ${index + 1}`;
-      const paneId = pane.getAttribute("id");
+      const originalPaneId = pane.getAttribute("id");
+      const paneId = `${groupId}-${originalPaneId}`;
+
+      // Update pane ID to be unique
+      pane.setAttribute("id", paneId);
 
       // Add heading inside tab pane if level is specified
       if (headingLevel) {
@@ -156,7 +165,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
       const link = document.createElement("a");
       link.className = "nav-link";
-      link.href = `#${paneId}`;
+      link.href = "#";
       link.textContent = title;
       link.setAttribute("data-tab", index);
 
@@ -174,16 +183,13 @@ document.addEventListener("DOMContentLoaded", function () {
 
     // Add click handlers for tab switching
     navTabs.addEventListener("click", function(e) {
-      e.preventDefault();
-
       if (e.target.classList.contains("nav-link")) {
+        e.preventDefault();
+        e.stopPropagation();
+
         const tabIndex = parseInt(e.target.getAttribute("data-tab"));
         if (!isNaN(tabIndex) && tabIndex >= 0 && tabIndex < tabPanes.length) {
-          const clickedTabTitle = e.target.textContent;
           activateTab(tabIndex);
-
-          // Synchronize other tab groups with the same tab title
-          syncTabsAcrossGroups(clickedTabTitle);
         }
       }
     });

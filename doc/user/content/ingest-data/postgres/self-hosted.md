@@ -213,7 +213,6 @@ option.
       be ready before you create a source.
 
 {{< /tab >}}
-
 {{< tab "Use an SSH tunnel">}}
 
 To create an SSH tunnel from Materialize to your database, you launch an VM to
@@ -264,225 +263,95 @@ scenarios, we recommend separating your workloads into multiple clusters for
 
 {{% postgres-direct/create-a-cluster %}}
 
-### 2. Start ingesting data
+### 2. Create a connection
 
-Now that you've configured your database network and created an ingestion
-cluster, you can connect Materialize to your PostgreSQL database and start
-ingesting data. The exact steps depend on your networking configuration, so
-start by selecting the relevant option.
+Once you have configured your network, create a connection in Materialize per
+your networking configuration.
 
 {{< tabs >}}
 
 {{< tab "Allow Materialize IPs">}}
 
-1. In the SQL client connected to Materialize, use the [`CREATE
-   SECRET`](/sql/create-secret/) command to securely store the password for the
-   `materialize` PostgreSQL user you created
-   [earlier](#2-create-a-publication-and-a-replication-user):
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ips_cloud"
+   example="create-secret" indent="true" %}}
 
-    ```mzsql
-    CREATE SECRET pgpass AS '<PASSWORD>';
-    ```
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ips_cloud"
+   example="create-connection" indent="true" %}}
 
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create a
-   connection object with access and authentication details for Materialize to
-   use:
-
-    ```mzsql
-    CREATE CONNECTION pg_connection TO POSTGRES (
-      HOST '<host>',
-      PORT 5432,
-      USER 'materialize',
-      PASSWORD SECRET pgpass,
-      SSL MODE 'require',
-      DATABASE '<database>'
-      );
-    ```
-
-    - Replace `<host>` with your database endpoint.
-
-    - Replace `<database>` with the name of the database containing the tables
-      you want to replicate to Materialize.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your database and start ingesting data from the publication you created
-   [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
+   {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ips_cloud"
+   example="create-connection-options-general" indent="true" %}}
 
 {{< /tab >}}
 
+{{< tab "Use AWS PrivateLink">}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_privatelink_cloud"
+   example="create-secret" indent="true" %}}
+
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_privatelink_cloud"
+   example="create-connection" indent="true" %}}
+
+   {{% include-example
+   file="examples/ingest_data/postgres/create_connection_privatelink_cloud"
+   example="create-connection-options-self-hosted" indent="true" %}}
+
+{{< /tab >}}
 {{< tab "Use an SSH tunnel">}}
 
-1. In the [Materialize console's SQL Shell](/console/),
-   or your preferred SQL client connected to Materialize, use the [`CREATE
-   CONNECTION`](/sql/create-connection/#ssh-tunnel) command to create an SSH
-   tunnel connection:
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-ssh-tunnel-connection" indent="true" %}}
 
-    ```mzsql
-    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
-        HOST '<SSH_BASTION_HOST>',
-        PORT <SSH_BASTION_PORT>,
-        USER '<SSH_BASTION_USER>'
-    );
-    ```
+   {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-ssh-tunnel-connection-options" indent="true" %}}
 
-    - Replace `<SSH_BASTION_HOST>` and `<SSH_BASTION_PORT`> with the public IP
-      address and port of the SSH bastion host you created [earlier](#b-optional-configure-network-security).
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="get-public-keys-aurora-rds-self-hosted" indent="true" %}}
 
-    - Replace `<SSH_BASTION_USER>` with the username for the key pair you
-      created for your SSH bastion host.
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="login-to-ssh-bastion-host" indent="true" %}}
 
-1. Get Materialize's public keys for the SSH tunnel connection you just
-   created:
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="validate-ssh-tunnel-connection" indent="true" %}}
 
-    ```mzsql
-    SELECT
-        mz_connections.name,
-        mz_ssh_tunnel_connections.*
-    FROM
-        mz_connections JOIN
-        mz_ssh_tunnel_connections USING(id)
-    WHERE
-        mz_connections.name = 'ssh_connection';
-    ```
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-secret" indent="true" %}}
 
-1. Log in to your SSH bastion host and add Materialize's public keys to the
-   `authorized_keys` file, for example:
+1. {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-connection" indent="true" %}}
 
-    ```sh
-    # Command for Linux
-    echo "ssh-ed25519 AAAA...76RH materialize" >> ~/.ssh/authorized_keys
-    echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
-    ```
-
-1. Back in the SQL client connected to Materialize, validate the SSH tunnel
-   connection you created using the [`VALIDATE CONNECTION`](/sql/validate-connection)
-   command:
-
-    ```mzsql
-    VALIDATE CONNECTION ssh_connection;
-    ```
-
-    If no validation error is returned, move to the next step.
-
-1. Use the [`CREATE SECRET`](/sql/create-secret/) command to securely store the
-   password for the `materialize` PostgreSQL user you created [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SECRET pgpass AS '<PASSWORD>';
-    ```
-
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
-   another connection object, this time with database access and authentication
-   details for Materialize to use:
-
-    ```mzsql
-    CREATE CONNECTION pg_connection TO POSTGRES (
-      HOST '<host>',
-      PORT 5432,
-      USER 'materialize',
-      PASSWORD SECRET pgpass,
-      DATABASE '<database>',
-      SSH TUNNEL ssh_connection
-      );
-    ```
-
-    - Replace `<host>` with your database endpoint.
-
-    - Replace `<database>` with the name of the database containing the tables
-      you want to replicate to Materialize.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your Azure instance and start ingesting data from the publication you
-   created [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
-
-1. After source creation, you can handle upstream [schema changes](/sql/create-source/postgres/#schema-changes)
-   for specific replicated tables using the [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/#context)
-   and [`DROP SOURCE`](/sql/alter-source/#dropping-subsources) syntax.
-
-{{< /tab >}}
-
-{{< tab "AWS PrivateLink">}}
-
-1. Back in the SQL client connected to Materialize, use the [`CREATE SECRET`](/sql/create-secret/)
-   command to securely store the password for the `materialize` PostgreSQL user you
-   created [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SECRET pgpass AS '<PASSWORD>';
-    ```
-
-1. Use the [`CREATE CONNECTION`](/sql/create-connection/) command to create
-   another connection object, this time with database access and authentication
-   details for Materialize to use:
-
-    ```mzsql
-    CREATE CONNECTION pg_connection TO POSTGRES (
-        HOST '<host>',
-        PORT 5432,
-        USER postgres,
-        PASSWORD SECRET pgpass,
-        DATABASE <database>,
-        AWS PRIVATELINK privatelink_svc
-    );
-    ```
-
-    - Replace `<host>` with your database endpoint.
-
-    - Replace `<database>` with the name of the database containing the tables
-      you want to replicate to Materialize.
-
-1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
-   to your database and start ingesting data from the publication you created
-   [earlier](#2-create-a-publication-and-a-replication-user):
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    By default, the source will be created in the active cluster; to use a
-    different cluster, use the `IN CLUSTER` clause. To ingest data from
-    specific schemas or tables in your publication, use `FOR SCHEMAS
-    (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` instead of `FOR
-    ALL TABLES`.
-
+   {{% include-example
+   file="examples/ingest_data/postgres/create_connection_ssh_cloud"
+   example="create-connection-options-general" indent="true" %}}
 {{< /tab >}}
 
 {{< /tabs >}}
 
-### 3. Monitor the ingestion status
+### 3. Start ingesting data
+
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source" %}}
+
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source-options" %}}
+
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud"
+example="schema-changes" %}}
+
+### 4. Monitor the ingestion status
 
 {{% postgres-direct/check-the-ingestion-status %}}
 
-### 4. Right-size the cluster
+### 5. Right-size the cluster
 
 {{% postgres-direct/right-size-the-cluster %}}
 
