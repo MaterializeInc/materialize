@@ -241,7 +241,10 @@ scenarios, we recommend separating your workloads into multiple clusters for
 {{< note >}}
 For a new SQL Server source, if none of the replicating tables
 are receiving write queries, snapshotting may take up to an additional 5 minutes
-to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases)
+to complete. For details, see [snapshot latency for inactive databases](#snapshot-latency-for-inactive-databases).
+
+For production deployments with SQL Server Always On Availability Groups, see
+[High Availability](#high-availability) for configuration guidance.
 {{</ note >}}
 
 Now that you've configured your database network, you can connect Materialize to
@@ -275,6 +278,118 @@ available(also for PostgreSQL)."
 ## D. Explore your data
 
 {{% sql-server-direct/next-steps %}}
+
+## High Availability
+
+To make your SQL Server source resilient to database failovers, configure
+Materialize to connect through a SQL Server [Always On Availability Group (AG)
+listener](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/listeners-client-connectivity-application-failover).
+When a failover occurs, SQL Server drops the existing connection and routes new
+connections to the new primary replica transparently.
+
+{{< warning >}}
+SQL Server AGs support two
+[availability modes](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/overview-of-always-on-availability-groups-sql-server?view=sql-server-ver17#availability-modes):
+
+- **Asynchronous-commit mode**: Does not guarantee data consistency.  Transactions commit on the primary before
+being sent to secondaries. If the primary fails before replicating recent
+transactions, those changes will be lost and **Materialize will not ingest
+them**.
+
+- **Synchronous-commit mode**: Guarantees data consistency.
+
+For guaranteed data consistency, use **synchronous-commit mode**.
+For additional best practices on configuring CDC with availability groups, see
+[Microsoft's documentation on replication agents with availability groups](https://learn.microsoft.com/en-us/sql/database-engine/availability-groups/windows/replicate-track-change-data-capture-always-on-availability?view=sql-server-ver17#general-changes-to-replication-agents-to-support-availability-groups).
+{{< /warning >}}
+
+#### Prerequisites
+
+Before connecting Materialize to an AG, ensure:
+
+1. **Your AG listener is configured and accessible.** Materialize must connect
+   via the listener DNS name, not individual node hostnames.
+
+1. **CDC is enabled on all potential primary replicas.** SQL Server's Change
+   Data Capture metadata is **not** replicated across AG nodes.
+
+1. **CDC capture and cleanup jobs exist on all potential primary replicas.**
+   After a role change, the new primary must have these jobs to continue
+   replicating changes.
+
+   SQL Server CDC metadata, including capture and cleanup jobs, **does not
+   replicate** to AG secondary replicas. After a failover, you must ensure the new
+   primary has CDC enabled and the required jobs are running.
+
+   **Recommended approach:** Create an automated script or SQL Agent job that runs
+   on each potential primary after a role change:
+
+   ```sql
+   USE YourDatabase;
+
+   -- Enable CDC if not already enabled
+   IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = 'YourDatabase' AND is_cdc_enabled = 1)
+   BEGIN
+       EXEC sys.sp_cdc_enable_db;
+   END
+
+   -- Enable CDC on tables (if not already enabled)
+   IF NOT EXISTS (SELECT 1 FROM cdc.change_tables WHERE source_object_id = OBJECT_ID('schema.table_name'))
+   BEGIN
+       EXEC sys.sp_cdc_enable_table
+           @source_schema = 'schema',
+           @source_name = 'table_name',
+           @role_name = NULL,
+           @supports_net_changes = 0;
+   END
+
+   -- Create capture job if it doesn't exist
+   IF NOT EXISTS (SELECT 1 FROM msdb.dbo.cdc_jobs WHERE job_type = 'capture')
+   BEGIN
+       EXEC sys.sp_cdc_add_job @job_type = 'capture', @continuous = 1;
+   END
+
+   -- Create cleanup job if it doesn't exist
+   IF NOT EXISTS (SELECT 1 FROM msdb.dbo.cdc_jobs WHERE job_type = 'cleanup')
+   BEGIN
+       EXEC sys.sp_cdc_add_job @job_type = 'cleanup';
+       -- Extend retention to cover expected failover + recovery time
+       EXEC sys.sp_cdc_change_job @job_type = 'cleanup', @retention = 43200;
+   END
+   ```
+
+   {{< note >}}
+   Adjust the `@retention` value based on your expected recovery time. The default
+   retention is ~3 days (4320 minutes). If CDC change data is pruned before
+   Materialize can ingest it after a failover, you must [drop and recreate the
+   source](/sql/drop-source/) to trigger a new snapshot.
+   {{< /note >}}
+
+#### Connecting to an AG listener
+
+Create your SQL Server connection using the **AG listener** as the host:
+
+```mzsql
+CREATE SECRET sqlserver_pass AS '<SQL_SERVER_PASSWORD>';
+
+CREATE CONNECTION sqlserver_ag TO SQL SERVER (
+    HOST 'my-ag-listener.example.com',  -- AG listener DNS name
+    PORT 1433,
+    USER 'materialize',
+    PASSWORD SECRET sqlserver_pass,
+    DATABASE '<DATABASE_NAME>'
+);
+
+CREATE SOURCE mz_source
+  FROM SQL SERVER CONNECTION sqlserver_ag
+  FOR ALL TABLES;
+```
+
+When the AG fails over to a new primary, Materialize will:
+
+1. Detect the dropped connection
+1. Reconnect to the AG listener (now pointing to the new primary)
+1. Resume ingestion from the last persisted LSN
 
 ## Considerations
 
