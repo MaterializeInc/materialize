@@ -21,14 +21,6 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
      linear joins.",
 );
 
-/// Whether rendering should use `mz_join_core_v2` rather than DD's `JoinCore::join_core`.
-pub const ENABLE_MZ_JOIN_CORE_V2: Config<bool> = Config::new(
-    "enable_mz_join_core_v2",
-    true,
-    "Whether compute should use `mz_join_core_v2` rather than DD's `JoinCore::join_core` to render \
-     linear joins.",
-);
-
 /// Whether rendering should use the new MV sink correction buffer implementation.
 pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
@@ -346,7 +338,6 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_MZ_JOIN_CORE)
-        .add(&ENABLE_MZ_JOIN_CORE_V2)
         .add(&ENABLE_CORRECTION_V2)
         .add(&ENABLE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
