@@ -1,1 +1,1 @@
-- [_Superuser_ privileges](/manage/users-service-accounts/#organization-roles)
+- [_Superuser_ privileges](/security/users-service-accounts/#organization-roles)

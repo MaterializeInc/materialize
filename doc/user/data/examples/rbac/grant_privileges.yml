@@ -74,7 +74,7 @@
     For new objects created by others, you can either:
     - Manually grant privileges on new objects; or
     - Use [default
-    privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    privileges](/security/access-control/manage-roles/#manage-future-privileges-for-a-role)
     to automatically grant privileges on new objects.
 
     {{</ important >}}
@@ -140,11 +140,11 @@
     privileges to create the various materialized views that will be indexed:
 
     - See [Grant a role to another
-    role](/manage/access-control/manage-roles/#grant-a-role-to-another-role) for
+    role](/security/access-control/manage-roles/#grant-a-role-to-another-role) for
     details and example of granting `serving_cluster` role to `view_manager`.
 
     - See [Change ownership of
-    objects](/manage/access-control/manage-roles/#change-ownership-of-objects)
+    objects](/security/access-control/manage-roles/#change-ownership-of-objects)
     for details and example of changing ownership of objects.
 
     {{</ note >}}
@@ -210,7 +210,7 @@
     For new objects created by others, you can either:
     - Manually grant privileges on new objects; or
     - Use [default
-    privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    privileges](/security/access-control/manage-roles/#manage-future-privileges-for-a-role)
     to automatically grant privileges on new objects.
 
     {{</ important >}}

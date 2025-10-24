@@ -9,6 +9,8 @@ aliases:
   - /sql/builtin-roles/
   - /manage/access-control/manage-privileges/
   - /manage/access-control/rbac-tutorial/
+  - /manage/access-control/manage-roles/
+  - /security/access-control/manage-privileges/
 ---
 
 In Materialize, role-based access control (RBAC) governs access to **database
@@ -20,7 +22,7 @@ objects** through privileges granted to database roles.
 
 The focus of this page is on managing database roles. For information on
 organization roles, see [Users and service
-accounts](/manage/users-service-accounts/).
+accounts](/security/users-service-accounts/).
 {{< /annotation >}}
 
 ## Required privileges for managing roles
@@ -28,7 +30,7 @@ accounts](/manage/users-service-accounts/).
 {{< note >}}
 
 With their **superuser** privileges, [**Organization
-admins**](/manage/users-service-accounts/#organization-roles) can manage roles
+admins**](/security/users-service-accounts/#organization-roles) can manage roles
 (including overriding ownership requirements when granting privileges on various
 objects).
 
@@ -47,7 +49,7 @@ file="shared-content/sql-command-privileges/grant-privilege.md" >}}|
 file="shared-content/sql-command-privileges/alter-default-privileges.md" >}} |
 
 See also [Appendix: Privileges by
-command](/manage/access-control/appendix-command-privileges/)
+command](/security/appendix-command-privileges/)
 
 ## Create a role
 
@@ -106,7 +108,7 @@ inherits privileges (not role attributes and parameters) through the other role.
 See also:
 
 - For a list of required privileges for specific operations, see [Appendix:
-Privileges by command](/manage/access-control/appendix-command-privileges/).
+Privileges by command](/security/appendix-command-privileges/).
 
 ## Manage current privileges for a role
 
@@ -207,7 +209,7 @@ name='quickstart';`.
 
 ### Grant privileges to a role
 
-To grant [privileges](/manage/access-control/appendix-command-privileges/) to
+To grant [privileges](/security/appendix-command-privileges/) to
 a role, use the [`GRANT PRIVILEGE`](/sql/grant-privilege/) statement (see
 [`GRANT PRIVILEGE`](/sql/grant-privilege/) for the full syntax)
 
@@ -402,7 +404,7 @@ REVOKE data_reader FROM sales_report_app;
 ## Manage future privileges for a role
 
 In Materialize, a role automatically gets all [applicable
-privileges](/manage/access-control/appendix-privileges/) for an object they
+privileges](/security/appendix-privileges/) for an object they
 create/own; for example, the creator of a schema gets `CREATE` and `USAGE`; the
 creator of a table gets `SELECT`, `INSERT`, `UPDATE`, and `DELETE`. However, for
 others to access the new object, you can either manually grant privileges on new
@@ -625,14 +627,14 @@ example="alter-roles-configs-not-inherited" %}}
 ## Change ownership of objects
 
 Certain [commands on an
-object](/manage/access-control/appendix-command-privileges/) (such as creating
+object](/security/appendix-command-privileges/) (such as creating
 an index on a materialized view or changing owner of an object) require
 ownership of the object itself (or *superuser* privileges of an Organization
 admin).
 
 In Materialize, when a role creates an object, the role becomes the owner of the
 object and is automatically  granted all [applicable
-privileges](/manage/access-control/appendix-privileges/) for the object. To
+privileges](/security/appendix-privileges/) for the object. To
 transfer ownership (and privileges) to another role (another user role/service
 account role/functional role), you can use the [ALTER ... OWNER
 TO](/sql/alter-owner/) command:
@@ -668,6 +670,6 @@ example="view-privileges-for-previous-owner" %}}
 
 ## See also
 
-- [Access control best practices](/manage/access-control/#best-practices)
+- [Access control best practices](/security/access-control/#best-practices)
 - [Manage privileges with
-  Terraform](/manage/access-control/rbac-terraform-tutorial/)
+  Terraform](/manage/terraform/manage-rbac/)

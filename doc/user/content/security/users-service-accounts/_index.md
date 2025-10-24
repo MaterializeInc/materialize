@@ -4,9 +4,11 @@ description: "Manage users and service accounts."
 disable_list: true
 menu:
   main:
-    parent: "manage"
+    parent: "security"
     identifier: "user-service-accounts"
     weight: 10
+aliases:
+  - /manage/users-service-accounts/
 ---
 
 As an administrator of a Materialize organization, you can manage the users and
@@ -71,6 +73,6 @@ guide](./sso/).
 
 ## See also
 
-- [Role-based access control](/manage/access-control/)
+- [Role-based access control](/security/access-control/)
 - [Manage with dbt](/manage/dbt/)
 - [Manage with Terraform](/manage/terraform/)

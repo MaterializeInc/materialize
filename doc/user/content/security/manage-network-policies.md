@@ -5,7 +5,7 @@ aliases:
   - /manage/access-control/manage-network-policies/
 menu:
   main:
-    parent: "manage"
+    parent: "security"
     weight: 14
     name: "Manage network policies"
     identifier: "manage-network-policies"

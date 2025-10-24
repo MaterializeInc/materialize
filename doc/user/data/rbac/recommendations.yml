@@ -19,7 +19,7 @@
 
     {{< include-md file="shared-content/rbac/use-resusable-roles.md" >}}
 
-    See also [Manage database roles](/manage/access-control/manage-roles).
+    See also [Manage database roles](/security/access-control/manage-roles/).
 
 - recommendation: "Audit for unused roles and privileges."
 
@@ -28,6 +28,6 @@
     {{< include-md file="shared-content/rbac/audit-remove-roles.md" >}}
 
     See also [Show roles in
-    system](/manage/access-control/manage-roles/#show-roles-in-system) and [Drop
-    a role](/manage/access-control/manage-roles/#drop-a-role) for more
+    system](/security/access-control/manage-roles/#show-roles-in-system) and [Drop
+    a role](/security/access-control/manage-roles/#drop-a-role) for more
     information.

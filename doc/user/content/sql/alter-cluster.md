@@ -259,8 +259,8 @@ To execute the `ALTER CLUSTER` command, you need:
 
 See also:
 
-- [Access control](/manage/access-control)
-- [Manage privileges](/manage/access-control/manage-privileges/)
+- [Access control](/security/access-control/)
+- [Manage privileges](/security/access-control/manage-roles/)
 
 ## Examples
 

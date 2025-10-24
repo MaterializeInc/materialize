@@ -71,7 +71,7 @@
   results: |
 
     In Materialize, a role automatically gets all [applicable
-    privileges](/manage/access-control/appendix-privileges/) for an object they
+    privileges](/security/appendix-privileges/) for an object they
     create; for example, the creator of a schema gets `CREATE` and `USAGE`; the
     creator of a table gets `SELECT`, `INSERT`, `UPDATE`, and `DELETE`.
 
@@ -100,7 +100,7 @@
     schema and vice versa. For privileges on new objects created by **others**, you can either:
     - Manually grant privileges on new objects; or
     - Use [default
-    privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    privileges](/security/access-control/manage-roles/#manage-future-privileges-for-a-role)
     to automatically grant privileges on new objects.
 
 - name: "serving_index_manager"
@@ -209,7 +209,7 @@
   results: |
 
     To allow others in the `view_manager` role to create indexes, see [Change
-    ownership of objects](/manage/access-control/manage-roles/#change-ownership-of-objects).
+    ownership of objects](/security/access-control/manage-roles/#change-ownership-of-objects).
 
 - name: "data_reader"
   description: |
@@ -272,5 +272,5 @@
     `mydb.sales`, you can either:
     - Manually grant `SELECT` privileges on the new objects; or
     - Use [default
-    privileges](/manage/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    privileges](/security/access-control/manage-roles/#manage-future-privileges-for-a-role)
     to automatically grant `SELECT` privileges on new objects.

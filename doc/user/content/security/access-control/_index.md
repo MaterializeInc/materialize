@@ -4,9 +4,10 @@ description: "How to configure and manage role-based database access control (RB
 disable_list: true
 aliases:
   - /manage/access-control/rbac/
+  - /manage/access-control/
 menu:
   main:
-    parent: manage
+    parent: security
     identifier: 'access-control'
     weight: 12
 ---
@@ -16,16 +17,16 @@ menu:
 
 This section focuses on the database access control. For information on
 organization roles, see [Users and service
-accounts](/manage/users-service-accounts/).
+accounts](/security/users-service-accounts/).
 {{</ annotation >}}
 
-<a name="role-based-access-control-rbac" ></a>
 
-## Role-based access control
+
+## Role-based access control (RBAC)
 
 In Materialize, role-based access control (RBAC) governs access to **database
 objects** through privileges granted to [database
-roles](/manage/access-control/manage-roles/).
+roles](/security/access-control/manage-roles/).
 
 ## Roles and privileges
 

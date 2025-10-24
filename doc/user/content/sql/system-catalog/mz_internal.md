@@ -47,7 +47,7 @@ statement_logging_sample_rate TO 0`. Materialize may apply a lower
 sampling rate than the one set in this parameter.
 
 The view can be accessed by Materialize _superusers_ or users that have been
-granted the [`mz_monitor` role](/manage/access-control/appendix-built-in-roles/#system-catalog-roles).
+granted the [`mz_monitor` role](/security/appendix-built-in-roles/#system-catalog-roles).
 
 <!-- RELATION_SPEC mz_internal.mz_recent_activity_log -->
 | Field                      | Type                         | Meaning                                                                                                                                                                                                                                                                       |

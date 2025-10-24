@@ -7,4 +7,4 @@ as:
 - For objects in a schema, access is also required for the schema.
 
 For details on SQL operations and needed privileges, see [Appendix: Privileges
-by command](/manage/access-control/appendix-command-privileges/).
+by command](/security/appendix-command-privileges/).

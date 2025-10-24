@@ -2,7 +2,7 @@
   description: |
 
     To view privileges for a
-    [user](/manage/users-service-accounts/invite-users/), run [`SHOW
+    [user](/security/users-service-accounts/invite-users/), run [`SHOW
     PRIVILEGES`](/sql/show-privileges) on the role named after the user's email
     (automatically created when the account is activated; i.e., first time the
     user logs in):
@@ -14,7 +14,7 @@
   description: |
 
     To view privileges for a [service
-    account](/manage/users-service-accounts/create-service-accounts/), run
+    account](/security/users-service-accounts/create-service-accounts/), run
     [`SHOW PRIVILEGES`](/sql/show-privileges) on the role named after the
     service account user (automatically created when the account is activated;
     i.e., first time the service account connects):

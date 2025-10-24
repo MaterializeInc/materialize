@@ -4,6 +4,7 @@ description: "Configure single sign-on (SSO) using SAML or Open ID Connect as an
 aliases:
   - /manage/sso/
   - /manage/access-control/sso/
+  - /manage/users-service-accounts/sso/
 menu:
   main:
     parent: user-service-accounts
@@ -21,7 +22,7 @@ all systems in your organization.
 {{< note >}}
 Single sign-on in Materialize only supports authentication into the Materialize
 console. Permissions within the database are handled separately using
-[role-based access control](/manage/access-control/).
+[role-based access control](/security/access-control/).
 {{</ note >}}
 
 ## Before you begin

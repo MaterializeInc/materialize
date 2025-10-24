@@ -8,7 +8,7 @@ menu:
 
 `SHOW NETWORK POLICIES` returns a list of all network policies configured in
 Materialize. Network policies are part of Materialize's framework for
-[access control](/manage/access-control/).
+[access control](/security/access-control/).
 
 ## Syntax
 

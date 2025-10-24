@@ -87,7 +87,7 @@ Factor)
 
 {{< annotation type="Key point(s)" >}}
 
-- You can use [RBAC](/manage/access-control/rbac/) to reduce the risk of
+- You can use [RBAC](/security/access-control/) to reduce the risk of
   accidentally dropping sources (and other objects) in Materialize.
 
 {{</ annotation >}}
