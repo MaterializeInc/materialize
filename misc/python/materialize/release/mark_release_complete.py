@@ -39,7 +39,15 @@ def main():
 
     version = f"{args.release_version}.{args.patch}"
     print(f"Releasing self-managed weekly helm-chart {version}")
-    spawn.runv(["misc/helm-charts/publish-weekly.sh", version])
+    spawn.runv(
+        [
+            "misc/helm-charts/publish-weekly.sh",
+            "--version",
+            version,
+            "--remote",
+            "origin",
+        ]
+    )
 
 
 if __name__ == "__main__":
