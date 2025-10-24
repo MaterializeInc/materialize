@@ -1,5 +1,12 @@
 # dbt-materialize Changelog
 
+## Unreleased
+
+* Fix unit test failures in dbt-core by adding support for the `column_name_to_quoted`
+  parameter in the unit test materialization. This parameter is required for handling
+  of quoted column identifiers in unit tests
+  ([dbt-adapters#292d173](https://github.com/dbt-labs/dbt-adapters/commit/292d17301eff3c8a972fcd57f7deb3aac4c8a3cb)).
+
 ## 1.9.5 - 2025-05-01
 
 * Add support for `retain_history` configuration in materialized views, allowing users to specify how long to retain historical data (e.g. `retain_history: '1hr'`).
