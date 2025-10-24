@@ -95,11 +95,6 @@ so it is executed.""",
         type=int,
         default=os.getenv("CI_PRIORITY", 0),
     )
-    parser.add_argument(
-        "--lto",
-        type=int,
-        default=ui.env_is_truthy("CI_LTO"),
-    )
     parser.add_argument("pipeline", type=str)
     args = parser.parse_args()
 
@@ -110,6 +105,16 @@ so it is executed.""",
     raw = raw.replace("$RUST_VERSION", rust_version())
 
     pipeline = yaml.safe_load(raw)
+
+    lto = (
+        pipeline.get("env", {}).get("CI_LTO", 0) == 1
+        or bool(os.environ["BUILDKITE_TAG"])
+        or (
+            not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
+            and args.pipeline in ("nightly", "release-qualification")
+        )
+        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+    )
 
     hash_check: dict[Arch, tuple[str, bool]] = {}
 
@@ -122,7 +127,7 @@ so it is executed.""",
     def get_hashes(arch: Arch) -> tuple[str, bool]:
         repo = mzbuild.Repository(
             Path("."),
-            profile=mzbuild.Profile.RELEASE if args.lto else mzbuild.Profile.OPTIMIZED,
+            profile=mzbuild.Profile.RELEASE if lto else mzbuild.Profile.OPTIMIZED,
             arch=arch,
             coverage=args.coverage,
             sanitizer=args.sanitizer,
@@ -160,7 +165,7 @@ so it is executed.""",
                 copy.deepcopy(pipeline),
                 args.coverage,
                 args.sanitizer,
-                args.lto,
+                lto,
             )
         else:
             print("Trimming unchanged steps from pipeline")
@@ -168,7 +173,7 @@ so it is executed.""",
                 pipeline,
                 args.coverage,
                 args.sanitizer,
-                args.lto,
+                lto,
             )
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
@@ -182,6 +187,7 @@ so it is executed.""",
     set_parallelism_name(pipeline)
     check_depends_on(pipeline, args.pipeline)
     add_version_to_preflight_tests(pipeline)
+    move_build_to_lto(pipeline, lto)
     trim_builds_prep_thread.join()
     trim_builds(pipeline, hash_check)
     add_cargo_test_dependency(
@@ -189,7 +195,7 @@ so it is executed.""",
         args.pipeline,
         args.coverage,
         args.sanitizer,
-        args.lto,
+        lto,
     )
     remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
@@ -869,6 +875,20 @@ def remove_dependencies_on_prs(
                 continue
             step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = step["depends_on"]
             del step["depends_on"]
+
+
+def move_build_to_lto(pipeline: Any, lto: bool) -> None:
+    if not lto:
+        return
+    pipeline["env"]["CI_LTO"] = 1
+    for step in steps(pipeline):
+        # Use different queue so we don't block the fast dedicated builder
+        # agents with their caches, LTO builds are very slow at linking, and
+        # need a lot of memory for it too
+        if step.get("id") == "build-x86_64":
+            step["agents"]["queue"] = "builder-linux-x86_64"
+        elif step.get("id") == "build-aarch64":
+            step["agents"]["queue"] = "builder-linux-aarch64-mem"
 
 
 def trim_builds(
