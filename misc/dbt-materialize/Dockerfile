@@ -11,5 +11,4 @@ FROM python:3.10.14
 
 COPY . dbt-materialize/
 
-RUN pip install pytest pytest-split
-RUN pip install ./dbt-materialize[dev]
+RUN pip install --no-cache-dir -r dbt-materialize/requirements.txt --find-links /dbt-materialize
