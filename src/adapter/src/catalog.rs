@@ -15,7 +15,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::convert;
 use std::sync::Arc;
-
+use std::sync::atomic::{AtomicU64, Ordering};
 use futures::future::BoxFuture;
 use futures::{Future, FutureExt};
 use itertools::Itertools;
@@ -140,6 +140,7 @@ pub struct Catalog {
     expr_cache_handle: Option<ExpressionCacheHandle>,
     storage: Arc<tokio::sync::Mutex<Box<dyn mz_catalog::durable::DurableCatalogState>>>,
     transient_revision: u64,
+    latest_transient_revision: Arc<AtomicU64>,
 }
 
 // Implement our own Clone because derive can't unless S is Clone, which it's
@@ -152,6 +153,7 @@ impl Clone for Catalog {
             expr_cache_handle: self.expr_cache_handle.clone(),
             storage: Arc::clone(&self.storage),
             transient_revision: self.transient_revision,
+            latest_transient_revision: Arc::clone(&self.latest_transient_revision),
         }
     }
 }
@@ -488,6 +490,10 @@ impl Catalog {
     /// restart on every load.
     pub fn transient_revision(&self) -> u64 {
         self.transient_revision
+    }
+
+    pub fn latest_transient_revision(&self) -> u64 {
+        self.latest_transient_revision.load(Ordering::SeqCst) ////////// Is the ordering ok?
     }
 
     /// Creates a debug catalog from the current

@@ -282,6 +282,7 @@ impl Client {
             segment_client: self.segment_client.clone(),
             peek_client,
             enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
+            catalog: Arc::clone(&catalog),
         };
 
         let session = client.session();
@@ -552,6 +553,7 @@ pub struct SessionClient {
     // check the actual feature flag value at every peek (without a Coordinator call) once we'll
     // always have a catalog snapshot at hand.
     pub enable_frontend_peek_sequencing: bool,
+    catalog: Arc<Catalog>,
 }
 
 impl SessionClient {
@@ -781,24 +783,30 @@ impl SessionClient {
 
     /// Fetches the catalog.
     #[instrument(level = "debug")]
-    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
-        let start = std::time::Instant::now();
-        let CatalogSnapshot { catalog } = self
-            .send_without_session(|tx| Command::CatalogSnapshot { tx })
-            .await;
-        self.inner()
-            .metrics()
-            .catalog_snapshot_seconds
-            .with_label_values(&[context])
-            .observe(start.elapsed().as_secs_f64());
-        catalog
+    pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
+        if self.catalog.transient_revision() == self.catalog.latest_transient_revision() {
+            Arc::clone(&self.catalog)
+        } else {
+            let start = std::time::Instant::now();
+            let CatalogSnapshot { catalog } = self
+                .send_without_session(|tx| Command::CatalogSnapshot { tx })
+                .await;
+            self.inner()
+                .metrics()
+                .catalog_snapshot_seconds
+                .with_label_values(&[context])
+                .observe(start.elapsed().as_secs_f64());
+            self.catalog = Arc::clone(&catalog);
+            assert_eq!(self.catalog.transient_revision(), self.catalog.latest_transient_revision());
+            catalog
+        }
     }
 
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn dump_catalog(&self) -> Result<CatalogDump, AdapterError> {
+    pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         let catalog = self.catalog_snapshot("dump_catalog").await;
         catalog.dump().map_err(AdapterError::from)
     }
@@ -808,7 +816,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_catalog(&self) -> Result<(), serde_json::Value> {
+    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
         let catalog = self.catalog_snapshot("check_catalog").await;
         catalog.check_consistency()
     }
