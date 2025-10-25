@@ -79,6 +79,8 @@ pub enum InvalidUsage<T> {
     CodecMismatch(Box<CodecMismatch>),
     /// An invalid usage of [crate::batch::Batch::rewrite_ts].
     InvalidRewrite(String),
+    /// Attempted to append to a shard without a registered write schema.
+    WriteWithoutSchema,
 }
 
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
@@ -126,6 +128,9 @@ impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
             }
             InvalidUsage::CodecMismatch(err) => std::fmt::Display::fmt(err, f),
             InvalidUsage::InvalidRewrite(err) => write!(f, "invalid rewrite: {err}"),
+            InvalidUsage::WriteWithoutSchema => {
+                f.write_str("attempted write without a registered schema")
+            }
         }
     }
 }

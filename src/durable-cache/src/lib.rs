@@ -80,6 +80,19 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             shard_name: format!("{purpose}_cache"),
             handle_purpose: format!("durable persist cache: {purpose}"),
         };
+
+        let (key_schema, val_schema) = C::schemas();
+        persist
+            .register_schema::<C::KeyCodec, C::ValCodec, u64, i64>(
+                shard_id,
+                &key_schema,
+                &val_schema,
+                diagnostics.clone(),
+            )
+            .await
+            .expect("valid usage")
+            .expect("valid schema");
+
         let since_handle = persist
             .open_critical_since(
                 shard_id,
@@ -90,7 +103,6 @@ impl<C: DurableCacheCodec> DurableCache<C> {
             )
             .await
             .expect("invalid usage");
-        let (key_schema, val_schema) = C::schemas();
         let (mut write, read) = persist
             .open(
                 shard_id,

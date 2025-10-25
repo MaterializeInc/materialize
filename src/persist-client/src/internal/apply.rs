@@ -254,6 +254,22 @@ where
             })
     }
 
+    /// See [crate::PersistClient::find_schema].
+    pub fn find_schema(&self, key_schema: &K::Schema, val_schema: &V::Schema) -> Option<SchemaId> {
+        self.state
+            .read_lock(&self.metrics.locks.applier_read_cacheable, |state| {
+                // The common case is that the requested schema is a recent one, so as a minor
+                // optimization, do this search in reverse order.
+                let mut schemas = state.collections.schemas.iter().rev();
+                schemas
+                    .find(|(_, x)| {
+                        K::decode_schema(&x.key) == *key_schema
+                            && V::decode_schema(&x.val) == *val_schema
+                    })
+                    .map(|(id, _)| *id)
+            })
+    }
+
     /// Returns whether the current's state `since` and `upper` are both empty.
     ///
     /// Due to sharing state with other handles, successive reads to this fn or any other may

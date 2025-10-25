@@ -138,6 +138,20 @@ where
         txns_id: ShardId,
     ) -> Self {
         let (txns_key_schema, txns_val_schema) = C::schemas();
+        client
+            .register_schema::<C::Key, C::Val, T, i64>(
+                txns_id,
+                &txns_key_schema,
+                &txns_val_schema,
+                Diagnostics {
+                    shard_name: "txns".to_owned(),
+                    handle_purpose: "txns register schema".to_owned(),
+                },
+            )
+            .await
+            .expect("valid usage")
+            .expect("valid schema");
+
         let (mut txns_write, txns_read) = client
             .open(
                 txns_id,
@@ -206,6 +220,11 @@ where
     /// it directly (i.e. using a WriteHandle instead of the TxnHandle,
     /// registering it with another txn shard) will lead to incorrectness,
     /// undefined behavior, and (potentially sticky) panics.
+    ///
+    /// # Panics
+    ///
+    /// This method requires that all writers in `data_writes` have a registered
+    /// write schema, and panics otherwise.
     #[instrument(level = "debug", fields(ts = ?register_ts))]
     pub async fn register(
         &mut self,
@@ -215,6 +234,17 @@ where
         let op = &Arc::clone(&self.metrics).register;
         op.run(async {
             let data_writes = data_writes.into_iter().collect::<Vec<_>>();
+
+            // Other parts of the txn system assume that all participating data
+            // shards have a registered schema, so sanity-check this here.
+            for data_write in &data_writes {
+                assert!(
+                    data_write.schema_id().is_some(),
+                    "data shard {} has no schema registered",
+                    data_write.shard_id(),
+                );
+            }
+
             let updates = data_writes
                 .iter()
                 .map(|data_write| {
@@ -285,13 +315,11 @@ where
                 }
             }
             for data_write in data_writes {
-                let new_schema_id = data_write.schema_id();
-
                 // If we already have a write handle for a newer version of a table, don't replace
                 // it! Currently we only support adding columns to tables with a default value, so
                 // the latest/newest schema will always be the most complete.
                 //
-                // TODO(alter_table): Revist when we support dropping columns.
+                // TODO(alter_table): Revisit when we support dropping columns.
                 match self.datas.data_write_for_commit.get(&data_write.shard_id()) {
                     None => {
                         self.datas
@@ -299,31 +327,35 @@ where
                             .insert(data_write.shard_id(), DataWriteCommit(data_write));
                     }
                     Some(previous) => {
-                        match (previous.schema_id(), new_schema_id) {
-                            (Some(previous_id), None) => {
-                                mz_ore::soft_panic_or_log!(
-                                    "tried registering a WriteHandle replacing one with a SchemaId prev_schema_id: {:?} shard_id: {:?}",
-                                    previous_id,
-                                    previous.shard_id(),
-                                );
-                            },
-                            (Some(previous_id), Some(new_id)) if previous_id > new_id => {
-                                mz_ore::soft_panic_or_log!(
-                                    "tried registering a WriteHandle with an older SchemaId prev_schema_id: {:?} new_schema_id: {:?} shard_id: {:?}",
-                                    previous_id,
-                                    new_id,
-                                    previous.shard_id(),
-                                );
-                            },
-                            (previous_schema_id, new_schema_id) => {
-                                if previous_schema_id.is_none() && new_schema_id.is_none() {
-                                    tracing::warn!("replacing WriteHandle without any SchemaIds to reason about");
-                                } else {
-                                    tracing::info!(?previous_schema_id, ?new_schema_id, shard_id = ?previous.shard_id(), "replacing WriteHandle");
-                                }
-                                self.datas.data_write_for_commit.insert(data_write.shard_id(), DataWriteCommit(data_write));
-                            }
+                        let new_schema_id = data_write.schema_id().expect("checked above");
+
+                        if let Some(prev_schema_id) = previous.schema_id()
+                            && prev_schema_id > new_schema_id
+                        {
+                            mz_ore::soft_panic_or_log!(
+                                "tried registering a WriteHandle with an older SchemaId; \
+                                 prev_schema_id: {} new_schema_id: {} shard_id: {}",
+                                prev_schema_id,
+                                new_schema_id,
+                                previous.shard_id(),
+                            );
+                            continue;
+                        } else if previous.schema_id().is_none() {
+                            mz_ore::soft_panic_or_log!(
+                                "encountered data shard without a schema; shard_id: {}",
+                                previous.shard_id(),
+                            );
                         }
+
+                        tracing::info!(
+                            prev_schema_id = ?previous.schema_id(),
+                            ?new_schema_id,
+                            shard_id = %previous.shard_id(),
+                            "replacing WriteHandle"
+                        );
+                        self.datas
+                            .data_write_for_commit
+                            .insert(data_write.shard_id(), DataWriteCommit(data_write));
                     }
                 }
             }
@@ -756,12 +788,8 @@ where
             .expect("codecs have not changed");
         let (key_schema, val_schema) = match schemas {
             Some((_, key_schema, val_schema)) => (Arc::new(key_schema), Arc::new(val_schema)),
-            // - For new shards we will always have at least one schema
-            //   registered by the time we reach this point, because that
-            //   happens at txn-registration time.
-            // - For pre-existing shards, every txns shard will have had
-            //   open_writer called on it at least once in the previous release,
-            //   so the schema should exist.
+            // We will always have at least one schema registered by the time we reach this point,
+            // because that is ensured at txn-registration time.
             None => unreachable!("data shard {} should have a schema", data_id),
         };
         let wrapped = self

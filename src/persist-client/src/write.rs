@@ -507,6 +507,12 @@ where
             }
         }
 
+        // If we are writing any data, we require that the write schema has previously been
+        // registered for the shard.
+        if batches.iter().any(|b| b.batch.len > 0) && self.schema_id().is_none() {
+            return Err(InvalidUsage::WriteWithoutSchema);
+        }
+
         let lower = expected_upper.clone();
         let upper = new_upper;
         let since = Antichain::from_elem(T::minimum());

@@ -1576,15 +1576,18 @@ where
             }
             None => {
                 info!(
-                    "register_schemas got {:?} expected {:?}",
+                    "register_schemas got ({:?}, {:?}), expected {:?}",
                     key_schema,
+                    val_schema,
                     self.schemas
                         .iter()
-                        .map(|(id, x)| (id, K::decode_schema(&x.key)))
+                        .map(|(id, x)| {
+                            let key = K::decode_schema(&x.key);
+                            let val = V::decode_schema(&x.val);
+                            (id, key, val)
+                        })
                         .collect::<Vec<_>>()
                 );
-                // Until we implement persist schema changes, only allow at most
-                // one registered schema.
                 Break(NoOpStateTransition(None))
             }
         }

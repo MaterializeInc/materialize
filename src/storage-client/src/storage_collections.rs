@@ -1867,6 +1867,24 @@ where
                     // somewhere
                     debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
+                    // If we are planning to write to the shard, we need to ensure it has a schema
+                    // registered _before_ opening the write handle.
+                    if !this.read_only || migrated_storage_collections.contains(&id) {
+                        persist_client
+                            .register_schema::<SourceData, (), T, StorageDiff>(
+                                metadata.data_shard,
+                                &metadata.relation_desc,
+                                &UnitSchema,
+                                Diagnostics {
+                                    shard_name: id.to_string(),
+                                    handle_purpose: format!("controller register schema"),
+                                },
+                            )
+                            .await
+                            .expect("valid usage")
+                            .expect("valid schema");
+                    }
+
                     let (write, mut since_handle) = this
                         .open_data_handles(
                             &id,

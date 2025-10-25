@@ -605,6 +605,12 @@ mod tests {
         let schema0 = StringsSchema(vec![false]);
         let schema1 = StringsSchema(vec![false, true]);
 
+        client
+            .register_schema::<Strings, (), u64, i64>(shard_id, &schema0, &UnitSchema, d.clone())
+            .await
+            .unwrap()
+            .unwrap();
+
         let write0 = client
             .open_writer::<Strings, (), u64, i64>(
                 shard_id,
