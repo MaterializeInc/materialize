@@ -15,12 +15,13 @@ use bytes::BufMut;
 use mz_expr::EvalError;
 use mz_kafka_util::client::TunnelingClientContext;
 use mz_proto::{IntoRustIfSome, ProtoType, RustType, TryFromProtoError};
-use mz_repr::Row;
+use mz_repr::{GlobalId, Row};
 use mz_ssh_util::tunnel::SshTunnelStatus;
 use proptest_derive::Arbitrary;
 use prost::Message;
 use rdkafka::error::KafkaError;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tracing::warn;
 
 include!(concat!(env!("OUT_DIR"), "/mz_storage_types.errors.rs"));
@@ -1097,6 +1098,11 @@ pub enum CsrConnectError {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+/// Error returned in response to a reference to an unknown collection.
+#[derive(Error, Debug)]
+#[error("collection does not exist: {0}")]
+pub struct CollectionMissing(pub GlobalId);
 
 #[cfg(test)]
 mod tests {
