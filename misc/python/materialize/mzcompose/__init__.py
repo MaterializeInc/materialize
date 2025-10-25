@@ -25,7 +25,7 @@ from typing import Any, Literal, TypeVar
 
 import psycopg
 
-from materialize import spawn, ui
+from materialize import MZ_ROOT, spawn, ui
 from materialize.mz_version import MzVersion
 from materialize.ui import UIError
 
@@ -40,6 +40,7 @@ DEFAULT_MZ_VOLUMES = [
     "mydata:/var/lib/mysql-files",
     "tmp:/share/tmp",
     "scratch:/scratch",
+    f"{MZ_ROOT}/misc/foundationdb:/etc/foundationdb",
 ]
 
 

@@ -46,6 +46,7 @@ copyright_files=$(grep -vE \
     -e '^ci/www/public/_redirects$' \
     -e '^ci/test/lint-deps/' \
     -e '^misc/completions/.*' \
+    -e '^misc/foundationdb/.*' \
     -e '^misc/mcp-materialize/uv.lock' \
     -e '^misc/mcp-materialize-agents/uv.lock' \
     -e '^misc/mcp-materialize-agents/mcp_materialize_agents/system_prompt.md' \

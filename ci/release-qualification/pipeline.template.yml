@@ -481,7 +481,7 @@ steps:
           run: main
           args: [--find-limit]
     timeout_in_minutes: 3600
-    parallelism: 20
+    parallelism: 30
 
   - group: Large Scale Ingestions
     key: large-scale-ingestions

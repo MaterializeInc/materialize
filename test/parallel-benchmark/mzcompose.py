@@ -32,6 +32,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka as KafkaService
 from materialize.mzcompose.services.kgen import Kgen as KgenService
 from materialize.mzcompose.services.materialized import Materialized
@@ -99,6 +100,7 @@ SERVICES = [
     SchemaRegistry(),
     Redpanda(),
     Cockroach(setup_materialize=True, in_memory=True),
+    FoundationDB(),
     Minio(setup_materialize=True),
     Azurite(),
     KgenService(),
@@ -451,6 +453,7 @@ def run_once(
                 additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
                 | {"max_connections": "100000"},
                 metadata_store="cockroach",
+                consensus_foundationdb=not tag,
             ),
             Testdrive(
                 no_reset=True,
@@ -459,6 +462,7 @@ def run_once(
                 external_blob_store=True,
                 # TODO: Better azurite support detection
                 blob_store_is_azure=args.azurite and bool(tag),
+                no_consistency_checks=True,
             ),
         ]
         target = None
@@ -482,6 +486,15 @@ def run_once(
                 mz_string = f"{mz_version} ({target.host})"
             else:
                 print("~~~ Starting up services")
+                c.up("foundationdb")
+                c.run(
+                    "foundationdb",
+                    "-C",
+                    "/etc/foundationdb/fdb.cluster",
+                    "--exec",
+                    "configure new single memory",
+                    entrypoint="fdbcli",
+                )
                 c.up(*service_names, Service("testdrive", idle=True))
                 c.verify_build_profile()
 
@@ -547,8 +560,11 @@ def run_once(
                 print(
                     "~~~ Resetting materialized to prevent interference between scenarios"
                 )
-                c.kill("cockroach", "materialized", "testdrive", "minio")
+                c.kill(
+                    "foundationdb", "cockroach", "materialized", "testdrive", "minio"
+                )
                 c.rm(
+                    "foundationdb",
                     "cockroach",
                     "materialized",
                     "testdrive",

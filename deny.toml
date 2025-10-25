@@ -143,7 +143,9 @@ skip = [
     # Used by tower-lsp
     { name = "dashmap", version = "5.5.3" },
     # Used by bindgen
+    { name = "bindgen", version = "0.70.1" },
     { name = "itertools", version = "0.13.0" },
+    { name = "rustc-hash", version = "1.1.0" },
     # Used by pprof
     { name = "nix", version = "0.26.4" },
     # Held back by mysql_async `v0.36.1`
@@ -202,6 +204,7 @@ name = "log"
 wrappers = [
     "azure_svc_blobstorage",
     "apache-avro",
+    "bindgen",
     "buildid",
     "cookie_store",
     "deadpool-postgres",

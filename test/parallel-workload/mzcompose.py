@@ -26,6 +26,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.cockroach import Cockroach
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
@@ -48,6 +49,7 @@ from materialize.parallel_workload.settings import (
 
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
+    FoundationDB(),
     Postgres(),
     MySql(),
     SqlServer(),
@@ -116,10 +118,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             sanity_restart=sanity_restart,
             default_replication_factor=1,
             additional_system_parameter_defaults=ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+            consensus_foundationdb=True,
         ),
         Toxiproxy(seed=random.randrange(2**63)),
     ):
         toxiproxy_start(c)
+        c.up("foundationdb")
+        c.run(
+            "foundationdb",
+            "-C",
+            "/etc/foundationdb/fdb.cluster",
+            "--exec",
+            "configure new single memory",
+            entrypoint="fdbcli",
+        )
         c.up(*service_names)
         setup_sql_server_testing(c)
 

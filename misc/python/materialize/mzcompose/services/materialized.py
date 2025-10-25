@@ -100,6 +100,7 @@ class Materialized(Service):
         networks: (
             dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
         ) = None,
+        consensus_foundationdb: bool = False,
     ) -> None:
         if name is None:
             name = "materialized"
@@ -248,9 +249,10 @@ class Materialized(Service):
                 else external_metadata_store
             )
             depends_graph[metadata_store] = {"condition": "service_healthy"}
-            command += [
-                f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
-            ]
+            if not consensus_foundationdb:
+                command += [
+                    f"--persist-consensus-url=postgres://root@{address}:26257?options=--search_path=consensus",
+                ]
             environment += [
                 f"MZ_TIMESTAMP_ORACLE_URL=postgres://root@{address}:26257?options=--search_path=tsoracle",
                 "MZ_NO_BUILTIN_POSTGRES=1",
@@ -259,6 +261,10 @@ class Materialized(Service):
                 # Set the adapter stash URL for older environments that need it (versions before
                 # v0.92.0).
                 f"MZ_ADAPTER_STASH_URL=postgres://root@{address}:26257?options=--search_path=adapter",
+            ]
+        if consensus_foundationdb:
+            command += [
+                "--persist-consensus-url=foundationdb:?options=--search_path=consensus",
             ]
 
         command += [
@@ -336,6 +342,12 @@ class Materialized(Service):
                 environment += ["MZ_LICENSE_KEY=/license_key/license_key"]
 
                 volumes += [f"{os.getcwd()}/license_key:/license_key/license_key"]
+
+        if consensus_foundationdb:
+            print("Using foundationdb for consensus")
+            volumes += [
+                f"{MZ_ROOT}/misc/foundationdb/fdb.cluster:/etc/foundationdb/fdb.cluster"
+            ]
 
         if use_default_volumes:
             volumes += DEFAULT_MZ_VOLUMES
