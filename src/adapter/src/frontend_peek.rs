@@ -27,7 +27,7 @@ use opentelemetry::trace::TraceContextExt;
 use tracing::{Span, debug};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{Catalog, CatalogState};
 use crate::coord::peek::PeekPlan;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, ExplainContext, TargetCluster};
@@ -45,6 +45,7 @@ impl PeekClient {
         &mut self,
         portal_name: &str,
         session: &mut Session,
+        catalog: Arc<Catalog>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if session.transaction().is_in_multi_statement_transaction() {
             // TODO(peek-seq): handle multi-statement transactions
@@ -74,14 +75,6 @@ impl PeekClient {
                 });
             }
         }
-
-        // TODO(peek-seq): This snapshot is wasted when we end up bailing out from the frontend peek
-        // sequencing. We could solve this is with that optimization where we
-        // continuously keep a catalog snapshot in the session, and only get a new one when the
-        // catalog revision has changed, which we could see with an atomic read.
-        // But anyhow, this problem will just go away when we reach the point that we never fall
-        // back to the old sequencing.
-        let catalog = self.catalog_snapshot("try_frontend_peek_inner").await;
 
         if let Err(_) = Coordinator::verify_portal(&*catalog, session, portal_name) {
             // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but retire already.

@@ -28,8 +28,7 @@ use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use crate::catalog::Catalog;
-use crate::command::{CatalogSnapshot, Command};
+use crate::command::Command;
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
@@ -115,21 +114,6 @@ impl PeekClient {
             self.oracles.insert(timeline.clone(), oracle);
         }
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
-    }
-
-    /// Fetch a snapshot of the catalog for use in frontend peek sequencing.
-    /// Records the time taken in the adapter metrics, labeled by `context`.
-    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
-        let start = std::time::Instant::now();
-        let CatalogSnapshot { catalog } = self
-            .call_coordinator(|tx| Command::CatalogSnapshot { tx })
-            .await;
-        self.coordinator_client
-            .metrics()
-            .catalog_snapshot_seconds
-            .with_label_values(&[context])
-            .observe(start.elapsed().as_secs_f64());
-        catalog
     }
 
     async fn call_coordinator<T, F>(&self, f: F) -> T

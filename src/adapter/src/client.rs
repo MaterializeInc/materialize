@@ -1106,9 +1106,16 @@ impl SessionClient {
         portal_name: &str,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
+            // TODO(peek-seq): This snapshot is wasted when we end up bailing out from the frontend peek
+            // sequencing. We could solve this is with that optimization where we
+            // continuously keep a catalog snapshot in the session, and only get a new one when the
+            // catalog revision has changed, which we could see with an atomic read.
+            // But anyhow, this problem will just go away when we reach the point that we never fall
+            // back to the old sequencing.
+            let catalog = self.catalog_snapshot("try_frontend_peek_inner").await;
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek_inner(portal_name, session)
+                .try_frontend_peek_inner(portal_name, session, catalog)
                 .await
         } else {
             Ok(None)
