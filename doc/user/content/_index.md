@@ -15,11 +15,11 @@ Materialize is the live data layer for apps and AI agents.
 
 ## What's new!
 
-- [Self-managed Materialize v25.2], which includes support for password
-  authentication (private preview), RBAC, and more! With Self-managed
+- [Self-Managed Materialize v25.2], which includes support for password
+  authentication (private preview), RBAC, and more! With Self-Managed
   Materialize, you can deploy and operate Materialize in your Kubernetes
-  environment. Self-managed Materialize is available in both Enterprise and
-  Community editions. For more information, see the [Self-managed Materialize]
+  environment. Self-Managed Materialize is available in both Enterprise and
+  Community editions. For more information, see the [Self-Managed Materialize]
   documentation.
 
 - [Materialize MCP
@@ -30,8 +30,8 @@ Materialize is the live data layer for apps and AI agents.
   For more information, see the [Materialize MCP Server](/integrations/llm/)
   documentation.
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
-[Self-managed Materialize v25.2]: https://materialize.com/docs/self-managed/v25.2/
+[Self-Managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
+[Self-Managed Materialize v25.2]: https://materialize.com/docs/self-managed/v25.2/
 {{</ callout >}}
 
 {{< callout
@@ -43,12 +43,12 @@ primary_text="Get Started">}}
 1. Sign up for a [free trial
    account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
    on Materialize Cloud. Alternatively, both the [Materialize Emulator Docker
-   image](/get-started/install-materialize-emulator/) and the [Self-managed
+   image](/get-started/install-materialize-emulator/) and the [Self-Managed
    Materialize] are also available.
 2. Follow the quickstart guide to learn the basics.
 3. Connect your own data sources and start building.
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
+[Self-Managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 {{</ callout >}}
 
 {{< multilinkbox >}}
