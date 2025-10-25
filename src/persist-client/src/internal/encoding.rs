@@ -65,8 +65,6 @@ use crate::{PersistConfig, ShardId, WriterId, cfg};
 /// A key and value `Schema` of data written to a batch or shard.
 #[derive(Debug)]
 pub struct Schemas<K: Codec, V: Codec> {
-    // TODO: Remove the Option once this finishes rolling out and all shards
-    // have a registered schema.
     /// Id under which this schema is registered in the shard's schema registry,
     /// if any.
     pub id: Option<SchemaId>,
