@@ -8,7 +8,6 @@
 // by the Apache License, Version 2.0.
 
 use std::sync::Arc;
-
 use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
@@ -371,41 +370,53 @@ impl PeekClient {
 
         let span = Span::current();
 
-        let (global_lir_plan, _optimization_finished_at) = match mz_ore::task::spawn_blocking(
-            || "optimize peek",
-            move || {
-                span.in_scope(|| {
-                    let raw_expr = select_plan.source.clone();
+        let select_plan_cloned = select_plan.clone();
 
-                    // HIR ⇒ MIR lowering and MIR optimization (local)
-                    let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                    // Attach resolved context required to continue the pipeline.
-                    let local_mir_plan =
-                        local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
-                    // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                    let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+        let (global_lir_plan, _optimization_finished_at) = if self.plan_cache.contains_key(&select_plan) {
+            (
+                self.plan_cache.get(&select_plan).unwrap().clone(),
+                now(),
+            )
+        } else {
+            match mz_ore::task::spawn_blocking(
+                || "optimize peek",
+                move || {
+                    span.in_scope(|| {
+                        let raw_expr = select_plan.source.clone();
 
-                    let optimization_finished_at = now();
+                        // HIR ⇒ MIR lowering and MIR optimization (local)
+                        let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+                        // Attach resolved context required to continue the pipeline.
+                        let local_mir_plan =
+                            local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
+                        // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                        let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
 
-                    // TODO(peek-seq): plan_insights stuff
+                        let optimization_finished_at = now();
 
-                    Ok::<_, AdapterError>((global_lir_plan, optimization_finished_at))
-                })
-            },
-        )
-        .await
-        {
-            Ok(Ok(r)) => r,
-            Ok(Err(adapter_error)) => {
-                return Err(adapter_error);
-            }
-            Err(_join_error) => {
-                // Should only happen if the runtime is shutting down, because we
-                // - never call `abort`;
-                // - catch panics with `catch_unwind_optimize`.
-                return Err(AdapterError::Unstructured(anyhow::anyhow!(
+                        // TODO(peek-seq): plan_insights stuff
+
+                        Ok::<_, AdapterError>((global_lir_plan, optimization_finished_at))
+                    })
+                },
+            )
+                .await
+            {
+                Ok(Ok(r)) => {
+                    self.plan_cache.insert(select_plan_cloned.clone(), r.0.clone());
+                    r
+                },
+                Ok(Err(adapter_error)) => {
+                    return Err(adapter_error);
+                }
+                Err(_join_error) => {
+                    // Should only happen if the runtime is shutting down, because we
+                    // - never call `abort`;
+                    // - catch panics with `catch_unwind_optimize`.
+                    return Err(AdapterError::Unstructured(anyhow::anyhow!(
                     "peek optimization aborted, because the system is shutting down"
                 )));
+                }
             }
         };
 

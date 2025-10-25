@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
@@ -27,11 +27,12 @@ use prometheus::Histogram;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use uuid::Uuid;
-
+use mz_sql::plan::SelectPlan;
 use crate::command::Command;
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
+use crate::optimize::peek::GlobalLirPlan;
 
 /// Storage collections trait alias we need to consult for since/frontiers.
 pub type StorageCollectionsHandle = Arc<
@@ -58,6 +59,7 @@ pub struct PeekClient {
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     persist_client: PersistClient,
+    pub plan_cache: HashMap<SelectPlan, GlobalLirPlan>,
 }
 
 impl PeekClient {
@@ -77,6 +79,7 @@ impl PeekClient {
             optimizer_metrics,
             oracles: Default::default(), // lazily populated
             persist_client,
+            plan_cache: Default::default(),
         }
     }
 

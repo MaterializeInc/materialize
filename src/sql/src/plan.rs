@@ -843,7 +843,7 @@ pub struct SetTransactionPlan {
 }
 
 /// A plan for select statements.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct SelectPlan {
     /// The `SELECT` statement itself. Used for explain/notices, but not otherwise
     /// load-bearing. Boxed to save stack space.
@@ -1837,7 +1837,7 @@ pub struct Type {
 }
 
 /// Specifies when a `Peek` or `Subscribe` should occur.
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Hash, Eq)]
 pub enum QueryWhen {
     /// The peek should occur at the latest possible timestamp that allows the
     /// peek to complete immediately.
@@ -1925,7 +1925,7 @@ pub enum MutationKind {
     Delete,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CopyFormat {
     Text,
     Csv,
