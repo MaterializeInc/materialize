@@ -3012,6 +3012,10 @@ impl Consensus for MetricsConsensus {
             .inc_by(u64::cast_from(deleted));
         Ok(deleted)
     }
+
+    fn truncate_counts(&self) -> bool {
+        self.consensus.truncate_counts()
+    }
 }
 
 /// A standard set of metrics for an async task. Call [TaskMetrics::instrument_task] to instrument
