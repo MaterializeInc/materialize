@@ -111,7 +111,7 @@ SERVICES = [
             # balancerd.
             DnsmasqEntry(
                 type="cname",
-                key="materialized",
+                key="sni.test",
                 value="environmentd.environment-58cd23ff-a4d7-4bd0-ad85-a6ff29cc86c3-0.svc.cluster.local",
             ),
             DnsmasqEntry(
@@ -133,8 +133,8 @@ SERVICES = [
             "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
             f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
             f"--frontegg-admin-role={ADMIN_ROLE}",
-            "--https-sni-resolver-template=materialized:6876",
-            "--pgwire-sni-resolver-template=materialized:6875",
+            "--https-sni-resolver-template=sni.test:6876",
+            "--pgwire-sni-resolver-template=sni.test:6875",
             "--tls-key=/secrets/balancerd.key",
             "--tls-cert=/secrets/balancerd.crt",
             "--internal-tls",
@@ -659,9 +659,8 @@ def workflow_user(c: Composition) -> None:
                 "--frontegg-jwk-file=/secrets/frontegg-mock.crt",
                 f"--frontegg-api-token-url={FRONTEGG_URL}/identity/resources/auth/v1/api-token",
                 f"--frontegg-admin-role={ADMIN_ROLE}",
-                "--https-sni-resolver-template=materialized:6876",
-                # We want to use the frontegg resolver in this
-                "--pgwire-sni-resolver-template=materialized:6875",
+                "--https-sni-resolver-template=sni.test:6876",
+                "--pgwire-sni-resolver-template=sni.test:6875",
                 "--tls-key=/secrets/balancerd.key",
                 "--tls-cert=/secrets/balancerd.crt",
                 "--internal-tls",
