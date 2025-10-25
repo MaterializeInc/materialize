@@ -60,7 +60,7 @@ impl Coordinator {
         // Put a placeholder in the catalog so the optimizer can find something
         // for the sink_id.
         let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
+        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
         let entry = CatalogEntry {

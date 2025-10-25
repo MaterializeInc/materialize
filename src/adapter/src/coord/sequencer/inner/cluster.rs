@@ -602,7 +602,7 @@ impl Coordinator {
         tracing::debug!("sequence_create_cluster");
 
         let id_ts = self.get_catalog_write_ts().await;
-        let id = self.catalog_mut().allocate_user_cluster_id(id_ts).await?;
+        let id = self.catalog().allocate_user_cluster_id(id_ts).await?;
         // The catalog items for the introspection sources are shared between all replicas
         // of a compute instance, so we create them unconditionally during instance creation.
         // Whether a replica actually maintains introspection arrangements is determined by the
