@@ -34,6 +34,7 @@ from materialize.checks.scenarios_upgrade import (
 )
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
+from materialize.version_list import VersionsFromDocs
 
 
 def wait_ready_and_promote(mz_service: str) -> list[MzcomposeAction]:
@@ -315,3 +316,60 @@ class ZeroDowntimeUpgradeEntireMzFourVersions(Scenario):
             *wait_ready_and_promote("mz_5"),
             Validate(self, mz_service="mz_5"),
         ]
+
+
+def create_zero_downtime_basic(
+    name: str,
+    base_version: MzVersion,
+) -> type[Scenario]:
+
+    def actions(self) -> list[Action]:
+        return [
+            StartMz(
+                self,
+                tag=self.base_version(),
+                mz_service="mz_1",
+                system_parameter_defaults=get_default_system_parameters(
+                    self.base_version()
+                ),
+            ),
+            Initialize(self, mz_service="mz_1"),
+            Manipulate(self, phase=1, mz_service="mz_1"),
+            Manipulate(self, phase=2, mz_service="mz_1"),
+            start_mz_read_only(
+                self,
+                tag=None,
+                deploy_generation=1,
+                mz_service="mz_2",
+                system_parameter_defaults=get_default_system_parameters(
+                    self.base_version()
+                ),
+            ),
+            *wait_ready_and_promote("mz_2"),
+            Validate(self, mz_service="mz_2"),
+        ]
+
+    return type(
+        name,
+        (Scenario,),
+        {
+            "base_version": lambda self: base_version,
+            "actions": actions,
+        },
+    )
+
+
+versions_from_docs = [
+    version
+    for version in VersionsFromDocs(respect_released_tag=True).minor_versions()
+    if version >= MzVersion.parse_mz("v0.126.0")
+]
+
+
+zero_downtime_basic_scenarios = [
+    create_zero_downtime_basic(
+        name=f"MultiVersionZeroDowntimeBasic_{version}",
+        base_version=version,
+    )
+    for version in versions_from_docs
+]

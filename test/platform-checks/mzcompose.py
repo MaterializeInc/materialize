@@ -15,6 +15,7 @@ contexts.
 
 import argparse
 import os
+import re
 from enum import Enum
 
 from materialize import buildkite
@@ -205,6 +206,25 @@ def teardown(c: Composition) -> None:
     c.rm_volumes("mzdata", "tmp", force=True)
 
 
+def fast_teardown(c: Composition) -> None:
+    c.rm(
+        *[
+            s.name
+            for s in SERVICES
+            if s.name != "debezium"
+            and s.name != "kafka"
+            and s.name != "schema-registry"
+            and s.name != "azurite"
+            and s.name != "mysql"
+            and s.name != "ssh-bastion-host"
+            and s.name != "zookeeper"
+        ],
+        stop=True,
+        destroy_volumes=True,
+    )
+    c.rm_volumes("mzdata", "tmp", force=True)
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # c.silent = True
     parser.add_argument(
@@ -257,12 +277,44 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--external-blob-store", action=argparse.BooleanOptionalAction, default=True
     )
 
+    parser.add_argument(
+        "--teardown",
+        default="False",
+        choices=["True", "False"],
+        help="Teardown the environment per scenario ran",
+    )
+
     args = parser.parse_args()
     features = Features(args.features)
 
     if args.scenario:
-        assert args.scenario in globals(), f"scenario {args.scenario} does not exist"
-        scenarios = [globals()[args.scenario]]
+        # Get all available scenarios
+        base_scenarios = {SystemVarChange}
+        all_scenarios = all_subclasses(Scenario) - base_scenarios
+
+        # Create a mapping of scenario names to scenario classes
+        scenario_map = {scenario.__name__: scenario for scenario in all_scenarios}
+
+        # Compile the regex pattern
+        try:
+            pattern = re.compile(args.scenario)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern '{args.scenario}': {e}")
+
+        # Filter scenarios by regex match
+        scenarios = [
+            scenario for name, scenario in scenario_map.items() if pattern.search(name)
+        ]
+
+        if not scenarios:
+            available = sorted(scenario_map.keys())
+            raise ValueError(
+                f"No scenarios matched pattern '{args.scenario}'. "
+                f"Available scenarios: {', '.join(available)}"
+            )
+        scenarios.sort(key=lambda s: s.__name__)
+
+        print(f"Matched scenarios: {[s.__name__ for s in scenarios]}")
     else:
         base_scenarios = {SystemVarChange}
         scenarios = all_subclasses(Scenario) - base_scenarios
@@ -315,14 +367,26 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             execution_mode = args.execution_mode
 
             if execution_mode in [ExecutionMode.SEQUENTIAL, ExecutionMode.PARALLEL]:
-                setup(c, args.external_blob_store)
-                scenario = scenario_class(
-                    checks=checks,
-                    executor=executor,
-                    features=features,
-                    seed=args.seed,
-                )
-                scenario.run()
+                try:
+                    setup(c, args.external_blob_store)
+                    scenario = scenario_class(
+                        checks=checks,
+                        executor=executor,
+                        features=features,
+                        seed=args.seed,
+                    )
+                    scenario.run()
+                except Exception as e:
+                    c.invoke(
+                        "logs",
+                        "--no-color",
+                        "--timestamps",
+                        "--tail",
+                        "20",
+                        "mz_1",
+                        "mz_2",
+                    )
+                    print("Error in scenario", e)
             elif execution_mode is ExecutionMode.ONEATATIME:
                 for check in checks:
                     print(
@@ -331,13 +395,38 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     c.override_current_testcase_name(
                         f"Check '{check}' with scenario '{scenario_class}'"
                     )
-                    setup(c, args.external_blob_store)
-                    scenario = scenario_class(
-                        checks=[check],
-                        executor=executor,
-                        features=features,
-                        seed=args.seed,
-                    )
-                    scenario.run()
+                    try:
+                        setup(c, args.external_blob_store)
+                        scenario = scenario_class(
+                            checks=[check],
+                            executor=executor,
+                            features=features,
+                            seed=args.seed,
+                        )
+                        scenario.run()
+                    except Exception as e:
+                        c.invoke(
+                            "logs",
+                            "--no-color",
+                            "--timestamps",
+                            "--tail",
+                            "20",
+                            "mz_1",
+                            "mz_2",
+                        )
+                        print(
+                            f"Error: {e}"
+                            + (
+                                f" (version: {executor.current_mz_version})"
+                                if hasattr(executor, "current_mz_version")
+                                else ""
+                            )
+                        )
+                    finally:
+                        if args.teardown == "True":
+                            fast_teardown(c)
+
             else:
                 raise RuntimeError(f"Unsupported execution mode: {execution_mode}")
+            if args.teardown == "True":
+                fast_teardown(c)
