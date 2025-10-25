@@ -19,6 +19,7 @@ chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 domain.workspace = true
 futures.workspace = true
+hickory-resolver.workspace = true
 humantime.workspace = true
 hyper.workspace = true
 hyper-openssl.workspace = true

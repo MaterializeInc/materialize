@@ -57,5 +57,6 @@ done
   --no-resolv \
   --keep-in-foreground \
   --log-queries \
+  --no-daemon \
   --log-facility=- \
   --conf-file="$OVR"
