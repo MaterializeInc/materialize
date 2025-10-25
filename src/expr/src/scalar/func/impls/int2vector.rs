@@ -27,8 +27,9 @@ impl LazyUnaryFunc for CastInt2VectorToArray {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        a.eval(datums, temp_storage)
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)
     }
 
     /// The output SqlColumnType of this function
@@ -75,14 +76,17 @@ impl LazyUnaryFunc for CastInt2VectorToString {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut buf = String::new();
         stringify_datum(&mut buf, a, &SqlScalarType::Int2Vector)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
+        output.push(Datum::String(temp_storage.push_string(buf)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {

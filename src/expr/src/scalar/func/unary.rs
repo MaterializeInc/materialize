@@ -28,7 +28,8 @@ pub trait LazyUnaryFunc {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError>;
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError>;
 
     /// The output SqlColumnType of this function.
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType;
@@ -144,16 +145,26 @@ impl<T: for<'a> EagerUnaryFunc<'a>> LazyUnaryFunc for T {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        match T::Input::try_from_result(a.eval(datums, temp_storage)) {
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        let a = a
+            .eval(datums, temp_storage, output)
+            .map(|()| output.pop().unwrap());
+        match T::Input::try_from_result(a) {
             // If we can convert to the input type then we call the function
-            Ok(input) => self.call(input).into_result(temp_storage),
+            Ok(input) => {
+                output.push(self.call(input).into_result(temp_storage)?);
+                Ok(())
+            }
             // If we can't and we got a non-null datum something went wrong in the planner
             Err(Ok(datum)) if !datum.is_null() => {
                 Err(EvalError::Internal("invalid input type".into()))
             }
             // Otherwise we just propagate NULLs and errors
-            Err(res) => res,
+            Err(res) => {
+                output.push(res?);
+                Ok(())
+            }
         }
     }
 
@@ -564,7 +575,7 @@ mod test {
             // TODO: assertions for nulls, errors
             let Ok(results) = datums
                 .iter()
-                .map(|args| expr.eval(args.as_slice(), arena))
+                .map(|args| expr.eval_pop(args.as_slice(), arena, &mut Vec::new()))
                 .collect::<Result<Vec<_>, _>>()
             else {
                 return;

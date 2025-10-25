@@ -448,7 +448,8 @@ where
         builder.new_output::<ConsolidatingContainerBuilder<_>>();
 
     // Re-used state for processing and building rows.
-    let mut datum_vec = mz_repr::DatumVec::new();
+    let mut datum_vec = DatumVec::new();
+    let mut output_vec = DatumVec::new();
     let mut row_builder = Row::default();
 
     // Extract the MFP if it exists; leave behind an identity MFP in that case.
@@ -492,6 +493,7 @@ where
                     &until,
                     map_filter_project.as_ref(),
                     &mut datum_vec,
+                    &mut output_vec,
                     &mut row_builder,
                     &mut output,
                 );
@@ -556,6 +558,7 @@ impl PendingWork {
         until: &Antichain<Timestamp>,
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
+        output_vec: &mut DatumVec,
         row_builder: &mut Row,
         output: &mut OutputHandleCore<
             '_,
@@ -612,6 +615,7 @@ impl PendingWork {
                             diff.into(),
                             |time| !until.less_equal(time),
                             row_builder,
+                            &mut output_vec.borrow(),
                         ) {
                             // Earlier we decided this Part doesn't need to be fetched, but to
                             // audit our logic we fetched it any way. If the MFP returned data it

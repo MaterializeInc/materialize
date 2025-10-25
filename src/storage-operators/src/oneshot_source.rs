@@ -454,6 +454,7 @@ where
         let mut datum_vec = DatumVec::default();
         let row_arena = RowArena::default();
         let mut row_buf = Row::default();
+        let mut output_vec = DatumVec::default();
 
         while let Some(event) = record_chunk_handle.next().await {
             let (capability, maybe_chunks) = match event {
@@ -479,7 +480,12 @@ where
                     for row in rows {
                         let mut datums = datum_vec.borrow_with(&row);
                         let result = mfp
-                            .evaluate_into(&mut *datums, &row_arena, &mut row_buf)
+                            .evaluate_into(
+                                &mut *datums,
+                                &row_arena,
+                                &mut output_vec.borrow(),
+                                &mut row_buf,
+                            )
                             .map(|row| row.cloned());
 
                         match result {

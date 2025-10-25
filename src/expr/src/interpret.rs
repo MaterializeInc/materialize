@@ -561,7 +561,11 @@ impl SpecialUnary {
                         ),
                         expr: Box::new(MirScalarExpr::column(0)),
                     };
-                    let eval = |d| specs.eval_result(expr.eval(&[d], specs.arena));
+                    let eval = |d| {
+                        let mut output = Vec::with_capacity(1);
+                        let res = expr.eval(&[d], specs.arena, &mut output);
+                        specs.eval_result(res.map(|()| output.pop().expect("must exist")))
+                    };
 
                     eagerly(range, |values| {
                         match values {
@@ -863,7 +867,11 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
             };
             summary.range.flat_map(is_monotone, |datum| {
                 Self::set_argument(&mut expr, 0, datum);
-                self.eval_result(expr.eval(&[], self.arena))
+                let mut output = Vec::new();
+                self.eval_result(
+                    expr.eval(&[], self.arena, &mut output)
+                        .map(|()| output.pop().expect("must exist")),
+                )
             })
         };
 
@@ -894,7 +902,11 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                 Self::set_argument(&mut expr, 0, left_result);
                 right.range.flat_map(right_monotonic, |right_result| {
                     Self::set_argument(&mut expr, 1, right_result);
-                    self.eval_result(expr.eval(&[], self.arena))
+                    let mut output = Vec::new();
+                    self.eval_result(
+                        expr.eval(&[], self.arena, &mut output)
+                            .map(|()| output.pop().expect("must exist")),
+                    )
                 })
             })
         };
@@ -944,7 +956,11 @@ impl<'a> Interpreter for ColumnSpecs<'a> {
                     .collect(),
             };
             eval_loop(func.is_monotone(), &mut fn_expr, &args, 0, &mut |expr| {
-                self.eval_result(expr.eval(&[], self.arena))
+                let mut output = Vec::new();
+                self.eval_result(
+                    expr.eval(&[], self.arena, &mut output)
+                        .map(|()| output.pop().expect("must exist")),
+                )
             })
         };
 
@@ -1415,7 +1431,7 @@ mod tests {
 
             for row in &rows {
                 let datums: Vec<_> = row.iter().collect();
-                let eval_result = expr.eval(&datums, &arena);
+                let eval_result = expr.eval_pop(&datums, &arena, &mut Vec::new());
                 match eval_result {
                     Ok(value) => {
                         assert!(spec.range.may_contain(value))

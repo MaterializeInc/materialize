@@ -594,7 +594,7 @@ impl LiteralLifting {
 
                     let eval_constant_aggr = |aggr: &mz_expr::AggregateExpr| {
                         let temp = mz_repr::RowArena::new();
-                        let mut eval = aggr.expr.eval(&[], &temp);
+                        let mut eval = aggr.expr.eval_pop(&[], &temp, &mut Vec::new());
                         if let Ok(param) = eval {
                             eval = Ok(aggr.func.eval(Some(param), &temp));
                         }

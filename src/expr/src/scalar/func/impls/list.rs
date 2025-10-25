@@ -27,14 +27,17 @@ impl LazyUnaryFunc for CastListToString {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut buf = String::new();
         stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
+        output.push(Datum::String(temp_storage.push_string(buf)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -80,15 +83,18 @@ impl LazyUnaryFunc for CastListToJsonb {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut row = Row::default();
         row.packer().push_list_with(|packer| {
             for elem in a.unwrap_list().iter() {
-                let elem = match self.cast_element.eval(&[elem], temp_storage)? {
+                self.cast_element.eval(&[elem], temp_storage, output)?;
+                let elem = match output.pop().unwrap() {
                     Datum::Null => Datum::JsonNull,
                     d => d,
                 };
@@ -96,7 +102,8 @@ impl LazyUnaryFunc for CastListToJsonb {
             }
             Ok::<_, EvalError>(())
         })?;
-        Ok(temp_storage.push_unary_row(row))
+        output.push(temp_storage.push_unary_row(row));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -148,20 +155,24 @@ impl LazyUnaryFunc for CastList1ToList2 {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut cast_datums = Vec::new();
         for el in a.unwrap_list().iter() {
             // `cast_expr` is evaluated as an expression that casts the
             // first column in `datums` (i.e. `datums[0]`) from the list elements'
             // current type to a target type.
-            cast_datums.push(self.cast_expr.eval(&[el], temp_storage)?);
+            self.cast_expr.eval(&[el], temp_storage, output)?;
+            cast_datums.push(output.pop().unwrap());
         }
 
-        Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
+        output.push(temp_storage.make_datum(|packer| packer.push_list(cast_datums)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -207,14 +218,19 @@ impl LazyUnaryFunc for ListLength {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let count = a.unwrap_list().iter().count();
         match count.try_into() {
-            Ok(c) => Ok(Datum::Int32(c)),
+            Ok(c) => {
+                output.push(Datum::Int32(c));
+                Ok(())
+            }
             Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
         }
     }

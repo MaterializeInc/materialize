@@ -54,7 +54,9 @@ where
             let activator = scope.activator_for(info.address);
             Box::new(move |input, ok_output, err_output| {
                 let mut datums = DatumVec::new();
+                let mut output = DatumVec::new();
                 let mut datums_mfp = DatumVec::new();
+                let mut output_vec = DatumVec::new();
 
                 // Buffer for extensions to `input_row`.
                 let mut table_func_output = Vec::new();
@@ -70,9 +72,10 @@ where
 
                         // Unpack datums for expression evaluation.
                         let datums_local = datums.borrow_with(&input_row);
+                        let mut output = output.borrow();
                         let args = exprs
                             .iter()
-                            .map(|e| e.eval(&datums_local, &temp_storage))
+                            .map(|e| e.eval_pop(&datums_local, &temp_storage, &mut output))
                             .collect::<Result<Vec<_>, _>>();
                         let args = match args {
                             Ok(args) => args,
@@ -99,6 +102,7 @@ where
                                 &time,
                                 &diff,
                                 &mut datums_mfp,
+                                &mut output_vec,
                                 &table_func_output,
                                 &mfp_plan,
                                 &until,
@@ -133,6 +137,7 @@ fn drain_through_mfp<T>(
     input_time: &T,
     input_diff: &Diff,
     datum_vec: &mut DatumVec,
+    output_vec: &mut DatumVec,
     extensions: &[(Row, Diff)],
     mfp_plan: &MfpPlan,
     until: &Antichain<Timestamp>,
@@ -155,6 +160,7 @@ fn drain_through_mfp<T>(
 
     // This is not cheap, and is meant to be amortized across many `extensions`.
     let mut datums_local = datum_vec.borrow_with(input_row);
+    let mut output_vec = output_vec.borrow();
     let datums_len = datums_local.len();
 
     let event_time = input_time.event_time().clone();
@@ -171,6 +177,7 @@ fn drain_through_mfp<T>(
             *diff * *input_diff,
             |time| !until.less_equal(time),
             &mut row_builder,
+            &mut output_vec,
         );
 
         for result in results {
