@@ -1170,8 +1170,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e)),
                 };
 
-                let owned_catalog = self.owned_catalog();
-                let catalog = owned_catalog.for_session(ctx.session());
+                let catalog = self.catalog().for_session(ctx.session());
 
                 purify_create_materialized_view_options(
                     catalog,
@@ -1216,8 +1215,7 @@ impl Coordinator {
                     Err(e) => return ctx.retire(Err(e)),
                 };
 
-                let owned_catalog = self.owned_catalog();
-                let catalog = owned_catalog.for_session(ctx.session());
+                let catalog = self.catalog().for_session(ctx.session());
 
                 purify_create_materialized_view_options(
                     catalog,

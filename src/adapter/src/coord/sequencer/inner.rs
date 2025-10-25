@@ -464,7 +464,7 @@ impl Coordinator {
 
         let id_ts = self.get_catalog_write_ts().await;
         let ids = self
-            .catalog_mut()
+            .catalog()
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
             .await?;
         for (subsource_stmt, (item_id, global_id)) in
@@ -540,7 +540,7 @@ impl Coordinator {
             // collection first.
             assert_none!(progress_stmt.of_source);
             let id_ts = self.get_catalog_write_ts().await;
-            let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
+            let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
             let progress_plan =
                 self.plan_subsource(ctx.session(), &params, progress_stmt, item_id, global_id)?;
             let progress_full_name = self
@@ -586,7 +586,7 @@ impl Coordinator {
         };
 
         let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
+        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
 
         let source_full_name = self.catalog().resolve_full_name(&source_plan.name, None);
         let of_source = ResolvedItemName::Item {
@@ -621,7 +621,7 @@ impl Coordinator {
         // 3. Finally, plan all the subsources
         let id_ts = self.get_catalog_write_ts().await;
         let ids = self
-            .catalog_mut()
+            .catalog()
             .allocate_user_ids(u64::cast_from(subsource_stmts.len()), id_ts)
             .await?;
         for (stmt, (item_id, global_id)) in subsource_stmts.into_iter().zip_eq(ids.into_iter()) {
@@ -834,8 +834,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) {
         let id_ts = self.get_catalog_write_ts().await;
-        let (connection_id, connection_gid) = match self.catalog_mut().allocate_user_id(id_ts).await
-        {
+        let (connection_id, connection_gid) = match self.catalog().allocate_user_id(id_ts).await {
             Ok(item_id) => item_id,
             Err(err) => return ctx.retire(Err(err.into())),
         };
@@ -1097,10 +1096,8 @@ impl Coordinator {
         plan::AlterNetworkPolicyPlan { id, name, rules }: plan::AlterNetworkPolicyPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         // TODO(network_policy): Consider role based network policies here.
-        let current_network_policy_name = self
-            .owned_catalog()
-            .system_config()
-            .default_network_policy_name();
+        let current_network_policy_name =
+            self.catalog().system_config().default_network_policy_name();
         // Check if the way we're alerting the policy is still valid for the current connection.
         if current_network_policy_name == name {
             self.validate_alter_network_policy(session, &rules)?;
@@ -1136,7 +1133,7 @@ impl Coordinator {
             None
         };
         let id_ts = self.get_catalog_write_ts().await;
-        let (table_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
+        let (table_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
         let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
 
         let data_source = match table.data_source {
@@ -1394,7 +1391,7 @@ impl Coordinator {
         // First try to allocate an ID and an OID. If either fails, we're done.
         let id_ts = self.get_catalog_write_ts().await;
         let (item_id, global_id) =
-            return_if_err!(self.catalog_mut().allocate_user_id(id_ts).await, ctx);
+            return_if_err!(self.catalog().allocate_user_id(id_ts).await, ctx);
 
         let catalog_sink = Sink {
             create_sql: sink.create_sql,
@@ -1511,7 +1508,7 @@ impl Coordinator {
         resolved_ids: ResolvedIds,
     ) -> Result<ExecuteResponse, AdapterError> {
         let id_ts = self.get_catalog_write_ts().await;
-        let (item_id, global_id) = self.catalog_mut().allocate_user_id(id_ts).await?;
+        let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
             global_id,

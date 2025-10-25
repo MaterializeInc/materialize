@@ -735,10 +735,7 @@ impl fmt::Display for AdapterError {
                 dependency_kind,
                 dependency_id,
             } => {
-                write!(
-                    f,
-                    "{dependency_kind} '{dependency_id}' was dropped"
-                )
+                write!(f, "{dependency_kind} '{dependency_id}' was dropped")
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
