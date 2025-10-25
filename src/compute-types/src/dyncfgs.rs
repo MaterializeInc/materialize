@@ -265,6 +265,13 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// Enable per-column dictionary compression for row containers in arrangements.
+pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION: Config<bool> = Config::new(
+    "enable_arrangement_dictionary_compression",
+    true,
+    "Enable arrangement dictionary compression.",
+);
+
 /// Whether to use `drop_dataflow` to actively cancel dataflows.
 pub const ENABLE_ACTIVE_DATAFLOW_CANCELATION: Config<bool> = Config::new(
     "enable_compute_active_dataflow_cancelation",
@@ -369,6 +376,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION)
         .add(&ENABLE_ACTIVE_DATAFLOW_CANCELATION)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
