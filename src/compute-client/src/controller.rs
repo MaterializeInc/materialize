@@ -675,7 +675,7 @@ where
         }
 
         tokio::select! {
-            resp = self.response_rx.recv() => {
+            resp = self.response_rx.recv() => { //////////// we get e.g. PeekNotification here
                 let resp = resp.expect("`self.response_tx` not dropped");
                 self.stashed_response = Some(resp);
             }
@@ -910,6 +910,7 @@ where
                 read_hold,
                 target_replica,
                 peek_response_tx,
+                false,
             )
             .expect("validated")
         });

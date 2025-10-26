@@ -333,6 +333,7 @@ impl PeekClient {
                 target_read_hold,
                 target_replica,
                 rows_tx,
+                true,
             )
             .await
             .map_err(AdapterError::concurrent_dependency_drop_from_peek_error)?;

@@ -275,6 +275,7 @@ where
         target_read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        is_frontend_peek: bool,
     ) -> Result<(), crate::controller::error::PeekError> {
         self.call_sync(move |i| {
             i.peek(
@@ -288,6 +289,7 @@ where
                 target_read_hold,
                 target_replica,
                 peek_response_tx,
+                is_frontend_peek,
             )
         })
         .await
@@ -1737,6 +1739,7 @@ where
         mut read_hold: ReadHold<T>,
         target_replica: Option<ReplicaId>,
         peek_response_tx: oneshot::Sender<PeekResponse>,
+        is_frontend_peek: bool,
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
@@ -1769,6 +1772,7 @@ where
                 peek_response_tx,
                 limit: finishing.limit.map(usize::cast_from),
                 offset: finishing.offset,
+                is_frontend_peek,
             },
         );
 
@@ -2088,14 +2092,16 @@ where
         let duration = peek.requested_at.elapsed();
         self.metrics.observe_peek_response(&response, duration);
 
-        let notification = PeekNotification::new(&response, peek.offset, peek.limit);
-        // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
-        // currently want the parent to be whatever the compute worker did with this peek.
-        self.deliver_response(ComputeControllerResponse::PeekNotification(
-            uuid,
-            notification,
-            otel_ctx,
-        ));
+        if !peek.is_frontend_peek {
+            let notification = PeekNotification::new(&response, peek.offset, peek.limit);
+            // NOTE: We use the `otel_ctx` from the response, not the pending peek, because we
+            // currently want the parent to be whatever the compute worker did with this peek.
+            self.deliver_response(ComputeControllerResponse::PeekNotification(
+                uuid,
+                notification,
+                otel_ctx,
+            ));
+        }
 
         self.finish_peek(uuid, response)
     }
@@ -2993,6 +2999,7 @@ struct PendingPeek<T: Timestamp> {
     limit: Option<usize>,
     /// The offset into the peek's result.
     offset: usize,
+    is_frontend_peek: bool,
 }
 
 #[derive(Debug, Clone)]
