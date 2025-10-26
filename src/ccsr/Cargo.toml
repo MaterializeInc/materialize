@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = "1.0.100"
 native-tls = "0.2.14"
-openssl = { version = "0.10.73", features = ["vendored"] }
+openssl = { version = "0.10.74", features = ["vendored"] }
 reqwest = { version = "0.11.13", features = [
     "blocking",
     "json",

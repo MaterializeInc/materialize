@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.100"
 async-trait = { version = "0.1.89" }
 clap = { version = "4.5.23", features = ["derive", "env"] }
-openssl = { version = "0.10.73", features = ["vendored"] }
+openssl = { version = "0.10.74", features = ["vendored"] }
 schemars = { version = "1.0.4" }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }

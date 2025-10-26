@@ -30,7 +30,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 reqwest = { version = "0.11.13", features = ["json"] }
-openssl = { version = "0.10.73", features = ["vendored"] }
+openssl = { version = "0.10.74", features = ["vendored"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

@@ -50,7 +50,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-transform = { path = "../transform" }
-openssl = { version = "0.10.73", features = ["vendored"] }
+openssl = { version = "0.10.74", features = ["vendored"] }
 paste = "1.0.11"
 prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }

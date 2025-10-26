@@ -13,8 +13,8 @@ workspace = true
 anyhow = { version = "1.0.100" }
 mz-ore = { path = "../ore", features = ["test"] }
 openssh = { version = "0.11.5", default-features = false, features = ["native-mux"] }
-openssh-mux-client = "0.17.8"
-openssl = { version = "0.10.73", features = ["vendored"] }
+openssh-mux-client = "0.17.9"
+openssl = { version = "0.10.74", features = ["vendored"] }
 rand = "0.8.5"
 futures = "0.3.31"
 itertools = "0.14.0"
