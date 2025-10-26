@@ -21,9 +21,9 @@ byteorder = "1.5"
 bytes = "1.10.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
-flate2 = "1.1.4"
+flate2 = "1.1.5"
 futures = "0.3.31"
-globset = "0.4.17"
+globset = "0.4.18"
 hex = "0.4.3"
 http = "1.2.0"
 humantime = "2.2.0"
