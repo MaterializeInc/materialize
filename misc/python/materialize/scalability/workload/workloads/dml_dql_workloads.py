@@ -7,27 +7,27 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 from materialize.scalability.operation.operations.operations import (
-    InsertDefaultValues,
-    SelectCount,
-    SelectCountInMv,
-    SelectLimit,
-    SelectOne,
+    #InsertDefaultValues,
+    #SelectCount,
+    #SelectCountInMv,
+    #SelectLimit,
+    #SelectOne,
     SelectStar,
-    SelectUnionAll,
-    Update,
+    #SelectUnionAll,
+    #Update,
 )
 from materialize.scalability.operation.scalability_operation import Operation
 from materialize.scalability.workload.workload_markers import DmlDqlWorkload
 
 
-class InsertWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [InsertDefaultValues()]
+# class InsertWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [InsertDefaultValues()]
 
 
-class SelectOneWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [SelectOne()]
+# class SelectOneWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [SelectOne()]
 
 
 class SelectStarWorkload(DmlDqlWorkload):
@@ -35,31 +35,31 @@ class SelectStarWorkload(DmlDqlWorkload):
         return [SelectStar()]
 
 
-class SelectLimitWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [SelectLimit()]
+# class SelectLimitWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [SelectLimit()]
 
 
-class SelectCountWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [SelectCount()]
+# class SelectCountWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [SelectCount()]
 
 
-class SelectUnionAllWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [SelectUnionAll()]
+# class SelectUnionAllWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [SelectUnionAll()]
 
 
-class InsertAndSelectCountInMvWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [InsertDefaultValues(), SelectCountInMv()]
+# class InsertAndSelectCountInMvWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [InsertDefaultValues(), SelectCountInMv()]
 
 
-class InsertAndSelectLimitWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [InsertDefaultValues(), SelectLimit()]
+# class InsertAndSelectLimitWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [InsertDefaultValues(), SelectLimit()]
 
 
-class UpdateWorkload(DmlDqlWorkload):
-    def operations(self) -> list["Operation"]:
-        return [Update()]
+# class UpdateWorkload(DmlDqlWorkload):
+#     def operations(self) -> list["Operation"]:
+#         return [Update()]
