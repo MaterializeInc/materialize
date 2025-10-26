@@ -10,7 +10,7 @@ from materialize.scalability.operation.operations.operations import (
     #InsertDefaultValues,
     #SelectCount,
     #SelectCountInMv,
-    #SelectLimit,
+    SelectLimit,
     #SelectOne,
     SelectStar,
     #SelectUnionAll,
@@ -35,9 +35,9 @@ class SelectStarWorkload(DmlDqlWorkload):
         return [SelectStar()]
 
 
-# class SelectLimitWorkload(DmlDqlWorkload):
-#     def operations(self) -> list["Operation"]:
-#         return [SelectLimit()]
+class SelectLimitWorkload(DmlDqlWorkload):
+    def operations(self) -> list["Operation"]:
+        return [SelectLimit()]
 
 
 # class SelectCountWorkload(DmlDqlWorkload):
