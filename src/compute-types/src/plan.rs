@@ -414,7 +414,8 @@ impl<T> PlanNode<T> {
 
 impl Plan {
     /// Pretty-print this [Plan] to a string.
-    pub fn pretty(&self) -> String {
+    /// Don't use this in prod to print log msgs!
+    pub fn pretty_non_redacted(&self) -> String {
         let config = ExplainConfig::default();
         self.explain(&config, None)
     }
