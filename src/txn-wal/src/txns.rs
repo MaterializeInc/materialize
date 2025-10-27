@@ -1340,8 +1340,8 @@ mod tests {
                     debug!("stress update {:.9} to {}", data_id.to_string(), self.ts);
                     let _ = self.txns.txns_cache.update_ge(&self.ts).await;
                 }
-                4 => self.start_read(data_id, true),
-                5 => self.start_read(data_id, false),
+                4 => self.start_read(data_id),
+                5 => self.start_read(data_id),
                 _ => unreachable!(""),
             }
             debug!("stress {} step {} DONE ts={}", self.idx, self.step, self.ts);
@@ -1469,7 +1469,7 @@ mod tests {
             .await
         }
 
-        fn start_read(&mut self, data_id: ShardId, use_global_txn_cache: bool) {
+        fn start_read(&mut self, data_id: ShardId) {
             debug!(
                 "stress start_read {:.9} at {}",
                 data_id.to_string(),
@@ -1490,7 +1490,6 @@ mod tests {
                         data_id,
                         as_of,
                         Antichain::new(),
-                        use_global_txn_cache,
                     );
                     let data_id = format!("{:.9}", data_id.to_string());
                     let _guard = info_span!("read_worker", %data_id, as_of).entered();

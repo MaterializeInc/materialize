@@ -1183,7 +1183,6 @@ mod tests {
                 data_id,
                 as_of,
                 Antichain::new(),
-                true,
             )
         }
     }

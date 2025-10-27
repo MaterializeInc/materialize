@@ -302,7 +302,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&crate::cfg::USE_CRITICAL_SINCE_CATALOG)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SOURCE)
         .add(&crate::cfg::USE_CRITICAL_SINCE_SNAPSHOT)
-        .add(&crate::cfg::USE_GLOBAL_TXN_CACHE_SOURCE)
         .add(&BATCH_BUILDER_MAX_OUTSTANDING_PARTS)
         .add(&COMPACTION_HEURISTIC_MIN_INPUTS)
         .add(&COMPACTION_HEURISTIC_MIN_PARTS)
@@ -463,13 +462,6 @@ pub const USE_CRITICAL_SINCE_SNAPSHOT: Config<bool> = Config::new(
     "persist_use_critical_since_snapshot",
     false,
     "Use the critical since (instead of the overall since) when taking snapshots in the controller or in fast-path peeks.",
-);
-
-/// Migrate the persist source to use a process global txn cache.
-pub const USE_GLOBAL_TXN_CACHE_SOURCE: Config<bool> = Config::new(
-    "use_global_txn_cache_source",
-    true,
-    "Use the process global txn cache (instead of an operator local one) in the Persist source.",
 );
 
 /// The maximum number of parts (s3 blobs) that [crate::batch::BatchBuilder]
