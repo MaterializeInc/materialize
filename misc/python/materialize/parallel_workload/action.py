@@ -1575,6 +1575,14 @@ class FlipFlagsAction(Action):
 
 
 class CreateViewAction(Action):
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        errors = super().errors_to_ignore(exe)
+        if exe.db.scenario == Scenario.Rename:
+            # Columns could have been renamed, we don't lock the base objects
+            # to get more interesting race conditions
+            errors += ["does not exist"]
+        return errors
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
