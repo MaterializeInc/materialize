@@ -17,7 +17,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use futures::StreamExt;
-use hickory_resolver::{Resolver, config::*, name_server::TokioConnectionProvider, system_conf::read_system_conf};
 use jsonwebtoken::{DecodingKey, EncodingKey};
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
@@ -141,29 +140,12 @@ async fn test_balancer() {
 
     let resolvers = vec![
         (
-            BalancerResolver::Static(
-                {
-                    // Use system DNS configuration for static resolver in tests
-                    let (config, opts) = read_system_conf()
-                        .unwrap_or_else(|_| (ResolverConfig::default(), ResolverOpts::default()));
-                    Resolver::builder_with_config(config, TokioConnectionProvider::default())
-                        .with_options(opts)
-                        .build()
-                },
-                envd_server.sql_local_addr().to_string(),
-            ),
+            BalancerResolver::Static(envd_server.sql_local_addr().to_string()),
             CancellationResolver::Static(envd_server.sql_local_addr().to_string()),
         ),
         (
             BalancerResolver::MultiTenant(
-                {
-                    // Use system DNS configuration in tests
-                    let (config, opts) = read_system_conf()
-                        .unwrap_or_else(|_| (ResolverConfig::default(), ResolverOpts::default()));
-                    Resolver::builder_with_config(config, TokioConnectionProvider::default())
-                        .with_options(opts)
-                        .build()
-                },
+                mz_balancerd::TenantDnsResolver::new(),
                 FronteggResolver {
                     auth: frontegg_auth,
                     addr_template: envd_server.sql_local_addr().to_string(),

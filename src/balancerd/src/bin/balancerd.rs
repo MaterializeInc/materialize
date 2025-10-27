@@ -18,13 +18,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
-use hickory_resolver::{
-    Resolver, config::*, name_server::TokioConnectionProvider, system_conf::read_system_conf,
-};
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
     BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
-    FronteggResolver, SniResolver, create_default_resolver,
+    FronteggResolver, SniResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -245,7 +242,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
 
             (
                 BalancerResolver::MultiTenant(
-                    create_default_resolver(),
+                    mz_balancerd::TenantDnsResolver::new(),
                     FronteggResolver {
                         auth,
                         addr_template,
@@ -283,35 +280,8 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
             };
             drop(addrs);
 
-            // Create a resolver for static addresses with the same caching configuration
-            let mut resolver_opts = ResolverOpts::default();
-            resolver_opts.cache_size = 10000;
-            resolver_opts.positive_max_ttl = Some(Duration::from_secs(10));
-            resolver_opts.positive_min_ttl = Some(Duration::from_secs(9));
-            resolver_opts.negative_min_ttl = Some(Duration::from_secs(1));
-
-            // Read system DNS configuration or fall back to defaults
-            let (config, opts) = read_system_conf()
-                .map(|(config, mut opts)| {
-                    // Override specific options while keeping system DNS servers
-                    opts.cache_size = resolver_opts.cache_size;
-                    opts.positive_max_ttl = resolver_opts.positive_max_ttl;
-                    opts.positive_min_ttl = resolver_opts.positive_min_ttl;
-                    opts.negative_min_ttl = resolver_opts.negative_min_ttl;
-                    (config, opts)
-                })
-                .unwrap_or_else(|err| {
-                    eprintln!("Failed to read system DNS configuration for static resolver, using defaults: {}", err);
-                    (ResolverConfig::default(), resolver_opts)
-                });
-
             (
-                BalancerResolver::Static(
-                    Resolver::builder_with_config(config, TokioConnectionProvider::default())
-                        .with_options(opts)
-                        .build(),
-                    addr.clone(),
-                ),
+                BalancerResolver::Static(addr.clone()),
                 CancellationResolver::Static(addr),
             )
         }
