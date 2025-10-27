@@ -203,6 +203,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "argh"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34ff18325c8a36b82f992e533ece1ec9f9a9db446bd1c14d4f936bac88fcd240"
+dependencies = [
+ "argh_derive",
+ "argh_shared",
+ "rust-fuzzy-search",
+]
+
+[[package]]
+name = "argh_derive"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adb7b2b83a50d329d5d8ccc620f5c7064028828538bdf5646acd60dc1f767803"
+dependencies = [
+ "argh_shared",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
+name = "argh_shared"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a464143cc82dedcdc3928737445362466b7674b5db4e2eb8e869846d6d84f4f6"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "array-concat"
 version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4005,7 +4037,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration 0.6.1",
  "tokio",
  "tower-service",
@@ -4842,6 +4874,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47186c6da4d81ca383c7c47c1bfc80f4b95f4720514d860a5407aaf4233f9588"
 dependencies = [
  "linked-hash-map",
+]
+
+[[package]]
+name = "linkme"
+version = "0.3.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5e3283ed2d0e50c06dd8602e0ab319bb048b6325d0bba739db64ed8205179898"
+dependencies = [
+ "linkme-impl",
+]
+
+[[package]]
+name = "linkme-impl"
+version = "0.3.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5cec0ec4228b4853bb129c84dbf093a27e6c7a20526da046defc334a1b017f7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
 ]
 
 [[package]]
@@ -5744,7 +5796,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "turmoil",
+ "turmoil 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid",
  "workspace-hack",
 ]
@@ -6875,7 +6927,7 @@ dependencies = [
  "tracing-capture",
  "tracing-opentelemetry",
  "tracing-subscriber",
- "turmoil",
+ "turmoil 0.7.0 (git+https://github.com/teskje/turmoil.git)",
  "url",
  "uuid",
  "workspace-hack",
@@ -6951,7 +7003,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
- "turmoil",
+ "turmoil 0.7.0 (git+https://github.com/teskje/turmoil.git)",
  "url",
  "urlencoding",
  "uuid",
@@ -7509,7 +7561,7 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
- "turmoil",
+ "turmoil 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "workspace-hack",
 ]
 
@@ -9989,6 +10041,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rand_distr"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
+dependencies = [
+ "num-traits",
+ "rand 0.9.2",
+]
+
+[[package]]
 name = "rand_hc"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10483,6 +10545,12 @@ dependencies = [
  "libc",
  "winapi",
 ]
+
+[[package]]
+name = "rust-fuzzy-search"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a157657054ffe556d8858504af8a672a054a6e0bd9e8ee531059100c0fa11bb2"
 
 [[package]]
 name = "rust-ini"
@@ -11205,6 +11273,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "simulation"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "mz-adapter-types",
+ "mz-build-info",
+ "mz-catalog",
+ "mz-controller",
+ "mz-dyncfgs",
+ "mz-environmentd",
+ "mz-license-keys",
+ "mz-orchestrator",
+ "mz-orchestrator-process",
+ "mz-ore",
+ "mz-persist",
+ "mz-persist-client",
+ "mz-persist-types",
+ "mz-repr",
+ "mz-secrets",
+ "mz-server-core",
+ "mz-service",
+ "mz-sql",
+ "mz-storage-types",
+ "snowglobe",
+ "tempfile",
+ "tower-http",
+ "tracing",
+]
+
+[[package]]
 name = "siphasher"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11243,6 +11343,30 @@ name = "snap"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1b6b67fb9a61334225b5b790716f609cd58395f895b3fe8b328786812a40bc3b"
+
+[[package]]
+name = "snowglobe"
+version = "0.1.0"
+source = "git+https://github.com/teskje/snowglobe.git#435ba3b5f4d5bd05f133aef1bca503e2e7a0bdcb"
+dependencies = [
+ "argh",
+ "libc",
+ "linkme",
+ "rand 0.9.2",
+ "snowglobe-macros",
+ "tracing",
+ "tracing-subscriber",
+ "turmoil 0.7.0 (git+https://github.com/teskje/turmoil.git)",
+]
+
+[[package]]
+name = "snowglobe-macros"
+version = "0.1.0"
+source = "git+https://github.com/teskje/snowglobe.git#435ba3b5f4d5bd05f133aef1bca503e2e7a0bdcb"
+dependencies = [
+ "quote",
+ "syn 2.0.106",
+]
 
 [[package]]
 name = "socket2"
@@ -11646,9 +11770,9 @@ dependencies = [
 
 [[package]]
 name = "tempfile"
-version = "3.20.0"
+version = "3.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
+checksum = "2d31c77bdf42a745371d260a26ca7163f1e0924b64afa0b688e61b5a9fa02f16"
 dependencies = [
  "fastrand 2.3.0",
  "getrandom 0.3.3",
@@ -12575,7 +12699,21 @@ dependencies = [
  "bytes",
  "indexmap 2.11.4",
  "rand 0.8.5",
- "rand_distr",
+ "rand_distr 0.4.3",
+ "scoped-tls",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "turmoil"
+version = "0.7.0"
+source = "git+https://github.com/teskje/turmoil.git#c75cc81490d5790dddda01758935cef3db1a2940"
+dependencies = [
+ "bytes",
+ "indexmap 2.11.4",
+ "rand 0.9.2",
+ "rand_distr 0.5.1",
  "scoped-tls",
  "tokio",
  "tracing",

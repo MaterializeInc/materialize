@@ -14,7 +14,7 @@ rust-version = "1.76.0"
 [workspace.lints.rust]
 unknown_lints = "allow"
 non_local_definitions = "allow"
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(stamped, coverage, nightly_doc_features, release, tokio_unstable)'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage, nightly_doc_features, release, simulation, tokio_unstable)'] }
 
 [workspace.lints.rustdoc]
 
