@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
 use mz_ore::task::{JoinHandle, RuntimeExt};
-use tokio::runtime::{Builder, Runtime};
+use tokio::runtime::{Builder, Runtime, Handle};
 
 /// A reasonable number of threads to use in tests: enough to reproduce nontrivial
 /// orderings if necessary and avoid blocking, but not too many.
@@ -43,11 +43,15 @@ pub const TEST_THREADS: usize = 4;
 /// [1]: <https://github.com/MaterializeInc/materialize/pull/13955>
 #[derive(Debug)]
 pub struct IsolatedRuntime {
+    #[cfg(not(simulation))]
     inner: Option<Runtime>,
+    #[cfg(simulation)]
+    inner: Option<Handle>,
 }
 
 impl IsolatedRuntime {
     /// Creates a new isolated runtime.
+    #[cfg(not(simulation))]
     pub fn new(metrics: &MetricsRegistry, worker_threads: Option<usize>) -> IsolatedRuntime {
         let mut runtime = Builder::new_multi_thread();
         if let Some(worker_threads) = worker_threads {
@@ -67,6 +71,14 @@ impl IsolatedRuntime {
         register_runtime_metrics("persist", runtime.metrics(), metrics);
         IsolatedRuntime {
             inner: Some(runtime),
+        }
+    }
+
+    #[cfg(simulation)]
+    pub fn new(_metrics: &MetricsRegistry, _worker_threads: Option<usize>) -> IsolatedRuntime {
+        let handle = Handle::current();
+        IsolatedRuntime {
+            inner: Some(handle),
         }
     }
 
@@ -93,6 +105,7 @@ impl IsolatedRuntime {
     }
 }
 
+#[cfg(not(simulation))]
 impl Drop for IsolatedRuntime {
     fn drop(&mut self) {
         // We don't need to worry about `shutdown_background` leaking

@@ -220,9 +220,9 @@ impl Coordinator {
         let catalog = self.owned_catalog();
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(mz_ore::task::spawn(
             || "optimize introspection subscribe (mir)",
-            move || {
+            async move {
                 span.in_scope(|| {
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(plan.from)?;
@@ -266,9 +266,9 @@ impl Coordinator {
         let global_mir_plan = global_mir_plan.resolve(as_of);
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(mz_ore::task::spawn(
             || "optimize introspection subscribe (lir)",
-            move || {
+            async move {
                 span.in_scope(|| {
                     // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
                     let global_lir_plan =

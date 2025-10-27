@@ -185,7 +185,7 @@ MESSAGE_LINT_INHERIT = "The lint section in {} does not inherit from the workspa
 
 EXCLUDE_CRATES = ["workspace-hack"]
 
-CHECK_CFGS = "stamped, coverage, nightly_doc_features, release, tokio_unstable"
+CHECK_CFGS = "coverage, nightly_doc_features, release, simulation, tokio_unstable"
 
 
 def main() -> None:

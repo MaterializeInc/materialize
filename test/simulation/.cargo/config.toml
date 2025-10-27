@@ -1,0 +1,12 @@
+[target.'cfg(target_os = "macos")']
+rustflags = [
+    "--cfg", "simulation",
+    "--cfg", "tokio_unstable",
+]
+
+[target.'cfg(target_os = "linux")']
+rustflags = [
+    "--cfg", "simulation",
+    "--cfg", "tokio_unstable",
+    "--cfg", 'getrandom_backend="linux_getrandom"',
+]
