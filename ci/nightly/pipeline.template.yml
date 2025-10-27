@@ -564,6 +564,7 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: zippy
               args: [--scenario=SqlServerCdc, --actions=10000, --max-execution-time=30m, --azurite]
+        skip: "database-issues#9855"
 
       - id: zippy-debezium-postgres
         label: "Zippy Debezium Postgres"
@@ -1416,6 +1417,11 @@ steps:
       concurrency_group: 'terraform-upgrade-aws'
       agents:
         queue: linux-aarch64-small
+      # storage is (re)initializing: TooManyRequests, fixed in new version, but not old
+      retry:
+        automatic:
+          - exit_status: 1
+            limit: 3
       plugins:
         - ./ci/plugins/scratch-aws-access: ~
         - ./ci/plugins/mzcompose:
