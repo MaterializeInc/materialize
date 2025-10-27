@@ -10,6 +10,7 @@
 //! Logic related to opening a [`Catalog`].
 
 mod builtin_item_migration;
+mod builtin_schema_migration;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -431,7 +432,7 @@ impl Catalog {
             )
             .await
             .map_err(|e| {
-                Error::new(ErrorKind::FailedMigration {
+                Error::new(ErrorKind::FailedCatalogMigration {
                     last_seen_version: last_seen_version.clone(),
                     this_version: config.build_info.version,
                     cause: e.to_string(),
