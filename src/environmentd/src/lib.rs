@@ -885,7 +885,7 @@ impl Listeners {
         Ok(Server {
             sql_listener_handles,
             http_listener_handles,
-            _adapter_handle: adapter_handle,
+            adapter_handle,
         })
     }
 }
@@ -909,5 +909,11 @@ pub struct Server {
     // Drop order matters for these fields.
     pub sql_listener_handles: BTreeMap<String, ListenerHandle>,
     pub http_listener_handles: BTreeMap<String, ListenerHandle>,
-    _adapter_handle: mz_adapter::Handle,
+    adapter_handle: mz_adapter::Handle,
+}
+
+impl Server {
+    pub async fn run(self) {
+        self.adapter_handle.join().await;
+    }
 }

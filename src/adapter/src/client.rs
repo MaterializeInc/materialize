@@ -31,7 +31,6 @@ use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
 use mz_ore::result::ResultExt;
 use mz_ore::task::AbortOnDropHandle;
-use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::{CatalogItemId, ColumnIndex, Row, SqlScalarType};
 use mz_sql::ast::{Raw, Statement};
@@ -46,6 +45,7 @@ use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::LocalSet;
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -75,7 +75,7 @@ use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, St
 pub struct Handle {
     pub(crate) session_id: Uuid,
     pub(crate) start_instant: Instant,
-    pub(crate) _thread: JoinOnDropHandle<()>,
+    pub(crate) local: LocalSet,
 }
 
 impl Handle {
@@ -91,6 +91,10 @@ impl Handle {
     /// Returns the instant at which the coordinator booted.
     pub fn start_instant(&self) -> Instant {
         self.start_instant
+    }
+
+    pub async fn join(self) {
+        self.local.await;
     }
 }
 

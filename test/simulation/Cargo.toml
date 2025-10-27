@@ -1,0 +1,38 @@
+[package]
+name = "simulation"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+futures = "0.3.31"
+mz-adapter-types.path = "../../src/adapter-types"
+mz-build-info.path = "../../src/build-info"
+mz-catalog.path = "../../src/catalog"
+mz-controller.path = "../../src/controller"
+mz-dyncfgs.path = "../../src/dyncfgs"
+mz-environmentd = { path = "../../src/environmentd", default-features = false }
+mz-license-keys.path = "../../src/license-keys"
+mz-orchestrator.path = "../../src/orchestrator"
+mz-orchestrator-process.path = "../../src/orchestrator-process"
+mz-ore = { path = "../../src/ore", features = ["turmoil"] }
+mz-persist = { path = "../../src/persist", features = ["turmoil"] }
+mz-persist-client = { path = "../../src/persist-client", features = ["turmoil"] }
+mz-persist-types.path = "../../src/persist-types"
+mz-repr.path = "../../src/repr"
+mz-secrets.path = "../../src/secrets"
+mz-server-core.path = "../../src/server-core"
+mz-service.path = "../../src/service"
+mz-sql.path = "../../src/sql"
+mz-storage-types.path = "../../src/storage-types"
+snowglobe.git = "https://github.com/teskje/snowglobe.git"
+tempfile = "3.20.0"
+tokio-postgres = "0.7.15"
+tower-http = "0.6.6"
+turmoil = "0.7.0"
+tracing = "0.1.37"
+
+[lints]
+workspace = true

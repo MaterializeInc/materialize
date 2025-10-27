@@ -21,6 +21,7 @@ pub mod batching_oracle;
 pub mod metrics;
 pub mod postgres_oracle;
 pub mod retry;
+pub mod simulation_oracle;
 
 /// Timestamps used by writes in an Append command.
 #[derive(Debug)]
