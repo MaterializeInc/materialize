@@ -702,6 +702,41 @@ impl PersistClient {
         Ok(machine.latest_schema())
     }
 
+    /// Registers a schema for the given shard.
+    ///
+    /// Returns the new schema ID if the registration succeeds, and `None`
+    /// otherwise. Schema registration succeeds in two cases:
+    ///  a) No schema was currently registered for the shard.
+    ///  b) The given schema is already registered for the shard.
+    ///
+    /// To evolve an existing schema instead, use
+    /// [PersistClient::compare_and_evolve_schema].
+    //
+    // TODO: unify with `compare_and_evolve_schema`
+    pub async fn register_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+        diagnostics: Diagnostics,
+    ) -> Result<Option<SchemaId>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+
+        let (schema_id, maintenance) = machine.register_schema(key_schema, val_schema).await;
+        maintenance.start_performing(&machine, &gc);
+
+        Ok(schema_id)
+    }
+
     /// Registers a new latest schema for the given shard.
     ///
     /// This new schema must be [backward_compatible] with all previous schemas
