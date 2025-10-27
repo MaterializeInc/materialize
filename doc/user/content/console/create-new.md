@@ -114,8 +114,8 @@ application password")
    {{< yaml-table data="console/service_account_fields" >}}
 
    See also [Create service
-   accounts](/security/users-service-accounts/create-service-accounts/) for creating
-   service accounts via Terraform.
+   accounts](/security/cloud/users-service-accounts/create-service-accounts/)
+   for creating service accounts via Terraform.
 
    {{</ tab >}}
    {{</ tabs >}}
@@ -136,7 +136,7 @@ application password")
 
    For a new service account, after creating the new app password, you must
    connect with the service account to complete the account creation. {{<
-   include-md file="shared-content/rbac/service-account-creation.md" >}}
+   include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
 
    To connect:
 

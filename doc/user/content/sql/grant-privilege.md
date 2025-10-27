@@ -92,7 +92,7 @@ TO <role_name> [, ... ];
 {{< tab "Materialized view/view/source">}}
 
 {{< note >}}
-{{< include-md file="shared-content/rbac/privilege-for-views-mat-views.md" >}}
+{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
 {{</ note >}}
 
 For specific materialized view(s)/view(s)/source(s):
@@ -200,7 +200,7 @@ For all tables or all tables in a specific schema(s) or in a specific database(s
 
 {{< note >}}
 
-{{< include-md file="shared-content/rbac/grant-privilege-all-tables.md" >}}
+{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
 
 {{</ note >}}
 

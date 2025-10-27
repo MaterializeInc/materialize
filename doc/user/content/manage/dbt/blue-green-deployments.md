@@ -27,7 +27,7 @@ iteration and reduced CI costs.
 
 ## RBAC permissions requirements
 
-When using blue/green deployments with [role-based access control (RBAC)](/security/access-control/#role-based-access-control-rbac), ensure that the role executing the deployment operations has sufficient privileges on the target objects:
+When using blue/green deployments with [role-based access control (RBAC)](/security/cloud/access-control/#role-based-access-control-rbac), ensure that the role executing the deployment operations has sufficient privileges on the target objects:
 
 * The role must have ownership privileges on the schemas being deployed
 * The role must have ownership privileges on the clusters being deployed

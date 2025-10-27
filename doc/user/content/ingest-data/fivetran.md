@@ -34,7 +34,7 @@ Ensure that you have:
 - An active [Fivetran](https://www.fivetran.com/) account with
 [permission to add destinations and connectors](https://fivetran.com/docs/using-fivetran/fivetran-dashboard/account-management/role-based-access-control#legacyandnewrbacmodel).
 - For the Materialize user that you're using to connect to Fivetran,
-[`CREATE`](/security/appendix-privileges/) privileges on the
+[`CREATE`](/security/appendix/appendix-privileges/) privileges on the
 target database in Materialize.
 
 ## Setup guide
