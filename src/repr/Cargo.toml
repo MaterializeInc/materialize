@@ -57,7 +57,7 @@ mz-proto = { path = "../proto", features = ["chrono"], default-features = false 
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 mz-timely-util = { path = "../timely-util", default-features = false }
 num-traits = "0.2.15"
-num_enum = "0.7.4"
+num_enum = "0.7.5"
 ordered-float = { version = "5.0.0", features = ["serde"] }
 postgres-protocol = { version = "0.6.5" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }

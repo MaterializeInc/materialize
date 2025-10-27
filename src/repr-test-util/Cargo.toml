@@ -15,7 +15,7 @@ itertools = "0.14.0"
 mz-lowertest = { path = "../lowertest" }
 mz-ore = { path = "../ore" }
 mz-repr = { path = "../repr" }
-proc-macro2 = "1.0.95"
+proc-macro2 = "1.0.103"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
