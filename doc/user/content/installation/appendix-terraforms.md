@@ -7,7 +7,7 @@ menu:
   main:
     parent: "installation"
     identifier: "appendix-terraforms"
-    weight: 100
+    weight: 95
 ---
 
 To help you get started, Materialize provides some template Terraforms.

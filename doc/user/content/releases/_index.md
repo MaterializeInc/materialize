@@ -1,15 +1,15 @@
 ---
-title: "Release Notes"
-description: "Release notes"
+title: "Releases"
+description: "Materialize release notes"
 disable_list: true
 menu:
   main:
     identifier: "releases"
     weight: 80
+
 ---
 
 ## Releases
-
 
 
 
