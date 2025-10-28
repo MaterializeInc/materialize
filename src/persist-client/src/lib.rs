@@ -1976,7 +1976,6 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn finalize_empty_shard(dyncfgs: ConfigUpdates) {
-        const EMPTY: &[(((), ()), u64, i64)] = &[];
         let persist_client = new_test_client(&dyncfgs).await;
 
         let shard_id = ShardId::new();
@@ -1990,11 +1989,7 @@ mod tests {
         // Advance since and upper to empty, which is a pre-requisite for
         // finalization/tombstoning.
         let () = read.downgrade_since(&Antichain::new()).await;
-        let () = write
-            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
-            .await
-            .expect("usage should be valid")
-            .expect("upper should match");
+        let () = write.advance_upper(&Antichain::new()).await;
 
         let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
             .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
@@ -2031,7 +2026,6 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn finalize_shard(dyncfgs: ConfigUpdates) {
-        const EMPTY: &[(((), ()), u64, i64)] = &[];
         const DATA: &[(((), ()), u64, i64)] = &[(((), ()), 0, 1)];
         let persist_client = new_test_client(&dyncfgs).await;
 
@@ -2053,11 +2047,7 @@ mod tests {
         // Advance since and upper to empty, which is a pre-requisite for
         // finalization/tombstoning.
         let () = read.downgrade_since(&Antichain::new()).await;
-        let () = write
-            .compare_and_append(EMPTY, Antichain::from_elem(1), Antichain::new())
-            .await
-            .expect("usage should be valid")
-            .expect("upper should match");
+        let () = write.advance_upper(&Antichain::new()).await;
 
         let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
             .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
