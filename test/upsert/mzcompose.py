@@ -634,6 +634,21 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
     c.up(*dependencies)
     with c.override(
         Testdrive(no_reset=True, consistent_seed=True),
+        Materialized(
+            # Too slow
+            sanity_restart=False,
+            options=[
+                "--orchestrator-process-scratch-directory=/scratch",
+            ],
+            additional_system_parameter_defaults={
+                "unsafe_enable_unorchestrated_cluster_replicas": "true",
+                "storage_dataflow_delay_sources_past_rehydration": "true",
+                "memory_limiter_interval": "0",
+            },
+            environment_extra=materialized_environment_extra,
+            default_replication_factor=2,
+            support_external_clusterd=True,
+        ),
     ):
         c.rm("testdrive")
         c.up(Service("testdrive", idle=True))
