@@ -709,6 +709,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     let runtime = Arc::new(
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(ncpus_useful)
+            .thread_stack_size(3 * 1024 * 1024) // 3 MiB
             // The default thread name exceeds the Linux limit on thread name
             // length, so pick something shorter.
             .thread_name_fn(|| {
