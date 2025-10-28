@@ -56,7 +56,9 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, parse_id};
+use crate::internal::encoding::{
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
+};
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
 use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
@@ -825,6 +827,9 @@ pub struct RunMeta {
 pub struct HollowBatchPart<T> {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
+    /// Miscellaneous metadata.
+    #[serde(skip_serializing_if = "MetadataMap::is_empty")]
+    pub meta: MetadataMap,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
     /// A lower bound on the keys in the part. (By default, this the minimum
@@ -1213,6 +1218,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         // are added.
         let HollowBatchPart {
             key: self_key,
+            meta: self_meta,
             encoded_size_bytes: self_encoded_size_bytes,
             key_lower: self_key_lower,
             structured_key_lower: self_structured_key_lower,
@@ -1225,6 +1231,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         } = self;
         let HollowBatchPart {
             key: other_key,
+            meta: other_meta,
             encoded_size_bytes: other_encoded_size_bytes,
             key_lower: other_key_lower,
             structured_key_lower: other_structured_key_lower,
@@ -1237,6 +1244,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         } = other;
         (
             self_key,
+            self_meta,
             self_encoded_size_bytes,
             self_key_lower,
             self_structured_key_lower,
@@ -1249,6 +1257,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         )
             .cmp(&(
                 other_key,
+                other_meta,
                 other_encoded_size_bytes,
                 other_key_lower,
                 other_structured_key_lower,
@@ -2998,6 +3007,7 @@ pub(crate) mod tests {
             )| {
                 HollowBatchPart {
                     key,
+                    meta: Default::default(),
                     encoded_size_bytes,
                     key_lower,
                     structured_key_lower: None,
@@ -3171,6 +3181,7 @@ pub(crate) mod tests {
                 .map(|x| {
                     RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
+                        meta: Default::default(),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
                         structured_key_lower: None,

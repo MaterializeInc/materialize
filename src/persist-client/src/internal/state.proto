@@ -60,6 +60,8 @@ message ProtoHollowBatchPart {
   }
   optional uint64 schema_id = 12;
 
+  map<string, bytes> metadata = 14;
+
   optional bytes key_stats = 536870906;
 
   reserved 536870907 to 536870911;

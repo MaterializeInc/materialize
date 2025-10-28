@@ -1461,6 +1461,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
         parts.extend(proto.deprecated_keys.into_iter().map(|key| {
             RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey(key),
+                meta: Default::default(),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
                 structured_key_lower: None,
@@ -1571,6 +1572,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             schema_id: None,
             structured_key_lower: self.structured_key_lower.into_proto(),
             deprecated_schema_id: None,
+            metadata: BTreeMap::default(),
         };
         part
     }
@@ -1608,6 +1610,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 format: x.format.map(|f| f.into_proto()),
                 schema_id: x.schema_id.into_proto(),
                 deprecated_schema_id: x.deprecated_schema_id.into_proto(),
+                metadata: BTreeMap::default(),
             },
             BatchPart::Inline {
                 updates,
@@ -1625,6 +1628,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 format: None,
                 schema_id: schema_id.into_proto(),
                 deprecated_schema_id: deprecated_schema_id.into_proto(),
+                metadata: BTreeMap::default(),
             },
         }
     }
@@ -1640,6 +1644,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
                 Ok(BatchPart::Hollow(HollowBatchPart {
                     key: key.into_rust()?,
+                    meta: proto.metadata.into_rust()?,
                     encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
                     key_lower: proto.key_lower.into(),
                     structured_key_lower: proto.structured_key_lower.into_rust()?,
@@ -2034,6 +2039,7 @@ mod tests {
             ),
             vec![RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
+                meta: Default::default(),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
                 structured_key_lower: None,
@@ -2061,6 +2067,7 @@ mod tests {
             .parts
             .push(RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("b".into()),
+                meta: Default::default(),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
                 structured_key_lower: None,

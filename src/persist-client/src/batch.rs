@@ -51,7 +51,9 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
 use crate::error::InvalidUsage;
 use crate::internal::compact::{CompactConfig, Compactor};
-use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
+use crate::internal::encoding::{
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, Schemas,
+};
 use crate::internal::machine::retry_external;
 use crate::internal::merge::{MergeTree, Pending};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
@@ -1279,8 +1281,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             stats
         });
 
+        let meta = MetadataMap::default();
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
+            meta,
             encoded_size_bytes: payload_len,
             key_lower,
             structured_key_lower,
