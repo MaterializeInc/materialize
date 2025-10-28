@@ -256,6 +256,50 @@ where
         &self.upper
     }
 
+    /// Advance the shard's upper by the given frontier.
+    ///
+    /// If the provided `target` is less than or equal to the shard's upper, this is a no-op.
+    ///
+    /// In contrast to the various compare-and-append methods, this method does not require the
+    /// handle's write schema to be registered with the shard. That is, it is fine to use a dummy
+    /// schema when creating a writer just to advance a shard upper.
+    pub async fn advance_upper(&mut self, target: &Antichain<T>) {
+        // We avoid `fetch_recent_upper` here, to avoid a consensus roundtrip if the known upper is
+        // already beyond the target.
+        let mut lower = self.shared_upper().clone();
+
+        while !PartialOrder::less_equal(target, &lower) {
+            let since = Antichain::from_elem(T::minimum());
+            let desc = Description::new(lower.clone(), target.clone(), since);
+            let batch = HollowBatch::empty(desc);
+
+            let heartbeat_timestamp = (self.cfg.now)();
+            let res = self
+                .machine
+                .compare_and_append(
+                    &batch,
+                    &self.writer_id,
+                    &self.debug_state,
+                    heartbeat_timestamp,
+                )
+                .await;
+
+            use CompareAndAppendRes::*;
+            let new_upper = match res {
+                Success(_seq_no, maintenance) => {
+                    maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
+                    batch.desc.upper().clone()
+                }
+                UpperMismatch(_seq_no, actual_upper) => actual_upper,
+                InvalidUsage(_invalid_usage) => unreachable!("batch bounds checked above"),
+                InlineBackpressure => unreachable!("batch was empty"),
+            };
+
+            self.upper.clone_from(&new_upper);
+            lower = new_upper;
+        }
+    }
+
     /// Applies `updates` to this shard and downgrades this handle's upper to
     /// `upper`.
     ///
