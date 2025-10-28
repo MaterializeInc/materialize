@@ -157,7 +157,9 @@ impl SourceRender for SqlServerSourceConnection {
             source_outputs.insert(*id, output_info);
         }
 
-        let metrics = config.metrics.get_sql_server_source_metrics(config.id);
+        let metrics = config
+            .metrics
+            .get_sql_server_source_metrics(config.id, config.worker_id);
 
         let (repl_updates, uppers, repl_errs, repl_token) = replication::render(
             scope.clone(),
