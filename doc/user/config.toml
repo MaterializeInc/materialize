@@ -105,13 +105,13 @@ weight = 90
 name = "Materialize Cloud Security and Compliance"
 parent = "about"
 url = "https://materialize.com/security-overview"
-weight = 25
+weight = 50
 
 [[menu.main]]
 name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
-weight = 30
+weight = 55
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
