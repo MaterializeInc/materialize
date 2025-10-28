@@ -1,6 +1,6 @@
 ---
-title: "Usage & billing"
-description: "Understand the billing model of Materialize, and learn best practices for cost control."
+title: "Usage & billing (Cloud)"
+description: "Understand the billing model of Materialize Cloud, and learn best practices for cost control."
 menu:
   main:
     parent: "manage"

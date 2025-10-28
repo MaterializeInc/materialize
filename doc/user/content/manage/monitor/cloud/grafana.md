@@ -3,7 +3,7 @@ title: "Grafana"
 description: "How to monitor the performance and overall health of your Materialize region using Grafana."
 menu:
   main:
-    parent: "monitor"
+    parent: "monitor-cloud"
     weight: 10
 ---
 

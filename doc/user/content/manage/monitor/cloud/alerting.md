@@ -3,7 +3,7 @@ title: "Alerting"
 description: "Alerting thresholds to use for monitoring."
 menu:
   main:
-    parent: "monitor"
+    parent: "monitor-cloud"
     weight: 15
 ---
 

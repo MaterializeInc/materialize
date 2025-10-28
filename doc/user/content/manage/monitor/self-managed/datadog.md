@@ -1,10 +1,11 @@
 ---
-title: "Datadog"
+title: "Datadog using Prometheus SQL Exporter"
 description: "How to monitor the performance and overall health of your Materialize region using Datadog."
 menu:
   main:
-    parent: "monitor"
+    parent: "monitor-sm"
     weight: 5
+    identifier: "datadog-sm"
 ---
 
 This guide walks you through the steps required to monitor the performance and
@@ -18,12 +19,9 @@ the following additional services:
 * A Prometheus SQL Exporter.
 * A Datadog Agent configured with an [OpenMetrics check](https://docs.datadoghq.com/integrations/openmetrics/).
 
+
 ## Step 1. Set up a Prometheus SQL Exporter
 
-{{< note >}}
-As a best practice, we strongly recommend using [service accounts](/security/users-service-accounts/create-service-accounts)
-to connect external applications, like Datadog, to Materialize.
-{{</ note >}}
 
 To export metrics from Materialize and expose them in a format that Datadog can
 consume, you need to configure and run a Prometheus SQL Exporter. This service
