@@ -81,14 +81,9 @@ weight = 100
 #
 
 [[menu.main]]
-identifier = "releases-previews"
-name = "Releases"
-weight = 80
-
-[[menu.main]]
 identifier = "changelogs"
 name = "Changelog ↗️"
-parent = "releases-previews"
+parent = "releases"
 weight = 20
 url = "https://materialize.com/changelog/"
 

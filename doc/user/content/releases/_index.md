@@ -1,23 +1,22 @@
 ---
-title: "Release schedule"
-description: "How Materialize is released"
+title: "Release Notes"
+description: "Release notes"
 disable_list: true
 menu:
   main:
-    parent: releases-previews
-    weight: 5
-    identifier: releases
+    identifier: "releases"
+    weight: 80
 ---
 
-We are continually improving Materialize with new features and bug fixes. We
-periodically release these improvements to your Materialize account. This page
-describes the changes in each release and the process by which they are
-deployed.
+## Releases
 
-## Schedule
 
-Materialize upgrades all regions to the latest release each week according to
-the following schedule:
+
+
+## Materialize Cloud Upgrade Schedule
+
+Materialize Cloud upgrades all regions to the latest release each week according
+to the following schedule:
 
 Region        | Day of week | Time
 --------------|-------------|-----------------------------
