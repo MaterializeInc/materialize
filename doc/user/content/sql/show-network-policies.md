@@ -1,10 +1,12 @@
 ---
-title: "SHOW NETWORK POLICIES"
+title: "SHOW NETWORK POLICIES (Cloud)"
 description: "`SHOW NETWORK POLICIES` returns a list of all network policies configured in Materialize."
 menu:
   main:
     parent: commands
 ---
+
+*Available for Materialize Cloud only*
 
 `SHOW NETWORK POLICIES` returns a list of all network policies configured in
 Materialize. Network policies are part of Materialize's framework for

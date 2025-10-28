@@ -6,54 +6,43 @@ menu:
     parent: commands
 ---
 
-`ALTER ROLE` alters the attributes of an existing role.
+`ALTER ROLE` alters the attributes of an existing role.[^1]
+
+[^1]: Materialize does not support the `SET ROLE` command.
 
 ## Syntax
 
-{{< diagram "alter-role.svg" >}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-_role_name_         | A name for the role.
+{{< tabs >}}
 
-#### `alter_role_attributes`
+{{< tab "Cloud" >}}
 
-{{< diagram "alter-role-attributes.svg" >}}
+{{% include-example file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-**INHERIT**         | Grants the role the ability to inherit privileges of other roles.
+{{% include-example file="examples/rbac-cloud/alter_roles"
+example="alter-role-options" %}}
 
-#### `alter_role_set`
+**Note:** 
+{{% include-example file="examples/rbac-cloud/alter_roles"
+example="alter-role-details" %}}
+{{< /tab >}}
+{{< tab "Self-Managed" >}}
 
-{{< diagram "alter-role-set.svg" >}}
+{{% include-example file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-_name_              | The name of the configuration parameter to modify.
-_value_             | The value to assign to the configuration parameter.
-**DEFAULT**         | Reset the value of the configuration parameter for the specified role to the system's default. Equivalent to `ALTER ROLE ... RESET`.
+{{% include-example file="examples/rbac-sm/alter_roles"
+example="alter-role-options" %}}
 
-## Details
+**Note:** 
+{{% include-example file="examples/rbac-sm/alter_roles"
+example="alter-role-details" %}}
+{{< /tab >}}
+{{< /tabs >}}
 
-Unlike PostgreSQL, Materialize derives the `LOGIN` and `SUPERUSER`
-attributes for a role during authentication, every time that role tries
-to connect to Materialize. Therefore, you cannot specify either
-attribute when altering an existing role.
-
-Unlike PostgreSQL, Materialize does not currently support the `NOINHERIT` attribute and the `SET
-ROLE` command.
+## Restrictions
 
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `ALTER ROLE ... INHERIT INHERIT`.
-
-Unlike PostgreSQL, Materialize does not use role attributes to determine a roles ability to create
-top level objects such as databases and other roles. Instead, Materialize uses system level
-privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
-
-Like PostgreSQL, altering the configuration parameter for a role only affects **new sessions**.
-Also like PostgreSQL, role configuration parameters are **not inherited**. To view the
-current configuration parameter defaults for a role, see [`mz_role_parameters`](/sql/system-catalog/mz_catalog#mz_role_parameters).
 
 ## Examples
 
@@ -90,19 +79,56 @@ SHOW cluster;
 quickstart
 ```
 
-##### Non-inheritance
+
+#### Making a role a superuser  (Self-Managed)
+
+Unlike regular roles, superusers have unrestricted access to all objects in the system and can perform any action on them.
+
 ```mzsql
-CREATE ROLE team;
-CREATE ROLE member;
-
-ALTER ROLE team SET cluster = 'team_compute';
-GRANT team TO member;
-
--- Start a new SQL session with the Role 'member'.
-SHOW cluster;
-quickstart
+ALTER ROLE rj SUPERUSER;
 ```
 
+To verify that the role has superuser privileges, you can query the `pg_authid` system catalog:
+
+```mzsql
+SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
+```
+
+```nofmt
+rj  t
+```
+
+#### Removing the superuser attribute from a role (Self-Managed)
+
+NOSUPERUSER will remove the superuser attribute from a role, preventing it from having unrestricted access to all objects in the system.
+
+```mzsql
+ALTER ROLE rj NOSUPERUSER;
+```
+
+```mzsql
+SELECT name, rolsuper FROM pg_authid WHERE rolname = 'rj';
+```
+
+```nofmt
+rj  f
+```
+
+#### Removing a role's password (Self-Managed)
+
+{{< warning >}}
+Setting a NULL password removes the password.
+{{< /warning >}}
+
+```mzsql
+ALTER ROLE rj PASSWORD NULL;
+```
+
+#### Changing a role's password (Self-Managed)
+
+```mzsql
+ALTER ROLE rj PASSWORD 'new_password';
+```
 ## Privileges
 
 The privileges required to execute this statement are:

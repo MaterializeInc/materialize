@@ -1,3 +1,26 @@
+- name: "create-role-syntax"
+  description: |
+    The following syntax is used to create a role in Materialize Cloud.
+  code: |
+    CREATE ROLE <role_name> [[WITH] INHERIT];
+
+- name: "create-role-options"
+  description: |
+    {{< yaml-table data="syntax_options/create_role_cloud_options" >}}
+
+- name: "create-role-details"
+  description: |
+     - Materialize Cloud does not support the `NOINHERIT` option for `CREATE
+     ROLE`.
+     - Materialize Cloud does not support the `LOGIN` and `SUPERUSER` attributes
+       for `CREATE ROLE`.  See [Organization
+       roles](/security/cloud/users-service-accounts/#organization-roles)
+       instead.
+     - Materialize Cloud does not use role attributes to determine a role's
+     ability to create top level objects such as databases and other roles.
+     Instead, Materialize uses system level privileges. See [GRANT
+     PRIVILEGE](../grant-privilege) for more details.
+    
 - name: "create-role-view-manager"
   description: |
 

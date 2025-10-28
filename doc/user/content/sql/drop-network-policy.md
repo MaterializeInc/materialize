@@ -1,10 +1,12 @@
 ---
-title: "DROP NETWORK POLICY"
+title: "DROP NETWORK POLICY (Cloud)"
 description: "`DROP NETWORK POLICY` removes an existing network policy from Materialize."
 menu:
   main:
     parent: commands
 ---
+
+*Available for Materialize Cloud only*
 
 `DROP NETWORK POLICY` removes an existing network policy from Materialize.
 Network policies are part of Materialize's framework for [access control](/security/access-control/).

@@ -1,3 +1,29 @@
+- name: "alter-role-syntax"
+  description: |
+    The following syntax is used to alter a role in Materialize Cloud.
+  code: |
+    ALTER ROLE <role_name> 
+    [[WITH] INHERIT]
+    [SET <config> =|TO <value|DEFAULT> ]
+    [RESET <config>];
+
+- name: "alter-role-options"
+  description: |
+    {{< yaml-table data="syntax_options/alter_role_cloud_options" >}}
+
+- name: alter-role-details
+  description: |
+     - Materialize Cloud does not support the `NOINHERIT` option for `ALTER
+     ROLE`.
+     - Materialize Cloud does not support the `LOGIN` and `SUPERUSER` attributes
+       for `ALTER ROLE`.  See [Organization
+       roles](/security/cloud/users-service-accounts/#organization-roles)
+       instead.
+     - Materialize Cloud does not use role attributes to determine a role's
+     ability to alter top level objects such as databases and other roles.
+     Instead, Materialize Cloud uses system level privileges. See [GRANT
+     PRIVILEGE](../grant-privilege) for more details.
+
 - name: "alter-roles-configurations"
   description: |
 

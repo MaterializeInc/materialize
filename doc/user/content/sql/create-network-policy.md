@@ -1,10 +1,12 @@
 ---
-title: "CREATE NETWORK POLICY"
-description: "`CREATE NETWORK POLICY` creates a network policy that restricts access to a Materialize region using IP-based rules."
+title: "CREATE NETWORK POLICY (Cloud)"
+description: "`CREATE NETWORK POLICY` creates a network policy that restricts access to a Materialize Cloud region using IP-based rules."
 menu:
   main:
     parent: commands
 ---
+
+*Available for Materialize Cloud only*
 
 `CREATE NETWORK POLICY` creates a network policy that restricts access to a
 Materialize region using IP-based rules. Network policies are part of
