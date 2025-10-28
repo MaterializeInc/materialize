@@ -10,7 +10,6 @@
 //! A source that reads from an a persist shard.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use mz_dyncfg::ConfigSet;
 use std::convert::Infallible;
 use std::fmt::Debug;
 use std::future::Future;
@@ -139,9 +138,6 @@ pub fn persist_source<G>(
     source_id: GlobalId,
     persist_clients: Arc<PersistClientCache>,
     txns_ctx: &TxnsContext,
-    // In case we need to use a dyncfg to decide which operators to render in a
-    // dataflow.
-    worker_dyncfgs: &ConfigSet,
     metadata: CollectionMetadata,
     read_schema: Option<RelationDesc>,
     as_of: Option<Antichain<Timestamp>>,
@@ -236,7 +232,6 @@ where
             stream,
             &source_id.to_string(),
             txns_ctx,
-            worker_dyncfgs,
             move || {
                 let (c, l) = (
                     Arc::clone(&persist_clients),

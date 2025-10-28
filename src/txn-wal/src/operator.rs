@@ -20,10 +20,10 @@ use differential_dataflow::Hashable;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
-use mz_dyncfg::{Config, ConfigSet, ConfigUpdates};
+use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
 use mz_ore::task::JoinHandleExt;
-use mz_persist_client::cfg::{RetryParameters, USE_GLOBAL_TXN_CACHE_SOURCE};
+use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
 };
@@ -48,7 +48,7 @@ use tracing::debug;
 
 use crate::TxnsCodecDefault;
 use crate::txn_cache::TxnsCache;
-use crate::txn_read::{DataListenNext, DataRemapEntry, TxnsRead};
+use crate::txn_read::{DataRemapEntry, TxnsRead};
 
 /// An operator for translating physical data shard frontiers into logical ones.
 ///
@@ -96,7 +96,6 @@ pub fn txns_progress<K, V, T, D, P, C, F, G>(
     passthrough: Stream<G, P>,
     name: &str,
     ctx: &TxnsContext,
-    worker_dyncfgs: &ConfigSet,
     client_fn: impl Fn() -> F,
     txns_id: ShardId,
     data_id: ShardId,
@@ -116,32 +115,18 @@ where
     G: Scope<Timestamp = T>,
 {
     let unique_id = (name, passthrough.scope().addr()).hashed();
-    let (remap, source_button) = if USE_GLOBAL_TXN_CACHE_SOURCE.get(worker_dyncfgs) {
-        txns_progress_source_global::<K, V, T, D, P, C, G>(
-            passthrough.scope(),
-            name,
-            ctx.clone(),
-            client_fn(),
-            txns_id,
-            data_id,
-            as_of,
-            data_key_schema,
-            data_val_schema,
-            unique_id,
-        )
-    } else {
-        txns_progress_source_local::<K, V, T, D, P, C, G>(
-            passthrough.scope(),
-            name,
-            client_fn(),
-            txns_id,
-            data_id,
-            as_of,
-            data_key_schema,
-            data_val_schema,
-            unique_id,
-        )
-    };
+    let (remap, source_button) = txns_progress_source_global::<K, V, T, D, P, C, G>(
+        passthrough.scope(),
+        name,
+        ctx.clone(),
+        client_fn(),
+        txns_id,
+        data_id,
+        as_of,
+        data_key_schema,
+        data_val_schema,
+        unique_id,
+    );
     // Each of the `txns_frontiers` workers wants the full copy of the remap
     // information.
     let remap = remap.broadcast();
@@ -154,110 +139,6 @@ where
         unique_id,
     );
     (passthrough, vec![source_button, frontiers_button])
-}
-
-/// An alternative implementation of [`txns_progress_source_global`] that opens
-/// a new [`TxnsCache`] local to the operator.
-fn txns_progress_source_local<K, V, T, D, P, C, G>(
-    scope: G,
-    name: &str,
-    client: impl Future<Output = PersistClient> + 'static,
-    txns_id: ShardId,
-    data_id: ShardId,
-    as_of: T,
-    data_key_schema: Arc<K::Schema>,
-    data_val_schema: Arc<V::Schema>,
-    unique_id: u64,
-) -> (Stream<G, DataRemapEntry<T>>, PressOnDropButton)
-where
-    K: Debug + Codec + Send + Sync,
-    V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
-    P: Debug + Data,
-    C: TxnsCodec + 'static,
-    G: Scope<Timestamp = T>,
-{
-    let worker_idx = scope.index();
-    let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
-    let name = format!("txns_progress_source({})", name);
-    let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
-    let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (remap_output, remap_stream) = builder.new_output();
-
-    let shutdown_button = builder.build(move |capabilities| async move {
-        if worker_idx != chosen_worker {
-            return;
-        }
-
-        let [mut cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
-        let client = client.await;
-        let mut txns_cache = TxnsCache::<T, C>::open(&client, txns_id, Some(data_id)).await;
-
-        let _ = txns_cache.update_gt(&as_of).await;
-        let mut subscribe = txns_cache.data_subscribe(data_id, as_of.clone());
-        let data_write = client
-            .open_writer::<K, V, T, D>(
-                data_id,
-                Arc::clone(&data_key_schema),
-                Arc::clone(&data_val_schema),
-                Diagnostics::from_purpose("data read physical upper"),
-            )
-            .await
-            .expect("schema shouldn't change");
-        if let Some(snapshot) = subscribe.snapshot.take() {
-            snapshot.unblock_read(data_write).await;
-        }
-
-        debug!("{} emitting {:?}", name, subscribe.remap);
-        remap_output.give(&cap, subscribe.remap.clone());
-
-        loop {
-            let _ = txns_cache.update_ge(&subscribe.remap.logical_upper).await;
-            cap.downgrade(&subscribe.remap.logical_upper);
-            let data_listen_next =
-                txns_cache.data_listen_next(&subscribe.data_id, &subscribe.remap.logical_upper);
-            debug!(
-                "{} data_listen_next at {:?}: {:?}",
-                name, subscribe.remap.logical_upper, data_listen_next,
-            );
-            match data_listen_next {
-                // We've caught up to the txns upper and we have to wait for it
-                // to advance before asking again.
-                //
-                // Note that we're asking again with the same input, but once
-                // the cache is past remap.logical_upper (as it will be after
-                // this update_gt call), we're guaranteed to get an answer.
-                DataListenNext::WaitForTxnsProgress => {
-                    let _ = txns_cache.update_gt(&subscribe.remap.logical_upper).await;
-                }
-                // The data shard got a write!
-                DataListenNext::ReadDataTo(new_upper) => {
-                    // A write means both the physical and logical upper advance.
-                    subscribe.remap = DataRemapEntry {
-                        physical_upper: new_upper.clone(),
-                        logical_upper: new_upper,
-                    };
-                    debug!("{} emitting {:?}", name, subscribe.remap);
-                    remap_output.give(&cap, subscribe.remap.clone());
-                }
-                // We know there are no writes in `[logical_upper,
-                // new_progress)`, so advance our output frontier.
-                DataListenNext::EmitLogicalProgress(new_progress) => {
-                    assert!(subscribe.remap.physical_upper < new_progress);
-                    assert!(subscribe.remap.logical_upper < new_progress);
-
-                    subscribe.remap.logical_upper = new_progress;
-                    // As mentioned in the docs on `DataRemapEntry`, we only
-                    // emit updates when the physical upper changes (which
-                    // happens to makes the protocol a tiny bit more
-                    // remap-like).
-                    debug!("{} not emitting {:?}", name, subscribe.remap);
-                }
-            }
-        }
-    });
-    (remap_stream, shutdown_button.press_on_drop())
 }
 
 /// TODO: I'd much prefer the communication protocol between the two operators
@@ -638,7 +519,6 @@ impl DataSubscribe {
         data_id: ShardId,
         as_of: u64,
         until: Antichain<u64>,
-        use_global_txn_cache: bool,
     ) -> Self {
         let mut worker = Worker::new(
             WorkerConfig::default(),
@@ -675,18 +555,11 @@ impl DataSubscribe {
                 })
             });
             let data_stream = data_stream.probe_with(&data);
-            // We purposely do not use the `ConfigSet` in `client` so that
-            // different tests can set different values.
-            let config_set = ConfigSet::default().add(&USE_GLOBAL_TXN_CACHE_SOURCE);
-            let mut updates = ConfigUpdates::default();
-            updates.add(&USE_GLOBAL_TXN_CACHE_SOURCE, use_global_txn_cache);
-            updates.apply(&config_set);
             let (data_stream, mut txns_progress_token) =
                 txns_progress::<String, (), u64, i64, _, TxnsCodecDefault, _, _>(
                     data_stream,
                     name,
                     &TxnsContext::default(),
-                    &config_set,
                     || std::future::ready(client.clone()),
                     txns_id,
                     data_id,
@@ -843,7 +716,6 @@ impl DataSubscribeTask {
             data_id,
             as_of,
             Antichain::new(),
-            true,
         );
         let mut output = Vec::new();
         loop {
@@ -1071,7 +943,6 @@ mod tests {
             d0,
             3,
             Antichain::from_elem(until),
-            true,
         );
         // Manually step the dataflow, instead of going through the
         // `DataSubscribe` helper because we're interested in all captured
