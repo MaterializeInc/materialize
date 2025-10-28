@@ -1609,7 +1609,7 @@ where
             let as_of = f.step_back().unwrap();
 
             storage_collections
-                .snapshot(id, as_of)
+                .snapshot_cursor(id, as_of)
                 .await
                 .expect("snapshot succeeds")
         }
@@ -1622,10 +1622,14 @@ where
     let mut latest_row_per_key: BTreeMap<K, (CheckedTimestamp<DateTime<Utc>>, Row)> =
         BTreeMap::new();
 
-    // Consolidate the snapshot, so we can process it correctly below.
-    differential_dataflow::consolidation::consolidate(&mut rows);
+    // It is very important that we append our retractions at the timestamp
+    // right after the timestamp at which we got our snapshot. Otherwise,
+    // it's possible for someone else to sneak in retractions or other
+    // unexpected changes.
+    let expected_upper = upper.into_option().expect("checked above");
+    let new_upper = TimestampManipulation::step_forward(&expected_upper);
 
-    let mut deletions = vec![];
+    let mut deletions = write_handle.builder(Antichain::from_elem(expected_upper.clone()));
 
     let mut handle_row = {
         let latest_row_per_key = &mut latest_row_per_key;
@@ -1659,29 +1663,36 @@ where
                 BinaryHeap<Reverse<(CheckedTimestamp<DateTime<Utc>>, Row)>>,
             > = BTreeMap::new();
 
-            for (row, diff) in rows {
-                let (key, timestamp) = handle_row(&row, diff);
+            while let Some(chunk) = rows.next().await {
+                for ((key, _v), _t, diff) in chunk {
+                    let data = key.expect("successful decode");
+                    let Ok(row) = &data.0 else { continue };
+                    let (key, timestamp) = handle_row(row, diff);
 
-                // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
-                // so we handle duplicated rows separately.
-                let entries = last_n_entries_per_key.entry(key).or_default();
-                for _ in 0..diff {
-                    // We CAN have multiple statuses (most likely Starting and Running) at the exact same
-                    // millisecond, depending on how the `health_operator` is scheduled.
-                    //
-                    // Note that these will be arbitrarily ordered, so a Starting event might
-                    // survive and a Running one won't. The next restart will remove the other,
-                    // so we don't bother being careful about it.
-                    //
-                    // TODO(guswynn): unpack these into health-status objects and use
-                    // their `Ord` impl.
-                    entries.push(Reverse((timestamp, row.clone())));
+                    // Duplicate rows ARE possible if many status changes happen in VERY quick succession,
+                    // so we handle duplicated rows separately.
+                    let entries = last_n_entries_per_key.entry(key).or_default();
+                    for _ in 0..diff {
+                        // We CAN have multiple statuses (most likely Starting and Running) at the exact same
+                        // millisecond, depending on how the `health_operator` is scheduled.
+                        //
+                        // Note that these will be arbitrarily ordered, so a Starting event might
+                        // survive and a Running one won't. The next restart will remove the other,
+                        // so we don't bother being careful about it.
+                        //
+                        // TODO(guswynn): unpack these into health-status objects and use
+                        // their `Ord` impl.
+                        entries.push(Reverse((timestamp, row.clone())));
 
-                    // Retain some number of entries, using pop to mark the oldest entries for
-                    // deletion.
-                    while entries.len() > n {
-                        if let Some(Reverse((_, r))) = entries.pop() {
-                            deletions.push(r);
+                        // Retain some number of entries, using pop to mark the oldest entries for
+                        // deletion.
+                        while entries.len() > n {
+                            if let Some(Reverse((_, r))) = entries.pop() {
+                                deletions
+                                    .add(&SourceData(Ok(r)), &(), &expected_upper, &-1)
+                                    .await
+                                    .expect("usage should be valid");
+                            }
                         }
                     }
                 }
@@ -1693,34 +1704,36 @@ where
             let keep_since = now - time_window;
 
             // Mark any row outside the retention window for deletion
-            for (row, diff) in rows {
-                let (_, timestamp) = handle_row(&row, diff);
+            while let Some(chunk) = rows.next().await {
+                for ((key, _v), _t, diff) in chunk {
+                    let data = key.expect("successful decode");
+                    let Ok(row) = &data.0 else { continue };
+                    let (_, timestamp) = handle_row(row, diff);
 
-                if *timestamp < keep_since {
-                    deletions.push(row);
+                    if *timestamp < keep_since {
+                        deletions
+                            .add(&data, &(), &expected_upper, &-1)
+                            .await
+                            .expect("usage should be valid");
+                    }
                 }
             }
         }
     }
 
-    // It is very important that we append our retractions at the timestamp
-    // right after the timestamp at which we got our snapshot. Otherwise,
-    // it's possible for someone else to sneak in retractions or other
-    // unexpected changes.
-    let expected_upper = upper.into_option().expect("checked above");
-    let new_upper = TimestampManipulation::step_forward(&expected_upper);
+    let mut updates = deletions
+        .finish(Antichain::from_elem(new_upper.clone()))
+        .await
+        .expect("expected valid usage");
+    let mut batches = vec![&mut updates];
 
-    // Updates are only deletes because everything else is already in the shard.
-    let updates = deletions
-        .into_iter()
-        .map(|row| ((SourceData(Ok(row)), ()), expected_upper.clone(), -1))
-        .collect::<Vec<_>>();
-
+    // Updates are only deletes because everything else is already in the shard.\
     let res = write_handle
-        .compare_and_append(
-            updates,
+        .compare_and_append_batch(
+            batches.as_mut_slice(),
             Antichain::from_elem(expected_upper.clone()),
             Antichain::from_elem(new_upper),
+            true,
         )
         .await
         .expect("usage was valid");
