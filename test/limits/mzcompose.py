@@ -2212,21 +2212,25 @@ def run_scenarios(
                         break
                     continue
                 else:
+                    explain_wallclock = None
+                    explain_wallclock_str = ""
                     if scenario.EXPLAIN:
-                        with c.sql_cursor(
-                            sslmode="require",
-                            user=ADMIN_USER,
-                            password=app_password(ADMIN_USER),
-                        ) as cur:
-                            start_time = time.time()
-                            cur.execute(scenario.EXPLAIN.encode())
-                            explain_wallclock = time.time() - start_time
-                            explain_wallclock_str = (
-                                f", explain took {explain_wallclock:.2f} s"
+                        try:
+                            with c.sql_cursor(
+                                sslmode="require",
+                                user=ADMIN_USER,
+                                password=app_password(ADMIN_USER),
+                            ) as cur:
+                                start_time = time.time()
+                                cur.execute(scenario.EXPLAIN.encode())
+                                explain_wallclock = time.time() - start_time
+                                explain_wallclock_str = (
+                                    f", explain took {explain_wallclock:.2f} s"
+                                )
+                        except Exception as e:
+                            print(
+                                f"Failed explain in scenario {scenario.__name__} with count {scenario.COUNT}: {e}, ignoring"
                             )
-                    else:
-                        explain_wallclock = None
-                        explain_wallclock_str = ""
                     print(
                         f"Scenario {scenario.__name__} with count {scenario.COUNT} took {wallclock:.2f} s{explain_wallclock_str}"
                     )
