@@ -321,7 +321,7 @@ where
             .await
             .expect("schema shouldn't change");
         let mut rx = txns_read
-            .data_subscribe(data_id, as_of.clone(), Box::new(data_write))
+            .data_subscribe(data_id, as_of.clone(), data_write)
             .await;
         debug!("{} starting as_of={:?}", name, as_of);
 

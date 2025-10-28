@@ -345,24 +345,6 @@ pub struct DataSubscription<T> {
     tx: mpsc::UnboundedSender<DataRemapEntry<T>>,
 }
 
-#[async_trait::async_trait]
-pub(crate) trait UnblockRead<T>: Debug + Send {
-    async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>);
-}
-
-#[async_trait::async_trait]
-impl<K, V, T, D> UnblockRead<T> for WriteHandle<K, V, T, D>
-where
-    K: Debug + Codec + Send + Sync,
-    V: Debug + Codec + Send + Sync,
-    T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
-{
-    async fn unblock_read(self: Box<Self>, snapshot: DataSnapshot<T>) {
-        snapshot.unblock_read(*self).await;
-    }
-}
-
 /// A shared [TxnsCache] running in a task and communicated with over a channel.
 #[derive(Debug, Clone)]
 pub struct TxnsRead<T> {
@@ -421,19 +403,25 @@ impl<T: Timestamp + Lattice + Codec64 + Sync> TxnsRead<T> {
     /// Initiate a subscription to `data_id`.
     ///
     /// Returns a channel that [`DataRemapEntry`]s are sent over.
-    pub(crate) async fn data_subscribe(
+    pub(crate) async fn data_subscribe<K, V, D>(
         &self,
         data_id: ShardId,
         as_of: T,
-        unblock: Box<dyn UnblockRead<T>>,
-    ) -> mpsc::UnboundedReceiver<DataRemapEntry<T>> {
-        self.send(|tx| TxnsReadCmd::DataSubscribe {
-            data_id,
-            as_of,
-            unblock,
-            tx,
-        })
-        .await
+        unblock: WriteHandle<K, V, T, D>,
+    ) -> mpsc::UnboundedReceiver<DataRemapEntry<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
+        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    {
+        let (snapshot, rest) = self
+            .send(|tx| TxnsReadCmd::DataSubscribe { data_id, as_of, tx })
+            .await;
+        if let Some(snapshot) = snapshot {
+            snapshot.unblock_read(unblock).await;
+        }
+        rest
     }
 
     /// See [TxnsCache::update_ge].
@@ -527,8 +515,10 @@ enum TxnsReadCmd<T> {
     DataSubscribe {
         data_id: ShardId,
         as_of: T,
-        unblock: Box<dyn UnblockRead<T>>,
-        tx: oneshot::Sender<mpsc::UnboundedReceiver<DataRemapEntry<T>>>,
+        tx: oneshot::Sender<(
+            Option<DataSnapshot<T>>,
+            mpsc::UnboundedReceiver<DataRemapEntry<T>>,
+        )>,
     },
     Wait {
         id: Uuid,
@@ -707,19 +697,9 @@ where
                     let res = self.cache.data_snapshot(data_id, as_of.clone());
                     let _ = tx.send(res);
                 }
-                TxnsReadCmd::DataSubscribe {
-                    data_id,
-                    as_of,
-                    unblock,
-                    tx,
-                } => {
+                TxnsReadCmd::DataSubscribe { data_id, as_of, tx } => {
                     let mut subscribe = self.cache.data_subscribe(data_id, as_of.clone());
-                    if let Some(snapshot) = subscribe.snapshot.take() {
-                        mz_ore::task::spawn(
-                            || "txn-wal::unblock_subscribe",
-                            unblock.unblock_read(snapshot),
-                        );
-                    }
+                    let snapshot = subscribe.snapshot.take();
                     let (sub_tx, sub_rx) = mpsc::unbounded_channel();
                     // Send the initial remap entry.
                     sub_tx
@@ -732,7 +712,7 @@ where
                     // Fill the subscriber in on the updates from as_of to the current progress.
                     Self::update_subscription(&mut subscription, &self.cache);
                     self.data_subscriptions.push(subscription);
-                    let _ = tx.send(sub_rx);
+                    let _ = tx.send((snapshot, sub_rx));
                 }
                 TxnsReadCmd::Wait { id, ts, tx } => {
                     let mut pending_wait = PendingWait { ts, tx: Some(tx) };
