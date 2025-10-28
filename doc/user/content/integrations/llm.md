@@ -30,7 +30,7 @@ To install and launch the MCP Server for Materialize:
 ```bash
 uv venv
 uv pip install mcp-materialize-agents
-uv run mcp_materialize_agents
+MZ_DSN=<DSN> uv run mcp_materialize_agents
 ```
 
 You can configure it using CLI flags or environment variables:
