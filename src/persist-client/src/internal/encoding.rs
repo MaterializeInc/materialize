@@ -19,7 +19,7 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastInto;
-use mz_ore::{assert_none, halt};
+use mz_ore::{assert_none, halt, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
@@ -32,7 +32,7 @@ use proptest::strategy::Strategy;
 use prost::Message;
 use semver::Version;
 use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
@@ -189,6 +189,105 @@ impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
             buf,
             _phantom: PhantomData,
         })
+    }
+}
+
+/// Our Proto implementation, Prost, cannot handle unrecognized fields. This means that unexpected
+/// data will be dropped at deserialization time, which means that we can't reliably roundtrip data
+/// from future versions of the code, which causes trouble during upgrades and at other times.
+///
+/// This type works around the issue by defining an unstructured metadata map. Keys are expected to
+/// be well-known strings defined in the code; values are bytes, expected to be encoded protobuf.
+/// (The association between the two is lightly enforced with the affiliated [MetadataKey] type.)
+/// It's safe to add new metadata keys in new versions, since even unrecognized keys can be losslessly
+/// roundtripped. However, if the metadata is not safe for the old version to ignore -- perhaps it
+/// needs to be kept in sync with some other part of the struct -- you will need to use a more
+/// heavyweight migration for it.
+#[derive(Debug, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub(crate) struct MetadataMap(BTreeMap<String, Bytes>);
+
+/// Associating a field name and an associated Proto message type, for lookup in a metadata map.
+///
+/// It is an error to reuse key names, or to change the type associated with a particular name.
+/// It is polite to choose short names, since they get serialized alongside every struct.
+#[allow(unused)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub(crate) struct MetadataKey<V, P = V> {
+    name: &'static str,
+    type_: PhantomData<(V, P)>,
+}
+
+impl<V, P> MetadataKey<V, P> {
+    #[allow(unused)]
+    pub(crate) const fn new(name: &'static str) -> Self {
+        MetadataKey {
+            name,
+            type_: PhantomData,
+        }
+    }
+}
+
+impl serde::Serialize for MetadataMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_map(self.0.iter())
+    }
+}
+
+impl MetadataMap {
+    /// Returns true iff no metadata keys have been set.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Serialize and insert a new key into the map, replacing any existing value for the key.
+    #[allow(unused)]
+    pub fn set<V: RustType<P>, P: prost::Message>(&mut self, key: MetadataKey<V, P>, value: V) {
+        self.0.insert(
+            String::from(key.name),
+            Bytes::from(value.into_proto_owned().encode_to_vec()),
+        );
+    }
+
+    /// Deserialize a key from the map, if it is present.
+    #[allow(unused)]
+    pub fn get<V: RustType<P>, P: prost::Message + Default>(
+        &self,
+        key: MetadataKey<V, P>,
+    ) -> Option<V> {
+        let proto = match P::decode(self.0.get(key.name)?.as_ref()) {
+            Ok(decoded) => decoded,
+            Err(err) => {
+                // This should be impossible unless one of the MetadataKey invariants are broken.
+                soft_panic_or_log!(
+                    "error when decoding {key}; was it redefined? {err}",
+                    key = key.name
+                );
+                return None;
+            }
+        };
+
+        match proto.into_rust() {
+            Ok(proto) => Some(proto),
+            Err(err) => {
+                // This should be impossible unless one of the MetadataKey invariants are broken.
+                soft_panic_or_log!(
+                    "error when decoding {key}; was it redefined? {err}",
+                    key = key.name
+                );
+                None
+            }
+        }
+    }
+}
+impl RustType<BTreeMap<String, Bytes>> for MetadataMap {
+    fn into_proto(&self) -> BTreeMap<String, Bytes> {
+        self.0.clone()
+    }
+    fn from_proto(proto: BTreeMap<String, Bytes>) -> Result<Self, TryFromProtoError> {
+        Ok(MetadataMap(proto))
     }
 }
 
@@ -1838,6 +1937,25 @@ mod tests {
     use crate::tests::new_test_client_cache;
 
     use super::*;
+
+    #[mz_ore::test]
+    fn metadata_map() {
+        const COUNT: MetadataKey<u64> = MetadataKey::new("count");
+
+        let mut map = MetadataMap::default();
+        map.set(COUNT, 100);
+        let mut map = MetadataMap::from_proto(map.into_proto()).unwrap();
+        assert_eq!(map.get(COUNT), Some(100));
+
+        const ANTICHAIN: MetadataKey<Antichain<u64>, ProtoU64Antichain> =
+            MetadataKey::new("antichain");
+        assert_none!(map.get(ANTICHAIN));
+
+        map.set(ANTICHAIN, Antichain::from_elem(30));
+        let map = MetadataMap::from_proto(map.into_proto()).unwrap();
+        assert_eq!(map.get(COUNT), Some(100));
+        assert_eq!(map.get(ANTICHAIN), Some(Antichain::from_elem(30)));
+    }
 
     #[mz_ore::test]
     fn applier_version_state() {
