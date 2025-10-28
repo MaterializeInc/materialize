@@ -62,30 +62,35 @@ sanitizer = {
         "-Cdebug-assertions=on",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
+        "--cfg=tokio_unstable",
     ],
     Sanitizer.hwaddress: [
         "-Zsanitizer=hwaddress",
         "-Ctarget-feature=+tagged-globals",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
+        "--cfg=tokio_unstable",
     ],
     Sanitizer.cfi: [
         "-Zsanitizer=cfi",
         "-Clto",  # error: `-Zsanitizer=cfi` requires `-Clto` or `-Clinker-plugin-lto`
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
+        "--cfg=tokio_unstable",
     ],
     Sanitizer.thread: [
         "-Zsanitizer=thread",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
+        "--cfg=tokio_unstable",
     ],
     Sanitizer.leak: [
         "-Zsanitizer=leak",
         "-Clink-arg=-fuse-ld=lld",  # access beyond end of merged section
         "-Clinker=clang++",
+        "--cfg=tokio_unstable",
     ],
-    Sanitizer.undefined: ["-Clink-arg=-fsanitize=undefined", "-Clinker=clang++"],
+    Sanitizer.undefined: ["-Clink-arg=-fsanitize=undefined", "-Clinker=clang++", "--cfg=tokio_unstable"],
 }
 
 sanitizer_cflags = {

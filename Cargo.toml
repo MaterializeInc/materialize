@@ -286,6 +286,7 @@ similar = { opt-level = 3 }
 [profile.release]
 # Compile time seems similar to "lto = false", runtime ~10% faster
 lto = "thin"
+incremental = false
 
 # Emit full debug info, allowing us to easily analyze core dumps from
 # staging (and, in an emergency, also prod).

@@ -191,7 +191,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "CXXSTDLIB": "stdc++",
                     "CC": "cc",
                     "CXX": "c++",
-                    "CPP": "clang-cpp-18",
+                    "CPP": "clang-cpp-20",
                     "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                     "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                     "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

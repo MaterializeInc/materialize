@@ -384,38 +384,35 @@ class CargoBuild(CargoPreImage):
             else (
                 rustc_flags.sanitizer[rd.sanitizer]
                 if rd.sanitizer != Sanitizer.none
-                else ["--cfg=tokio_unstable"]
+                else ["--cfg=tokio_unstable", "-Clink-arg=-fuse-ld=lld", "-Clinker=clang++", "-Clinker-plugin-lto"]
             )
         )
-        cflags = (
-            [
-                f"--target={target(rd.arch)}",
-                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
-                "-fuse-ld=lld",
-                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
-                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
-            ]
-            + rustc_flags.sanitizer_cflags[rd.sanitizer]
-            if rd.sanitizer != Sanitizer.none
-            else []
-        )
-        extra_env = (
-            {
-                "CFLAGS": " ".join(cflags),
-                "CXXFLAGS": " ".join(cflags),
-                "LDFLAGS": " ".join(cflags),
-                "CXXSTDLIB": "stdc++",
-                "CC": "cc",
-                "CXX": "c++",
-                "CPP": "clang-cpp-18",
-                "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
-            }
-            if rd.sanitizer != Sanitizer.none
-            else {}
-        )
+        cflags = [
+            f"--target={target(rd.arch)}",
+            f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
+            "-flto=thin",
+            "-fuse-ld=lld",
+            f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
+            f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
+            "-O3",
+        ]
+        if rd.sanitizer != Sanitizer.none:
+            cflags += rustc_flags.sanitizer_cflags[rd.sanitizer]
+
+        extra_env = {
+            "CFLAGS": " ".join(cflags),
+            "CXXFLAGS": " ".join(cflags),
+            "LDFLAGS": " ".join(cflags),
+            "CXXSTDLIB": "stdc++",
+            "CC": "/sanshim/cc",
+            "CXX": "/sanshim/c++",
+            "CPP": "clang-cpp-20",
+            "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/sanshim/cc",
+            "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/sanshim/cc",
+            "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        }
+        if rd.sanitizer != Sanitizer.none:
+            extra_env["TSAN_OPTIONS"] = "report_bugs=0"  # build-scripts fail
 
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env

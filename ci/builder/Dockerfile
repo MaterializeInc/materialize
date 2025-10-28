@@ -108,13 +108,81 @@ RUN userdel -r ubuntu
 
 ENTRYPOINT ["autouseradd", "--user", "materialize"]
 
-# Stage 2: Build a full CI Builder image that can be used for any CI job.
+# Stage 2. Build a cross-compiling toolchain that targets the oldest version of
+# Linux that we support.
+#
+# TODO(parkmycar): This shouldn't be necessary anymore with Bazel.
+FROM ubuntu:noble-20250619 as crosstool
+
+ARG ARCH_GCC
+ARG ARCH_GO
+
+WORKDIR /scratch
+
+# The environment variables are necessary to convince `tzdata`'s install scripts
+# not to hang.
+# See: https://serverfault.com/questions/949991/how-to-install-tzdata-on-a-ubuntu-docker-image
+RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    autoconf \
+    automake \
+    bison \
+    bzip2 \
+    ca-certificates \
+    curl \
+    file \
+    flex \
+    gawk \
+    g++ \
+    gcc \
+    gnupg2 \
+    help2man \
+    libc-dev \
+    libncurses-dev \
+    libstdc++6 \
+    libstdc++-13-dev \
+    libtool-bin \
+    llvm \
+    make \
+    patch \
+    texinfo \
+    unzip \
+    xz-utils
+
+COPY crosstool.asc ./
+
+# Faster uncompression
+ARG XZ_OPT=-T0
+
+RUN gpg --import crosstool.asc \
+    && rm crosstool.asc \
+    && echo "trusted-key 09f6dd5f1f30ef2e" >> ~/.gnupg/gpg.conf \
+    && mkdir crosstool \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/releases/download/crosstool-ng-1.26.0/crosstool-ng-1.26.0.tar.xz > crosstool.tar.xz \
+    && curl -fsSL https://github.com/crosstool-ng/crosstool-ng/releases/download/crosstool-ng-1.26.0/crosstool-ng-1.26.0.tar.xz.sig > crosstool.sig \
+    && gpg --verify crosstool.sig crosstool.tar.xz \
+    && tar -xf crosstool.tar.xz -C crosstool --strip-components=1 \
+    && rm crosstool.sig crosstool.tar.xz \
+    && (cd crosstool && ./configure && make install) \
+    && rm -rf crosstool
+
+COPY crosstool-$ARCH_GCC.defconfig ./
+
+RUN DEFCONFIG=crosstool-$ARCH_GCC.defconfig ct-ng defconfig \
+    && rm crosstool-$ARCH_GCC.defconfig \
+    && ct-ng build
+
+# Stage 3: Build a full CI Builder image that imports the cross-compiling
+# toolchain and can be used for any CI job.
 FROM ci-builder-min as ci-builder-full
 
 ARG ARCH_GCC
 ARG ARCH_GO
 
 WORKDIR /workdir
+
+# Import the cross toolchain.
+
+COPY --from=crosstool /opt/x-tools /opt/x-tools
 
 # Install dependencies needed by any CI job. Not all of these are available in
 # the Ubuntu repositories.
@@ -136,9 +204,9 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     jq \
     lcov \
     libc-dbg \
-    libclang-common-18-dev \
+    libclang-common-20-dev \
     libclang-dev \
-    libclang-rt-18-dev \
+    libclang-rt-20-dev \
     libpq-dev \
     lld \
     llvm \
@@ -237,6 +305,11 @@ RUN mkdir rust \
     && cargo install --root /usr/local --version "=0.10.0" --locked --no-default-features --features=s3,openssl/vendored sccache \
     && cargo install --root /usr/local --version "=0.3.6" --locked cargo-binutils \
     && cargo install --root /usr/local --version "=0.13.1" --locked wasm-pack
+
+# Link the system lld into the cross-compiling sysroot.
+
+RUN ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-ld.lld \
+    && ln -s /usr/bin/lld /opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin/$ARCH_GCC-unknown-linux-gnu-lld
 
 # Shims for sanitizers
 COPY sanshim/$ARCH_GCC /sanshim
@@ -347,11 +420,27 @@ RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.8.1/linux/$AR
 # trustworthy on the first connection.
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
 
+# Set the necessary environment variables to point Cargo and C/C++ build systems
+# at our cross-compiling toolchain.
+
+ENV AR=$ARCH_GCC-unknown-linux-gnu-ar
+ENV LD=$ARCH_GCC-unknown-linux-gnu-lld
+ENV RANLIB=$ARCH_GCC-unknown-linux-gnu-ranlib
+ENV CPP=$ARCH_GCC-unknown-linux-gnu-cpp
+ENV CC=$ARCH_GCC-unknown-linux-gnu-cc
+ENV CXX=$ARCH_GCC-unknown-linux-gnu-c++
+ENV CXXSTDLIB=static=stdc++
 ENV LDFLAGS="-fuse-ld=lld -static-libstdc++"
-ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -Csymbol-mangling-version=v0 -Ctarget-cpu=$RUST_CPU_TARGET -Ctarget-feature=$RUST_TARGET_FEATURES --cfg=tokio_unstable"
-ENV PATH=/opt/google-cloud-sdk/bin:$PATH
+ENV RUSTFLAGS="-Clink-arg=-Wl,--compress-debug-sections=zlib -Clink-arg=-Wl,-O3 -Clink-arg=-fuse-ld=lld -L/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/$ARCH_GCC-unknown-linux-gnu/sysroot/lib/ -Csymbol-mangling-version=v0 --cfg=tokio_unstable"
+ENV TARGET_AR=$AR
+ENV TARGET_CC=$CC
+ENV TARGET_CXX=$CXX
+ENV TARGET_CXXSTDLIB=static=stdc++
+ENV TARGET_RANLIB=$RANLIB
+ENV PATH=/opt/google-cloud-sdk/bin:/opt/x-tools/$ARCH_GCC-unknown-linux-gnu/bin:$PATH
+ENV CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-cc
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-unknown-linux-gnu-cc
 ENV CARGO_TARGET_DIR=/mnt/build
-ENV CARGO_INCREMENTAL=1
 ENV HELM_PLUGINS=/usr/local/share/helm/plugins
 
 # Set up for a persistent volume to hold Cargo metadata, so that crate metadata
