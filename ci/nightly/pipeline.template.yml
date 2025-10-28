@@ -2295,6 +2295,18 @@ steps:
     key: orchestratord-test
     steps:
       - id: orchestratord-defaults
+        label: "Orchestratord test (defaults from documentation)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: defaults
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-default-properties
         label: "Orchestratord test (defaults for properties)"
         depends_on: build-aarch64
         timeout_in_minutes: 120

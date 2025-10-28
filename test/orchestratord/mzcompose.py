@@ -17,6 +17,7 @@ import datetime
 import json
 import os
 import random
+import shutil
 import signal
 import subprocess
 import time
@@ -25,6 +26,7 @@ from collections.abc import Callable, Iterator
 from enum import Enum
 from typing import Any
 
+import requests
 import yaml
 from semver.version import Version
 
@@ -41,7 +43,10 @@ from materialize.mzcompose.services.environmentd import Environmentd
 from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import all_subclasses
-from materialize.version_list import get_all_self_managed_versions
+from materialize.version_list import (
+    get_all_self_managed_versions,
+    get_self_managed_versions,
+)
 
 SERVICES = [
     Testdrive(),
@@ -1125,6 +1130,253 @@ class Action(Enum):
     Noop = "noop"
     Upgrade = "upgrade"
     UpgradeChain = "upgrade-chain"
+
+
+def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    args = parser.parse_args()
+
+    current_version = get_tag(args.tag)
+
+    # Following https://materialize.com/docs/self-managed/v25.2/installation/install-on-local-kind/
+    for version in reversed(get_self_managed_versions() + [current_version]):
+        dir = "my-local-mz"
+        if os.path.exists(dir):
+            shutil.rmtree(dir)
+        os.mkdir(dir)
+        spawn.runv(["kind", "delete", "cluster"])
+        spawn.runv(["kind", "create", "cluster"])
+        spawn.runv(
+            [
+                "kubectl",
+                "label",
+                "node",
+                "kind-control-plane",
+                "materialize.cloud/disk=true",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "label",
+                "node",
+                "kind-control-plane",
+                "materialize.cloud/swap=true",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "label",
+                "node",
+                "kind-control-plane",
+                "workload=materialize-instance",
+            ]
+        )
+
+        shutil.copyfile(
+            "misc/helm-charts/operator/values.yaml",
+            os.path.join(dir, "sample-values.yaml"),
+        )
+        files = {
+            "sample-postgres.yaml": "misc/helm-charts/testing/postgres.yaml",
+            "sample-minio.yaml": "misc/helm-charts/testing/minio.yaml",
+            "sample-materialize.yaml": "misc/helm-charts/testing/materialize.yaml",
+        }
+
+        for file, path in files.items():
+            if version == current_version:
+                shutil.copyfile(path, os.path.join(dir, file))
+            else:
+                url = f"https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/{version}/{path}"
+                response = requests.get(url)
+                assert (
+                    response.status_code == 200
+                ), f"Failed to download {file} from {url}: {response.status_code}"
+                with open(os.path.join(dir, file), "wb") as f:
+                    f.write(response.content)
+
+        spawn.runv(
+            [
+                "helm",
+                "repo",
+                "add",
+                "materialize",
+                "https://materializeinc.github.io/materialize",
+            ]
+        )
+        spawn.runv(["helm", "repo", "update", "materialize"])
+        spawn.runv(
+            [
+                "helm",
+                "install",
+                "my-materialize-operator",
+                MZ_ROOT / "misc" / "helm-charts" / "operator",
+                "--namespace=materialize",
+                "--create-namespace",
+                "--version",
+                "v25.3.0",
+                "--set",
+                "observability.podMetrics.enabled=true",
+                "-f",
+                os.path.join(dir, "sample-values.yaml"),
+            ]
+        )
+        spawn.runv(
+            ["kubectl", "apply", "-f", os.path.join(dir, "sample-postgres.yaml")]
+        )
+        spawn.runv(["kubectl", "apply", "-f", os.path.join(dir, "sample-minio.yaml")])
+        spawn.runv(["kubectl", "get", "all", "-n", "materialize"])
+        spawn.runv(
+            [
+                "helm",
+                "repo",
+                "add",
+                "metrics-server",
+                "https://kubernetes-sigs.github.io/metrics-server/",
+            ]
+        )
+        spawn.runv(["helm", "repo", "update", "metrics-server"])
+        spawn.runv(
+            [
+                "helm",
+                "install",
+                "metrics-server",
+                "metrics-server/metrics-server",
+                "--namespace",
+                "kube-system",
+                "--set",
+                "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
+            ]
+        )
+        for i in range(120):
+            try:
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "crd",
+                        "materializes.materialize.cloud",
+                        "-n",
+                        "materialize",
+                        "-o",
+                        "name",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+                break
+
+            except subprocess.CalledProcessError:
+                pass
+            time.sleep(1)
+        else:
+            raise ValueError("Never completed")
+
+        with open(os.path.join(dir, "sample-materialize.yaml")) as f:
+            materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
+        assert len(materialize_setup) == 3
+
+        if version == current_version:
+            materialize_setup[2]["spec"][
+                "environmentdImageRef"
+            ] = f"materialize/environmentd:{version}"
+            # Self-managed v25.1/2 don't require a license key yet
+            materialize_setup[1]["stringData"]["license_key"] = os.environ[
+                "MZ_CI_LICENSE_KEY"
+            ]
+        else:
+            # TODO: Remove this part once environmentId is set in older versions
+            materialize_setup[2]["spec"][
+                "environmentId"
+            ] = "12345678-1234-1234-1234-123456789013"
+
+        with open(os.path.join(dir, "sample-materialize.yaml"), "w") as f:
+            yaml.dump_all(materialize_setup, f, default_flow_style=False)
+
+        spawn.runv(
+            ["kubectl", "apply", "-f", os.path.join(dir, "sample-materialize.yaml")]
+        )
+
+        for i in range(240):
+            try:
+                data = json.loads(
+                    spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pod",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "json",
+                        ]
+                    )
+                )
+                expected_pods = {
+                    "environmentd": 1,
+                    "clusterd": 2,
+                    "balancerd": 2,
+                    "console": 2,
+                }
+                actual_pods = {
+                    "environmentd": 0,
+                    "clusterd": 0,
+                    "balancerd": 0,
+                    "console": 0,
+                }
+                for item in data.get("items", []):
+                    for container in item.get("status", {}).get(
+                        "containerStatuses", []
+                    ):
+                        name = container.get("name")
+                        assert name in expected_pods, f"Unexpected pod {name}"
+                        state = container.get("state", {})
+                        if "running" in state:
+                            actual_pods[name] += 1
+                if expected_pods == actual_pods:
+                    spawn.runv(
+                        [
+                            "kubectl",
+                            "get",
+                            "pod",
+                            "-n",
+                            "materialize-environment",
+                        ]
+                    )
+                    break
+                else:
+                    print(f"Current pods: {actual_pods}")
+
+            except subprocess.CalledProcessError:
+                pass
+            time.sleep(1)
+        else:
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "pod",
+                    "-n",
+                    "materialize-environment",
+                ]
+            )
+            # Helps to debug
+            spawn.runv(
+                [
+                    "kubectl",
+                    "describe",
+                    "pod",
+                    "-l",
+                    "app=environmentd",
+                    "-n",
+                    "materialize-environment",
+                ]
+            )
+            raise ValueError("Never completed")
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
