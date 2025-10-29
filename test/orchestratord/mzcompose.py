@@ -200,8 +200,7 @@ class LicenseKey(Modification):
     @classmethod
     def values(cls) -> list[Any]:
         # TODO: Add back "del" when https://github.com/MaterializeInc/database-issues/issues/9599 is resolved
-        # TODO: Add back invalid when it's solved for upgrades
-        return ["valid"]
+        return ["valid", "invalid"]
 
     @classmethod
     def failed_reconciliation_values(cls) -> list[Any]:
@@ -231,10 +230,6 @@ class LicenseKey(Modification):
 
         def check() -> None:
             environmentd = get_environmentd_data()
-            if self.value == "invalid":
-                assert len(environmentd["items"]) == 0
-                return
-
             envs = environmentd["items"][0]["spec"]["containers"][0]["env"]
             if self.value == "del" or (mods[LicenseKeyCheck] == False):
                 for env in envs:
@@ -1678,8 +1673,9 @@ def run_scenario(
             if subclass not in mod_dict:
                 mod_dict[subclass] = subclass.default()
         try:
-            for mod in mods:
-                mod.validate(mod_dict)
+            if not expect_fail:
+                for mod in mods:
+                    mod.validate(mod_dict)
         except:
             print(
                 f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
