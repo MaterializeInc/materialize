@@ -81,6 +81,7 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
+pub const V161: Version = Version::new(0, 161, 0);
 
 /// Describes the status of a deployment.
 ///

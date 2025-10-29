@@ -25,7 +25,7 @@ use serde::Deserialize;
 use tracing::{debug, trace};
 use uuid::Uuid;
 
-use crate::metrics::Metrics;
+use crate::{controller::materialize::environmentd::V161, metrics::Metrics};
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::{
     Materialize, MaterializeCertSpec, MaterializeRolloutStrategy, MaterializeStatus,
@@ -426,11 +426,15 @@ impl k8s_controller::Context for Context {
                         mz.spec.environment_id = environment_id;
                     }
                 } else {
-                    return Err(Error::Anyhow(anyhow::anyhow!(
-                        "environment_id is not set in materialize resource {}/{} but no license key was given",
-                        mz.namespace(),
-                        mz.name_unchecked()
-                    )));
+                    if mz.meets_minimum_version(&V161) {
+                        return Err(Error::Anyhow(anyhow::anyhow!(
+                            "environmentId is not set in materialize resource {}/{} but no license key was given",
+                            mz.namespace(),
+                            mz.name_unchecked()
+                        )));
+                    } else {
+                        mz.spec.environment_id = Uuid::new_v4();
+                    }
                 }
             }
             mz_api
