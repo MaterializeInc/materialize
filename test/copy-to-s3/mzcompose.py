@@ -265,7 +265,7 @@ def workflow_ci(c: Composition, _parser: WorkflowArgumentParser) -> None:
     """
     Workflows to run during CI
     """
-    for name in ["auth", "http"]:
+    for name in ["auth", "http", "gcs"]:
         with c.test_case(name):
             c.workflow(name)
 
