@@ -8,26 +8,26 @@ click==8.3.0
 colorama==0.4.6
 daff==1.4.2
 dbt-adapters==1.17.3
-dbt-common==1.33.0
+dbt-common==1.35.0
 dbt-core==1.10.13
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.9.1
 dbt-protos==1.0.382
-dbt-semantic-interfaces==0.9.0
+dbt-semantic-interfaces==0.10.0
 dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git@f6ee73c42f1d34132ed489defb9eb9ef83221256#subdirectory=dbt-tests-adapter
 deepdiff==8.6.1
 freezegun==1.5.5
 idna==3.11
 importlib_metadata==8.7.0
 iniconfig==2.3.0
-isodate==0.6.1
+isodate==0.7.2
 Jinja2==3.1.6
 jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 leather==0.4.0
 MarkupSafe==3.0.3
-mashumaro==3.14
+mashumaro==3.17
 more-itertools==10.8.0
 msgpack==1.1.2
 networkx==3.4.2
