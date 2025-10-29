@@ -12,7 +12,7 @@ The example results show one default privilege. This default privilege grants
 
 - To use a [type](/sql/types/#custom-types) created in a schema, the `USAGE`
 access is required on the containing schema as well.
-- {{% include-md file="shared-content/rbac/default-privilege-clarification.md"
+- {{% include-md file="shared-content/rbac-cloud/default-privilege-clarification.md"
   %}}
 
 {{</ note >}}

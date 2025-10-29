@@ -6,6 +6,6 @@ By default, the `PUBLIC` role has the following privileges:
 {{</ tab >}}
 {{< tab "Default privileges on future objects set up for PUBLIC">}}
 {{< yaml-table data="rbac/default_object_privileges" >}}
-{{< include-md file="shared-content/rbac/default-privilege-clarification.md" >}}
+{{< include-md file="shared-content/rbac-cloud/default-privilege-clarification.md" >}}
 {{</ tab >}}
 {{</ tabs >}}

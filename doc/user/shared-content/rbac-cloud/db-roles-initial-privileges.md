@@ -1,6 +1,6 @@
-{{% include-md file="shared-content/rbac/db-roles-public-membership.md" %}}
+{{% include-md file="shared-content/rbac-cloud/db-roles-public-membership.md" %}}
 
-{{% include-md file="shared-content/rbac/public-role-privileges.md" %}}
+{{% include-md file="shared-content/rbac-cloud/public-role-privileges.md" %}}
 
 In addition, all roles have:
 - `USAGE` on all built-in types and [all system catalog
