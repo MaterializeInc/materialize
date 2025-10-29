@@ -48,6 +48,7 @@ check_default_workflow_references_others() {
         -not -wholename "./test/testdrive-old-kafka-src-syntax/mzcompose.py" `# Other workflow is run separately` \
         -not -wholename "./test/terraform/mzcompose.py" `# Handled differently` \
         -not -wholename "./test/cluster-spec-sheet/mzcompose.py" `# Handled differently` \
+        -not -wholename "./test/orchestratord/mzcompose.py" `# Handled differently` \
     )
 
     for file in "${MZCOMPOSE_TEST_FILES[@]}"; do
