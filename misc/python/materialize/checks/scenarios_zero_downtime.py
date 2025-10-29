@@ -17,13 +17,11 @@ from materialize.checks.actions import (
     Validate,
 )
 from materialize.checks.checks import Check
+from materialize.checks.common import wait_ready_and_promote
 from materialize.checks.executors import Executor
 from materialize.checks.features import Features
 from materialize.checks.mzcompose_actions import (
-    MzcomposeAction,
-    PromoteMz,
     StartMz,
-    WaitReadyMz,
 )
 from materialize.checks.scenarios import Scenario
 from materialize.checks.scenarios_upgrade import (
@@ -34,10 +32,6 @@ from materialize.checks.scenarios_upgrade import (
 )
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
-
-
-def wait_ready_and_promote(mz_service: str) -> list[MzcomposeAction]:
-    return [WaitReadyMz(mz_service), PromoteMz(mz_service)]
 
 
 class ZeroDowntimeRestartEntireMz(Scenario):
