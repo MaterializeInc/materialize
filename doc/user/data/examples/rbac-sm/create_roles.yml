@@ -2,7 +2,7 @@
   description: |
     The following syntax is used to create a role in Materialize Self-Managed.
   code: |
-    CREATE ROLE <role_name> 
+    CREATE ROLE <role_name>
     [WITH]
         [ SUPERUSER | NOSUPERUSER ],
         [ LOGIN | NOLOGIN ]

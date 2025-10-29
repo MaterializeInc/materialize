@@ -8,7 +8,7 @@ menu:
 ---
 
 `SHOW PRIVILEGES` lists the privileges granted on all objects via
-[role-based access control](/security/cloud/access-control/#role-based-access-control-rbac) (RBAC).
+[role-based access control](/security/) (RBAC).
 
 ## Syntax
 
@@ -80,4 +80,3 @@ SHOW PRIVILEGES FOR materialize;
 
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
-- [Access control](/security/cloud/access-control/#role-based-access-control-rbac)

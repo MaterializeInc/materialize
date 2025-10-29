@@ -473,7 +473,7 @@ Field       | Type       | Meaning
 ### `mz_role_parameters`
 
 The `mz_role_parameters` table contains a row for each configuration parameter
-whose default value has been altered for a given role. See [`ALTER ROLE ... SET`](/sql/alter-role/#alter_role_set)
+whose default value has been altered for a given role. See [`ALTER ROLE ... SET`](/sql/alter-role/#syntax)
 on setting default configuration parameter values per role.
 
 <!-- RELATION_SPEC mz_catalog.mz_role_parameters -->

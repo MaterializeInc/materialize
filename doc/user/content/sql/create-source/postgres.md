@@ -31,6 +31,8 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
 
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+
 ## Syntax
 
 {{< diagram "create-source-postgres.svg" >}}
@@ -228,10 +230,12 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 
 If your PostgreSQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host.
+through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (

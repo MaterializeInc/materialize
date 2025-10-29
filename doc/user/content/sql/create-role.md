@@ -24,7 +24,7 @@ the system.
 
 {{% include-example file="examples/rbac-cloud/create_roles" example="create-role-options" %}}
 
-Note:
+**Note:**
 {{% include-example file="examples/rbac-cloud/create_roles" example="create-role-details" %}}
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
@@ -34,7 +34,7 @@ Note:
 {{% include-example file="examples/rbac-sm/create_roles"
 example="create-role-options" %}}
 
-Note:
+**Note:**
 {{% include-example file="examples/rbac-sm/create_roles" example="create-role-details" %}}
 {{< /tab >}}
 {{< /tabs >}}

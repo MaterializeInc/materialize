@@ -2,12 +2,12 @@
   description: |
     The following syntax is used to alter a role in Materialize Self-Managed.
   code: |
-    ALTER ROLE <role_name> 
+    ALTER ROLE <role_name>
     [WITH]
       [ SUPERUSER | NOSUPERUSER ]
       [ LOGIN | NOLOGIN ]
       [ INHERIT | NOINHERIT ]
-      [ PASSWORD <text> ]] 
+      [ PASSWORD <text> ]]
     [SET <name> TO <value|DEFAULT> ]
     [RESET <name>]
     ;
@@ -24,7 +24,7 @@
      level objects such as databases and other roles. Instead, Self-Managed
      Materialize uses system level privileges. See [GRANT
      PRIVILEGE](../grant-privilege) for more details.
-     
+
 - name: "alter-roles-configurations"
   description: |
 

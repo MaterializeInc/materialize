@@ -20,7 +20,7 @@
      ability to create top level objects such as databases and other roles.
      Instead, Materialize uses system level privileges. See [GRANT
      PRIVILEGE](../grant-privilege) for more details.
-    
+
 - name: "create-role-view-manager"
   description: |
 

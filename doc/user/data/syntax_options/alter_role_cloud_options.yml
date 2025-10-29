@@ -16,11 +16,11 @@ rows:
         [`mz_role_parameters`](/sql/system-catalog/mz_catalog#mz_role_parameters).
 
         {{< note >}}
-        
+
         - Altering the configuration parameter for a role only affects **new
         sessions**.
-        - Role configuration parameters are **not inherited**. 
-        
+        - Role configuration parameters are **not inherited**.
+
         {{< /note >}}
 
     - Option: "`RESET <name>`"
@@ -32,9 +32,9 @@ rows:
         [`mz_role_parameters`](/sql/system-catalog/mz_catalog#mz_role_parameters).
 
         {{< note >}}
-        
+
         - Altering the configuration parameter for a role only affects **new
         sessions**.
-        - Role configuration parameters are **not inherited**. 
-        
+        - Role configuration parameters are **not inherited**.
+
         {{< /note >}}

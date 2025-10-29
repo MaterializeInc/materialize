@@ -22,7 +22,7 @@ menu:
 {{% include-example file="examples/rbac-cloud/alter_roles"
 example="alter-role-options" %}}
 
-**Note:** 
+**Note:**
 {{% include-example file="examples/rbac-cloud/alter_roles"
 example="alter-role-details" %}}
 {{< /tab >}}
@@ -33,7 +33,7 @@ example="alter-role-details" %}}
 {{% include-example file="examples/rbac-sm/alter_roles"
 example="alter-role-options" %}}
 
-**Note:** 
+**Note:**
 {{% include-example file="examples/rbac-sm/alter_roles"
 example="alter-role-details" %}}
 {{< /tab >}}

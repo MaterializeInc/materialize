@@ -12,7 +12,7 @@ rows:
     - Option: "`NOLOGIN`"
       Description: |
         *Optional.* If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.
- 
+
     - Option: "`SUPERUSER`"
       Description: |
         *Optional.* If specified, grants the role superuser privileges.
@@ -22,7 +22,7 @@ rows:
        *Optional.* If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified.
     - Option: "`PASSWORD`"
       Description: |
-        ***Public Preview*** 
-        
+        ***Public Preview***
+
         *Optional.* This feature may have minor stability issues. If specified,
         allows you to set a password for the role.

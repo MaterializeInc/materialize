@@ -63,4 +63,3 @@ SHOW DEFAULT PRIVILEGES FOR joe;
 ## Related pages
 
 - [`ALTER DEFAULT PRIVILEGES`](../alter-default-privileges)
-- [Access control](/security/cloud/access-control/#role-based-access-control-rbac)

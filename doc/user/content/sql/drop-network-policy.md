@@ -9,7 +9,7 @@ menu:
 *Available for Materialize Cloud only*
 
 `DROP NETWORK POLICY` removes an existing network policy from Materialize.
-Network policies are part of Materialize's framework for [access control](/security/access-control/).
+Network policies are part of Materialize's framework for [access control](/security/cloud/).
 
 To alter the rules in a network policy, use the [`ALTER NETWORK POLICY`](../alter-network-policy)
 command.

@@ -28,6 +28,8 @@ The same syntax, supported formats and features can be used to connect to a
 [Redpanda](/integrations/redpanda/) broker.
 {{</ note >}}
 
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+
 ## Syntax
 
 {{< diagram "create-source-kafka.svg" >}}
@@ -527,10 +529,12 @@ CREATE CONNECTION kafka_connection TO KAFKA (
 {{< /tabs >}}
 
 If your Kafka broker is not exposed to the public internet, you can [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host:
+through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
@@ -611,10 +615,12 @@ CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (
 
 If your Confluent Schema Registry server is not exposed to the public internet,
 you can [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host:
+through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host:
 
 {{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (

@@ -2,7 +2,7 @@
   description: |
     The following syntax is used to alter a role in Materialize Cloud.
   code: |
-    ALTER ROLE <role_name> 
+    ALTER ROLE <role_name>
     [[WITH] INHERIT]
     [SET <config> =|TO <value|DEFAULT> ]
     [RESET <config>];

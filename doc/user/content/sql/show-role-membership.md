@@ -9,7 +9,7 @@ menu:
 
 `SHOW ROLE MEMBERSHIP` lists the members of each role granted (directly or
 indirectly) via [role-based access
-control](/security/cloud/access-control/#role-based-access-control-rbac) (RBAC).
+control](/security/) (RBAC).
 
 ## Syntax
 
@@ -53,4 +53,3 @@ SHOW ROLE MEMBERSHIP FOR r2;
 
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [Access control](/security/cloud/access-control/#role-based-access-control-rbac)

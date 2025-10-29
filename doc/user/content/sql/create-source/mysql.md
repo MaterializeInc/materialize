@@ -18,6 +18,8 @@ MySQL database, you first need to tweak its configuration to enable
 access and authentication parameters.
 {{% /create-source/intro %}}
 
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+
 ## Syntax
 
 {{< note >}}
@@ -231,12 +233,14 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-If your MySQL server is not exposed to the public internet, you can
-[tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host SSH bastion host.
+If your MySQL server is not exposed to the public internet, you can [tunnel the
+connection](/sql/create-connection/#network-security-connections) through an AWS
+PrivateLink service (Materialize Cloud) or an SSH bastion host SSH bastion host.
 
 {{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (

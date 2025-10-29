@@ -7,7 +7,7 @@ menu:
 ---
 
 `GRANT PRIVILEGE` grants privileges to [database
-role(s)](/security/access-control/manage-roles/).
+role(s)](/sql/create-role/).
 
 ## Syntax
 
