@@ -179,7 +179,6 @@ pub fn main() {
     let ncpus_useful = usize::max(1, std::cmp::min(num_cpus::get(), num_cpus::get_physical()));
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(ncpus_useful)
-        .thread_stack_size(3 * 1024 * 1024) // 3 MiB
         // The default thread name exceeds the Linux limit on thread name
         // length, so pick something shorter. The maximum length is 16 including
         // a \0 terminator. This gives us four decimals, which should be enough
