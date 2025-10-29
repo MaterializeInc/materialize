@@ -192,13 +192,13 @@ def workflow_gcs(c: Composition) -> None:
 
     def env_get_or_fail(key: str) -> str:
         value = os.environ.get(key)
-        assert value is not None, f"{key} evironment variable must be set"
+        assert value is not None, f"{key} environment variable must be set"
         return value
 
-    gcs_access_key = env_get_or_fail("GCS_ACCESS_KEY")
-    gcs_secret_key = env_get_or_fail("GCS_SECRET_KEY")
     gcs_bucket = env_get_or_fail("GCS_BUCKET")
     gcs_region = env_get_or_fail("GCS_REGION")
+    gcs_access_key = env_get_or_fail("GCS_ACCESS_KEY")
+    gcs_secret_key = env_get_or_fail("GCS_SECRET_KEY")
     gcs_endpoint = os.environ.get("GCS_ENDPOINT", "https://storage.googleapis.com")
 
     key_prefix = f"copy_to/{make_random_key(10)}/"
