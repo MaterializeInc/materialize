@@ -28,9 +28,9 @@ from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import (
-    fetch_self_managed_versions,
     get_published_minor_mz_versions,
     get_self_managed_versions,
+    get_supported_self_managed_versions,
 )
 
 # late initialization
@@ -570,18 +570,7 @@ def upgrade_service_actions(
     ]
 
 
-def get_self_managed_v25_2_versions() -> list[MzVersion]:
-    self_managed_versions = fetch_self_managed_versions()
-    return sorted(
-        [
-            v.version
-            for v in self_managed_versions
-            if v.helm_version.major == 25 and v.helm_version.minor == 2
-        ]
-    )
-
-
-class SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade(Scenario):
+class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
     """
     Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release to main.
     Run all manipulation phases before any upgrades.
@@ -594,16 +583,22 @@ class SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.v25_2_versions = get_self_managed_v25_2_versions()
+        (self.self_managed_previous_versions, self.self_managed_future_versions) = (
+            get_supported_self_managed_versions()
+        )
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
-        return self.v25_2_versions[0]
+        return self.self_managed_previous_versions[0]
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         actions = []
-        versions = self.v25_2_versions + [None]
+        versions = (
+            self.self_managed_previous_versions
+            + [None]
+            + self.self_managed_future_versions
+        )
 
         mz_services = create_mz_service_upgrade_info_list(versions)
 
@@ -635,9 +630,9 @@ class SelfManagedv25Point2_Upgrade_ManipulateBeforeUpgrade(Scenario):
         return actions
 
 
-class SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade(Scenario):
+class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
     """
-    Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release to main.
+    Upgrade from the oldest Self-Managed version to the latest Self-Managed version to main.
     Run the first manipulation phase before all upgrades and the second during the upgrade.
     """
 
@@ -648,16 +643,22 @@ class SelfManagedv25Point2_Upgrade_ManipulateDuringUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.v25_2_versions = get_self_managed_v25_2_versions()
+        (self.self_managed_previous_versions, self.self_managed_future_versions) = (
+            get_supported_self_managed_versions()
+        )
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
-        return self.v25_2_versions[0]
+        return self.self_managed_previous_versions[0]
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
         actions = []
-        versions = self.v25_2_versions + [None]
+        versions = (
+            self.self_managed_previous_versions
+            + [None]
+            + self.self_managed_future_versions
+        )
 
         mz_services = create_mz_service_upgrade_info_list(
             versions,

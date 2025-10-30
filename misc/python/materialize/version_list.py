@@ -66,6 +66,22 @@ def get_self_managed_versions() -> list[MzVersion]:
     return sorted(result)
 
 
+# Gets the previous and future supported self managed versions relative to the current version
+def get_supported_self_managed_versions() -> tuple[list[MzVersion], list[MzVersion]]:
+    self_managed_versions = fetch_self_managed_versions()
+    current_version = MzVersion.parse_cargo()
+    filtered_versions = sorted(
+        [
+            v.version
+            for v in self_managed_versions
+            if v.helm_version.major == 25 or v.helm_version.major == 26
+        ]
+    )
+    previous_versions = [v for v in filtered_versions if v < current_version]
+    future_versions = [v for v in filtered_versions if v > current_version]
+    return previous_versions, future_versions
+
+
 BAD_SELF_MANAGED_VERSIONS = {
     MzVersion.parse_mz("v0.130.0"),
     MzVersion.parse_mz("v0.130.1"),
