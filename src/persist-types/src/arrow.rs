@@ -23,7 +23,7 @@
 //! [Arrow IPC]: https://arrow.apache.org/docs/format/Columnar.html#serialization-and-interprocess-communication-ipc
 
 use std::cmp::Ordering;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -329,7 +329,7 @@ impl RustType<proto::BooleanBuffer> for arrow::buffer::BooleanBuffer {
 }
 
 /// Wraps a single arrow array, downcasted to a specific type.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum ArrayOrd {
     /// Wraps a `NullArray`.
     Null(NullArray),
@@ -439,6 +439,50 @@ impl ArrayOrd {
     /// Return a struct representing the value at a particular index in this array.
     pub fn at(&self, idx: usize) -> ArrayIdx<'_> {
         ArrayIdx { idx, array: self }
+    }
+}
+
+impl Debug for ArrayOrd {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct DebugType<'a>(&'a ArrayOrd);
+
+        impl Debug for DebugType<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self.0 {
+                    ArrayOrd::Null(_) => write!(f, "Null"),
+                    ArrayOrd::Bool(_) => write!(f, "Bool"),
+                    ArrayOrd::Int8(_) => write!(f, "Int8"),
+                    ArrayOrd::Int16(_) => write!(f, "Int16"),
+                    ArrayOrd::Int32(_) => write!(f, "Int32"),
+                    ArrayOrd::Int64(_) => write!(f, "Int64"),
+                    ArrayOrd::UInt8(_) => write!(f, "UInt8"),
+                    ArrayOrd::UInt16(_) => write!(f, "UInt16"),
+                    ArrayOrd::UInt32(_) => write!(f, "UInt32"),
+                    ArrayOrd::UInt64(_) => write!(f, "UInt64"),
+                    ArrayOrd::Float32(_) => write!(f, "Float32"),
+                    ArrayOrd::Float64(_) => write!(f, "Float64"),
+                    ArrayOrd::String(_) => write!(f, "String"),
+                    ArrayOrd::Binary(_) => write!(f, "Binary"),
+                    ArrayOrd::FixedSizeBinary(a) => f
+                        .debug_tuple("FixedSizeBinary")
+                        .field(&a.value_length())
+                        .finish(),
+                    ArrayOrd::List(_, _, nested) => f.debug_tuple("List").field(&*nested).finish(),
+                    ArrayOrd::Struct(_, fields) => {
+                        let mut tuple = f.debug_tuple("Struct");
+                        for field in fields {
+                            tuple.field(field);
+                        }
+                        tuple.finish()
+                    }
+                }
+            }
+        }
+
+        f.debug_struct("ArrayOrd")
+            .field("type", &DebugType(self))
+            .field("goodbytes", &self.goodbytes())
+            .finish()
     }
 }
 
@@ -621,7 +665,7 @@ impl<'a> Ord for ArrayIdx<'a> {
                     }
                 }
             }
-            (_, _) => panic!("array types did not match"),
+            (a, b) => panic!("array types did not match! {a:?} vs. {b:?}",),
         }
     }
 }
