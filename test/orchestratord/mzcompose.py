@@ -199,12 +199,11 @@ def all_modifications() -> list[type[Modification]]:
 class LicenseKey(Modification):
     @classmethod
     def values(cls) -> list[Any]:
-        # TODO: Add back "del" when https://github.com/MaterializeInc/database-issues/issues/9599 is resolved
-        return ["valid", "invalid"]
+        return ["valid", "invalid", "del"]
 
     @classmethod
     def failed_reconciliation_values(cls) -> list[Any]:
-        return ["invalid"]
+        return ["invalid", "del"]
 
     @classmethod
     def default(cls) -> Any:
@@ -231,28 +230,20 @@ class LicenseKey(Modification):
         def check() -> None:
             environmentd = get_environmentd_data()
             envs = environmentd["items"][0]["spec"]["containers"][0]["env"]
-            if self.value == "del" or (mods[LicenseKeyCheck] == False):
-                for env in envs:
-                    assert (
-                        env["name"] != "MZ_LICENSE_KEY"
-                    ), f"Expected MZ_LICENSE_KEY to be missing, but is in {envs}"
-            elif self.value == "valid":
-                for env in envs:
-                    if env["name"] != "MZ_LICENSE_KEY":
-                        continue
-                    expected = "/license_key/license_key"
-                    assert (
-                        env["value"] == expected
-                    ), f"Expected license key to be set to {expected}, but is {env['value']}"
-                    break
-                else:
-                    assert (
-                        False
-                    ), f"Expected to find MZ_LICENSE_KEY in env variables, but only found {envs}"
-                ready = environmentd["items"][0]["status"]["containerStatuses"][0][
-                    "ready"
-                ]
-                assert ready, "Expected environmentd to be in ready state"
+            for env in envs:
+                if env["name"] != "MZ_LICENSE_KEY":
+                    continue
+                expected = "/license_key/license_key"
+                assert (
+                    env["value"] == expected
+                ), f"Expected license key to be set to {expected}, but is {env['value']}"
+                break
+            else:
+                assert (
+                    False
+                ), f"Expected to find MZ_LICENSE_KEY in env variables, but only found {envs}"
+            ready = environmentd["items"][0]["status"]["containerStatuses"][0]["ready"]
+            assert ready, "Expected environmentd to be in ready state"
 
         retry(check, 240)
 
