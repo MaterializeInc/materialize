@@ -38,16 +38,24 @@ class SelfManagedVersion:
 
 
 def fetch_self_managed_versions() -> list[SelfManagedVersion]:
-    return [
-        SelfManagedVersion(
+    result: list[SelfManagedVersion] = []
+    for entry in yaml.safe_load(
+        requests.get("https://materializeinc.github.io/materialize/index.yaml").text
+    )["entries"]["materialize-operator"]:
+        self_managed_version = SelfManagedVersion(
             MzVersion.parse_mz(entry["version"]),
             MzVersion.parse_mz(entry["appVersion"]),
         )
-        for entry in yaml.safe_load(
-            requests.get("https://materializeinc.github.io/materialize/index.yaml").text
-        )["entries"]["materialize-operator"]
-        if MzVersion.parse_mz(entry["appVersion"]) not in INVALID_VERSIONS
-    ]
+        if (
+            not self_managed_version.version.prerelease
+            and self_managed_version.version not in BAD_SELF_MANAGED_VERSIONS
+        ):
+            result.append(self_managed_version)
+    return result
+
+
+def get_all_self_managed_versions() -> list[MzVersion]:
+    return [version.version for version in fetch_self_managed_versions()]
 
 
 def get_self_managed_major_release_latest_versions() -> list[MzVersion]:
@@ -88,19 +96,14 @@ BAD_SELF_MANAGED_VERSIONS = {
     MzVersion.parse_mz("v0.130.2"),
     MzVersion.parse_mz("v0.130.3"),
     MzVersion.parse_mz("v0.130.4"),
+    MzVersion.parse_mz(
+        "v0.147.7"
+    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
+    MzVersion.parse_mz(
+        "v0.147.14"
+    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
+    MzVersion.parse_mz("v0.157.0"),
 }
-
-
-def get_all_self_managed_versions() -> list[MzVersion]:
-    result = set()
-    for entry in yaml.safe_load(
-        requests.get("https://materializeinc.github.io/materialize/index.yaml").text
-    )["entries"]["materialize-operator"]:
-        version = MzVersion.parse_mz(entry["appVersion"])
-        if not version.prerelease and version not in BAD_SELF_MANAGED_VERSIONS:
-            result.add(version)
-    return sorted(result)
-
 
 # not released on Docker
 INVALID_VERSIONS = {
@@ -124,13 +127,6 @@ INVALID_VERSIONS = {
     MzVersion.parse_mz("v0.93.0"),  # accidental release
     MzVersion.parse_mz("v0.99.1"),  # incompatible for upgrades
     MzVersion.parse_mz("v0.113.1"),  # incompatible for upgrades
-    MzVersion.parse_mz(
-        "v0.147.7"
-    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
-    MzVersion.parse_mz(
-        "v0.147.14"
-    ),  # Incompatible for upgrades because it clears login attribute for roles due to catalog migration
-    MzVersion.parse_mz("v0.157.0"),
 }
 
 _SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
