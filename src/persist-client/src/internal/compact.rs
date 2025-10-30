@@ -180,7 +180,6 @@ where
     pub fn new(
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
-        write_schemas: Schemas<K, V>,
         gc: GarbageCollector<K, V, T, D>,
     ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) = mpsc::channel::<(
@@ -242,14 +241,12 @@ where
                     .queued_seconds
                     .inc_by(enqueued.elapsed().as_secs_f64());
 
-                let write_schemas = write_schemas.clone();
-
                 let compact_span =
                     debug_span!(parent: None, "compact::apply", shard_id=%machine.shard_id());
                 compact_span.follows_from(&Span::current());
                 let gc = gc.clone();
                 mz_ore::task::spawn(|| "PersistCompactionWorker", async move {
-                    let res = Self::compact_and_apply(&machine, req, write_schemas)
+                    let res = Self::compact_and_apply(&machine, req)
                         .instrument(compact_span)
                         .await;
                     if let Ok(maintenance) = res {
@@ -328,7 +325,6 @@ where
     pub(crate) async fn compact_and_apply(
         machine: &Machine<K, V, T, D>,
         req: CompactReq<T>,
-        write_schemas: Schemas<K, V>,
     ) -> Result<RoutineMaintenance, anyhow::Error> {
         let metrics = Arc::clone(&machine.applier.metrics);
         metrics.compaction.started.inc();
@@ -349,38 +345,38 @@ where
         );
         // always use most recent schema from all the Runs we're compacting to prevent Compactors
         // created before the schema was evolved, from trying to "de-evolve" a Part.
-        let compaction_schema_id = req
+        let Some(compaction_schema_id) = req
             .inputs
             .iter()
             .flat_map(|batch| batch.batch.run_meta.iter())
             .filter_map(|run_meta| run_meta.schema)
             // It's an invariant that SchemaIds are ordered.
-            .max();
-        let maybe_compaction_schema = match compaction_schema_id {
-            Some(id) => machine
-                .get_schema(id)
-                .map(|(key_schema, val_schema)| (id, key_schema, val_schema)),
-            None => None,
+            .max()
+        else {
+            metrics.compaction.schema_selection.no_schema.inc();
+            metrics.compaction.failed.inc();
+            return Err(anyhow!(
+                "compacting {shard_id} and spine ids {spine_ids}: could not determine schema id from inputs",
+                shard_id = req.shard_id,
+                spine_ids = mz_ore::str::separated(", ", req.inputs.iter().map(|i| i.id))
+            ));
         };
-        let use_most_recent_schema = COMPACTION_USE_MOST_RECENT_SCHEMA.get(&machine.applier.cfg);
+        let Some((key_schema, val_schema)) = machine.get_schema(compaction_schema_id) else {
+            metrics.compaction.schema_selection.no_schema.inc();
+            metrics.compaction.failed.inc();
+            return Err(anyhow!(
+                "compacting {shard_id} and spine ids {spine_ids}: schema id {compaction_schema_id} not present in machine state",
+                shard_id = req.shard_id,
+                spine_ids = mz_ore::str::separated(", ", req.inputs.iter().map(|i| i.id))
+            ));
+        };
 
-        let compaction_schema = match maybe_compaction_schema {
-            Some((id, key_schema, val_schema)) if use_most_recent_schema => {
-                metrics.compaction.schema_selection.recent_schema.inc();
-                Schemas {
-                    id: Some(id),
-                    key: Arc::new(key_schema),
-                    val: Arc::new(val_schema),
-                }
-            }
-            Some(_) => {
-                metrics.compaction.schema_selection.disabled.inc();
-                write_schemas
-            }
-            None => {
-                metrics.compaction.schema_selection.no_schema.inc();
-                write_schemas
-            }
+        metrics.compaction.schema_selection.recent_schema.inc();
+
+        let compaction_schema = Schemas {
+            id: Some(compaction_schema_id),
+            key: Arc::new(key_schema),
+            val: Arc::new(val_schema),
         };
 
         trace!(

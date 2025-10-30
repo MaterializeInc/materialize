@@ -754,12 +754,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
             );
             machine.applier.metrics.compaction.requested.inc();
             let start = Instant::now();
-            let res = Compactor::<K, V, T, D>::compact_and_apply(
-                &machine,
-                req,
-                write.write_schemas.clone(),
-            )
-            .await;
+            let res = Compactor::<K, V, T, D>::compact_and_apply(&machine, req).await;
             let apply_maintenance = match res {
                 Ok(x) => x,
                 Err(err) => {

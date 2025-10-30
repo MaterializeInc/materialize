@@ -49,7 +49,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
@@ -725,6 +725,12 @@ pub enum CompactionInput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpineId(pub usize, pub usize);
+
+impl Display for SpineId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}, {})", self.0, self.1)
+    }
+}
 
 impl Serialize for SpineId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
