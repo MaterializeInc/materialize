@@ -96,9 +96,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     current_version = MzVersion.parse_cargo()
-    min_upgradable_version = MzVersion.create(
-        current_version.major, current_version.minor - 1, 0
-    )
+    if current_version.major == 26 and current_version.minor == 0:
+        min_upgradable_version = MzVersion.create(0, 164, 0)
+    else:
+        min_upgradable_version = MzVersion.create(
+            current_version.major, current_version.minor - 1, 0
+        )
 
     for version in tested_versions:
         # Building the latest release might have failed, don't block PRs on
