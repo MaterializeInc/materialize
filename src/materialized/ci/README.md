@@ -20,7 +20,7 @@ To launch the Docker container:
 
 ```
 docker pull --no-cache materialize/materialized:latest
-docker run -d -p 127.0.0.1:6874:6874 -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 materialize/materialized:latest
+docker run -d -p 127.0.0.1:6874:6874 -p 127.0.0.1:6875:6875 -p 127.0.0.1:6876:6876 -p 127.0.0.1:6877:6877 materialize/materialized:latest
 ```
 
 After running this command...
