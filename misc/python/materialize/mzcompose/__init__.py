@@ -85,7 +85,6 @@ def get_minimal_system_parameters(
         "enable_alter_swap": "true",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
-        "enable_compute_active_dataflow_cancelation": "true",
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
         "enable_connection_validation_syntax": "true",

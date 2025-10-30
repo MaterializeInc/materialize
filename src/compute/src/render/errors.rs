@@ -11,8 +11,6 @@
 
 use mz_repr::Row;
 
-use crate::render::context::ShutdownProbe;
-
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is
 /// Some.
@@ -67,16 +65,12 @@ impl<T, E> MaybeValidatingRow<T, E> for Result<T, E> {
 /// dataflow is in the process of shutting down.
 #[derive(Clone)]
 pub(super) struct ErrorLogger {
-    shutdown_probe: ShutdownProbe,
     dataflow_name: String,
 }
 
 impl ErrorLogger {
-    pub fn new(shutdown_probe: ShutdownProbe, dataflow_name: String) -> Self {
-        Self {
-            shutdown_probe,
-            dataflow_name,
-        }
+    pub fn new(dataflow_name: String) -> Self {
+        Self { dataflow_name }
     }
 
     /// Log the given error, unless the dataflow is shutting down.
@@ -102,9 +96,7 @@ impl ErrorLogger {
         // all workers are guaranteed to make this observation at the same time. So it's possible
         // that some workers have already started discarding results while other workers still see
         // `shutdown_probe.in_shutdown() == false`.
-        if !self.shutdown_probe.in_local_shutdown() {
-            self.log_always(message, details);
-        }
+        self.log_always(message, details);
     }
 
     /// Like [`Self::log`], but also logs errors when the dataflow is shutting down.
