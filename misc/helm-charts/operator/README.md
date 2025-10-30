@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v25.3.0-beta.1](https://img.shields.io/badge/Version-v25.3.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.165.0-dev.0](https://img.shields.io/badge/AppVersion-v0.165.0--dev.0-informational?style=flat-square)
+![Version: v26.0.0-beta.1](https://img.shields.io/badge/Version-v26.0.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.0.0-dev.0](https://img.shields.io/badge/AppVersion-v26.0.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -159,7 +159,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` |  | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.164.0"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.0.0-dev.0--pr.gfa8ba620176a7d0f9abcc64f89f5d21db80c6d94"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``nil`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
@@ -185,7 +185,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.165.0-dev.0 \
+  --set operator.image.tag=v26.0.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -220,7 +220,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.165.0-dev.0
+  environmentdImageRef: materialize/environmentd:v26.0.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
@@ -305,7 +305,7 @@ Or check the `Chart.yaml` file in the `misc/helm-charts/operator` directory:
 apiVersion: v2
 name: materialize-operator
 # ...
-version: v25.3.0-beta-1
+version: v26.0.0-dev.0
 appVersion: v0.147.0  # Use this version for your Materialize instances
 ```
 
