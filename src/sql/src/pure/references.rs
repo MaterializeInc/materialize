@@ -272,19 +272,25 @@ impl<'a> SourceReferenceClient<'a> {
                         .or_insert(table);
                 }
 
-                unique_tables
-                    .into_values()
-                    .map(|raw| {
-                        let capture_instance = Arc::clone(&raw.capture_instance.name);
-                        let database = Arc::clone(database);
-                        let table = mz_sql_server_util::desc::SqlServerTableDesc::new(raw);
-                        ReferenceMetadata::SqlServer {
-                            table,
-                            database,
-                            capture_instance,
-                        }
-                    })
-                    .collect()
+                let mut result = Vec::with_capacity(unique_tables.len());
+                for raw_table in unique_tables.into_values() {
+                    let constraints = mz_sql_server_util::inspect::get_constraints_for_table(
+                        client,
+                        &raw_table.schema_name,
+                        &raw_table.name,
+                    )
+                    .await?;
+                    let capture_instance = Arc::clone(&raw_table.capture_instance.name);
+                    let database = Arc::clone(database);
+                    let table =
+                        mz_sql_server_util::desc::SqlServerTableDesc::new(raw_table, constraints)?;
+                    result.push(ReferenceMetadata::SqlServer {
+                        table,
+                        database,
+                        capture_instance,
+                    });
+                }
+                result
             }
             SourceReferenceClient::Kafka { topic } => {
                 vec![ReferenceMetadata::Kafka(topic.to_string())]
