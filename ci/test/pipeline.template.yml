@@ -26,7 +26,6 @@ steps:
     steps:
       - id: build-x86_64
         label: ":rust: Build x86_64"
-        env:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -37,7 +36,6 @@ steps:
 
       - id: build-aarch64
         label: ":rust: Build aarch64"
-        env:
         command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
@@ -56,6 +54,8 @@ steps:
         agents:
           queue: l-builder-linux-x86_64
         branches: "v*.*"
+        env:
+          CI_LTO: 0
 
       - id: build-aarch64-no-lto
         label: ":rust: Build aarch64 (no LTO)"
@@ -67,6 +67,8 @@ steps:
         agents:
           queue: l-builder-linux-aarch64
         branches: "v*.*"
+        env:
+          CI_LTO: 0
 
       - id: upload-debug-symbols-x86_64
         label: "Upload debug symbols for x86_64"
