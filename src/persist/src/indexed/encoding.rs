@@ -377,6 +377,14 @@ impl BlobTraceUpdates {
             if from_type != to_type {
                 if let Some(migration) = backward_compatible(&from_type, &to_type) {
                     *array = migration.migrate(Arc::clone(array));
+                    if array.data_type() != &to_type {
+                        error!(
+                            ?from_type,
+                            actual_type=?array.data_type(),
+                            ?to_type,
+                            "migration failed; returned non-matching data type!"
+                        );
+                    }
                 } else {
                     error!(
                         ?from_type,

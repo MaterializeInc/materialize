@@ -25,11 +25,13 @@ use differential_dataflow::trace::Description;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use itertools::Itertools;
+use mz_ore::soft_assert_eq_or_log;
 use mz_ore::task::JoinHandle;
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
 use mz_persist_types::arrow::{ArrayBound, ArrayIdx, ArrayOrd};
+use mz_persist_types::columnar::data_type;
 use mz_persist_types::part::Part;
 use mz_persist_types::{Codec, Codec64};
 use semver::Version;
@@ -173,6 +175,16 @@ impl<K: Codec, V: Codec, T: Codec64, D: Codec64> RowSort<T, D> for StructuredSor
         let structured = updates
             .get_or_make_structured::<K, V>(&*self.schemas.key, &*self.schemas.val)
             .clone();
+        soft_assert_eq_or_log!(
+            Some(structured.key.data_type()),
+            data_type::<K>(&*self.schemas.key).ok().as_ref(),
+            "migrated key type should match"
+        );
+        soft_assert_eq_or_log!(
+            Some(structured.val.data_type()),
+            data_type::<V>(&*self.schemas.val).ok().as_ref(),
+            "migrated val type should match"
+        );
         let key_ord = ArrayOrd::new(&structured.key);
         let val_ord = ArrayOrd::new(&structured.val);
         StructuredUpdates {
