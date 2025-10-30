@@ -112,7 +112,7 @@ use std::task::Poll;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::operators::arrange::{Arranged, ShutdownButton};
+use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::trace::TraceReader;
 use differential_dataflow::{AsCollection, Data, VecCollection};
@@ -159,7 +159,7 @@ use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
-use crate::render::context::{ArrangementFlavor, Context, ShutdownProbe, shutdown_token};
+use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::continual_task::ContinualTaskCtx;
 use crate::row_spine::{RowRowBatcher, RowRowBuilder};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
@@ -283,8 +283,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                         ErrorHandler::Halt("compute_import"),
                     );
 
-                    let mut source_tokens: Vec<Rc<dyn Any>> = vec![Rc::new(token)];
-
                     // If `mfp` is non-identity, we need to apply what remains.
                     // For the moment, assert that it is either trivial or `None`.
                     assert!(mfp.map(|x| x.is_identity()).unwrap_or(true));
@@ -306,7 +304,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                             .try_into()
                             .expect("must fit");
 
-                        let (token, stream) = ok_stream.limit_progress(
+                        let stream = ok_stream.limit_progress(
                             output_probe.clone(),
                             slack,
                             limit,
@@ -314,7 +312,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                             name.clone(),
                         );
                         ok_stream = stream;
-                        source_tokens.push(token);
                     }
 
                     // Attach a probe reporting the input frontier.
@@ -345,7 +342,7 @@ pub fn build_compute_dataflow<A: Allocate>(
                     imported_sources.push((mz_expr::Id::Global(*source_id), (oks, errs)));
 
                     // Associate returned tokens with the source identifier.
-                    tokens.insert(*source_id, Rc::new(source_tokens));
+                    tokens.insert(*source_id, Rc::new(token));
                 });
             }
         });
@@ -386,10 +383,6 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let (probe, token) = shutdown_token(region);
-                    context.shutdown_probe = probe;
-                    tokens.insert(object.id, Rc::new(token));
-
                     let bundle = context.scope.clone().region_named(
                         &format!("BuildingObject({:?})", object.id),
                         |region| {
@@ -492,10 +485,6 @@ pub fn build_compute_dataflow<A: Allocate>(
 
                 // Build declared objects.
                 for object in dataflow.objects_to_build {
-                    let (probe, token) = shutdown_token(region);
-                    context.shutdown_probe = probe;
-                    tokens.insert(object.id, Rc::new(token));
-
                     let bundle = context.scope.clone().region_named(
                         &format!("BuildingObject({:?})", object.id),
                         |region| {
@@ -649,19 +638,14 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    let token = Rc::new(());
-                    let shutdown_token = Rc::downgrade(&token);
                     oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_oks", self.debug_name),
                         expiration,
-                        Weak::clone(&shutdown_token),
                     );
                     errs.stream = errs.stream.expire_stream_at(
                         &format!("{}_export_index_errs", self.debug_name),
                         expiration,
-                        shutdown_token,
                     );
-                    needed_tokens.push(token);
                 }
 
                 oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
@@ -750,19 +734,14 @@ where
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
-                    let token = Rc::new(());
-                    let shutdown_token = Rc::downgrade(&token);
                     oks.stream = oks.stream.expire_stream_at(
                         &format!("{}_export_index_iterative_oks", self.debug_name),
                         expiration,
-                        Weak::clone(&shutdown_token),
                     );
                     errs.stream = errs.stream.expire_stream_at(
                         &format!("{}_export_index_iterative_err", self.debug_name),
                         expiration,
-                        shutdown_token,
                     );
-                    needed_tokens.push(token);
                 }
 
                 oks.stream = oks.stream.probe_notify_with(vec![output_probe.clone()]);
@@ -925,11 +904,6 @@ where
                         move |_k, _s, t| t.push(((), Diff::ONE)),
                     )
                     .as_collection(|k, _| k.clone());
-
-                // Actively interrupt the data flow during shutdown, to ensure we won't keep
-                // iterating for long (or even forever).
-                let oks = render_shutdown_fuse(oks, self.shutdown_probe.clone());
-                let errs = render_shutdown_fuse(errs, self.shutdown_probe.clone());
 
                 oks_v.set(&oks);
                 err_v.set(&errs);
@@ -1604,30 +1578,6 @@ where
     }
 }
 
-/// Wraps the provided `VecCollection` with an operator that passes through all received inputs as
-/// long as the provided `ShutdownProbe` does not announce dataflow shutdown. Once the token
-/// dataflow is shutting down, all data flowing into the operator is dropped.
-fn render_shutdown_fuse<G, D>(
-    collection: VecCollection<G, D, Diff>,
-    probe: ShutdownProbe,
-) -> VecCollection<G, D, Diff>
-where
-    G: Scope,
-    D: Data,
-{
-    let stream = collection.inner;
-    let stream = stream.unary(Pipeline, "ShutdownFuse", move |_cap, _info| {
-        move |input, output| {
-            input.for_each(|cap, data| {
-                if !probe.in_shutdown() {
-                    output.session(&cap).give_container(data);
-                }
-            });
-        }
-    });
-    stream.as_collection()
-}
-
 /// Suppress progress messages for times before the given `as_of`.
 ///
 /// This operator exists specifically to work around a memory spike we'd otherwise see when
@@ -1712,8 +1662,6 @@ trait LimitProgress<T: Timestamp> {
     /// * `limit` is the maximum number of pending times to keep around.
     /// * `upper` is the upper bound of the stream's frontier until which the implementation can
     ///   retain a capability.
-    ///
-    /// Returns a shutdown button and the stream with the progress limiting applied.
     fn limit_progress(
         &self,
         handle: MzProbeHandle<T>,
@@ -1721,7 +1669,7 @@ trait LimitProgress<T: Timestamp> {
         limit: Option<usize>,
         upper: Antichain<T>,
         name: String,
-    ) -> (Rc<dyn Any>, Self);
+    ) -> Self;
 }
 
 // TODO: We could make this generic over a `T` that can be converted to and from a u64 millisecond
@@ -1739,9 +1687,7 @@ where
         limit: Option<usize>,
         upper: Antichain<mz_repr::Timestamp>,
         name: String,
-    ) -> (Rc<dyn Any>, Self) {
-        let mut button = None;
-
+    ) -> Self {
         let stream =
             self.unary_frontier(Pipeline, &format!("LimitProgress({name})"), |_cap, info| {
                 // Times that we've observed on our input.
@@ -1752,22 +1698,7 @@ where
                 let activator = self.scope().activator_for(info.address);
                 handle.activate(activator.clone());
 
-                let shutdown = Rc::new(());
-                button = Some(ShutdownButton::new(
-                    Rc::new(RefCell::new(Some(Rc::clone(&shutdown)))),
-                    activator,
-                ));
-                let shutdown = Rc::downgrade(&shutdown);
-
                 move |(input, frontier), output| {
-                    // We've been shut down, release all resources and consume inputs.
-                    if shutdown.strong_count() == 0 {
-                        retained_cap = None;
-                        pending_times.clear();
-                        input.for_each(|_, _| {});
-                        return;
-                    }
-
                     input.for_each(|cap, data| {
                         for time in data
                             .iter()
@@ -1824,7 +1755,7 @@ where
                     }
                 }
             });
-        (Rc::new(button.unwrap().press_on_drop()), stream)
+        stream
     }
 }
 
