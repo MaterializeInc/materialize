@@ -24,7 +24,7 @@ use mz_auth::hash::scram256_hash;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
-    Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    Fingerprint, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -62,9 +62,6 @@ use uuid::Uuid;
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
 use crate::catalog::migrate::{self, get_migration_version, set_migration_version};
-use crate::catalog::open::builtin_item_migration::{
-    BuiltinItemMigrationResult, migrate_builtin_items,
-};
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
     BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name,
@@ -190,7 +187,7 @@ impl Catalog {
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
-        let (migrated_builtins, new_builtin_collections) = {
+        let new_builtin_collections = {
             migrate::durable_migrate(
                 &mut txn,
                 state.config.environment_id.organization_id(),
@@ -205,7 +202,7 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let (migrated_builtins, new_builtin_collections) =
+            let new_builtin_collections =
                 add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
             let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
                 system_cluster: config.builtin_system_cluster_config,
@@ -225,9 +222,10 @@ impl Catalog {
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            (migrated_builtins, new_builtin_collections)
+            remove_pending_cluster_replicas_migration(&mut txn)?;
+
+            new_builtin_collections
         };
-        remove_pending_cluster_replicas_migration(&mut txn)?;
 
         let op_updates = txn.get_and_commit_op_updates();
         updates.extend(op_updates);
@@ -482,19 +480,18 @@ impl Catalog {
         }
 
         // Migrate builtin items.
-        let BuiltinItemMigrationResult {
-            builtin_table_updates: builtin_table_update,
-            migrated_storage_collections_0dt,
-            cleanup_action,
-        } = migrate_builtin_items(
-            &mut state,
+        let schema_migration_result = builtin_schema_migration::run(
+            config.build_info,
             &mut txn,
-            &mut local_expr_cache,
-            migrated_builtins,
             config.builtin_item_migration_config,
         )
         .await?;
-        builtin_table_updates.extend(builtin_table_update);
+
+        let state_updates = txn.get_and_commit_op_updates();
+        let table_updates = state
+            .apply_updates_for_bootstrap(state_updates, &mut local_expr_cache)
+            .await;
+        builtin_table_updates.extend(table_updates);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
 
         // Bump the migration version immediately before committing.
@@ -502,11 +499,12 @@ impl Catalog {
 
         txn.commit(config.boot_ts).await?;
 
-        cleanup_action.await;
+        // Now that the migration is durable, run any requested deferred cleanup.
+        schema_migration_result.cleanup_action.await;
 
         Ok(InitializeStateResult {
             state,
-            migrated_storage_collections_0dt,
+            migrated_storage_collections_0dt: schema_migration_result.replaced_items,
             new_builtin_collections: new_builtin_collections.into_iter().collect(),
             builtin_table_updates,
             last_seen_version,
@@ -712,19 +710,17 @@ impl CatalogState {
 
 /// Updates the catalog with new and removed builtin items.
 ///
-/// Returns the list of builtin [`GlobalId`]s that need to be migrated, and the list of new builtin
-/// [`GlobalId`]s.
+/// Returns the list of new builtin [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
     builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<(Vec<CatalogItemId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
+) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
-    let mut migrated_builtin_ids = Vec::new();
     // Used to validate unique descriptions.
     let mut builtin_descs = HashSet::new();
 
     // We compare the builtin items that are compiled into the binary with the builtin items that
-    // are persisted in the catalog to discover new, deleted, and migrated builtin items.
+    // are persisted in the catalog to discover new and deleted builtin items.
     let mut builtins = Vec::new();
     for builtin in BUILTINS::iter(builtins_cfg) {
         let desc = SystemObjectDescription {
@@ -775,36 +771,6 @@ fn add_new_remove_old_builtin_items_migration(
         .into_iter()
         .zip_eq(new_builtin_ids.clone())
         .collect();
-
-    // Look for migrated builtins.
-    for (builtin, system_object_mapping, fingerprint) in existing_builtins.iter().cloned() {
-        if system_object_mapping.unique_identifier.fingerprint != fingerprint {
-            // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly,
-            // it was cause the table to be truncated because the contents are not also
-            // stored in the durable catalog. Secondly, we prune `mz_storage_usage_by_shard`
-            // of old events in the background on startup. The correctness of that pruning
-            // relies on there being no other retractions to `mz_storage_usage_by_shard`.
-            assert_ne!(
-                *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, system_object_mapping.description,
-                "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
-            );
-            assert_ne!(
-                builtin.catalog_item_type(),
-                CatalogItemType::Type,
-                "types cannot be migrated"
-            );
-            assert_ne!(
-                system_object_mapping.unique_identifier.fingerprint,
-                RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
-                "clearing the runtime alterable flag on an existing object is not permitted",
-            );
-            assert!(
-                !builtin.runtime_alterable(),
-                "setting the runtime alterable flag on an existing object is not permitted"
-            );
-            migrated_builtin_ids.push(system_object_mapping.unique_identifier.catalog_id);
-        }
-    }
 
     // Add new builtin items to catalog.
     for ((builtin, fingerprint), (catalog_id, global_id)) in new_builtins.iter().cloned() {
@@ -954,7 +920,7 @@ fn add_new_remove_old_builtin_items_migration(
         .map(|(_catalog_id, global_id)| global_id)
         .collect();
 
-    Ok((migrated_builtin_ids, new_builtin_collections))
+    Ok(new_builtin_collections)
 }
 
 fn add_new_remove_old_builtin_clusters_migration(
