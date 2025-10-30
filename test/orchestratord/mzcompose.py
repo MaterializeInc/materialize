@@ -1421,7 +1421,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "clusterd",
             "balancerd",
         ]
-        c.invoke("pull", *services)
+        c.up(*[Service(service, idle=True) for service in services])
         for service in services:
             spawn.runv(
                 [
