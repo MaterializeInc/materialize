@@ -25,7 +25,8 @@ kubernetes-stubs==22.6.0.post1
 launchdarkly-api==17.2.0
 matplotlib==3.10.7
 matplotlib-stubs==0.3.4
-networkx==3.5
+# Keep on 3.4.2 for Python 3.10 compatibility
+networkx==3.4.2
 networkx-stubs==0.0.1
 # Keep on 2.2.6 for Python 3.10 compatibility
 numpy==2.2.6
@@ -52,7 +53,8 @@ pyyaml==6.0.3
 requests==2.32.5
 ruamel.yaml==0.18.16
 ruff==0.0.292
-scipy==1.16.2
+# Keep on 1.15.2 for Python 3.10 compatibility
+scipy==1.15.2
 semver==3.0.4
 shtab==1.7.2
 sqlparse==0.5.3
