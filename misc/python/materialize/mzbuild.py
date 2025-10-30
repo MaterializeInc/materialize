@@ -786,7 +786,7 @@ class ResolvedImage:
                 "-",
                 *(f"--build-arg={k}={v}" for k, v in build_args.items()),
                 "-t",
-                f"docker.io/{self.spec()}",
+                self.spec(),
                 "-t",
                 f"ghcr.io/materializeinc/{self.spec()}",
                 f"--platform=linux/{self.image.rd.arch.go_str()}",
