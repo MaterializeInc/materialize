@@ -50,7 +50,7 @@ def fetch_self_managed_versions() -> list[SelfManagedVersion]:
     ]
 
 
-def get_self_managed_versions() -> list[MzVersion]:
+def get_self_managed_major_release_latest_versions() -> list[MzVersion]:
     prefixes = set()
     result = set()
     self_managed_versions = fetch_self_managed_versions()

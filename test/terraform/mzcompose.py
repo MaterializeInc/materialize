@@ -33,7 +33,7 @@ from materialize.mzcompose.composition import (
     WorkflowArgumentParser,
 )
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.version_list import get_self_managed_versions
+from materialize.version_list import get_self_managed_major_release_latest_versions
 
 SERVICES = [
     Testdrive(),  # overridden below
@@ -942,7 +942,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     add_arguments_temporary_test(parser)
     args = parser.parse_args()
 
-    previous_tags = get_self_managed_versions()
+    previous_tags = get_self_managed_major_release_latest_versions()
     tag = get_tag(args.tag)
     path = MZ_ROOT / "test" / "terraform" / "aws-upgrade"
     aws = AWS(path)

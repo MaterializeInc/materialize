@@ -30,7 +30,7 @@ from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHEC
 from materialize.version_list import (
     fetch_self_managed_versions,
     get_published_minor_mz_versions,
-    get_self_managed_versions,
+    get_self_managed_major_release_latest_versions,
 )
 
 # late initialization
@@ -93,7 +93,7 @@ class UpgradeEntireMzFromLatestSelfManaged(Scenario):
     """Upgrade the entire Mz instance from the last Self-Managed version without any intermediate steps. This makes sure our Self-Managed releases for self-managed Materialize stay upgradable."""
 
     def base_version(self) -> MzVersion:
-        return get_self_managed_versions()[-1]
+        return get_self_managed_major_release_latest_versions()[-1]
 
     def actions(self) -> list[Action]:
         print(f"Upgrading from tag {self.base_version()}")
@@ -127,11 +127,11 @@ class UpgradeEntireMzFromPreviousSelfManaged(Scenario):
     """Upgrade the entire Mz instance through the last two Self-Managed versions. This makes sure our Self-Managed releases for self-managed Materialize stay upgradable."""
 
     def base_version(self) -> MzVersion:
-        return get_self_managed_versions()[-2]
+        return get_self_managed_major_release_latest_versions()[-2]
 
     def actions(self) -> list[Action]:
         print(
-            f"Upgrading from tag {self.base_version()} through {get_self_managed_versions()[-1]}"
+            f"Upgrading from tag {self.base_version()} through {get_self_managed_major_release_latest_versions()[-1]}"
         )
         return [
             StartMz(
@@ -143,7 +143,7 @@ class UpgradeEntireMzFromPreviousSelfManaged(Scenario):
             KillMz(
                 capture_logs=True
             ),  #  We always use True here otherwise docker-compose will lose the pre-upgrade logs
-            StartMz(self, tag=get_self_managed_versions()[-1]),
+            StartMz(self, tag=get_self_managed_major_release_latest_versions()[-1]),
             Manipulate(self, phase=2),
             KillMz(
                 capture_logs=True
