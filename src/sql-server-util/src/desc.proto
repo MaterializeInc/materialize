@@ -20,13 +20,24 @@ message ProtoSqlServerTableDesc {
   string name = 1;
   string schema_name = 2;
   repeated ProtoSqlServerColumnDesc columns = 3;
+  repeated ProtoSqlServerTableConstraint constraints = 5;
+}
+
+message ProtoSqlServerTableConstraint {
+  string constraint_name = 1;
+  oneof constraint_type {
+    google.protobuf.Empty primary_key = 2;
+    google.protobuf.Empty unique = 3;
+  }
+  repeated string column_names = 4;
 }
 
 message ProtoSqlServerColumnDesc {
+  reserved 22;
+
   string name = 1;
   mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
   string raw_type = 21;
-  optional string primary_key_constraint = 22;
 
   oneof decode_type {
     google.protobuf.Empty bool = 4;

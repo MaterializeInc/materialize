@@ -11,7 +11,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_ore::collections::CollectionExt;
 use mz_proto::RustType;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
@@ -20,7 +19,8 @@ use mz_sql_parser::ast::{
     Value, WithOptionValue,
 };
 use mz_sql_server_util::desc::{
-    SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerQualifiedTableName, SqlServerTableDesc,
+    SqlServerColumnDecodeType, SqlServerColumnDesc, SqlServerQualifiedTableName,
+    SqlServerTableConstraintType, SqlServerTableDesc,
 };
 use mz_storage_types::sources::{SourceExportStatementDetails, SourceReferenceResolver};
 use prost::Message;
@@ -414,26 +414,65 @@ pub(super) fn generate_source_export_statement_values(
     };
 
     // Filter out columns that the user wanted to exclude.
-    let included_columns = table.columns.iter().filter_map(|c| {
-        c.column_type
-            .as_ref()
-            .map(|ct| (c.name.as_ref(), ct, c.primary_key_constraint.clone()))
-    });
+    let included_columns = table
+        .columns
+        .iter()
+        .filter_map(|c| c.column_type.as_ref().map(|ct| (c.name.as_ref(), ct)));
 
-    let mut primary_keys: BTreeMap<Arc<str>, Vec<Ident>> = BTreeMap::new();
     let mut column_defs = vec![];
     let mut constraints = vec![];
 
-    for (col_name, col_type, col_primary_key_constraint) in included_columns {
+    // there are likely less excluded columns than included
+    let excluded_columns: BTreeSet<_> = table
+        .columns
+        .iter()
+        .filter_map(|c| match &c.column_type {
+            None => Some(c.name.as_ref()),
+            Some(_) => None,
+        })
+        .collect();
+    for constraint in table.constraints.iter() {
+        // if one or more columns of the constraint are excluded, do not record the constraint
+        // in materialize
+        if constraint
+            .column_names
+            .iter()
+            .any(|col| excluded_columns.contains(col.as_str()))
+        {
+            tracing::debug!(
+                "skipping constraint {name} due to excluded column",
+                name = &constraint.constraint_name
+            );
+            continue;
+        }
+
+        constraints.push(mz_sql_parser::ast::TableConstraint::Unique {
+            name: Some(Ident::new_lossy(constraint.constraint_name.clone())),
+            columns: constraint
+                .column_names
+                .iter()
+                .map(Ident::new)
+                .collect::<Result<_, _>>()?,
+            is_primary: matches!(
+                constraint.constraint_type,
+                SqlServerTableConstraintType::PrimaryKey
+            ),
+            nulls_not_distinct: false,
+        });
+    }
+
+    tracing::debug!(
+        "source export constraints for {schema_name}.{table_name}: {constraints:?}",
+        schema_name = &table.schema_name,
+        table_name = &table.name
+    );
+
+    for (col_name, col_type) in included_columns {
         let name = Ident::new(col_name)?;
         let ty = mz_pgrepr::Type::from(&col_type.scalar_type);
         let data_type = scx.resolve_type(ty)?;
         let mut col_options = vec![];
 
-        if let Some(constraint) = col_primary_key_constraint {
-            let columns = primary_keys.entry(constraint).or_default();
-            columns.push(name.clone());
-        }
         if !col_type.nullable {
             col_options.push(mz_sql_parser::ast::ColumnOptionDef {
                 name: None,
@@ -447,27 +486,6 @@ pub(super) fn generate_source_export_statement_values(
             collation: None,
             options: col_options,
         });
-    }
-
-    match primary_keys.len() {
-        // No primary key.
-        0 => (),
-        1 => {
-            let (constraint_name, columns) = primary_keys.into_element();
-            constraints.push(mz_sql_parser::ast::TableConstraint::Unique {
-                name: Some(Ident::new_lossy(&*constraint_name)),
-                columns,
-                is_primary: true,
-                nulls_not_distinct: false,
-            });
-        }
-        // Multiple primary keys..?
-        2.. => {
-            let constraint_names = primary_keys.into_keys().collect();
-            return Err(PlanError::SqlServerSourcePurificationError(
-                SqlServerSourcePurificationError::MultiplePrimaryKeys { constraint_names },
-            ));
-        }
     }
 
     let details = SourceExportStatementDetails::SqlServer {

@@ -24,7 +24,8 @@ use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{
-    SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerQualifiedTableName, SqlServerTableRaw,
+    SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerQualifiedTableName,
+    SqlServerTableConstraintRaw, SqlServerTableRaw,
 };
 use crate::{Client, SqlServerError, quote_identifier};
 
@@ -382,24 +383,12 @@ SELECT
     c.max_length as col_max_length,
     c.precision as col_precision,
     c.scale as col_scale,
-    c.is_computed as col_is_computed,
-    tc.constraint_name AS col_primary_key_constraint
+    c.is_computed as col_is_computed
 FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
 JOIN sys.columns c ON t.object_id = c.object_id
 JOIN sys.types ty ON c.user_type_id = ty.user_type_id
 JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
-LEFT JOIN information_schema.key_column_usage kc
-    ON kc.table_schema = s.name
-    AND kc.table_name = t.name
-    AND kc.column_name = c.name
-LEFT JOIN information_schema.table_constraints tc
-    ON tc.constraint_catalog = kc.constraint_catalog
-    AND tc.constraint_schema = kc.constraint_schema
-    AND tc.constraint_name = kc.constraint_name
-    AND tc.table_schema = kc.table_schema
-    AND tc.table_name = kc.table_name
-    AND tc.constraint_type = 'PRIMARY KEY'
 ";
 
 /// Returns the table metadata for the tables that are tracked by the specified `capture_instance`s.
@@ -478,7 +467,6 @@ pub async fn get_cdc_table_columns(
             name: Arc::clone(&column_name),
             data_type: get_value::<&str>(row, "col_type")?.into(),
             is_nullable: true,
-            primary_key_constraint: None,
             max_length: get_value(row, "col_max_length")?,
             precision: get_value(row, "col_precision")?,
             scale: get_value(row, "col_scale")?,
@@ -487,6 +475,54 @@ pub async fn get_cdc_table_columns(
         columns.insert(column_name, column);
     }
     Ok(columns)
+}
+
+/// Retrieve primary key and unique constraints for the given table.
+pub async fn get_constraints_for_table(
+    client: &mut Client,
+    schema_name: &str,
+    table_name: &str,
+) -> Result<Vec<SqlServerTableConstraintRaw>, SqlServerError> {
+    static GET_COLUMN_CONSTRAINTS_FOR_TABLE: &str = "SELECT \
+        ccu.column_name,  \
+        tc.constraint_name, \
+        tc.constraint_type \
+    FROM information_schema.table_constraints tc \
+    JOIN information_schema.constraint_column_usage ccu \
+        ON ccu.constraint_schema = tc.constraint_schema \
+        AND ccu.constraint_name = tc.constraint_name \
+    WHERE tc.table_schema = @P1 \
+        AND tc.table_name = @P2 \
+        AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')";
+
+    let result = client
+        .query(
+            GET_COLUMN_CONSTRAINTS_FOR_TABLE,
+            &[&schema_name, &table_name],
+        )
+        .await?;
+
+    let mut constraints: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for row in result {
+        let column_name = get_value::<&str>(&row, "column_name")?.into();
+        let constraint_name = get_value::<&str>(&row, "constraint_name")?.into();
+        let constraint_type = get_value::<&str>(&row, "constraint_type")?.into();
+        constraints
+            .entry((constraint_name, constraint_type))
+            .or_default()
+            .push(column_name);
+    }
+    tracing::debug!("table {schema_name}.{table_name} constraints: {constraints:?}");
+    Ok(constraints
+        .into_iter()
+        .map(
+            |((constraint_name, constraint_type), columns)| SqlServerTableConstraintRaw {
+                constraint_name,
+                constraint_type,
+                columns,
+            },
+        )
+        .collect())
 }
 
 /// Ensure change data capture (CDC) is enabled for the database the provided
@@ -675,7 +711,6 @@ fn get_value<'a, T: tiberius::FromSql<'a>>(
     row.try_get(name)?
         .ok_or(SqlServerError::MissingColumn(name))
 }
-
 fn deserialize_table_columns_to_raw_tables(
     rows: &[tiberius::Row],
 ) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
@@ -687,16 +722,12 @@ fn deserialize_table_columns_to_raw_tables(
         let capture_instance: Arc<str> = get_value::<&str>(row, "capture_instance")?.into();
         let capture_instance_create_date: NaiveDateTime =
             get_value::<NaiveDateTime>(row, "capture_instance_create_date")?;
-        let primary_key_constraint: Option<Arc<str>> = row
-            .try_get::<&str, _>("col_primary_key_constraint")?
-            .map(|v| v.into());
 
         let column_name = get_value::<&str>(row, "col_name")?.into();
         let column = SqlServerColumnRaw {
             name: Arc::clone(&column_name),
             data_type: get_value::<&str>(row, "col_type")?.into(),
             is_nullable: get_value(row, "col_nullable")?,
-            primary_key_constraint,
             max_length: get_value(row, "col_max_length")?,
             precision: get_value(row, "col_precision")?,
             scale: get_value(row, "col_scale")?,
@@ -714,7 +745,6 @@ fn deserialize_table_columns_to_raw_tables(
         columns.push(column);
     }
 
-    // Flatten into our raw Table description.
     let raw_tables = tables
         .into_iter()
         .map(
@@ -730,8 +760,7 @@ fn deserialize_table_columns_to_raw_tables(
                 }
             },
         )
-        .collect::<Vec<SqlServerTableRaw>>();
-
+        .collect();
     Ok(raw_tables)
 }
 

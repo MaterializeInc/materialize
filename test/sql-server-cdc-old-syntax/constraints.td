@@ -48,13 +48,11 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'unique_null
 > CREATE DEFAULT INDEX ON unique_not_null;
 > CREATE DEFAULT INDEX ON unique_nullable;
 
-# TODO: database-issues#9723
-#> SELECT key FROM (SHOW INDEXES ON pk);
-#{f1,f2}
+> SELECT key FROM (SHOW INDEXES ON pk);
+{f1,f2}
 
-# TODO: database-issues#9723
-#> SELECT key FROM (SHOW INDEXES ON unique_not_null);
-#{f1,f2}
+> SELECT key FROM (SHOW INDEXES ON unique_not_null);
+{f1,f2}
 
 > SELECT key FROM (SHOW INDEXES ON unique_nullable);
 {f1,f2,f3}
@@ -93,10 +91,9 @@ Target cluster: quickstart
 #
 # Unique converted to keys
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_not_null
-Explained Query:
-  Distinct project=[#0, #1]
-    Project (#0, #1)
-      ReadIndex on=unique_not_null unique_not_null_primary_idx=[*** full scan ***]
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.unique_not_null_primary_idx (*** full scan ***)
