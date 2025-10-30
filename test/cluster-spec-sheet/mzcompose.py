@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """
-Reproduces cluster spec sheet results on Materialize Cloud.
+Reproduces cluster spec sheet results on Materialize Cloud (or local Docker).
 """
 
 import argparse
@@ -17,6 +17,7 @@ import glob
 import itertools
 import os
 import re
+import shlex
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable
@@ -34,6 +35,7 @@ from materialize.mzcompose.composition import (
     Composition,
     WorkflowArgumentParser,
 )
+from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mz import Mz
 from materialize.test_analytics.config.test_analytics_db_config import (
@@ -43,7 +45,7 @@ from materialize.test_analytics.data.cluster_spec_sheet import (
     cluster_spec_sheet_result_storage,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
-from materialize.ui import UIError
+from materialize.ui import CommandFailureCausedUIError, UIError
 
 CLUSTER_SPEC_SHEET_VERSION = "1.0.0"  # Used for uploading test analytics results
 
@@ -51,6 +53,11 @@ REGION = os.getenv("REGION", "aws/us-east-1")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
 USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
 APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
+
+MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
+    "memory_limiter_interval": "0s",
+    "max_credit_consumption_rate": "1024",
+}
 
 SERVICES = [
     Mz(
@@ -60,9 +67,13 @@ SERVICES = [
     ),
     Materialized(
         propagate_crashes=True,
-        additional_system_parameter_defaults={
-            "memory_limiter_interval": "0s",
-            "max_credit_consumption_rate": "1024",
+        additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+    ),
+    # dbbench service built from our mzbuild Dockerfile (test/dbbench)
+    MzComposeService(
+        "dbbench",
+        {
+            "mzbuild": "dbbench",
         },
     ),
 ]
@@ -73,6 +84,7 @@ SCENARIO_TPCH_MV_STRONG = "tpch_mv_strong"
 SCENARIO_TPCH_QUERIES_STRONG = "tpch_queries_strong"
 SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
 SCENARIO_TPCH_STRONG = "tpch_strong"
+SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
 ALL_SCENARIOS = [
     SCENARIO_AUCTION_STRONG,
     SCENARIO_AUCTION_WEAK,
@@ -80,6 +92,7 @@ ALL_SCENARIOS = [
     SCENARIO_TPCH_QUERIES_STRONG,
     SCENARIO_TPCH_QUERIES_WEAK,
     SCENARIO_TPCH_STRONG,
+    SCENARIO_QPS_ENVD_STRONG_SCALING,
 ]
 
 
@@ -129,6 +142,7 @@ class ScenarioRunner:
         connection: ConnectionHandler,
         results_writer: csv.DictWriter,
         replica_size: Any,
+        target: "BenchTarget",
     ) -> None:
         self.scenario = scenario
         self.scenario_version = scenario_version
@@ -137,6 +151,8 @@ class ScenarioRunner:
         self.connection = connection
         self.results_writer = results_writer
         self.replica_size = replica_size
+        self.target = target
+        self.envd_cpus: int | None = None  # Used only in QPS scenarios
 
     def add_result(
         self,
@@ -144,7 +160,8 @@ class ScenarioRunner:
         name: str,
         repetition: int,
         size_bytes: int | None,
-        time: float,
+        time: float | None = None,
+        qps: float | None = None,
     ) -> None:
         self.results_writer.writerow(
             {
@@ -155,9 +172,11 @@ class ScenarioRunner:
                 "category": category,
                 "test_name": name,
                 "cluster_size": self.replica_size,
+                "envd_cpus": self.envd_cpus,
                 "repetition": repetition,
                 "size_bytes": size_bytes,
-                "time_ms": int(time * 1000),
+                "time_ms": int(time * 1000) if time is not None else None,
+                "qps": qps,
             }
         )
 
@@ -209,6 +228,145 @@ class ScenarioRunner:
                     self.run_query(after_part)
 
             self.connection.retryable(inner)
+
+    def measure_dbbench(
+        self,
+        category: str,
+        name: str,
+        *,
+        setup: list[str],
+        query: list[str],
+        after: list[str],
+        duration: str,
+        concurrency: int | None = None,
+    ) -> None:
+        """
+        Run dbbench via the 'dbbench' mzcompose service and record its final QPS.
+
+        Parameters somewhat mirror ScenarioRunner.measure for consistency, but are applied to a
+        generated dbbench.ini:
+          - setup:    SQL statements run once before the workload (dbbench [setup])
+          - query:    SQL statements that form the workload (dbbench [loadtest] query=...)
+          - after:    SQL statements run once after the workload (dbbench [teardown])
+          - duration: length of the workload (top-level duration=...)
+          - concurrency: concurrent sessions for the workload.
+
+        We capture and parse dbbench's output (stderr or stdout) to find the last
+        occurrence of a "QPS" value that dbbench reports in its summary, and store that
+        as the 'qps' column in the results CSV. If no QPS is found, the test fails.
+        (We omit time_ms for these rows since wall-clock time is not meaningful here.)
+        """
+
+        # Build a dbbench command that targets the current Materialize instance and
+        # the active cluster 'c' using target-provided flags.
+        flags = self.target.dbbench_connection_flags()
+
+        # Render a minimal INI file for dbbench.
+        def ini_escape(s: str) -> str:
+            return s.replace("\n", " ")
+
+        lines: list[str] = []
+        lines.append(f"duration={duration}")
+        # [setup]
+        if setup:
+            lines.append("")
+            lines.append("[setup]")
+            for q in setup:
+                q = dedent(q).strip()
+                if q:
+                    lines.append(f"query={ini_escape(q)}")
+        # [teardown]
+        if after:
+            lines.append("")
+            lines.append("[teardown]")
+            for q in after:
+                q = dedent(q).strip()
+                if q:
+                    lines.append(f"query={ini_escape(q)}")
+        # [loadtest]
+        lines.append("")
+        lines.append("[loadtest]")
+        for q in query:
+            q = dedent(q).strip()
+            if q:
+                lines.append(f"query={ini_escape(q)}")
+        if concurrency is not None:
+            lines.append(f"concurrency={int(concurrency)}")
+
+        ini_text = "\n".join(lines) + "\n"
+
+        # Construct a shell snippet to write the INI and execute dbbench
+        quoted_flags = " ".join(shlex.quote(x) for x in flags)
+        script = (
+            "set -euo pipefail; "
+            "cat > /tmp/run.ini; "
+            f"exec dbbench {quoted_flags} -intermediate-stats=false /tmp/run.ini"
+        )
+
+        print(f"--- Running dbbench step '{name}' for {self.envd_cpus} ...")
+        # Execute the command in the 'dbbench' service container and capture output
+        result = self.target.c.run(
+            "dbbench",
+            "-lc",  # sh arg to make it run `script`
+            script,
+            entrypoint="sh",
+            rm=True,
+            capture_and_print=True,
+            stdin=ini_text,
+        )
+
+        # dbbench writes its final summary to stderr; prefer stderr but also
+        # consider stdout just in case.
+        stderr_out = result.stderr or ""
+        stdout_out = result.stdout or ""
+        combined_out = f"{stderr_out}\n{stdout_out}".strip()
+
+        # Persist full dbbench output to a log file for later inspection
+        logs_dir = os.path.join("test", "cluster-spec-sheet", "dbbench-logs")
+        os.makedirs(logs_dir, exist_ok=True)
+
+        # Build a descriptive, filesystem-safe filename
+        def _slug(x: Any) -> str:
+            return re.sub(r"[^A-Za-z0-9._=-]+", "-", str(x))
+
+        fname = f"{_slug(self.scenario)}_{_slug(self.mode)}_{_slug(self.envd_cpus)}_{_slug(name)}.log"
+        log_path = os.path.join(logs_dir, fname)
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(combined_out + ("\n" if not combined_out.endswith("\n") else ""))
+        print(f"dbbench logs saved to {log_path}")
+
+        # Parse QPS from output.
+        # (Alternatively, we could make our fork of dbbench print a more machine-readable output.)
+        # TODO: Later, we'll want to also look at latency (avg and tail-latency), but seems too unstable for now.
+        qps_val: float | None = None
+        try:
+            qps_matches = re.findall(r"([0-9]+(?:\.[0-9]+)?)\s*QPS", combined_out)
+            if len(qps_matches) > 1:
+                raise UIError(
+                    f"dbbench: found multiple QPS values in output: {qps_matches}"
+                )
+            if qps_matches:
+                qps_val = float(qps_matches[0])
+        except Exception as e:
+            raise UIError(f"Failed to parse dbbench QPS from output: {e}")
+
+        if qps_val is None:
+            tail = "\n".join(combined_out.splitlines()[-25:])
+            raise UIError("dbbench: failed to find QPS in output. Last lines:\n" + tail)
+        else:
+            print(f"dbbench parsed QPS: {qps_val}")
+
+        # Record a result row: put QPS into the 'qps' column, and omit time_ms (not applicable)
+        self.add_result(
+            category,
+            name,
+            # we have `duration` instead of `repetitions` in QPS benchmarks currently (but maybe it's good to keep
+            # `repetition` in the schema in case we ever want also multiple repetitions for QPS)
+            0,
+            None,
+            None,
+            qps=qps_val,
+        )
 
     def size_of_dataflow(self, object: str) -> int | None:
         retries = 10
@@ -1672,29 +1830,218 @@ class AuctionScenario(Scenario):
         )
 
 
-def disable_region(c: Composition) -> None:
+class QpsEnvdStrongScalingScenario(Scenario):
+
+    def name(self) -> str:
+        return SCENARIO_QPS_ENVD_STRONG_SCALING
+
+    def materialize_views(self) -> list[str]:
+        return []
+
+    def setup(self) -> list[str]:
+        return []
+
+    def drop(self) -> list[str]:
+        return []
+
+    def run(self, runner: ScenarioRunner) -> None:
+        runner.measure_dbbench(
+            category="peek_qps",
+            name="dbbench_256_conns",
+            setup=[
+                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
+                "create default index on gen_view",
+                "select * from gen_view",  # Wait for hydration
+            ],
+            query=[
+                "select * from gen_view",
+            ],
+            after=[
+                "drop view gen_view cascade",
+            ],
+            duration="40s",
+            concurrency=256,
+        )
+
+        runner.measure_dbbench(
+            category="peek_qps",
+            name="dbbench_512_conns",
+            setup=[
+                "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
+                "create default index on gen_view",
+                "select * from gen_view",  # Wait for hydration
+            ],
+            query=[
+                "select * from gen_view",
+            ],
+            after=[
+                "drop view gen_view cascade",
+            ],
+            duration="40s",
+            concurrency=512,
+        )
+
+        # TODO: Add more scenarios as the QPS/CPS work progresses:
+        # - different connection counts
+        # - distribute queries across more clusters;
+        #   see manual test results with multiple clusters here:
+        #   https://docs.google.com/presentation/d/1bIyTWaRiyEqBXFxoxpHwWSywztSW1jRw_JP3M-Zj_6A/edit?slide=id.g39de8b7440c_0_86#slide=id.g39de8b7440c_0_86
+        # - explicit transactions (which are currently super slow)
+        # - (slow-path queries are kinda expected to be slow, so it's not so important to measure them)
+        # - I think dbbench uses the "Simple Query Protocol" by default. We might want to also measure the
+        #   "Extended Query Protocol" / prepared statements.
+        # - Lookups in a large index, especially on a larger replica.
+        # - Larger result sets.
+        #
+        # We'll also want to measure latency, including tail latency.
+
+
+def disable_region(c: Composition, hard: bool) -> None:
     print(f"Shutting down region {REGION} ...")
 
     try:
-        c.run("mz", "region", "disable", "--hard", rm=True)
+        if hard:
+            c.run("mz", "region", "disable", "--hard", rm=True)
+        else:
+            c.run("mz", "region", "disable", rm=True)
     except UIError:
         # Can return: status 404 Not Found
         pass
 
 
-def wait_for_cloud(c: Composition) -> None:
-    print(f"Waiting for cloud cluster to come up with username {USERNAME} ...")
-    _wait_for_pg(
-        host=c.cloud_hostname(),
-        user=USERNAME,
-        password=APP_PASSWORD,
-        port=6875,
-        query="SELECT 1",
-        expected=[(1,)],
-        timeout_secs=900,
-        dbname="materialize",
-        sslmode="require",
-    )
+def cloud_disable_enable_and_wait(
+    target: "BenchTarget",
+    environmentd_cpu_allocation: int | None = None,
+) -> None:
+    """
+    Soft-disable and then enable the Cloud region, then wait for environmentd readiness.
+
+    The disabling is needed because `mz region enable` does a 0dt rollout. This means that,
+    without a `disable`, we'd get an intrusive envd restart some time later after `wait_for_envd`
+    already succeeded (with the old envd). Therefore, we do an `mz region disable` first, so
+    that `wait_for_envd` can't succeed before the read-only env promotes.
+
+    When `environmentd_cpu_allocation` is provided, it is passed to `mz region enable` via
+    `--environmentd-cpu-allocation` to reconfigure environmentd's CPU allocation.
+    """
+    disable_region(target.c, hard=False)
+
+    if environmentd_cpu_allocation is None:
+        target.c.run("mz", "region", "enable", rm=True)
+    else:
+        target.c.run(
+            "mz",
+            "region",
+            "enable",
+            "--environmentd-cpu-allocation",
+            str(environmentd_cpu_allocation),
+            rm=True,
+        )
+
+    time.sleep(10)
+
+    assert "materialize.cloud" in target.c.cloud_hostname()
+    wait_for_envd(target)
+
+
+def reconfigure_envd_cpus(
+    target: "BenchTarget", envd_cpus: int, runner: ScenarioRunner
+) -> None:
+    """
+    Reconfigure the number of CPU cores allocated to environmentd for the given target.
+
+    - Docker target: recreate the local `materialized` container with a CPU limit equal to envd_cpus,
+      wait for SQL readiness, and force the benchmark connection to reconnect.
+    - Cloud target: soft-disable/enable the region with the desired envd CPU allocation, wait for
+      SQL readiness, and force the benchmark connection to reconnect.
+    """
+    if isinstance(target, DockerTarget):
+        # For Docker target: restart `materialized` with a CPU limit equal to envd_cpus.
+        try:
+            # Create a temporary override of the materialized service with updated CPU limits.
+            # Keep other defaults consistent with SERVICES.
+            overridden = Materialized(
+                propagate_crashes=True,
+                additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
+                # This is just an upper limit; it won't make a noise if your local machine doesn't have enough cores.
+                # If you'd like to avoid going over your machine's core count, you can use `--max-scale`.
+                cpu=str(envd_cpus),
+            )
+            print(f"--- Reconfiguring local environmentd CPUs to {envd_cpus}")
+            with target.c.override(overridden):
+                # Recreate the container to apply new limits, but preserve volumes.
+                try:
+                    target.c.rm("materialized", stop=True, destroy_volumes=False)
+                except CommandFailureCausedUIError as e:
+                    # Ignore only the benign case where the container does not yet exist.
+                    if not (e.stderr and "No such container" in e.stderr):
+                        raise
+                target.c.up("materialized")
+                wait_for_envd(target, timeout_secs=60)
+        except Exception as e:
+            raise UIError(f"failed to apply Docker CPU override for environmentd: {e}")
+    else:
+        # Cloud target: reconfigure environmentd CPUs via `mz region`.
+        try:
+            print(f"--- Reconfiguring Cloud environmentd CPUs to {envd_cpus}")
+            cloud_disable_enable_and_wait(target, environmentd_cpu_allocation=envd_cpus)
+        except Exception as e:
+            raise UIError(
+                f"failed to apply Cloud CPU override for environmentd via 'mz region': {e}"
+            )
+
+    # Force reconnection to the (potentially restarted) service.
+    try:
+        runner.connection.connection.close()
+    except Exception:
+        pass
+
+
+def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
+    """
+    Wait until the environmentd SQL endpoint is ready.
+
+    - Cloud: uses cloud hostname:6875, sslmode=require, and prefers the per-run
+      app password if available; falls back to MZ_CLI_APP_PASSWORD.
+    - Docker: probes SQL readiness via Composition.sql_query
+    """
+    if isinstance(target, CloudTarget):
+        host = target.c.cloud_hostname()
+        user = USERNAME
+        # Prefer the newly created app password when present; fall back to the CLI password.
+        password = target.new_app_password or APP_PASSWORD or ""
+        sslmode = "require"
+        print(
+            f"Waiting for cloud environmentd at {host}:6875 to come up with username {user} ..."
+        )
+        _wait_for_pg(
+            host=host,
+            user=user,
+            password=password,
+            port=6875,
+            query="SELECT 1",
+            expected=[(1,)],
+            timeout_secs=timeout_secs,
+            dbname="materialize",
+            sslmode=sslmode,
+        )
+    else:
+        # Docker target: use the composition helper to query the service via the
+        # host-mapped port on 127.0.0.1; the container hostname "materialized"
+        # is not resolvable from the host network when using psycopg directly.
+        print("Waiting for local environmentd (docker) at materialized:6875 ...")
+        deadline = time.time() + timeout_secs
+        last_err: Exception | None = None
+        while time.time() < deadline:
+            try:
+                target.c.sql_query("SELECT 1", service="materialized")
+                return
+            except Exception as e:
+                last_err = e
+                time.sleep(1)
+        raise UIError(
+            f"materialized did not accept SQL connections within {timeout_secs}s after restart: {last_err}"
+        )
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1716,7 +2063,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--analyze",
         default=True,
         action=argparse.BooleanOptionalAction,
-        help="Analyze results after completing test.",
+        help="Analyze results after completing test. Dispatches to cluster-scale or envd-scale focused analyses based on the file suffix: `.cluster.csv` or `.envd.csv`.",
     )
     parser.add_argument(
         "--target",
@@ -1725,7 +2072,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="Target to deploy to (default: cloud).",
     )
     parser.add_argument(
-        "--max-scale", type=int, default=32, help="Maximum scale to test."
+        "--max-scale",
+        type=int,
+        default=32,
+        help="Maximum scale to test. For QPS scenarios, this directly corresponds to the number of CPU cores given to envd.",
     )
     parser.add_argument(
         "--scale-tpch", type=float, default=8, help="TPCH scale factor."
@@ -1734,7 +2084,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--scale-tpch-queries", type=float, default=4, help="TPCH queries scale factor."
     )
     parser.add_argument(
-        "--scale-auction", type=int, default=3, help="TPCH scale factor."
+        "--scale-auction", type=int, default=3, help="Auction scale factor."
     )
     parser.add_argument(
         "scenarios",
@@ -1765,9 +2115,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         target.cleanup()
 
     target.initialize()
-    results_file = open(args.record, "w", newline="")
-    results_writer = csv.DictWriter(
-        results_file,
+
+    # Derive two result files (cluster and envd-focused) from the provided --record path
+    base_name = os.path.splitext(args.record)[0]
+    cluster_path = f"{base_name}.cluster.csv"
+    envd_path = f"{base_name}.envd.csv"
+
+    cluster_file = open(cluster_path, "w", newline="")
+    envd_file = open(envd_path, "w", newline="")
+
+    # Traditional scenarios: cluster-focused schema
+    cluster_writer = csv.DictWriter(
+        cluster_file,
         fieldnames=[
             "scenario",
             "scenario_version",
@@ -1780,12 +2139,37 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "size_bytes",
             "time_ms",
         ],
+        extrasaction="ignore",
     )
-    results_writer.writeheader()
+    cluster_writer.writeheader()
+
+    # Envd-focused scenarios: QPS schema
+    envd_writer = csv.DictWriter(
+        envd_file,
+        fieldnames=[
+            "scenario",
+            "scenario_version",
+            "scale",
+            "mode",
+            "category",
+            "test_name",
+            "envd_cpus",
+            "repetition",
+            "qps",
+        ],
+        extrasaction="ignore",
+    )
+    envd_writer.writeheader()
 
     def process(scenario: str) -> None:
         with c.test_case(scenario):
             conn = ConnectionHandler(target.new_connection)
+
+            # This cluster is just for misc setup queries.
+            size = "50cc" if isinstance(target, CloudTarget) else "scale=1,workers=1"
+            with conn as cur:
+                cur.execute("DROP CLUSTER IF EXISTS quickstart;")
+                cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
 
             if scenario == SCENARIO_TPCH_STRONG:
                 print("--- SCENARIO: Running TPC-H Index strong scaling")
@@ -1793,7 +2177,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     scenario=TpchScenario(
                         args.scale_tpch, target.replica_size_for_scale(1)
                     ),
-                    results_writer=results_writer,
+                    results_writer=cluster_writer,
                     connection=conn,
                     target=target,
                     max_scale=max_scale,
@@ -1804,7 +2188,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     scenario=TpchScenarioMV(
                         args.scale_tpch, target.replica_size_for_scale(1)
                     ),
-                    results_writer=results_writer,
+                    results_writer=cluster_writer,
                     connection=conn,
                     target=target,
                     max_scale=max_scale,
@@ -1815,7 +2199,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     scenario=TpchScenarioQueriesIndexedInputs(
                         args.scale_tpch_queries, target.replica_size_for_scale(1)
                     ),
-                    results_writer=results_writer,
+                    results_writer=cluster_writer,
                     connection=conn,
                     target=target,
                     max_scale=max_scale,
@@ -1826,7 +2210,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     scenario=TpchScenarioQueriesIndexedInputs(
                         args.scale_tpch_queries, None
                     ),
-                    results_writer=results_writer,
+                    results_writer=cluster_writer,
                     connection=conn,
                     target=target,
                     max_scale=max_scale,
@@ -1837,7 +2221,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     scenario=AuctionScenario(
                         args.scale_auction, target.replica_size_for_scale(1)
                     ),
-                    results_writer=results_writer,
+                    results_writer=cluster_writer,
                     connection=conn,
                     target=target,
                     max_scale=max_scale,
@@ -1846,7 +2230,18 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 print("--- SCENARIO: Running Auction weak scaling")
                 run_scenario_weak(
                     scenario=AuctionScenario(args.scale_auction, None),
-                    results_writer=results_writer,
+                    results_writer=cluster_writer,
+                    connection=conn,
+                    target=target,
+                    max_scale=max_scale,
+                )
+            if scenario == SCENARIO_QPS_ENVD_STRONG_SCALING:
+                print("--- SCENARIO: Running QPS envd strong scaling")
+                run_scenario_envd_strong_scaling(
+                    scenario=QpsEnvdStrongScalingScenario(
+                        1, target.replica_size_for_scale(1)
+                    ),
+                    results_writer=envd_writer,
                     connection=conn,
                     target=target,
                     max_scale=max_scale,
@@ -1858,23 +2253,33 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         c.test_parts(scenarios, process)
         test_failed = False
     finally:
-        results_file.close()
+        cluster_file.close()
+        envd_file.close()
         # Clean up
         if args.cleanup:
             target.cleanup()
 
-    upload_results_to_test_analytics(c, args.record, not test_failed)
+    # Upload only cluster scaling results to Test Analytics for now, until the Test Analytics schema is extended.
+    # TODO: See slack discussion:
+    # https://materializeinc.slack.com/archives/C01LKF361MZ/p1762351652336819?thread_ts=1762348361.164759&cid=C01LKF361MZ
+    upload_results_to_test_analytics(c, cluster_path, not test_failed)
 
     assert not test_failed
 
     if buildkite.is_in_buildkite():
-        buildkite.upload_artifact(args.record, cwd=MZ_ROOT, quiet=True)
+        # Upload both CSVs as artifacts
+        buildkite.upload_artifact(cluster_path, cwd=MZ_ROOT, quiet=True)
+        buildkite.upload_artifact(envd_path, cwd=MZ_ROOT, quiet=True)
 
     if args.analyze:
-        analyze_file(args.record)
+        # Analyze both files separately (each has its own schema)
+        analyze_results_file(cluster_path)
+        analyze_results_file(envd_path)
 
 
 class BenchTarget:
+    c: Composition
+
     @abstractmethod
     def initialize(self) -> None: ...
     @abstractmethod
@@ -1894,20 +2299,43 @@ class BenchTarget:
         """
         return None
 
+    @abstractmethod
+    def dbbench_connection_flags(self) -> list[str]:
+        """
+        Return dbbench connection flags appropriate for this target, excluding the
+        workload file path. The result should include driver, host, port, username,
+        optional password, database, and params (including sslmode and cluster=c).
+        """
+        ...
+
 
 class CloudTarget(BenchTarget):
     def __init__(self, c: Composition) -> None:
         self.c = c
         self.new_app_password: str | None = None
 
+    def dbbench_connection_flags(self) -> list[str]:
+        assert self.new_app_password is not None
+        return [
+            "-driver",
+            "postgres",
+            "-host",
+            self.c.cloud_hostname(),
+            "-port",
+            "6875",
+            "-username",
+            USERNAME,
+            "-password",
+            self.new_app_password,
+            "-database",
+            "materialize",
+            "-params",
+            "sslmode=require&cluster=c",
+        ]
+
     def initialize(self) -> None:
-        print("Enabling region using Mz ...")
-        self.c.run("mz", "region", "enable", rm=True)
-
-        time.sleep(10)
-
-        assert "materialize.cloud" in self.c.cloud_hostname()
-        wait_for_cloud(self.c)
+        print("Soft-disabling and then enabling region using Mz ...")
+        cloud_disable_enable_and_wait(self)
 
         # Create new app password.
         new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
@@ -1936,7 +2364,7 @@ class CloudTarget(BenchTarget):
         return conn
 
     def cleanup(self) -> None:
-        disable_region(self.c)
+        disable_region(self.c, hard=True)
 
     def replica_size_for_scale(self, scale: int) -> str:
         """
@@ -1948,6 +2376,22 @@ class CloudTarget(BenchTarget):
 class DockerTarget(BenchTarget):
     def __init__(self, c: Composition) -> None:
         self.c = c
+
+    def dbbench_connection_flags(self) -> list[str]:
+        return [
+            "-driver",
+            "postgres",
+            "-host",
+            "materialized",
+            "-port",
+            "6875",
+            "-username",
+            "materialize",
+            "-database",
+            "materialize",
+            "-params",
+            "sslmode=disable&cluster=c",
+        ]
 
     def initialize(self) -> None:
         print("Starting local Materialize instance ...")
@@ -1988,6 +2432,7 @@ def run_scenario_strong(
         connection,
         results_writer,
         replica_size=None,
+        target=target,
     )
 
     for query in scenario.drop():
@@ -2019,6 +2464,92 @@ def run_scenario_strong(
         runner.replica_size = replica_size
 
         scenario.run(runner)
+
+
+def run_scenario_envd_strong_scaling(
+    scenario: Scenario,
+    results_writer: csv.DictWriter,
+    connection: ConnectionHandler,
+    target: BenchTarget,
+    max_scale: int,
+) -> None:
+    """
+    Run envd-focused scaling scenarios, where we keep the compute cluster size
+    fixed and scale the CPU resources available to environmentd instead.
+
+    For the Docker target, we change the CPU limit of the local `materialized`
+    container (which runs environmentd) before each scale point.
+    For the Cloud target, we reconfigure environmentd using `mz region enable`
+    with the `--environmentd-cpu-allocation` flag.
+    """
+
+    runner = ScenarioRunner(
+        scenario.name(),
+        scenario.VERSION,
+        scenario.scale,
+        "strong",
+        connection,
+        results_writer,
+        replica_size=None,
+        target=target,
+    )
+
+    # Prepare a tiny table for cluster availability checks.
+    for query in [
+        "DROP TABLE IF EXISTS t CASCADE;",
+        "CREATE TABLE t (a int);",
+        "INSERT INTO t VALUES (1);",
+    ]:
+        runner.run_query(query)
+
+    # Scenario-specific setup.
+    for query in scenario.setup():
+        runner.run_query(query)
+
+    for name in scenario.materialize_views():
+        runner.run_query(f"SELECT COUNT(*) > 0 FROM {name};")
+
+    fixed_replica_size = target.replica_size_for_scale(1)
+
+    try:
+        # (So far, I haven't seen a difference between 16 and 32 in manual testing in cloud. When we start seeing a
+        # difference, consider extending to 64.)
+        for envd_cpus in [1, 2, 4, 8, 16, 32]:
+            if envd_cpus > max_scale:
+                break
+
+            print(
+                f"--- Running envd-scaling scenario {scenario.name()} with envd_cpus={envd_cpus}; compute size fixed at {fixed_replica_size}"
+            )
+
+            reconfigure_envd_cpus(target, envd_cpus, runner)
+
+            # (Re)create a fixed-size compute cluster.
+            def recreate_cluster() -> None:
+                runner.run_query("DROP CLUSTER IF EXISTS c CASCADE")
+                runner.run_query(f"CREATE CLUSTER c SIZE '{fixed_replica_size}'")
+                runner.run_query("SET cluster = 'c';")
+                runner.run_query("SELECT * FROM t;")
+
+            runner.connection.retryable(recreate_cluster)
+
+            # Record envd CPU cores for this step. (We intentionally do not set replica_size, because that would be fixed
+            # in this scenario, so there is no meaningful analysis to be done on that.)
+            runner.envd_cpus = envd_cpus
+
+            scenario.run(runner)
+    finally:
+        if isinstance(target, CloudTarget):
+            # We reset the cloud envd's core count in any case, to avoid accidentally burning a lot of money.
+            print("--- Resetting Cloud environmentd CPUs to the default")
+            target.c.run(
+                "mz",
+                "region",
+                "enable",
+                "--environmentd-cpu-allocation",
+                "2",
+                rm=True,
+            )
 
 
 def run_scenario_weak(
@@ -2057,6 +2588,7 @@ def run_scenario_weak(
             connection,
             results_writer,
             replica_size,
+            target=target,
         )
         for query in scenario.drop():
             runner.run_query(query)
@@ -2091,12 +2623,26 @@ def workflow_plot(c: Composition, parser: WorkflowArgumentParser) -> None:
     args = parser.parse_args()
 
     for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_file(str(file))
+        analyze_results_file(str(file))
 
 
-def analyze_file(file: str):
+def analyze_results_file(file: str):
     print(f"--- Analyzing file {file} ...")
 
+    base_name = os.path.basename(file)
+    if base_name.endswith(".cluster.csv"):
+        analyze_cluster_results_file(file)
+    elif base_name.endswith(".envd.csv"):
+        analyze_envd_results_file(file)
+    else:
+        # Backward compatibility: fall back to cluster analyzer for legacy filenames
+        print(
+            f"Warning: Legacy analyzer fallback: treating {file} as cluster results (no .cluster/.envd suffix)"
+        )
+        analyze_cluster_results_file(file)
+
+
+def analyze_cluster_results_file(file: str) -> None:
     def extract_cluster_size(s: str) -> float:
         match = re.search(r"(\d+)(?:(cc)|(C))", s)
         if match:
@@ -2165,6 +2711,7 @@ def analyze_file(file: str):
             f"{slug}_time_ms",
             "Time [ms]",
             "Normalized time",
+            x="credits_per_h",
         )
         plot(
             plot_dir,
@@ -2174,6 +2721,37 @@ def analyze_file(file: str):
             f"{slug}_credits",
             "Cost [centi-credits]",
             "Normalized cost",
+            x="credits_per_h",
+        )
+
+
+def analyze_envd_results_file(file: str) -> None:
+    df = pd.read_csv(file)
+    if df.empty:
+        print(f"^^^ +++ File {file} is empty, skipping")
+        return
+
+    base_name = os.path.basename(file).split(".")[0]
+    plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
+    os.makedirs(plot_dir, exist_ok=True)
+
+    for (benchmark, category, mode), sub in df.groupby(
+        ["scenario", "category", "mode"]
+    ):
+        title = f"{str(benchmark).replace('_',' ')} - {str(category).replace('_',' ')} ({mode})"
+        slug = f"{benchmark}_{category}_{mode}".replace(" ", "_")
+        sub_q = sub[sub["qps"].notna() & (sub["qps"] > 0)]
+        if sub_q.empty:
+            raise UIError(f"No QPS data found for {title} in {file}")
+        plot(
+            plot_dir,
+            sub_q,
+            "qps",
+            f"{title} (QPS)",
+            f"{slug}_qps",
+            "QPS",
+            "Normalized QPS",
+            x="envd_cpus",
         )
 
 
@@ -2220,18 +2798,20 @@ def plot(
     slug: str,
     data_label: str,
     normalized_label: str,
+    x: str,
 ):
     df2 = data.pivot_table(
-        index=["credits_per_h"],
+        index=[x],
         columns=["test_name"],
         values=[value],
         aggfunc="min",
     ).sort_index(axis=1)
-    (level, dropped) = labels_to_drop(df2)
+    (level, _dropped) = labels_to_drop(df2)
     filtered = df2.droplevel(level, axis=1).dropna(axis=1, how="all")
     if filtered.empty:
         print(f"Warning: No data to plot for {title}")
         return
+    filtered.index.name = x
     plot = filtered.plot(
         kind="bar",
         figsize=(12, 6),
@@ -2240,6 +2820,7 @@ def plot(
         title=f"{title}",
         grid=True,
     )
+    plot.set_xlabel(x)
     plot.legend(
         loc="upper left",
         bbox_to_anchor=(1.0, 1.0),
@@ -2255,6 +2836,7 @@ def plot(
         title=f"{title}",
         grid=True,
     )
+    plot.set_xlabel(x)
     plot.legend(
         loc="upper left",
         bbox_to_anchor=(1.0, 1.0),

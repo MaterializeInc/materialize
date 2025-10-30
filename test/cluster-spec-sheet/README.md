@@ -8,8 +8,6 @@ Reproduce data for the cluster spec sheet effort.
 
 This will run all scenarios currently defined for the cluster spec sheet.
 
-The test expects a default cluster.
-
 Pass `--cleanup` to disable the region after the test.
 
 # Running
@@ -48,3 +46,9 @@ In this case, the environment variables are not required.
 ```
 bin/mzcompose --find cluster-spec-sheet run default --target=docker
 ```
+
+## Scenarios
+
+There are two kinds of scenarios:
+- cluster scaling: These measure run times and arrangement sizes.
+- envd scaling: These measure QPS.
