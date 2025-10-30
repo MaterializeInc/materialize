@@ -9,10 +9,6 @@ menu:
 
 ---
 
-## Releases
-
-
-
 ## Materialize Cloud Upgrade Schedule
 
 Materialize Cloud upgrades all regions to the latest release each week according
