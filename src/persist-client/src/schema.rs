@@ -605,7 +605,7 @@ mod tests {
         let schema0 = StringsSchema(vec![false]);
         let schema1 = StringsSchema(vec![false, true]);
 
-        let mut write0 = client
+        let write0 = client
             .open_writer::<Strings, (), u64, i64>(
                 shard_id,
                 Arc::new(schema0.clone()),
@@ -614,8 +614,6 @@ mod tests {
             )
             .await
             .unwrap();
-
-        write0.ensure_schema_registered().await;
         assert_eq!(write0.write_schemas.id.unwrap(), SchemaId(0));
 
         // Not backward compatible (yet... we don't support dropping a column at

@@ -700,11 +700,6 @@ where
         self.applier.latest_schema()
     }
 
-    /// Returns the ID of the given schema, if known at the current state.
-    pub fn find_schema(&self, key_schema: &K::Schema, val_schema: &V::Schema) -> Option<SchemaId> {
-        self.applier.find_schema(key_schema, val_schema)
-    }
-
     /// See [crate::PersistClient::compare_and_evolve_schema].
     ///
     /// TODO: Unify this with [Self::register_schema]?
