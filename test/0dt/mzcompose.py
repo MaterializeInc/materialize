@@ -1825,10 +1825,7 @@ def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("mz_old")
     c.sql(
-        """
-        ALTER SYSTEM SET enable_builtin_migration_schema_evolution = false;
-        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
-        """,
+        "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -1924,10 +1921,7 @@ def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("mz_old")
     c.sql(
-        """
-        ALTER SYSTEM SET enable_builtin_migration_schema_evolution = true;
-        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
-        """,
+        "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
         service="mz_old",
         port=6877,
         user="mz_system",

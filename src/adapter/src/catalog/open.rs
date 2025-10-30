@@ -9,7 +9,6 @@
 
 //! Logic related to opening a [`Catalog`].
 
-mod builtin_item_migration;
 mod builtin_schema_migration;
 
 use std::collections::{BTreeMap, BTreeSet};
