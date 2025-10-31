@@ -39,7 +39,10 @@ use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::Codec64;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::txn::TxnsCodec;
-use mz_repr::{GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulation};
+use mz_repr::{
+    GlobalId, RelationDesc, RelationVersion, Row, SqlRelationType, SqlScalarType,
+    TimestampManipulation,
+};
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
@@ -3254,11 +3257,18 @@ async fn finalize_shards_task<T>(
 
                         // We only use the writer to advance the upper, so using a dummy schema is
                         // fine.
+                        let dummy = RelationDesc::new(
+                            SqlRelationType {
+                                column_types: vec![SqlScalarType::Bool.nullable(false)],
+                                keys: vec![],
+                            },
+                            vec!["foo"],
+                        );
                         let mut write_handle: WriteHandle<SourceData, (), T, StorageDiff> =
                             persist_client
                                 .open_writer(
                                     shard_id,
-                                    Arc::new(RelationDesc::empty()),
+                                    Arc::new(dummy),
                                     Arc::new(UnitSchema),
                                     diagnostics,
                                 )
