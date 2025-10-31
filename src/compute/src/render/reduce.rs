@@ -90,6 +90,7 @@ where
             } = key_val_plan;
             let key_arity = key_plan.projection.len();
             let mut datums = DatumVec::new();
+            let mut output = DatumVec::new();
 
             // Determine the columns we'll need from the row.
             let mut demand = Vec::new();
@@ -122,10 +123,15 @@ where
                     for skip in skips.iter() {
                         datums_local.push(row_iter.nth(*skip).unwrap());
                     }
+                    let mut output = output.borrow();
 
                     // Evaluate the key expressions.
-                    let key =
-                        key_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let key = key_plan.evaluate_into(
+                        &mut datums_local,
+                        &temp_storage,
+                        &mut output,
+                        &mut row_builder,
+                    );
                     let key = match key {
                         Err(e) => {
                             return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
@@ -137,8 +143,12 @@ where
                     // Evaluate the value expressions.
                     // The prior evaluation may have left additional columns we should delete.
                     datums_local.truncate(skips.len());
-                    let val =
-                        val_plan.evaluate_into(&mut datums_local, &temp_storage, &mut row_builder);
+                    let val = val_plan.evaluate_into(
+                        &mut datums_local,
+                        &temp_storage,
+                        &mut output,
+                        &mut row_builder,
+                    );
                     let val = match val {
                         Err(e) => {
                             return Some((Err(DataflowError::from(e)), time.clone(), diff.clone()));
@@ -348,6 +358,8 @@ where
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
+        let mut output1 = DatumVec::new();
+        let mut output2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -419,6 +431,7 @@ where
                                 &mfp_after1,
                                 &mut datums_local,
                                 &temp_storage,
+                                &mut output1.borrow(),
                                 key_len,
                             ) {
                                 output.push((row, Diff::ONE));
@@ -492,7 +505,7 @@ where
                     // Finally, if `mfp_after` can produce errors, then we should also report
                     // these here.
                     let Some(mfp) = &mfp_after2 else { return };
-                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage, &mut output2.borrow()) {
                         output.push((e.into(), Diff::ONE));
                     }
                 },
@@ -517,6 +530,8 @@ where
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
+        let mut output1 = DatumVec::new();
+        let mut output2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -535,7 +550,7 @@ where
                     // back to the key. As a consequence, we can treat `mfp_after` as a filter here.
                     if mfp_after1
                         .as_ref()
-                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage))
+                        .map(|mfp| mfp.evaluate_inner(&mut datums_local, &temp_storage, &mut output1.borrow()))
                         .unwrap_or(Ok(true))
                         == Ok(true)
                     {
@@ -562,7 +577,7 @@ where
                     let mut datums_local = datums2.borrow();
                     datums_local.extend(datum_iter);
 
-                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                    if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage, &mut output2.borrow()) {
                         output.push((e.into(), Diff::ONE));
                     }
                 },
@@ -617,6 +632,8 @@ where
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
+        let mut output1 = DatumVec::new();
+        let mut output2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -640,9 +657,13 @@ where
                         datums_local.push(row.unpack_first());
                     }
 
-                    if let Some(row) =
-                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                    {
+                    if let Some(row) = evaluate_mfp_after(
+                        &mfp_after1,
+                        &mut datums_local,
+                        &temp_storage,
+                        &mut output1.borrow(),
+                        key_len,
+                    ) {
                         output.push((row, Diff::ONE));
                     }
                 }
@@ -669,7 +690,11 @@ where
                             datums_local.push(row.unpack_first());
                         }
 
-                        if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                        if let Err(e) = mfp.evaluate_inner(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut output2.borrow(),
+                        ) {
                             output.push((e.into(), Diff::ONE));
                         }
                     },
@@ -746,6 +771,8 @@ where
         let mut datums2 = DatumVec::new();
         let mut datums_key_1 = DatumVec::new();
         let mut datums_key_2 = DatumVec::new();
+        let mut output1 = DatumVec::new();
+        let mut output2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
         let func2 = func.clone();
 
@@ -785,9 +812,13 @@ where
                         ),
                     );
 
-                    if let Some(row) =
-                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                    {
+                    if let Some(row) = evaluate_mfp_after(
+                        &mfp_after1,
+                        &mut datums_local,
+                        &temp_storage,
+                        &mut output1.borrow(),
+                        key_len,
+                    ) {
                         target.push((row, Diff::ONE));
                     }
                 }
@@ -806,6 +837,7 @@ where
                     let mut datums_local = datums_key_1.borrow();
                     datums_local.extend(key.to_datum_iter());
                     let key_len = datums_local.len();
+                    let mut output1 = output1.borrow();
                     for datum in func
                         .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
                             iter,
@@ -818,6 +850,7 @@ where
                             &mfp_after1,
                             &mut datums_local,
                             &temp_storage,
+                            &mut output1,
                             key_len,
                         ) {
                             target.push((row, Diff::ONE));
@@ -876,7 +909,7 @@ where
                                     &temp_storage,
                                 ),
                             );
-                            if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
+                            if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage, &mut output2.borrow())
                             {
                                 target.push((e.into(), Diff::ONE));
                             }
@@ -906,6 +939,7 @@ where
                             let mut datums_local = datums_key_2.borrow();
                             datums_local.extend(key.to_datum_iter());
                             let key_len = datums_local.len();
+                            let mut output2 = output2.borrow();
                             for datum in func2
                                 .eval_with_unnest_list::<_, window_agg_helpers::OneByOneAggrImpls>(
                                     iter,
@@ -916,8 +950,11 @@ where
                                 datums_local.push(datum);
                                 // We know that `mfp` can error (because of the `could_error` call
                                 // above), so try to evaluate it here.
-                                if let Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                                {
+                                if let Err(e) = mfp.evaluate_inner(
+                                    &mut datums_local,
+                                    &temp_storage,
+                                    &mut output2,
+                                ) {
                                     target.push((e.into(), Diff::ONE));
                                 }
                             }
@@ -1079,6 +1116,8 @@ where
             // Allocations for the two closures.
             let mut datums1 = DatumVec::new();
             let mut datums2 = DatumVec::new();
+            let mut output1 = DatumVec::new();
+            let mut output2 = DatumVec::new();
             let mfp_after1 = mfp_after.clone();
             let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
             let aggr_funcs2 = aggr_funcs.clone();
@@ -1125,7 +1164,7 @@ where
                             let Some(mfp) = &mfp_after2 else { return };
                             let temp_storage = RowArena::new();
                             let datum_iter = key.to_datum_iter();
-                            let mut datums_local = datums2.borrow();
+                            let mut datums_local = datums1.borrow();
                             datums_local.extend(datum_iter);
 
                             let mut source_iters = source
@@ -1137,9 +1176,11 @@ where
                                     .map(|i| source_iters[i].next().unwrap());
                                 datums_local.push(func.eval(column_iter, &temp_storage));
                             }
-                            if let Result::Err(e) =
-                                mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                            {
+                            if let Result::Err(e) = mfp.evaluate_inner(
+                                &mut datums_local,
+                                &temp_storage,
+                                &mut output1.borrow(),
+                            ) {
                                 target.push((e.into(), Diff::ONE));
                             }
                         },
@@ -1158,7 +1199,7 @@ where
                     move |key, source, target| {
                         let temp_storage = RowArena::new();
                         let datum_iter = key.to_datum_iter();
-                        let mut datums_local = datums1.borrow();
+                        let mut datums_local = datums2.borrow();
                         datums_local.extend(datum_iter);
                         let key_len = datums_local.len();
 
@@ -1176,6 +1217,7 @@ where
                             &mfp_after1,
                             &mut datums_local,
                             &temp_storage,
+                            &mut output2.borrow(),
                             key_len,
                         ) {
                             target.push((row, Diff::ONE));
@@ -1394,6 +1436,8 @@ where
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
+        let mut output1 = DatumVec::new();
+        let mut output2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
 
@@ -1416,9 +1460,13 @@ where
                         datums_local.extend(monoid.finalize().iter());
                     }
 
-                    if let Some(row) =
-                        evaluate_mfp_after(&mfp_after1, &mut datums_local, &temp_storage, key_len)
-                    {
+                    if let Some(row) = evaluate_mfp_after(
+                        &mfp_after1,
+                        &mut datums_local,
+                        &temp_storage,
+                        &mut output1.borrow(),
+                        key_len,
+                    ) {
                         output.push((row, Diff::ONE));
                     }
                 }
@@ -1442,8 +1490,11 @@ where
                         for monoid in accum.iter() {
                             datums_local.extend(monoid.finalize().iter());
                         }
-                        if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage)
-                        {
+                        if let Err(e) = mfp.evaluate_inner(
+                            &mut datums_local,
+                            &temp_storage,
+                            &mut output2.borrow(),
+                        ) {
                             output.push((e.into(), Diff::ONE));
                         }
                     },
@@ -1574,6 +1625,8 @@ where
         // Allocations for the two closures.
         let mut datums1 = DatumVec::new();
         let mut datums2 = DatumVec::new();
+        let mut output1 = DatumVec::new();
+        let mut output2 = DatumVec::new();
         let mfp_after1 = mfp_after.clone();
         let mfp_after2 = mfp_after.filter(|mfp| mfp.could_error());
         let full_aggrs2 = full_aggrs.clone();
@@ -1602,6 +1655,7 @@ where
                             &mfp_after1,
                             &mut datums_local,
                             &temp_storage,
+                            &mut output1.borrow(),
                             key_len,
                         ) {
                             output.push((row, Diff::ONE));
@@ -1656,7 +1710,7 @@ where
                         datums_local.push(finalize_accum(&aggr.func, accum, total));
                     }
 
-                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage) {
+                    if let Result::Err(e) = mfp.evaluate_inner(&mut datums_local, &temp_storage, &mut output2.borrow()) {
                         output.push((e.into(), Diff::ONE));
                     }
                 },
@@ -1673,8 +1727,9 @@ where
 /// if the MFP filters the result out.
 fn evaluate_mfp_after<'a, 'b>(
     mfp_after: &'a Option<SafeMfpPlan>,
-    datums_local: &'b mut mz_repr::DatumVecBorrow<'a>,
+    datums_local: &'b mut Vec<Datum<'a>>,
     temp_storage: &'a RowArena,
+    output: &mut Vec<Datum<'a>>,
     key_len: usize,
 ) -> Option<Row> {
     let mut row_builder = SharedRow::get();
@@ -1683,7 +1738,7 @@ fn evaluate_mfp_after<'a, 'b>(
     if let Some(mfp) = mfp_after {
         // It must ignore errors here, but they are scanned
         // for elsewhere if the MFP can error.
-        if let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage) {
+        if let Ok(Some(iter)) = mfp.evaluate_iter(datums_local, temp_storage, output) {
             // The `mfp_after` must preserve the key columns,
             // so we can skip them to form aggregation results.
             Some(row_builder.pack_using(iter.skip(key_len)))

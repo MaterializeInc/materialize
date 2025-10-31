@@ -315,11 +315,13 @@ impl LazyUnaryFunc for CastStringToArray {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let (datums, dims) = strconv::parse_array(
             a.unwrap_str(),
             || Datum::Null,
@@ -329,11 +331,12 @@ impl LazyUnaryFunc for CastStringToArray {
                     Cow::Borrowed(s) => s,
                 };
                 self.cast_expr
-                    .eval(&[Datum::String(elem_text)], temp_storage)
+                    .eval_pop(&[Datum::String(elem_text)], temp_storage, output)
             },
         )?;
 
-        Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, datums))?)
+        output.push(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, datums))?);
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -388,11 +391,13 @@ impl LazyUnaryFunc for CastStringToList {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let parsed_datums = strconv::parse_list(
             a.unwrap_str(),
             matches!(
@@ -406,11 +411,12 @@ impl LazyUnaryFunc for CastStringToList {
                     Cow::Borrowed(s) => s,
                 };
                 self.cast_expr
-                    .eval(&[Datum::String(elem_text)], temp_storage)
+                    .eval_pop(&[Datum::String(elem_text)], temp_storage, output)
             },
         )?;
 
-        Ok(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)))
+        output.push(temp_storage.make_datum(|packer| packer.push_list(parsed_datums)));
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -467,11 +473,13 @@ impl LazyUnaryFunc for CastStringToMap {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let parsed_map = strconv::parse_map(
             a.unwrap_str(),
             matches!(
@@ -484,20 +492,21 @@ impl LazyUnaryFunc for CastStringToMap {
                     Some(Cow::Borrowed(s)) => Datum::String(s),
                     None => Datum::Null,
                 };
-                self.cast_expr.eval(&[value_text], temp_storage)
+                self.cast_expr.eval_pop(&[value_text], temp_storage, output)
             },
         )?;
         let mut pairs: Vec<(String, Datum)> = parsed_map.into_iter().map(|(k, v)| (k, v)).collect();
         pairs.sort_by(|(k1, _v1), (k2, _v2)| k1.cmp(k2));
         pairs.dedup_by(|(k1, _v1), (k2, _v2)| k1 == k2);
-        Ok(temp_storage.make_datum(|packer| {
+        output.push(temp_storage.make_datum(|packer| {
             packer.push_dict_with(|packer| {
                 for (k, v) in pairs {
                     packer.push(Datum::String(&k));
                     packer.push(v);
                 }
             })
-        }))
+        }));
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -606,27 +615,30 @@ impl LazyUnaryFunc for CastStringToRange {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut range = strconv::parse_range(a.unwrap_str(), |elem_text| {
             let elem_text = match elem_text {
                 Cow::Owned(s) => temp_storage.push_string(s),
                 Cow::Borrowed(s) => s,
             };
             self.cast_expr
-                .eval(&[Datum::String(elem_text)], temp_storage)
+                .eval_pop(&[Datum::String(elem_text)], temp_storage, output)
         })?;
 
         range.canonicalize()?;
 
-        Ok(temp_storage.make_datum(|packer| {
+        output.push(temp_storage.make_datum(|packer| {
             packer
                 .push_range(range)
                 .expect("must have already handled errors")
-        }))
+        }));
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -743,20 +755,23 @@ impl LazyUnaryFunc for CastStringToInt2Vector {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
 
         let datums = strconv::parse_legacy_vector(a.unwrap_str(), |elem_text| {
             let elem_text = match elem_text {
                 Cow::Owned(s) => temp_storage.push_string(s),
                 Cow::Borrowed(s) => s,
             };
-            INT2VECTOR_CAST_EXPR.eval(&[Datum::String(elem_text)], temp_storage)
+            INT2VECTOR_CAST_EXPR.eval_pop(&[Datum::String(elem_text)], temp_storage, output)
         })?;
-        array_create_scalar(&datums, temp_storage)
+        output.push(array_create_scalar(&datums, temp_storage)?);
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -979,12 +994,15 @@ impl LazyUnaryFunc for RegexpMatch {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let haystack = a.eval(datums, temp_storage)?;
-        if haystack.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
-        regexp_match_static(haystack, temp_storage, &self.0)
+        let haystack = output.pop().unwrap();
+        output.push(regexp_match_static(haystack, temp_storage, &self.0)?);
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -1037,12 +1055,19 @@ impl LazyUnaryFunc for RegexpSplitToArray {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let haystack = a.eval(datums, temp_storage)?;
-        if haystack.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
-        regexp_split_to_array_re(haystack.unwrap_str(), &self.0, temp_storage)
+        let haystack = output.pop().unwrap();
+        output.push(regexp_split_to_array_re(
+            haystack.unwrap_str(),
+            &self.0,
+            temp_storage,
+        )?);
+        Ok(())
     }
 
     /// The output SqlColumnType of this function
@@ -1102,19 +1127,21 @@ impl LazyUnaryFunc for QuoteIdent {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let d = a.eval(datums, temp_storage)?;
-        if d.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
-        let v = d.unwrap_str();
+        let v = output.pop().unwrap().unwrap_str();
         let i = mz_sql_parser::ast::Ident::new(v).map_err(|err| EvalError::InvalidIdentifier {
             ident: v.into(),
             detail: Some(err.to_string().into()),
         })?;
         let r = temp_storage.push_string(i.to_string());
 
-        Ok(Datum::String(r))
+        output.push(Datum::String(r));
+        Ok(())
     }
 
     /// The output SqlColumnType of this function

@@ -18,7 +18,7 @@ use mz_expr::visit::Visit;
 use mz_expr::{
     AggregateExpr, ColumnOrder, EvalError, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
 };
-use mz_repr::{Datum, Diff, Row, RowArena, SqlRelationType};
+use mz_repr::{Datum, DatumVec, Diff, Row, RowArena, SharedRow, SqlRelationType};
 
 use crate::{TransformCtx, TransformError, any};
 
@@ -190,18 +190,28 @@ impl FoldConstants {
                         }
                     }
 
+                    let mut datums = DatumVec::new();
+                    let mut output = DatumVec::new();
+
                     let new_rows = match rows {
                         Ok(rows) => rows
                             .iter()
                             .cloned()
                             .map(|(input_row, diff)| {
                                 // TODO: reduce allocations to zero.
-                                let mut unpacked = input_row.unpack();
+                                let datums = datums.borrow_with(&input_row);
                                 let temp_storage = RowArena::new();
+                                let mut row = SharedRow::get();
+                                let mut packer = row.packer();
+                                packer.extend_by_row(&input_row);
                                 for scalar in scalars.iter() {
-                                    unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
+                                    packer.push(scalar.eval_pop(
+                                        &datums,
+                                        &temp_storage,
+                                        &mut output.borrow(),
+                                    )?)
                                 }
-                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), diff))
+                                Ok::<_, EvalError>((row.clone(), diff))
                             })
                             .collect::<Result<_, _>>(),
                         Err(e) => Err(e.clone()),
@@ -340,12 +350,15 @@ impl FoldConstants {
 
                     // Now throw away anything that doesn't satisfy the requisite constraints.
                     let mut datum_vec = mz_repr::DatumVec::new();
+                    let mut output = mz_repr::DatumVec::new();
                     old_rows.retain(|(row, _count)| {
                         let datums = datum_vec.borrow_with(row);
                         let temp_storage = RowArena::new();
+                        let mut output = output.borrow();
                         equivalences.iter().all(|equivalence| {
-                            let mut values =
-                                equivalence.iter().map(|e| e.eval(&datums, &temp_storage));
+                            let mut values = equivalence
+                                .iter()
+                                .map(|e| e.eval_pop(&datums, &temp_storage, &mut output));
                             if let Some(value) = values.next() {
                                 values.all(|v| v == value)
                             } else {
@@ -439,6 +452,9 @@ impl FoldConstants {
         let mut row_buf = Row::default();
         let mut limit_remaining =
             limit.map_or(Diff::MAX, |limit| Diff::try_from(limit).expect("must fit"));
+        let mut output1 = DatumVec::new();
+        let mut output2 = DatumVec::new();
+        let mut output1 = output1.borrow();
         for (row, diff) in rows {
             // We currently maintain the invariant that any negative
             // multiplicities will be consolidated away before they
@@ -457,9 +473,10 @@ impl FoldConstants {
 
             let datums = row.unpack();
             let temp_storage = RowArena::new();
+            // TODO: Rewrite as a for loop to reduce allocations.
             let key = match group_key
                 .iter()
-                .map(|e| e.eval(&datums, &temp_storage2))
+                .map(|e| e.eval_pop(&datums, &temp_storage2, &mut output1))
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(key) => key,
@@ -468,9 +485,11 @@ impl FoldConstants {
             let val = match aggregates
                 .iter()
                 .map(|agg| {
-                    row_buf
-                        .packer()
-                        .extend([agg.expr.eval(&datums, &temp_storage)?]);
+                    row_buf.packer().push(agg.expr.eval_pop(
+                        &datums,
+                        &temp_storage,
+                        &mut output2.borrow(),
+                    )?);
                     Ok::<_, EvalError>(row_buf.clone())
                 })
                 .collect::<Result<Vec<_>, _>>()
@@ -527,8 +546,8 @@ impl FoldConstants {
         rows: &'a mut [(Row, Diff)],
     ) {
         // helper functions for comparing elements by order_key and group_key
-        let mut lhs_datum_vec = mz_repr::DatumVec::new();
-        let mut rhs_datum_vec = mz_repr::DatumVec::new();
+        let mut lhs_datum_vec = DatumVec::new();
+        let mut rhs_datum_vec = DatumVec::new();
         let mut cmp_order_key = |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
             let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
             let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
@@ -546,8 +565,8 @@ impl FoldConstants {
                     nulls_last: false,
                 })
                 .collect::<Vec<ColumnOrder>>();
-            let mut lhs_datum_vec = mz_repr::DatumVec::new();
-            let mut rhs_datum_vec = mz_repr::DatumVec::new();
+            let mut lhs_datum_vec = DatumVec::new();
+            let mut rhs_datum_vec = DatumVec::new();
             move |lhs: &(Row, Diff), rhs: &(Row, Diff)| {
                 let lhs_datums = &lhs_datum_vec.borrow_with(&lhs.0);
                 let rhs_datums = &rhs_datum_vec.borrow_with(&rhs.0);
@@ -607,15 +626,16 @@ impl FoldConstants {
         let limit = limit.unwrap_or(usize::MAX);
         let mut new_rows = Vec::new();
         let mut row_buf = Row::default();
-        let mut datum_vec = mz_repr::DatumVec::new();
+        let mut datum_vec = DatumVec::new();
+        let mut output = DatumVec::new();
         for (input_row, diff) in rows {
             let datums = datum_vec.borrow_with(input_row);
             let temp_storage = RowArena::new();
-            let datums = exprs
-                .iter()
-                .map(|expr| expr.eval(&datums, &temp_storage))
-                .collect::<Result<Vec<_>, _>>()?;
-            let mut output_rows = func.eval(&datums, &temp_storage)?.fuse();
+            let mut output = output.borrow();
+            for expr in exprs {
+                expr.eval(&datums, &temp_storage, &mut output)?;
+            }
+            let mut output_rows = func.eval(&output, &temp_storage)?.fuse();
             for (output_row, diff2) in (&mut output_rows).take(limit - new_rows.len()) {
                 let mut packer = row_buf.packer();
                 packer.extend_by_row(input_row);
@@ -636,12 +656,13 @@ impl FoldConstants {
         rows: &[(Row, Diff)],
     ) -> Result<Vec<(Row, Diff)>, EvalError> {
         let mut new_rows = Vec::new();
-        let mut datum_vec = mz_repr::DatumVec::new();
+        let mut datum_vec = DatumVec::new();
+        let mut output = DatumVec::new();
         'outer: for (row, diff) in rows {
             let datums = datum_vec.borrow_with(row);
             let temp_storage = RowArena::new();
             for p in &*predicates {
-                if p.eval(&datums, &temp_storage)? != Datum::True {
+                if p.eval_pop(&datums, &temp_storage, &mut output.borrow())? != Datum::True {
                     continue 'outer;
                 }
             }

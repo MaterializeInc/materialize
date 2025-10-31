@@ -28,14 +28,17 @@ impl LazyUnaryFunc for CastMapToString {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut buf = String::new();
         stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
+        output.push(Datum::String(temp_storage.push_string(buf)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -79,14 +82,19 @@ impl LazyUnaryFunc for MapLength {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let count = a.unwrap_map().iter().count();
         match count.try_into() {
-            Ok(c) => Ok(Datum::Int32(c)),
+            Ok(c) => {
+                output.push(Datum::Int32(c));
+                Ok(())
+            }
             Err(_) => Err(EvalError::Int32OutOfRange(count.to_string().into())),
         }
     }
@@ -133,11 +141,13 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let list = a.unwrap_list();
         let mut map = std::collections::BTreeMap::new();
 
@@ -155,7 +165,8 @@ impl LazyUnaryFunc for MapBuildFromRecordList {
         }
 
         let map = temp_storage.make_datum(|packer| packer.push_dict(map));
-        Ok(map)
+        output.push(map);
+        Ok(())
     }
 
     fn output_type(&self, _input_type: SqlColumnType) -> SqlColumnType {

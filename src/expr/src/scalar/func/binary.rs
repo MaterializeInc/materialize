@@ -23,7 +23,8 @@ pub(crate) trait LazyBinaryFunc {
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
         b: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError>;
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError>;
 
     /// The output SqlColumnType of this function.
     fn output_type(
@@ -118,9 +119,12 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
         b: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        let b = b.eval(datums, temp_storage)?;
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        let a = output.pop().expect("eval just pushed");
+        b.eval(datums, temp_storage, output)?;
+        let b = output.pop().expect("eval just pushed");
         let a = match T::Input1::try_from_result(Ok(a)) {
             // If we can convert to the input type then we call the function
             Ok(input) => input,
@@ -129,7 +133,10 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
                 return Err(EvalError::Internal("invalid input type".into()));
             }
             // Otherwise we just propagate NULLs and errors
-            Err(res) => return res,
+            Err(res) => {
+                output.push(res?);
+                return Ok(());
+            }
         };
         let b = match T::Input2::try_from_result(Ok(b)) {
             // If we can convert to the input type then we call the function
@@ -139,9 +146,13 @@ impl<T: for<'a> EagerBinaryFunc<'a>> LazyBinaryFunc for T {
                 return Err(EvalError::Internal("invalid input type".into()));
             }
             // Otherwise we just propagate NULLs and errors
-            Err(res) => return res,
+            Err(res) => {
+                output.push(res?);
+                return Ok(());
+            }
         };
-        self.call(a, b, temp_storage).into_result(temp_storage)
+        output.push(self.call(a, b, temp_storage).into_result(temp_storage)?);
+        Ok(())
     }
 
     fn output_type(

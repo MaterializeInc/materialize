@@ -28,14 +28,17 @@ impl LazyUnaryFunc for CastRecordToString {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut buf = String::new();
         stringify_datum(&mut buf, a, &self.ty)?;
-        Ok(Datum::String(temp_storage.push_string(buf)))
+        output.push(Datum::String(temp_storage.push_string(buf)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -84,16 +87,20 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
+        let a = output.pop().unwrap();
         let mut cast_datums = Vec::new();
         for (el, cast_expr) in a.unwrap_list().iter().zip_eq(&self.cast_exprs) {
-            cast_datums.push(cast_expr.eval(&[el], temp_storage)?);
+            cast_expr.eval(&[el], temp_storage, output)?;
+            cast_datums.push(output.pop().unwrap());
         }
-        Ok(temp_storage.make_datum(|packer| packer.push_list(cast_datums)))
+        output.push(temp_storage.make_datum(|packer| packer.push_list(cast_datums)));
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {
@@ -142,12 +149,15 @@ impl LazyUnaryFunc for RecordGet {
         datums: &[Datum<'a>],
         temp_storage: &'a RowArena,
         a: &'a MirScalarExpr,
-    ) -> Result<Datum<'a>, EvalError> {
-        let a = a.eval(datums, temp_storage)?;
-        if a.is_null() {
-            return Ok(Datum::Null);
+        output: &mut Vec<Datum<'a>>,
+    ) -> Result<(), EvalError> {
+        a.eval(datums, temp_storage, output)?;
+        if output.last() == Some(&Datum::Null) {
+            return Ok(());
         }
-        Ok(a.unwrap_list().iter().nth(self.0).unwrap())
+        let a = output.pop().unwrap();
+        output.push(a.unwrap_list().iter().nth(self.0).unwrap());
+        Ok(())
     }
 
     fn output_type(&self, input_type: SqlColumnType) -> SqlColumnType {

@@ -1311,6 +1311,7 @@ impl PersistPeek {
         // Re-used state for processing and building rows.
         let mut result = vec![];
         let mut datum_vec = DatumVec::new();
+        let mut output_vec = DatumVec::new();
         let mut row_builder = Row::default();
         let arena = RowArena::new();
         let mut total_size = 0usize;
@@ -1351,7 +1352,12 @@ impl PersistPeek {
                 };
                 let mut datum_local = datum_vec.borrow_with(&row);
                 let eval_result = mfp_plan
-                    .evaluate_into(&mut datum_local, &arena, &mut row_builder)
+                    .evaluate_into(
+                        &mut datum_local,
+                        &arena,
+                        &mut output_vec.borrow(),
+                        &mut row_builder,
+                    )
                     .map(|row| row.cloned())
                     .map_err(|e| e.to_string())?;
                 if let Some(row) = eval_result {

@@ -108,8 +108,9 @@ pub fn plan_select_if_side_effecting(
         args.push(arg);
     }
     let mut datums = vec![];
+    let mut output = vec![];
     for arg in &args {
-        let datum = arg.eval(&[], &temp_storage)?;
+        let datum = arg.eval_pop(&[], &temp_storage, &mut output)?;
         datums.push(datum);
     }
 
