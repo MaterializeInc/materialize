@@ -2655,7 +2655,6 @@ pub enum BinaryFunc {
     Position(Position),
     Right(Right),
     RepeatString,
-    Normalize,
     Trim(Trim),
     TrimLeading(TrimLeading),
     TrimTrailing(TrimTrailing),
@@ -2956,7 +2955,6 @@ impl BinaryFunc {
             BinaryFunc::Power(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::PowerNumeric(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             // BinaryFunc::RepeatString(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::Normalize(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::GetBit(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::GetByte(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ConstantTimeEqBytes(s) => {
@@ -3039,7 +3037,6 @@ impl BinaryFunc {
             BinaryFunc::ListContainsList { rev: false } => Ok(list_contains_list(a, b)),
             BinaryFunc::ListContainsList { rev: true } => Ok(list_contains_list(b, a)),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
-            BinaryFunc::Normalize => normalize_with_form(a, b, temp_storage),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
                 SqlScalarType::Int32 => contains_range_elem::<i32>(a, b),
                 SqlScalarType::Int64 => contains_range_elem::<i64>(a, b),
@@ -3273,7 +3270,7 @@ impl BinaryFunc {
             Encode(s) => s.output_type(input1_type, input2_type),
             Decode(s) => s.output_type(input1_type, input2_type),
             Power(s) => s.output_type(input1_type, input2_type),
-            RepeatString | Normalize => input1_type.scalar_type.nullable(in_nullable),
+            RepeatString => input1_type.scalar_type.nullable(in_nullable),
 
             AddNumeric(s) => s.output_type(input1_type, input2_type),
             DivNumeric(s) => s.output_type(input1_type, input2_type),
@@ -3460,7 +3457,6 @@ impl BinaryFunc {
             BinaryFunc::MulUint64(s) => s.propagates_nulls(),
             BinaryFunc::MzAclItemContainsPrivilege(s) => s.propagates_nulls(),
             BinaryFunc::MzRenderTypmod(s) => s.propagates_nulls(),
-            BinaryFunc::Normalize => true,
             BinaryFunc::NotEq(s) => s.propagates_nulls(),
             BinaryFunc::ParseIdent(s) => s.propagates_nulls(),
             BinaryFunc::Position(s) => s.propagates_nulls(),
@@ -3652,7 +3648,6 @@ impl BinaryFunc {
             MulUint64(s) => s.introduces_nulls(),
             MzAclItemContainsPrivilege(s) => s.introduces_nulls(),
             MzRenderTypmod(s) => s.introduces_nulls(),
-            Normalize => false,
             NotEq(s) => s.introduces_nulls(),
             ParseIdent(s) => s.introduces_nulls(),
             Position(s) => s.introduces_nulls(),
@@ -3900,7 +3895,6 @@ impl BinaryFunc {
             LogNumeric(s) => s.is_infix_op(),
             MzAclItemContainsPrivilege(s) => s.is_infix_op(),
             MzRenderTypmod(s) => s.is_infix_op(),
-            Normalize => false,
             ParseIdent(s) => s.is_infix_op(),
             Position(s) => s.is_infix_op(),
             Power(s) => s.is_infix_op(),
@@ -4070,7 +4064,6 @@ impl BinaryFunc {
             BinaryFunc::MulUint64(s) => s.negate(),
             BinaryFunc::MzAclItemContainsPrivilege(s) => s.negate(),
             BinaryFunc::MzRenderTypmod(s) => s.negate(),
-            BinaryFunc::Normalize => None,
             BinaryFunc::NotEq(s) => s.negate(),
             BinaryFunc::ParseIdent(s) => s.negate(),
             BinaryFunc::Position(s) => s.negate(),
@@ -4300,7 +4293,6 @@ impl BinaryFunc {
             BinaryFunc::Position(s) => s.could_error(),
             BinaryFunc::Right(s) => s.could_error(),
             BinaryFunc::RepeatString => true,
-            BinaryFunc::Normalize => true,
             BinaryFunc::EncodedBytesCharLength(s) => s.could_error(),
             BinaryFunc::ListLengthMax { .. } => true,
             BinaryFunc::ArrayLength(s) => s.could_error(),
@@ -4543,7 +4535,6 @@ impl BinaryFunc {
             BinaryFunc::PrettySql(s) => s.is_monotone(),
             BinaryFunc::RegexpReplace { .. } => (false, false),
             BinaryFunc::StartsWith(s) => s.is_monotone(),
-            BinaryFunc::Normalize => (false, false),
         }
     }
 }
@@ -4734,7 +4725,6 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Power(s) => s.fmt(f),
             BinaryFunc::PowerNumeric(s) => s.fmt(f),
             BinaryFunc::RepeatString => f.write_str("repeat"),
-            BinaryFunc::Normalize => f.write_str("normalize"),
             BinaryFunc::GetBit(s) => s.fmt(f),
             BinaryFunc::GetByte(s) => s.fmt(f),
             BinaryFunc::ConstantTimeEqBytes(s) => s.fmt(f),
