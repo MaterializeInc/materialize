@@ -408,7 +408,13 @@ impl k8s_controller::Context for Context {
                 .context("invalid environment id in license key")?;
             Some(environment_id)
         } else {
-            None
+            if mz.meets_minimum_version(&V161) {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "license_key is required when running in kubernetes",
+                )));
+            } else {
+                None
+            }
         };
 
         if mz.spec.request_rollout.is_nil() || mz.spec.environment_id.is_nil() {
