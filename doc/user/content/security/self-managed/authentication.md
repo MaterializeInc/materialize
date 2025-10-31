@@ -11,7 +11,7 @@ menu:
 
 ## Configuring Authentication Type
 
-To configure the authentication type used by self-managed Materialize, use the
+To configure the authentication type used by Self-Managed Materialize, use the
 `spec.authenticatorKind` setting in conjunction with any specific configuration
 for the authentication method.
 
@@ -26,7 +26,7 @@ used:
 
 Password authentication requires users to log in with a password.
 
-To configure self-managed Materialize for password authentication:
+To configure Self-Managed Materialize for password authentication:
 
  Configuration | Description
 ---------------| ------------

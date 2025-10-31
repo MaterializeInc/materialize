@@ -1,5 +1,6 @@
 {{- $column := .Get "column" -}}
 {{- $numColumns := .Get "numColumns" | default "1" -}}
+{{- $label := .Get "label" -}}
 {{ $pathArray := split (lower (.Get "data")) "/" }}
 {{ $data := $.Site.Data }}
 
@@ -7,9 +8,26 @@
   {{ $data = index $data . }}
 {{ end }}
 
-<ul style="column-count: {{ $numColumns }}" >
+{{ if $label }}
+
+  {{- $filteredRows := slice -}}
   {{- range $data.rows -}}
-    {{- $value := index . $column -}}
-    <li>{{ $value | markdownify }}</li>
+    {{- if in .labels $label -}}
+      {{- $filteredRows = $filteredRows | append . -}}
+    {{- end -}}
   {{- end -}}
-</ul>
+
+  <ul style="column-count: {{ $numColumns }}">
+    {{- range $filteredRows -}}
+      {{- $command := index . "command" -}}
+      <li>{{ $command | markdownify }}</li>
+    {{- end -}}
+  </ul>
+{{ else }}
+  <ul style="column-count: {{ $numColumns }}" >
+    {{- range $data.rows -}}
+      {{- $value := index . $column -}}
+      <li>{{ $value | markdownify }}</li>
+    {{- end -}}
+  </ul>
+{{ end }}

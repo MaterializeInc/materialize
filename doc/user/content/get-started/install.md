@@ -1,6 +1,6 @@
 ---
-title: "Install self-managed Materialize"
-description: "Install self-managed Materialize."
+title: "Install Self-Managed Materialize"
+description: "Install Self-Managed Materialize."
 disable_list: true
 menu:
   main:

@@ -1,6 +1,6 @@
 ---
 title: "mz-debug self-managed"
-description: Use mz-debug to debug Materialize self-managed Materialize Kubernetes environments.
+description: Use mz-debug to debug Self-Managed Materialize Kubernetes environments.
 menu:
   main:
     parent: mz-debug

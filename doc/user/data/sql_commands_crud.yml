@@ -1,0 +1,21 @@
+columns:
+  - column: col1
+  - column: commands
+rows:
+  - col1: "**Select/Subscribe**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="select_subscribe" >}}
+
+     {{< yaml-list data="sql_commands_all" label="query_related" >}}
+
+  - col1: "**Cursor**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="cursor" >}}
+
+  - col1: "**Sink**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="sink" >}}
+
+  - col1: "**Transactions**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="txn" >}}

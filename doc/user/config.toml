@@ -69,13 +69,6 @@ identifier = "reference"
 name = "Reference"
 weight = 80
 
-[[menu.main]]
-name = "SQL commands"
-identifier = "commands"
-parent = "reference"
-weight = 100
-
-
 #
 # Releases
 #
