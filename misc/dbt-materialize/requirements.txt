@@ -8,7 +8,7 @@ click==8.3.0
 colorama==0.4.6
 daff==1.4.2
 dbt-adapters==1.17.3
-dbt-common==1.33.0
+dbt-common==1.35.0
 dbt-core==1.10.13
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
@@ -27,7 +27,7 @@ jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 leather==0.4.0
 MarkupSafe==3.0.3
-mashumaro==3.14
+mashumaro==3.17
 more-itertools==10.8.0
 msgpack==1.1.2
 networkx==3.4.2
