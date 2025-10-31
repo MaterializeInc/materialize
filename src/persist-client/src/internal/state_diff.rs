@@ -1517,7 +1517,7 @@ mod tests {
         // apply_lenient handles splitting up [0,7094664) so we can apply the
         // [0,6805359)+[6805359,7083793)->[0,7083793) swap.
 
-        let batches_before = vec![hb(0, 7094664, 0), hb(7094664, 7185234, 100)];
+        let batches_before = [hb(0, 7094664, 0), hb(7094664, 7185234, 100)];
 
         let diffs = vec![
             StateFieldDiff {
