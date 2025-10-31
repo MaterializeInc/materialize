@@ -31,9 +31,7 @@ DEFAULT_POSTGRES = (
 )
 DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
 
-IMAGE_REGISTRY = (
-    "ghcr.io/materializeinc" if ui.env_is_truthy("CI") else "materialize",
-)
+IMAGE_REGISTRY = "ghcr.io/materializeinc" if ui.env_is_truthy("CI") else "materialize"
 
 
 def main():
@@ -267,7 +265,7 @@ def environment(args: argparse.Namespace):
     else:
         license_key_args = {}
         environment_id_args = {
-            "environment_id": environment_id,
+            "environmentId": environment_id,
         }
 
     backend_secret_name = f"materialize-backend-{environment_id}"
