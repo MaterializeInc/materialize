@@ -84,6 +84,8 @@ the [Helm documentation](https://helm.sh/docs/intro/install/).
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
 
+{{< include-md file="shared-content/license-key-required.md" >}}
+
 ## A. Authenticate with Azure
 
 1. Open a Terminal window.

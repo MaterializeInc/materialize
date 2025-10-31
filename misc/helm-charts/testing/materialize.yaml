@@ -21,6 +21,7 @@ metadata:
 stringData:
   metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
   persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+  license_key: ""
 ---
 apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
