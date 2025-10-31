@@ -121,7 +121,7 @@ command:
 
 {{< /tab >}}
 
-{{< tab "Use AWS PrivateLink">}}
+{{< tab "Use AWS PrivateLink (Cloud-only)" >}}
 
 [AWS PrivateLink](https://aws.amazon.com/privatelink/) lets you connect
 Materialize to your Redpanda Cloud instance without exposing traffic to the

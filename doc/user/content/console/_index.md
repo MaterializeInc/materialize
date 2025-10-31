@@ -23,8 +23,9 @@ view billing information.
 
   - [**New source**](/console/create-new/#create-new-source) screens
 
-  - [**New app password**](/console/create-new/#create-new-app-password) screens
-
+  - [**New app
+    password**](/console/create-new/#create-new-app-password-cloud-only) screens
+    (***Cloud-only***)
 
 - [SQL Shell](/console/sql-shell/): Issue SQL queries.
 
@@ -37,8 +38,11 @@ view billing information.
 - [Monitoring](/console/monitoring/): Monitor your environment as well as access your query history.
 
 - [Admin](/console/admin/): Manage client credentials and billing information.
+  (***Cloud-only***)
 
-- [Connect](/console/connect/): View information needed to connect to
-  Materialize.
+- [Connect](/console/connect/): View information needed to connect using service
+  accounts. (***Cloud-only***)
 
-- [User Profile](/console/user-profile/): Manage your user profile.
+- [User Profile](/console/user-profile/): Manage your user profile
+  (***Cloud-only***), find links to links to the documentation, Materialize
+  Community slack, and Help Center.

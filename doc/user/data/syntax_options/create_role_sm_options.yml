@@ -1,0 +1,28 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+    - Option: "`INHERIT`"
+      Description: |
+        *Optional.* If specified, grants the role the ability to inherit
+        privileges of other roles. *Default.*
+    - Option: "`LOGIN`"
+      Description: |
+        *Optional.* If specified, allows a role to login via the PostgreSQL or web endpoints
+    - Option: "`NOLOGIN`"
+      Description: |
+        *Optional.* If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.
+
+    - Option: "`SUPERUSER`"
+      Description: |
+        *Optional.* If specified, grants the role superuser privileges.
+
+    - Option: "`NOSUPERUSER`"
+      Description: |
+       *Optional.* If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified.
+    - Option: "`PASSWORD`"
+      Description: |
+        ***Public Preview***
+
+        *Optional.* This feature may have minor stability issues. If specified,
+        allows you to set a password for the role.

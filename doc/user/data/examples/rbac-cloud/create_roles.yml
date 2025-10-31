@@ -1,0 +1,49 @@
+- name: "create-role-syntax"
+  description: |
+    The following syntax is used to create a role in Materialize Cloud.
+  code: |
+    CREATE ROLE <role_name> [[WITH] INHERIT];
+
+- name: "create-role-options"
+  description: |
+    {{< yaml-table data="syntax_options/create_role_cloud_options" >}}
+
+- name: "create-role-details"
+  description: |
+     - Materialize Cloud does not support the `NOINHERIT` option for `CREATE
+     ROLE`.
+     - Materialize Cloud does not support the `LOGIN` and `SUPERUSER` attributes
+       for `CREATE ROLE`.  See [Organization
+       roles](/security/cloud/users-service-accounts/#organization-roles)
+       instead.
+     - Materialize Cloud does not use role attributes to determine a role's
+     ability to create top level objects such as databases and other roles.
+     Instead, Materialize uses system level privileges. See [GRANT
+     PRIVILEGE](../grant-privilege) for more details.
+
+- name: "create-role-view-manager"
+  description: |
+
+    Create a role for users who need to perform compute/transform operations in
+    the compute/transform cluster(s). This role will handle creating views,
+    materialized views, and other transformation objects.
+
+  code: |
+    CREATE ROLE view_manager;
+
+- name: "create-role-serving-index-manager"
+  description: |
+
+    Create a role for users who need to manage indexes on the serving
+    cluster(s). This role will handle creating indexes to serve results.
+
+  code: |
+    CREATE ROLE serving_index_manager;
+
+- name: "create-role-data-reader"
+  description: |
+
+    Create a role for users who need to read results from the serving cluster.
+
+  code: |
+    CREATE ROLE data_reader;

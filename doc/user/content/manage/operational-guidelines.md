@@ -71,6 +71,23 @@ See also [Cluster architecture](#three-tier-architecture).
 
 ## Role-based access control (RBAC)
 
-{{< include-md file="shared-content/rbac/rbac-intro-disambiguation.md" >}}
+{{< tabs >}}
 
-{{% yaml-sections data="rbac/recommendations" heading-field="recommendation" heading-level=3 %}}
+{{< tab "Cloud" >}}
+
+### Cloud
+
+{{% yaml-sections data="rbac/recommendations-cloud"
+heading-field="recommendation" heading-level=5 %}}
+
+{{< /tab >}}
+
+{{< tab "Self-Managed" >}}
+
+### Self-Managed
+
+{{% yaml-sections data="rbac/recommendations-sm"
+heading-field="recommendation" heading-level=5 %}}
+{{< /tab >}}
+
+{{< /tabs >}}

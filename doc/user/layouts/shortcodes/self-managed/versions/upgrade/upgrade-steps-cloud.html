@@ -1,0 +1,161 @@
+{{ $orchestratord_version := site.Data.self_managed.latest_versions.orchestratord_version }}
+{{ $environmentd_version :=
+site.Data.self_managed.latest_versions.environmentd_version }}
+{{ $operator_version :=
+site.Data.self_managed.latest_versions.operator_helm_chart_version }}
+
+1. Back up your `terraform.tfvars` file.
+
+   ```sh
+   cp terraform.tfvars original_terraform.tfvars
+   ```
+
+1. Update the `terraform.tfvars` to set the Materialize Operator version:
+
+   | Variable              | Description |
+   |-----------------------|-------------|
+   | `operator_version`    | New Materialize Operator version.<br> <ul><li>If the variable does not exist, add the variable and set to the new version.</li><li>If the variable exists, update the value to the new version.</li></ul> |
+
+   ```sh
+   ##... Existing content not shown for brevity
+   ##... Leave the existing variables unchanged
+   operator_version="{{ $operator_version }}"  # Set to the desired operator version
+   ```
+
+1. Initialize the terraform directory.
+
+    ```bash
+    terraform init
+    ```
+
+1. Run `terraform plan` with both the `terraform.tfvars` and your
+   `mz_instances.tfvars` files and review the changes to be made.
+
+   ```bash
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
+   ```
+
+   The plan should show the changes to be made for the `materialize_operator`.
+
+1. If you are satisfied with the changes, apply.
+
+   ```bash
+   terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
+   ```
+
+   To approve the changes and apply, enter `yes`.
+
+   Upon successful completion, you should see output with a summary of changes.
+
+1. Verify that the operator is running:
+
+   ```bash
+   kubectl -n materialize get all
+   ```
+
+   Verify the operator upgrade by checking its events:
+
+   ```bash
+   kubectl -n materialize describe pod -l app.kubernetes.io/name=materialize-operator
+   ```
+
+   - The **Containers** section should show the ``--helm-chart-version``
+     argument set to the new version.
+
+   - The **Events** section should list that the new version of the
+     orchestratord have been pulled.
+
+
+1. Back up your ``mz_instances.tfvars`` file.
+
+   ```sh
+   cp mz_instances.tfvars original_mz_instances.tfvars
+   ```
+
+1. Update the `mz_instances.tfvars` to specify the upgrade variables for each
+   instance:
+
+
+   | Variable          | Description |
+   |--------------------|-------------|
+   | `create_database`  | Set to `false`. |
+   | `environmentd_version`  | New Materialize instance version.|
+   | `request_rollout`  or `force_rollout` | A new UUID string.  Can be generated with `uuidgen`.<br> <ul><li>`request_rollout` triggers a rollout only if changes exist. </li><li>`force_rollout`  triggers a rollout even if no changes exist.</li></ul> |
+   | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
+
+   For example, the following instance specifies:
+
+   - a `create_database` of `false`,
+   - an `inPlaceRollout` of `false`,
+   - an `environmentd_version` of `"{{ $environmentd_version }}"`, and
+   - a `request_rollout` of `"22222222-2222-2222-2222-222222222222"`.
+
+   ```sh
+   materialize_instances = [
+       {
+         name           = "demo"
+         namespace      = "materialize-environment"
+         database_name  = "demo_db"
+         cpu_request    = "1"
+         memory_request = "2Gi"
+         memory_limit   = "2Gi"
+         create_database = false
+         environmentd_version = "{{ $environmentd_version }}"
+         inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
+         requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
+       }
+   ]
+   ```
+
+   <div class="warning">
+      <strong class="gutter">WARNING!</strong> Please consult the Materialize team before setting inPlaceRollout to true and performing an in-place rollout. In almost all cases a rolling upgrade is preferred.
+   </div>
+
+
+
+
+
+1. Run `terraform plan` with both the `terraform.tfvars` and your
+   `mz_instances.tfvars` files and review the changes to be made.
+
+   ```bash
+   terraform plan -var-file=terraform.tfvars -var-file=mz_instances.tfvars
+   ```
+
+   The plan should show the changes to be made for the Materialize instance.
+
+1. If you are satisfied with the changes, apply.
+
+   ```bash
+   terraform apply -var-file=terraform.tfvars -var-file=mz_instances.tfvars
+   ```
+
+   To approve the changes and apply, enter `yes`.
+
+   Upon successful completion, you should see output with a summary of changes.
+
+1. Verify that the components are running after the upgrade:
+
+   ```bash
+   kubectl -n materialize-environment get all
+   ```
+
+   Verify upgrade by checking the `balancerd` events:
+
+   ```bash
+   kubectl -n materialize-environment describe pod -l app=balancerd
+   ```
+
+   The **Events** section should list that the new version of the `balancerd`
+   have been pulled.
+
+   Verify the upgrade by checking the `environmentd` events:
+
+   ```bash
+   kubectl -n materialize-environment describe pod -l app=environmentd
+   ```
+
+   The **Events** section should list that the new version of the `environmentd`
+   have been pulled.
+
+1. Open the Materialize Console. The Console should display the new version.

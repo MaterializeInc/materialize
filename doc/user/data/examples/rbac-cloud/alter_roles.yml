@@ -1,0 +1,72 @@
+- name: "alter-role-syntax"
+  description: |
+    The following syntax is used to alter a role in Materialize Cloud.
+  code: |
+    ALTER ROLE <role_name>
+    [[WITH] INHERIT]
+    [SET <config> =|TO <value|DEFAULT> ]
+    [RESET <config>];
+
+- name: "alter-role-options"
+  description: |
+    {{< yaml-table data="syntax_options/alter_role_cloud_options" >}}
+
+- name: alter-role-details
+  description: |
+     - Materialize Cloud does not support the `NOINHERIT` option for `ALTER
+     ROLE`.
+     - Materialize Cloud does not support the `LOGIN` and `SUPERUSER` attributes
+       for `ALTER ROLE`.  See [Organization
+       roles](/security/cloud/users-service-accounts/#organization-roles)
+       instead.
+     - Materialize Cloud does not use role attributes to determine a role's
+     ability to alter top level objects such as databases and other roles.
+     Instead, Materialize Cloud uses system level privileges. See [GRANT
+     PRIVILEGE](../grant-privilege) for more details.
+
+- name: "alter-roles-configurations"
+  description: |
+
+    The following example configures the `blue.berry@example.com` role to use
+    the `compute_cluster` cluster, `mydb` database, and `sales` schema by
+    default.
+
+  code: |
+    ALTER ROLE "blue.berry@example.com" SET CLUSTER = compute_cluster;
+    ALTER ROLE "blue.berry@example.com" SET DATABASE = mydb;
+    ALTER ROLE "blue.berry@example.com" SET search_path = sales; -- i.e., schema
+  results: |
+
+    - These changes will take effect in the next session for the role; the
+      changes have **NO** effect on the current session.
+
+    - These configurations are just the defaults. For example, the connection
+      string can specify a different database for the session or the user can
+      issue a `SET ...` command to override these values for the current
+      session.
+
+- name: "alter-roles-configs-not-inherited"
+  description: |
+
+    In Materialize, when you grant a role to another role (user role/service
+    account role/independent role), the target role inherits only the privileges
+    of the granted role. **Role configurations are not inherited.** For example,
+    the following example updates the `data_reader` role to use
+    `serving_cluster` by default.
+
+  code: |
+    ALTER ROLE data_reader SET CLUSTER = serving_cluster;
+  results: |
+
+    This change affects only the `data_reader` role and does not affect roles
+    that have been granted `data_reader`, such as `sales_report_app`. That is,
+    after this change:
+
+    - The default cluster for `data_reader` is `serving_cluster` for new
+      sessions.
+
+    - The default cluster for `sales_report_app` is not affected.
+
+    {{< tip >}}
+    {{< include-md file="shared-content/rbac/alter-role-tip.md" >}}
+    {{</ tip >}}

@@ -1,0 +1,95 @@
+- name: "view-privileges-for-current-owner"
+  description: |
+    Review `lemon@example.com"`'s privileges on the `shared_lemon` table.
+
+  code: |
+    SHOW PRIVILEGES FOR "lemon@example.com" where name = 'shared_lemon';
+
+  results: |
+
+    As the owner, `lemon@example.com`  has all applicable privileges
+    (`INSERT`/`SELECT`/`UPDATE`/`DELETE`) for the table as well as the `INSERT`
+    through its membership in `view_manager` (from [Alter default privileges
+    example](/security/self-managed/access-control/manage-roles/#alter-default-privileges)).
+
+    ```none
+          grantor      |      grantee      | database | schema |     name     | object_type | privilege_type
+    -------------------+-------------------+----------+--------+--------------+-------------+----------------
+     lemon@example.com | lemon@example.com | mydb     | sales  | shared_lemon | table       | DELETE
+     lemon@example.com | lemon@example.com | mydb     | sales  | shared_lemon | table       | INSERT
+     lemon@example.com | lemon@example.com | mydb     | sales  | shared_lemon | table       | SELECT
+     lemon@example.com | lemon@example.com | mydb     | sales  | shared_lemon | table       | UPDATE
+     lemon@example.com | view_manager      | mydb     | sales  | shared_lemon | table       | INSERT
+    ```
+
+- name: "view-privileges-for-future-owner"
+  description: |
+
+    Review `view_manager`'s privileges on the `shared_lemon` table.
+
+  code: |
+    SHOW PRIVILEGES FOR view_manager where name = 'shared_lemon';
+
+  results: |
+
+    The results show that the `view_manager` role has `INSERT` privileges on the
+    `shared_lemon` table (from [Alter default privileges
+    example](/security/self-managed/access-control/manage-roles/#alter-default-privileges)).
+
+    ```none
+          grantor      |   grantee    | database | schema |     name     | object_type | privilege_type
+    -------------------+--------------+----------+--------+--------------+-------------+----------------
+     lemon@example.com | view_manager | mydb     | sales  | shared_lemon | table       | INSERT
+    ```
+
+- name: "table-shared_lemon"
+  description: |
+
+    Change the owner of the `shared_lemon` table to `view_manager`.
+
+  code: |
+    ALTER TABLE mydb.sales.shared_lemon OWNER TO view_manager;
+
+- name: "view-privileges-for-new-owner"
+  description: |
+
+    After running the command, review `view_manager`'s privileges on the
+    `shared_lemon` table.
+
+  code: |
+    SHOW PRIVILEGES FOR view_manager where name = 'shared_lemon';
+
+  results: |
+
+    The results show that the `view_manager` role has all applicable privileges
+    for a table (`INSERT`, `SELECT`, `UPDATE`, `DELETE`):
+
+    ```none
+      grantor    |   grantee    | database | schema |     name     | object_type | privilege_type
+    -------------+--------------+----------+--------+--------------+-------------+----------------
+    view_manager | view_manager | mydb     | sales  | shared_lemon | table       | DELETE
+    view_manager | view_manager | mydb     | sales  | shared_lemon | table       | INSERT
+    view_manager | view_manager | mydb     | sales  | shared_lemon | table       | SELECT
+    view_manager | view_manager | mydb     | sales  | shared_lemon | table       | UPDATE
+    ```
+
+- name: "view-privileges-for-previous-owner"
+  description: |
+
+    Review `lemon@example.com`'s privileges on the `shared_lemon` table.
+  code: |
+    SHOW PRIVILEGES FOR "lemon@example.com" where name = 'shared_lemon';
+
+  results: |
+
+    The results show that `lemon@example.com` now only has access through
+    `view_manager`.
+
+    ```none
+       grantor    |   grantee    | database | schema |     name     | object_type | privilege_type
+    --------------+--------------+----------+--------+--------------+-------------+----------------
+     view_manager | view_manager | mydb     | sales  | shared_lemon | table       | DELETE
+     view_manager | view_manager | mydb     | sales  | shared_lemon | table       | INSERT
+     view_manager | view_manager | mydb     | sales  | shared_lemon | table       | SELECT
+     view_manager | view_manager | mydb     | sales  | shared_lemon | table       | UPDATE
+    ```

@@ -1,0 +1,81 @@
+- name: "create-role-syntax"
+  description: |
+    The following syntax is used to create a role in Materialize Self-Managed.
+  code: |
+    CREATE ROLE <role_name>
+    [WITH]
+        [ SUPERUSER | NOSUPERUSER ],
+        [ LOGIN | NOLOGIN ]
+        [ INHERIT ]
+        [ PASSWORD <text> ]
+    ;
+
+- name: "create-role-options"
+  description: |
+    {{< yaml-table data="syntax_options/create_role_sm_options" >}}
+
+- name: "create-role-details"
+  description: |
+     - Self-Managed Materialize does not support the `NOINHERIT` option for
+     `CREATE ROLE`.
+     - With the exception of the `SUPERUSER` attribute, Self-Managed Materialize
+     does not use role attributes to determine a role's ability to create top
+     level objects such as databases and other roles. Instead, Self-Managed
+     Materialize uses system level privileges. See [GRANT PRIVILEGE](../grant-privilege) for more details.
+
+- name: "create-role-user"
+  description: |
+
+    The following creates a new user `blue.berry@example.com`, or more specifically, creates a role for a user `blue.berry@example.com` using [`CREATE ROLE ... WITH LOGIN PASSWORD`](/sql/create-role).
+
+  code: |
+    CREATE ROLE "blue.berry@example.com" WITH LOGIN PASSWORD '<password>';
+  results: |
+    {{< note >}}
+    The role/user name `blue.berry@example.com` is enclosed in double quotes to
+    override the [naming restrictions](/sql/identifiers/#naming-restrictions).
+    {{</ note >}}
+
+    Once created, the user `blue.berry@example.com` can login using the
+    password.
+
+- name: "create-role-service-account"
+  description: |
+
+    The following creates a new service account `sales_report_app`, or more
+    specifically, creates a role for a service account `sales_report_app` using
+    [`CREATE ROLE ... WITH LOGIN PASSWORD`](/sql/create-role).
+
+  code: |
+    CREATE ROLE "sales_report_app" WITH LOGIN PASSWORD '<password>';
+  results: |
+
+    Once created, the associated application can use the `sales_report_app`
+    service account to connect to Materialize.
+
+- name: "create-role-view-manager"
+  description: |
+
+    Create a role for users who need to perform compute/transform operations in
+    the compute/transform cluster(s). This role will handle creating views,
+    materialized views, and other transformation objects.
+
+  code: |
+    CREATE ROLE view_manager;
+
+- name: "create-role-serving-index-manager"
+  description: |
+
+    Create a role for users who need to manage indexes on the serving
+    cluster(s). This role will handle creating indexes to serve results.
+
+  code: |
+    CREATE ROLE serving_index_manager;
+
+- name: "create-role-data-reader"
+  description: |
+
+    Create a role for users who need to read results from the serving cluster.
+
+  code: |
+    CREATE ROLE data_reader;

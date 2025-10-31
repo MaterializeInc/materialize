@@ -11,7 +11,15 @@ aliases:
   - /connect-sources/ssh-tunnel/
 ---
 
+{{< tabs >}}
+{{< tab "Cloud" >}}
 {{% network-security/ssh-tunnel %}}
+{{< /tab >}}
+{{< tab "Self-Managed" >}}
+{{% network-security/ssh-tunnel-sm %}}
+{{< /tab >}}
+{{< /tabs >}}
+
 
 ## Create a source connection
 

@@ -1,13 +1,15 @@
 ---
-title: "ALTER NETWORK POLICY"
+title: "ALTER NETWORK POLICY (Cloud)"
 description: "`ALTER NETWORK POLICY` alters an existing network policy."
 menu:
   main:
     parent: commands
 ---
 
+*Available for Materialize Cloud only*
+
 `ALTER NETWORK POLICY` alters an existing network policy. Network policies are
-part of Materialize's framework for [access control](/security/access-control/).
+part of Materialize's framework for [access control](/security/cloud/).
 
 Changes to a network policy will only affect new connections
 and **will not** terminate active connections.

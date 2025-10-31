@@ -19,6 +19,8 @@ securely store each credential in Materialize's secret management system.
 Credentials that are generally not sensitive (like usernames and SSL
 certificates) can be specified as plain `text`, or also stored as secrets.
 
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+
 ## Source and sink connections
 
 ### AWS
@@ -36,7 +38,7 @@ perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection
 | <div style="min-width:240px">Field</div>  | Value            | Description
 |-------------------------------------------|------------------|------------------------------
 | `ENDPOINT`                                | `text`           | *Advanced.* Override the default AWS endpoint URL. Allows targeting S3-compatible services like MinIO.
-| `REGION`                                  | `text`           | The AWS region to connect to. Defaults to the current Materialize region.
+| `REGION`                                  | `text`           | *For Materialize Cloud only* The AWS region to connect to. Defaults to the current Materialize region.
 | `ACCESS KEY ID`                           | secret or `text` | The access key ID to connect with. Triggers credentials-based authentication.<br><br><strong>Warning!</strong> Use of credentials-based authentication is deprecated. AWS strongly encourages the use of role assumption-based authentication instead.
 | `SECRET ACCESS KEY`                       | secret           | The secret access key corresponding to the specified access key ID.<br><br>Required and only valid when `ACCESS KEY ID` is specified.
 | `SESSION TOKEN`                           | secret or `text` | The session token corresponding to the specified access key ID.<br><br>Only valid when `ACCESS KEY ID` is specified.
@@ -217,7 +219,7 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 | `AWS CONNECTION` <a name="kafka-aws-connection"></a>  | object name      | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
 | `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
 | `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
-| `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | {{< warn-if-unreleased-inline "v0.106" >}} The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
+| `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
 
 #### `WITH` options {#kafka-with-options}
 
@@ -349,10 +351,13 @@ CREATE CONNECTION kafka_msk TO KAFKA (
 #### Network security {#kafka-network-security}
 
 If your Kafka broker is not exposed to the public internet, you can tunnel the
-connection through an AWS PrivateLink service or an SSH bastion host.
+connection through an AWS PrivateLink service (Materialize Cloud) or an
+SSH bastion host.
 
 {{< tabs >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 Depending on the hosted service you are connecting to, you might need to specify
 a PrivateLink connection [per advertised broker](#kafka-privatelink-syntax)
@@ -376,10 +381,10 @@ those brokers without any tunneling.
 
 {{< diagram "broker-option.svg" >}}
 
-The `USING` clause specifies that Materialize should connect to the designated
-broker via an AWS PrivateLink service. Brokers do not need to be configured the
-same way, but the clause must be individually attached to each broker that you
-want to connect to via the tunnel.
+The `USING` clause specifies that Materialize Cloud should connect to the
+designated broker via an AWS PrivateLink service. Brokers do not need to be
+configured the same way, but the clause must be individually attached to each
+broker that you want to connect to via the tunnel.
 
 ##### Broker connection options {#kafka-privatelink-options}
 
@@ -588,11 +593,12 @@ CREATE CONNECTION csr_ssl TO CONFLUENT SCHEMA REGISTRY (
 #### Network security {#csr-network-security}
 
 If your Confluent Schema Registry server is not exposed to the public internet,
-you can tunnel the connection through an AWS PrivateLink service or an SSH
-bastion host.
+you can tunnel the connection through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 
 {{< tabs >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ##### Connection options {#csr-privatelink-options}
 
@@ -685,11 +691,14 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 
 #### Network security {#mysql-network-security}
 
-If your MySQL server is not exposed to the public internet, you can tunnel
-the connection through an AWS PrivateLink service or an SSH bastion host.
+If your MySQL server is not exposed to the public internet, you can tunnel the
+connection through an AWS PrivateLink service (Materialize Cloud) or an
+SSH bastion host.
 
 {{< tabs >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ##### Connection options {#mysql-privatelink-options}
 
@@ -815,10 +824,12 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 #### Network security {#postgres-network-security}
 
 If your PostgreSQL server is not exposed to the public internet, you can tunnel
-the connection through an AWS PrivateLink service or an SSH bastion host.
+the connection through an AWS PrivateLink service (Materialize Cloud)or an SSH bastion host.
 
 {{< tabs >}}
 {{< tab "AWS PrivateLink">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ##### Connection options {#postgres-privatelink-options}
 
@@ -931,7 +942,11 @@ CREATE CONNECTION sqlserver_connection TO SQL SERVER (
 
 ## Network security connections
 
-### AWS PrivateLink
+
+
+### AWS PrivateLink (Materialize Cloud) {#aws-privatelink}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 An AWS PrivateLink connection establishes a link to an [AWS PrivateLink] service.
 You can use AWS PrivateLink connections in [Confluent Schema Registry connections](#confluent-schema-registry),

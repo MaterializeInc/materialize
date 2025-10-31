@@ -1,0 +1,276 @@
+- name: "view_manager"
+  description: |
+
+    The following grants the `view_manager` role to the role associated with the
+    user `blue.berry@example.com`.
+
+  code: |
+    GRANT view_manager TO "blue.berry@example.com";
+
+- name: "view_manager-results-show-privileges"
+  description: |
+
+    Review the privileges granted to the `blue.berry@example.com` role:
+
+  code: |
+    SHOW PRIVILEGES FOR "blue.berry@example.com";
+
+  results: |
+
+    The results should include the privileges inherited through the
+    `view_manager` role in addition to those privileges through the `PUBLIC`
+    role. If the role had been granted direct privileges, those would also be
+    included.
+
+    ```none
+       grantor        |   grantee    |  database   | schema |        name       | object_type | privilege_type
+    ------------------+--------------+-------------+--------+-------------------+-------------+----------------
+    admin@example.com | view_manager | mydb        | sales  | items             | table       | SELECT
+    admin@example.com | view_manager | mydb        | sales  | orders            | table       | SELECT
+    admin@example.com | view_manager | mydb        | sales  | sales_items       | table       | SELECT
+    admin@example.com | view_manager | mydb        |        | sales             | schema      | CREATE
+    admin@example.com | view_manager | mydb        |        | sales             | schema      | USAGE
+    admin@example.com | view_manager |             |        | compute_cluster   | cluster     | CREATE
+    admin@example.com | view_manager |             |        | compute_cluster   | cluster     | USAGE
+    admin@example.com | PUBLIC       | mydb        |        | public            | schema      | USAGE
+    mz_system         | PUBLIC       | materialize |        | public            | schema      | USAGE
+    mz_system         | PUBLIC       |             |        | materialize       | database    | USAGE
+    mz_system         | PUBLIC       |             |        | quickstart        | cluster     | USAGE
+    ```
+
+- name: "view_manager-results-create-objects"
+  description: |
+
+    After the `view_manager` role is granted to `blue.berry@example.com`,
+    `blue.berry@example.com` can create objects in the `mydb.sales` schema on
+    the `compute_cluster`.
+
+  code: |
+    -- run as blue.berry@example.com
+    SET CLUSTER TO compute_cluster;
+    SET DATABASE TO mydb;
+    SET SCHEMA TO sales;
+
+    -- Create an intermediate view for a stacked materialized view
+    CREATE VIEW orders_view AS
+    SELECT o.*,i.price,o.quantity * i.price as subtotal
+    FROM orders as o
+    JOIN items as i
+    ON o.item = i.item;
+
+    -- Create a materialized view
+    CREATE MATERIALIZED VIEW orders_daily_totals AS
+    SELECT date_trunc('day',order_date) AS order_date,
+          sum(subtotal) AS daily_total
+    FROM orders_view
+    GROUP BY date_trunc('day',order_date);
+
+    -- Select from the materialized view
+    SELECT * from orders_daily_totals;
+
+  results: |
+
+    In Materialize, a role automatically gets all [applicable
+    privileges](/security/appendix/appendix-privileges/) for an object they
+    create; for example, the creator of a schema gets `CREATE` and `USAGE`; the
+    creator of a table gets `SELECT`, `INSERT`, `UPDATE`, and `DELETE`.
+
+    For example, if you show privileges for `"blue.berry@example.com"` after
+    creating the view and materialized view, you will see that the role has
+    `SELECT` privileges on the `orders_daily_totals`  and `orders_view`.
+
+    ```none
+      grantor              |         grantee        |  database   | schema |      name           |     object_type   | privilege_type
+    -----------------------+------------------------+-------------+--------+---------------------+-------------------+---------------
+    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_daily_totals | materialized-view | SELECT
+    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_view         | view              | SELECT
+    admin@example.com      | view_manager           | mydb        | sales  | items               | table             | SELECT
+    admin@example.com      | view_manager           | mydb        | sales  | orders              | table             | SELECT
+    admin@example.com      | view_manager           | mydb        | sales  | sales_items         | table             | SELECT
+    ... -- Rest omitted for brevity
+    ```
+
+    {{< note >}}
+    If a query directly references a view or materialized view:
+    {{< include-md file="shared-content/rbac/select-views-privileges.md" >}}
+    {{</ note >}}
+
+    However, with the current privileges, `"blue.berry@example.com"` cannot
+    select from new views/materialized views created by **others** in the
+    schema and vice versa. For privileges on new objects created by **others**, you can either:
+    - Manually grant privileges on new objects; or
+    - Use [default
+    privileges](/security/cloud/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    to automatically grant privileges on new objects.
+
+- name: "serving_index_manager"
+  description: |
+    The following grants the `serving_index_manager` role to the functional role
+    `view_manager`, which already has privileges to create materialized views in
+    `mydb.sales` schema. This allows members of the `view_manager` role to
+    create indexes on their objects on the `serving_cluster`.
+
+  code: |
+    GRANT serving_index_manager TO view_manager;
+
+- name: "serving_index_manager-results-show-privileges-view_manager"
+  description: |
+    Review the privileges granted to the `view_manager` role:
+
+  code: |
+    SHOW PRIVILEGES FOR view_manager;
+
+  results: |
+
+    The results include the privileges inherited through the
+    `serving_index_manager` role in addition to those privileges inherited
+    through the `PUBLIC` role as well as those granted directly to the role, if
+    any.
+
+    ```none
+      grantor         |        grantee        |  database   | schema |        name       | object_type | privilege_type
+    ------------------+-----------------------+-------------+--------+-------------------+-------------+----------------
+    admin@example.com | serving_index_manager | mydb        |        | sales             | schema      | CREATE
+    admin@example.com | serving_index_manager |             |        | serving_cluster   | cluster     | CREATE
+    admin@example.com | serving_index_manager |             |        | serving_cluster   | cluster     | USAGE
+    admin@example.com | view_manager          | mydb        | sales  | items             | table       | SELECT
+    admin@example.com | view_manager          | mydb        | sales  | orders            | table       | SELECT
+    admin@example.com | view_manager          | mydb        | sales  | sales_items       | table       | SELECT
+    admin@example.com | view_manager          | mydb        |        | sales             | schema      | CREATE
+    admin@example.com | view_manager          | mydb        |        | sales             | schema      | USAGE
+    admin@example.com | view_manager          |             |        | compute_cluster   | cluster     | CREATE
+    admin@example.com | view_manager          |             |        | compute_cluster   | cluster     | USAGE
+    admin@example.com | PUBLIC                | mydb        |        | public            | schema      | USAGE
+    mz_system         | PUBLIC                | materialize |        | public            | schema      | USAGE
+    mz_system         | PUBLIC                |             |        | materialize       | database    | USAGE
+    mz_system         | PUBLIC                |             |        | quickstart        | cluster     | USAGE
+    ```
+- name: "serving_index_manager-results-show-privileges-view_manager-member"
+  description: |
+    Review the privileges for `"blue.berry@example.com"` (a member of `view_manager`):
+
+  code: |
+    SHOW PRIVILEGES FOR "blue.berry@example.com";
+
+  results: |
+
+    The results include the privileges inherited through the
+    `serving_index_manager` role in addition to those privileges inherited
+    through the `PUBLIC` role as well as those granted directly to the role, if
+    any. For example, after being granted the `view_manager` role,
+    `"blue.berry@example.com"` created the `orders_daily_totals` and
+    `orders_view`. As the creator, `"blue.berry@example.com"` automatically gets
+    all applicable privileges on the objects they create.
+
+    ```none
+      grantor              |         grantee        |  database   | schema |    name             |    object_type    | privilege_type
+    -----------------------+------------------------+-------------+--------+---------------------+-------------------+---------------
+    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_daily_totals | materialized-view | SELECT
+    blue.berry@example.com | blue.berry@example.com | mydb        | sales  | orders_view         | view              | SELECT
+    admin@example.com      | serving_index_manager  | mydb        |        | sales               | schema            | CREATE
+    admin@example.com      | serving_index_manager  |             |        | serving_cluster     | cluster           | CREATE
+    admin@example.com      | serving_index_manager  |             |        | serving_cluster     | cluster           | USAGE
+    admin@example.com      | view_manager           | mydb        | sales  | items               | table             | SELECT
+    admin@example.com      | view_manager           | mydb        | sales  | orders              | table             | SELECT
+    admin@example.com      | view_manager           | mydb        | sales  | sales_items         | table             | SELECT
+    admin@example.com      | view_manager           | mydb        |        | sales               | schema            | CREATE
+    admin@example.com      | view_manager           | mydb        |        | sales               | schema            | USAGE
+    admin@example.com      | view_manager           |             |        | compute_cluster     | cluster           | CREATE
+    admin@example.com      | view_manager           |             |        | compute_cluster     | cluster           | USAGE
+    admin@example.com      | PUBLIC                 | mydb        |        | public              | schema            | USAGE
+    mz_system              | PUBLIC                 | materialize |        | public              | schema            | USAGE
+    mz_system              | PUBLIC                 |             |        | materialize         | database          | USAGE
+    mz_system              | PUBLIC                 |             |        | quickstart          | cluster           | USAGE
+    ```
+
+- name: "serving_index_manager-results-create-index"
+  description: |
+
+    To create indexes on an object, in addition to specific `CREATE` privileges
+    (granted by the `serving_index_manager` role), the user needs to be the
+    owner of the object.
+
+    After the `serving_index_manager` role is granted to the `view_manager`
+    role, members of `view_manager` can create indexes on the `serving_cluster`
+    for objects that they own. For example, `"blue.berry@example.com"` can
+    create an index on the `orders_daily_totals` materialized view.
+
+  code: |
+    -- run as "blue.berry@example.com"
+    SET CLUSTER TO serving_cluster;
+    SET DATABASE TO mydb;
+    SET SCHEMA TO sales;
+
+    CREATE INDEX ON orders_daily_totals (order_date);
+
+    -- If the role has `USAGE` on the `serving_cluster`:
+    SELECT * from orders_daily_totals;
+
+  results: |
+
+    To allow others in the `view_manager` role to create indexes, see [Change
+    ownership of objects](/security/cloud/access-control/manage-roles/#change-ownership-of-objects).
+
+- name: "data_reader"
+  description: |
+
+    The following grants the `data_reader` role to the service account role
+    `sales_report_app`.
+
+  code: |
+    GRANT data_reader TO sales_report_app;
+
+- name: "data_reader-results-show-privileges"
+  description: |
+    Review the privileges for `sales_report_app` after the grant:
+
+  code: |
+    SHOW PRIVILEGES FOR sales_report_app;
+
+  results: |
+    The results should include the privileges inherited through the
+    `data_reader` role in addition to those privileges inherited through the
+    `PUBLIC` role. If the role had been granted direct privileges, those would
+    also be included.
+
+    ```none
+        grantor       |   grantee   |  database   | schema |        name         | object_type | privilege_type
+    ------------------+-------------+-------------+--------+---------------------+-------------+----------------
+    admin@example.com | data_reader | mydb        | sales  | items               | table       | SELECT
+    admin@example.com | data_reader | mydb        | sales  | orders              | table       | SELECT
+    admin@example.com | data_reader | mydb        | sales  | sales_items         | table       | SELECT
+    admin@example.com | data_reader | mydb        |        | sales               | schema      | USAGE
+    admin@example.com | data_reader |             |        | serving_cluster     | cluster     | USAGE
+    admin@example.com | PUBLIC      | mydb        |        | public              | schema      | USAGE
+    mz_system         | PUBLIC      | materialize |        | public              | schema      | USAGE
+    mz_system         | PUBLIC      |             |        | materialize         | database    | USAGE
+    mz_system         | PUBLIC      |             |        | quickstart          | cluster     | USAGE
+    ```
+
+- name: "data_reader-results-select"
+  description: |
+
+    As the privileges show, after the `data_reader` role is granted to the
+    `sales_report_app` service account role, `sales_report_app` can read from
+    the three tables in the `mydb.sales` schema on the `serving_cluster`.
+
+  code: |
+    SET CLUSTER TO serving_cluster;
+    SET DATABASE TO mydb;
+    SET SCHEMA TO sales;
+
+    SELECT * FROM sales_items;
+
+  results: |
+
+    However, `sales_report_app` cannot read from the new objects in
+    `mydb.sales`; e.g., `orders_daily_totals` materialized view and its
+    underlying view `orders_view` that were created after the `SELECT`
+    privileges were granted to the `data_reader` role.
+
+    To allow `sales_report_app` or `data_reader` to read from the new objects in
+    `mydb.sales`, you can either:
+    - Manually grant `SELECT` privileges on the new objects; or
+    - Use [default
+    privileges](/security/cloud/access-control/manage-roles/#manage-future-privileges-for-a-role)
+    to automatically grant `SELECT` privileges on new objects.

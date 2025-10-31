@@ -11,7 +11,7 @@ menu:
 From the Console, you can create new [clusters](/concepts/clusters/ "Isolated
 pools of compute resources (CPU, memory, and scratch disk space)"),
 [sources](/concepts/sources/ "Upstream (i.e., external) systems you want
-Materialize to read data from"), and application passwords.
+Materialize to read data from"), and, for Materialize Cloud, application passwords.
 
 ### Create new cluster
 
@@ -70,7 +70,7 @@ From the Materialize Console:
     {{</ tip >}}
 
 
-### Create new app password
+### Create new app password (Cloud-only)
 
 ![Image of the Create application
 password](/images/console/console-create-new/create-app-password.png "Create
@@ -114,8 +114,8 @@ application password")
    {{< yaml-table data="console/service_account_fields" >}}
 
    See also [Create service
-   accounts](/security/users-service-accounts/create-service-accounts/) for creating
-   service accounts via Terraform.
+   accounts](/security/cloud/users-service-accounts/create-service-accounts/)
+   for creating service accounts via Terraform.
 
    {{</ tab >}}
    {{</ tabs >}}
@@ -136,7 +136,7 @@ application password")
 
    For a new service account, after creating the new app password, you must
    connect with the service account to complete the account creation. {{<
-   include-md file="shared-content/rbac/service-account-creation.md" >}}
+   include-md file="shared-content/rbac-cloud/service-account-creation.md" >}}
 
    To connect:
 

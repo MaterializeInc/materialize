@@ -48,10 +48,6 @@ alter_materialized_view_set ::=
   'ALTER' 'MATERIALIZED VIEW' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
 alter_materialized_view_reset ::=
   'ALTER' 'MATERIALIZED VIEW' name 'RESET' '(' 'RETAIN HISTORY' ')'
-alter_role ::=
-    'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_set )
-alter_role_attributes ::= 'WITH'? 'INHERIT'
-alter_role_set ::= ('SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' ) | 'RESET' name)
 alter_secret ::=
   'ALTER' 'SECRET' 'IF EXISTS'? name AS value
 alter_source ::=
@@ -158,8 +154,6 @@ create_materialized_view ::=
     ('IN CLUSTER' cluster_name)?
     ('WITH' with_options)?
     'AS' select_stmt
-create_role ::=
-    'CREATE' 'ROLE' role_name ('WITH'? 'INHERIT')?
 create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=

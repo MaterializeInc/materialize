@@ -1,0 +1,90 @@
+
+columns:
+  - column: "Field"
+  - column: "Type"
+  - column: "Description"
+  - column: "Recommendation"
+rows:
+  - Field: "**workers**"
+    Type: int
+    Description: |
+
+      The number of timely workers in your cluster replica.
+
+    Recommendation: |
+
+      Use 1 worker per CPU core, with a minimum of 1 worker.
+
+  - Field: "**scale**"
+    Type: int
+    Description: |
+
+      The number of pods (i.e., processes) to use in a cluster replica; used to
+      scale out replicas horizontally. Each pod will be provisioned using the
+      settings defined in the size definition.
+
+    Recommendation: |
+
+      Generally, this should be set to 1. This should only be greater than 1 when a replica needs to take on limits that are greater than the maximum limits permitted on a single node.
+
+  - Field: "**cpu_exclusive**"
+    Type: bool
+    Description: |
+
+      The flag that determines if the workers should attempt to pin to a particular CPU core.
+    Recommendation: |
+
+      <a name="cpu_exclusive"></a>
+
+      Set to true **if and only if** the [`cpu_limit`](#cpu_limit) is a whole
+      number and the CPU management policy in the k8s cluster is set to static.
+
+  - Field: "**cpu_limit**"
+    Type: float
+    Description: |
+
+      <a name="cpu_limit"></a>
+      The k8s limit for CPU for a replica pod in cores.
+    Recommendation: |
+
+      Prefer whole number values to enable CPU affinity. Kubernetes only allows
+      CPU Affinity for pods taking a whole number of cores.
+
+      If the value is not a whole number, set [`cpu_exclusive`](#cpu_exclusive) to false.
+
+  - Field: "**memory_limit**"
+    Type: float
+    Description: |
+
+      The k8s limit for memory for a replica pod in bytes.
+    Recommendation: |
+
+      For most workloads, use an approximate **1:8** CPU-to-memory ratio (1 core
+      : 8 GiB). This can vary depending on your workload characteristics.
+
+  - Field: "**disk_limit**"
+    Type: float
+    Description: |
+
+      The size of the NVMe persistent volume to provision for a replica pod in bytes.
+    Recommendation: |
+
+      When spill-to-disk is enabled, use a **1:2** memory-to-disk ratio. Materialize spills data to disk when memory is insufficient, which can impact performance.
+
+  - Field: "**credits_per_hour**"
+    Type: string
+    Description: |
+
+      This is a cloud attribute that should be set to "0.00" in self-managed.
+    Recommendation: |
+
+      Set to "0.00" for self-managed deployments.
+
+  - Field: "**selectors**"
+    Type: map
+    Description: |
+
+      This is a map of selector keys to values that will be used to schedule pods for this cluster on specific nodes.
+    Recommendation: |
+
+      It is generally not required to set this.

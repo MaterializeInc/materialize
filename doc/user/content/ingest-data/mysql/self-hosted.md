@@ -44,6 +44,10 @@ skip this step**. For production scenarios, we recommend configuring one of the
 network security options below.
 {{< /note >}}
 
+{{< tabs >}}
+
+{{< tab "Cloud">}}
+
 There are various ways to configure your database's network to allow Materialize
 to connect:
 
@@ -104,6 +108,50 @@ traffic from the bastion host.
 
 1. Update your database firewall rules to allow traffic from the SSH bastion
    host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+{{< /tab >}}
+
+{{< tab "Self-Managed">}}
+
+{{% include-md
+file="shared-content/self-managed/configure-network-security-intro.md" %}}
+
+{{< tabs >}}
+
+{{< tab "Allow Materialize IPs">}}
+
+1. Update your database firewall rules to allow traffic from Materialize IPs.
+
+{{< /tab >}}
+
+{{< tab "Use an SSH tunnel">}}
+
+To create an SSH tunnel from Materialize to your database, you launch an VM to
+serve as an SSH bastion host, configure the bastion host to allow traffic only
+from Materialize, and then configure your database's private network to allow
+traffic from the bastion host.
+
+1. Launch a VM to serve as your SSH bastion host.
+
+    - Make sure the VM is publicly accessible and in the same VPC as your
+      database.
+    - Add a key pair and note the username. You'll use this username when
+      connecting Materialize to your bastion host.
+    - Make sure the VM has a static public IP address. You'll use this IP
+      address when connecting Materialize to your bastion host.
+
+1. Configure the SSH bastion host to allow traffic only from Materialize.
+
+1. Update your database firewall rules to allow traffic from the SSH bastion
+   host.
+
+{{< /tab >}}
+
+{{< /tabs >}}
 
 {{< /tab >}}
 

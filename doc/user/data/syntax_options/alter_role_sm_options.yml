@@ -1,0 +1,60 @@
+columns:
+  - column: "Option"
+  - column: "Description"
+rows:
+    - Option: "`INHERIT`"
+      Description: |
+        *Optional.* If specified, grants the role the ability to inherit
+        privileges of other roles. *Default.*
+    - Option: "`LOGIN`"
+      Description: |
+        *Optional.* If specified, allows a role to login via the PostgreSQL or web endpoints
+    - Option: "`NOLOGIN`"
+      Description: |
+        *Optional.* If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.
+
+    - Option: "`SUPERUSER`"
+      Description: |
+        *Optional.* If specified, grants the role superuser privileges.
+
+    - Option: "`NOSUPERUSER`"
+      Description: |
+       *Optional.* If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified.
+    - Option: "`PASSWORD`"
+      Description: |
+        ***Public Preview***
+
+        *Optional.* This feature may have minor stability issues. If specified,
+        allows you to set a password for the role.
+    - Option: "`SET <name> TO <value|DEFAULT>`"
+      Description: |
+        *Optional.* If specified, sets the configuration parameter for the role
+        to the `<value>` or if the value specified is `DEFAULT`, the system's
+        default (equivalent to `ALTER ROLE ... RESET <name>`).
+
+        To view the configuration parameter defaults for a role, see
+        [`mz_role_parameters`](/sql/system-catalog/mz_catalog#mz_role_parameters).
+
+        {{< note >}}
+
+        - Altering the configuration parameter for a role only affects **new
+        sessions**.
+        - Role configuration parameters are **not inherited**.
+
+        {{< /note >}}
+
+    - Option: "`RESET <name>`"
+      Description: |
+        *Optional.* If specified, resets the configuration parameter for the
+        role to the system's default.
+
+        To view the configuration parameter defaults for a role, see
+        [`mz_role_parameters`](/sql/system-catalog/mz_catalog#mz_role_parameters).
+
+        {{< note >}}
+
+        - Altering the configuration parameter for a role only affects **new
+        sessions**.
+        - Role configuration parameters are **not inherited**.
+
+        {{< /note >}}

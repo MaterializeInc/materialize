@@ -6,42 +6,40 @@ menu:
     parent: commands
 ---
 
-`CREATE ROLE` creates a new role, which is a user account in Materialize.
+`CREATE ROLE` creates a new role, which is a user account in Materialize.[^1]
 
 When you connect to Materialize, you must specify the name of a valid role in
 the system.
 
+[^1]: Materialize does not support the `CREATE USER` command.
+
 ## Syntax
 
-{{< diagram "create-role.svg" >}}
+{{< tabs >}}
 
-Field               | Use
---------------------|-------------------------------------------------------------------------
-_role_name_         | A name for the role.
-**INHERIT**         | Grants the role the ability to inherit privileges of other roles.
+{{< tab "Cloud" >}}
 
-## Details
+### Cloud
+{{% include-example file="examples/rbac-cloud/create_roles" example="create-role-syntax" %}}
 
-Materialize's support for `CREATE ROLE` is similar to that of PostgreSQL, with
-the following options exceptions:
+{{% include-example file="examples/rbac-cloud/create_roles" example="create-role-options" %}}
 
-| Option   | Description                                                                                                                                                                                            |
-|-------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `INHERIT`   | Materialize implicitly uses `INHERIT` for the `CREATE ROLE` command. That is, `CREATE ROLE <name>` and `CREATE ROLE <name> WITH INHERIT` are equivalent.                                                   |
-| `NOINHERIT` | Materialize does not support the `NOINHERIT` option for `CREATE ROLE`.                                                                                                                                  |
-| `LOGIN`     | Materialize does not support the `LOGIN` option for `CREATE ROLE`.<ul><li>Instead, Materialize derives the `LOGIN` option for a role during authentication every time that role tries to connect.</li><li>Materialize does not support the `CREATE USER` command as the command implies a `LOGIN` attribute for the role.</li></ul>|
-| `SUPERUSER` | Materialize does not support the `SUPERUSER` option for `CREATE ROLE`.<ul><li>Instead, Materialize derives the `SUPERUSER` option for a role during authentication every time that role tries to connect.</li></ul>|
+**Note:**
+{{% include-example file="examples/rbac-cloud/create_roles" example="create-role-details" %}}
+{{< /tab >}}
+{{< tab "Self-Managed" >}}
+### Self-Managed
+{{% include-example file="examples/rbac-sm/create_roles" example="create-role-syntax" %}}
 
-{{< note >}}
+{{% include-example file="examples/rbac-sm/create_roles"
+example="create-role-options" %}}
 
-Materialize does not use role attributes to determine a role's ability to create
-top level objects such as databases and other roles. Instead, Materialize uses
-system level privileges. See [GRANT PRIVILEGE](../grant-privilege) for more
-details.
+**Note:**
+{{% include-example file="examples/rbac-sm/create_roles" example="create-role-details" %}}
+{{< /tab >}}
+{{< /tabs >}}
 
-{{</ note >}}
-
-### Restrictions
+## Restrictions
 
 You may not specify redundant or conflicting sets of options. For example,
 Materialize will reject the statement `CREATE ROLE ... INHERIT INHERIT`.
@@ -54,17 +52,64 @@ The privileges required to execute this statement are:
 
 ## Examples
 
+### Create a functional role
+
+In Materialize Cloud and Self-Managed, you can create a functional role:
+
 ```mzsql
 CREATE ROLE db_reader;
 ```
+
+### Create a role with login and password (Self-Managed)
+
+```mzsql
+CREATE ROLE db_reader WITH LOGIN PASSWORD 'password';
+```
+
+You can verify that the role was created by querying the `mz_roles` system catalog:
+
 ```mzsql
 SELECT name FROM mz_roles;
 ```
+
 ```nofmt
  db_reader
  mz_system
  mz_support
 ```
+
+### Create a superuser role (Self-Managed)
+
+Unlike regular roles, superusers have unrestricted access to all objects in the system and can perform any action on them.
+
+```mzsql
+CREATE ROLE super_user WITH SUPERUSER LOGIN PASSWORD 'password';
+```
+
+You can verify that the superuser role was created by querying the `mz_roles` system catalog:
+
+```mzsql
+SELECT name FROM mz_roles;
+```
+
+```nofmt
+ db_reader
+ mz_system
+ mz_support
+ super_user
+```
+
+You can also verify that the role has superuser privileges by checking the `pg_authid` system catalog:
+
+```mzsql
+SELECT rolsuper FROM pg_authid WHERE rolname = 'super_user';
+```
+
+```nofmt
+ true
+```
+
+
 
 ## Related pages
 

@@ -1,6 +1,6 @@
 ---
-title: "AWS PrivateLink connections"
-description: "How to connect Materialize to a Kafka broker, a Confluent Schema Registry server, a
+title: "AWS PrivateLink connections (Cloud-only)"
+description: "How to connect Materialize Cloud to a Kafka broker, a Confluent Schema Registry server, a
 PostgreSQL database, or a MySQL database through an AWS PrivateLink service."
 aliases:
   - /ops/network-security/privatelink/
@@ -8,7 +8,7 @@ aliases:
 menu:
   main:
     parent: "network-security"
-    name: "AWS PrivateLink connections"
+    name: "AWS PrivateLink connections (Cloud-only)"
 ---
 
 Materialize can connect to a Kafka broker, a Confluent Schema Registry server, a

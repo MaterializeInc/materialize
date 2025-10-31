@@ -16,7 +16,7 @@ This section contains various resources for managing Materialize.
 |-------|-------------|
 | [Operational guidelines](/manage/operational-guidelines/) | General operational guidelines |
 | [Monitoring and alerting](/manage/monitor/) | Guides to set up monitoring and alerting |
-| [Disaster Recovery](/manage/disaster-recovery/) | Disaster recovery strategies |
+| [Disaster Recovery](/manage/disaster-recovery/) | Disaster recovery strategies for Materialize Cloud |
 
 
 ## Manage via dbt/Terraform

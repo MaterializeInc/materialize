@@ -1,7 +1,0 @@
-{{- $tag := "" -}}
-{{- range $.Site.Data.self_managed.materialize_operator_chart_parameter.parameters -}}
-  {{- if eq .parameter "operator.image.tag" -}}
-    {{- $tag = .default -}}
-  {{- end -}}
-{{- end -}}
-{{- $tag -}}
