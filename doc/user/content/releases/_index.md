@@ -9,6 +9,22 @@ menu:
 
 ---
 
+## Releases
+
+### v26.0
+
+A license key is required to use Materialize v26.0 in a self-managed
+Kubernetes cluster. To request a license key for Materialize Community
+Edition, visit https://materialize.com/get-started/.
+
+The license key should be configured in the Kubernetes Secret resource
+created during the installation process. To configure a license key in an
+existing installation, run:
+
+```bash
+kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
+```
+
 ## Materialize Cloud Upgrade Schedule
 
 Materialize Cloud upgrades all regions to the latest release each week according

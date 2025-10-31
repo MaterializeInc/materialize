@@ -51,6 +51,13 @@
    kubectl -n materialize describe pod -l app.kubernetes.io/name=materialize-operator
    ```
 
+1. As of Materialize version 26.0, a license key is required to run in
+   Kubernetes. To configure a license key in an existing installation, run:
+
+   ```bash
+   kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
+   ```
+
 1. Create a new `upgrade-materialize.yaml` file with the following content:
 
    | Field | Description |

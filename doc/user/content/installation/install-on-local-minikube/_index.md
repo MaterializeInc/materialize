@@ -63,6 +63,8 @@ This tutorial uses `kubectl`. To install, refer to the [`kubectl` documentationq
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
+{{< include-md file="shared-content/license-key-required.md" >}}
+
 ## Installation
 
 1. Start Docker if it is not already running.
@@ -106,6 +108,8 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    the Materialize repo:
 
    {{% self-managed/versions/curl-sample-files-local-install %}}
+
+1. Edit `sample-materialize.yaml` to add your license key to the `license_key` field in the backend secret.
 
 1. Install the Materialize Helm chart.
 

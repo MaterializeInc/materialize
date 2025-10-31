@@ -15,3 +15,4 @@ menu:
 
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Troubleshooting](/installation/troubleshooting/)
+- [FAQ](/installation/faq/)
