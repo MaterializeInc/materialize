@@ -39,6 +39,7 @@ bytes = "1.10.1"
 deadpool-postgres = "0.10.3"
 differential-dataflow = "0.17.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
+foundationdb = { version = "0.9.2", features = ["embedded-fdb-include", "fdb-7_3"] }
 futures-util = "0.3.31"
 itertools = "0.14.0"
 md-5 = "0.10.6"
