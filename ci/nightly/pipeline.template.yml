@@ -315,6 +315,105 @@ steps:
               composition: testdrive
               args: [--default-size=1, --slow]
 
+      - id: testdrive-size-1-1
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-2
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-3
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-4
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-5
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-6
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-7
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-8
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
+      - id: testdrive-size-1-9
+        label: ":racing_car: testdrive with SIZE 1"
+        depends_on: build-aarch64
+        timeout_in_minutes: 360
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: testdrive
+              args: [--default-size=1, --slow]
+
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"
         depends_on: build-aarch64
