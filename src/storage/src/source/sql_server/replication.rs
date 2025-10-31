@@ -22,6 +22,7 @@ use itertools::Itertools;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_repr::{Diff, GlobalId, Row, RowArena};
+use mz_sql_server_util::SqlServerCdcMetrics;
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_sql_server_util::desc::SqlServerRowDecoder;
 use mz_sql_server_util::inspect::get_latest_restore_history_id;
@@ -40,6 +41,7 @@ use timely::dataflow::operators::{CapabilitySet, Concat, Map};
 use timely::dataflow::{Scope, Stream as TimelyStream};
 use timely::progress::{Antichain, Timestamp};
 
+use crate::metrics::source::sql_server::SqlServerSourceMetrics;
 use crate::source::RawSourceCreationConfig;
 use crate::source::sql_server::{
     DefiniteError, ReplicationError, SourceOutputInfo, TransientError,
@@ -58,6 +60,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
     config: RawSourceCreationConfig,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
     source: SqlServerSourceConnection,
+    metrics: SqlServerSourceMetrics,
 ) -> (
     StackedCollection<G, (u64, Result<SourceMessage, DataflowError>)>,
     TimelyStream<G, Infallible>,
@@ -134,6 +137,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // A worker *must* emit a count even if not responsible for snapshotting a table
             // as statistic summarization will return null if any worker hasn't set a value.
             // This will also reset snapshot stats for any exports not snapshotting.
+            metrics.snapshot_table_count.set(u64::cast_from(capture_instance_to_snapshot.len()));
             if !capture_instance_to_snapshot.is_empty() {
                 for stats in config.statistics.values() {
                     stats.set_snapshot_records_known(0);
@@ -177,15 +181,23 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // happens outside the snapshot transaction the totals might be off, so we won't assert
             // that we get exactly this many rows later.
             for table in &snapshot_tables {
+                let qualified_table_name = format!("{schema_name}.{table_name}",
+                    schema_name = &table.schema_name,
+                    table_name = &table.name);
+                let size_calc_start = Instant::now();
                 let table_total = mz_sql_server_util::inspect::snapshot_size(&mut client, &table.schema_name, &table.name).await?;
+                metrics.set_snapshot_table_size_latency(
+                    &qualified_table_name,
+                    size_calc_start.elapsed().as_secs_f64()
+                );
                 for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
                     export_stat.set_snapshot_records_known(u64::cast_from(table_total));
                     export_stat.set_snapshot_records_staged(0);
                 }
             }
-
+            let cdc_metrics = PrometheusSqlServerCdcMetrics{inner: &metrics};
             let mut cdc_handle = client
-                .cdc(capture_instances.keys().cloned())
+                .cdc(capture_instances.keys().cloned(), cdc_metrics)
                 .max_lsn_wait(MAX_LSN_WAIT.get(config.config.config_set()));
 
             // Snapshot any instance that requires it.
@@ -208,7 +220,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
 
                 for table in snapshot_tables {
                     // TODO(sql_server3): filter columns to only select columns required for Source.
-                    let (snapshot_lsn, snapshot)= cdc_handle
+                    let (snapshot_lsn, snapshot) = cdc_handle
                         .snapshot(&table, config.worker_id, config.id)
                         .await?;
 
@@ -267,7 +279,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                     }
 
                     tracing::info!(%config.id, %table.name, %table.schema_name, %snapshot_lsn, "timely-{worker_id} snapshot complete");
-
+                    metrics.snapshot_table_count.dec();
                     // final update for snapshot_staged, using the staged values as the total is an estimate
                     for export_stat in export_statistics.get(&table.capture_instance.name).unwrap() {
                         export_stat.set_snapshot_records_staged(snapshot_staged);
@@ -385,6 +397,7 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         if errored_instances.contains(&capture_instance) {
                             // outputs for this captured instance are in an errored state, so they are not
                             // emitted
+                            metrics.ignored.inc_by(u64::cast_from(changes.len()));
                         }
 
                         let Some(partition_indexes) = capture_instances.get(&capture_instance) else {
@@ -410,7 +423,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                             lsn,
                             &rewinds,
                             &data_output,
-                            data_cap_set
+                            data_cap_set,
+                            &metrics
                         ).await?
                     },
                     CdcEvent::SchemaUpdate { capture_instance, table, ddl_event } => {
@@ -470,15 +484,23 @@ async fn handle_data_event(
     rewinds: &BTreeMap<u64, (Lsn, Lsn)>,
     data_output: &StackedAsyncOutputHandle<Lsn, (u64, Result<SourceMessage, DataflowError>)>,
     data_cap_set: &CapabilitySet<Lsn>,
+    metrics: &SqlServerSourceMetrics,
 ) -> Result<(), TransientError> {
     for change in changes {
         let (sql_server_row, diff): (_, _) = match change {
-            CdcOperation::Insert(sql_server_row) | CdcOperation::UpdateNew(sql_server_row) => {
+            CdcOperation::Insert(sql_server_row) => {
+                metrics.inserts.inc();
                 (sql_server_row, Diff::ONE)
             }
-            CdcOperation::Delete(sql_server_row) | CdcOperation::UpdateOld(sql_server_row) => {
+            CdcOperation::UpdateNew(sql_server_row) => {
+                metrics.updates.inc();
+                (sql_server_row, Diff::ONE)
+            }
+            CdcOperation::Delete(sql_server_row) => {
+                metrics.deletes.inc();
                 (sql_server_row, Diff::MINUS_ONE)
             }
+            CdcOperation::UpdateOld(sql_server_row) => (sql_server_row, Diff::MINUS_ONE),
         };
 
         // Try to decode a row, returning a SourceError if it fails.
@@ -570,4 +592,19 @@ async fn return_definite_error(
         &errs_capset[0],
         ReplicationError::DefiniteError(Rc::new(err)),
     );
+}
+
+/// Provides an implemntation of [`SqlServerCdcMetrics`] that will update [`SqlServerSourceMetrics`]`
+struct PrometheusSqlServerCdcMetrics<'a> {
+    inner: &'a SqlServerSourceMetrics,
+}
+
+impl<'a> SqlServerCdcMetrics for PrometheusSqlServerCdcMetrics<'a> {
+    fn snapshot_table_lock_start(&self, table_name: &str) {
+        self.inner.update_snapshot_table_lock_count(table_name, 1);
+    }
+
+    fn snapshot_table_lock_end(&self, table_name: &str) {
+        self.inner.update_snapshot_table_lock_count(table_name, -1);
+    }
 }
