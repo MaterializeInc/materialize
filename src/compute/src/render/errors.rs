@@ -60,9 +60,7 @@ impl<T, E> MaybeValidatingRow<T, E> for Result<T, E> {
 }
 
 /// Error logger to be used by rendering code.
-///
-/// Holds onto a `[ShutdownProbe`] to ensure that no false-positive errors are logged while the
-/// dataflow is in the process of shutting down.
+// TODO: Consider removing this struct.
 #[derive(Clone)]
 pub(super) struct ErrorLogger {
     dataflow_name: String,
@@ -73,7 +71,7 @@ impl ErrorLogger {
         Self { dataflow_name }
     }
 
-    /// Log the given error, unless the dataflow is shutting down.
+    /// Log the given error.
     ///
     /// The logging format is optimized for surfacing errors with Sentry:
     ///  * `error` is logged at ERROR level and will appear as the error title in Sentry.
@@ -90,19 +88,6 @@ impl ErrorLogger {
     ///
     // TODO(database-issues#5362): Rethink or justify our error logging strategy.
     pub fn log(&self, message: &'static str, details: &str) {
-        // It's important that we silence errors as soon as the local shutdown token has been
-        // dropped. Dataflow operators may start discarding results, thereby producing incorrect
-        // output, as soon as they observe that all workers have dropped their token. However, not
-        // all workers are guaranteed to make this observation at the same time. So it's possible
-        // that some workers have already started discarding results while other workers still see
-        // `shutdown_probe.in_shutdown() == false`.
-        self.log_always(message, details);
-    }
-
-    /// Like [`Self::log`], but also logs errors when the dataflow is shutting down.
-    ///
-    /// Use this method to notify about errors that cannot be caused by dataflow shutdown.
-    pub fn log_always(&self, message: &'static str, details: &str) {
         tracing::warn!(
             dataflow = self.dataflow_name,
             "[customer-data] {message} ({details})"
@@ -110,7 +95,7 @@ impl ErrorLogger {
         tracing::error!(message);
     }
 
-    /// Like [`Self::log_always`], but panics in debug mode.
+    /// Like [`Self::log`], but panics in debug mode.
     ///
     /// Use this method to notify about errors that are certainly caused by bugs in Materialize.
     pub fn soft_panic_or_log(&self, message: &'static str, details: &str) {
