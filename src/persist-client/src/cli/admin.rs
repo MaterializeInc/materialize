@@ -231,7 +231,6 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                     Arc::clone(&pubsub_sender),
                 ));
 
-                // We need a PersistClient to open a write handle so we can append an empty batch.
                 let persist_client = PersistClient::new(
                     cfg,
                     blob,
@@ -259,21 +258,7 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                         diagnostics,
                     )
                     .await?;
-
-                if !write_handle.upper().is_empty() {
-                    let empty_batch: Vec<(
-                        (crate::cli::inspect::K, crate::cli::inspect::V),
-                        u64,
-                        i64,
-                    )> = vec![];
-                    let lower = write_handle.upper().clone();
-                    let upper = Antichain::new();
-
-                    let result = write_handle.append(empty_batch, lower, upper).await?;
-                    if let Err(err) = result {
-                        anyhow::bail!("failed to force downgrade upper, {err:?}");
-                    }
-                }
+                write_handle.advance_upper(&Antichain::new()).await;
             }
 
             if force_downgrade_since {

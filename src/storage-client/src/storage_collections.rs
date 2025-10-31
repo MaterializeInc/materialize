@@ -3248,40 +3248,23 @@ async fn finalize_shards_task<T>(
                     Some(shard_id)
                 } else {
                     debug!(%shard_id, "finalizing shard");
-                        let finalize = || async move {
+                    let finalize = || async move {
                         // TODO: thread the global ID into the shard finalization WAL
                         let diagnostics = Diagnostics::from_purpose("finalizing shards");
 
-                        let schemas = persist_client.latest_schema::<SourceData, (), T, StorageDiff>(shard_id, diagnostics.clone()).await.expect("codecs have not changed");
-                        let (key_schema, val_schema) = match schemas {
-                            Some((_, key_schema, val_schema)) => (key_schema, val_schema),
-                            None => (RelationDesc::empty(), UnitSchema),
-                        };
-
-                        let empty_batch: Vec<((SourceData, ()), T, StorageDiff)> = vec![];
+                        // We only use the writer to advance the upper, so using a dummy schema is
+                        // fine.
                         let mut write_handle: WriteHandle<SourceData, (), T, StorageDiff> =
                             persist_client
                                 .open_writer(
                                     shard_id,
-                                    Arc::new(key_schema),
-                                    Arc::new(val_schema),
+                                    Arc::new(RelationDesc::empty()),
+                                    Arc::new(UnitSchema),
                                     diagnostics,
                                 )
                                 .await
                                 .expect("invalid persist usage");
-
-                        let upper = write_handle.upper();
-
-                        if !upper.is_empty() {
-                            let append = write_handle
-                                .append(empty_batch, upper.clone(), Antichain::new())
-                                .await?;
-
-                            if let Err(e) = append {
-                                warn!(%shard_id, "tried to finalize a shard with an advancing upper: {e:?}");
-                                return Ok(());
-                            }
-                        }
+                        write_handle.advance_upper(&Antichain::new()).await;
                         write_handle.expire().await;
 
                         if force_downgrade_since {
@@ -3317,9 +3300,7 @@ async fn finalize_shards_task<T>(
                                 .compare_and_downgrade_since(&epoch, (&epoch, &new_since))
                                 .await;
                             if let Err(e) = downgrade {
-                                warn!(
-                                    "tried to finalize a shard with an advancing epoch: {e:?}"
-                                );
+                                warn!("tried to finalize a shard with an advancing epoch: {e:?}");
                                 return Ok(());
                             }
                             // Not available now, so finalization is broken.
