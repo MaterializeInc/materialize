@@ -147,15 +147,6 @@ pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
     before timing it out (Materialize).",
 );
 
-pub(crate) const COMPACTION_USE_MOST_RECENT_SCHEMA: Config<bool> = Config::new(
-    "persist_compaction_use_most_recent_schema",
-    true,
-    "\
-    Use the most recent schema from all the Runs that are currently being \
-    compacted, instead of the schema on the current write handle (Materialize).
-    ",
-);
-
 pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
     "persist_compaction_check_process_flag",
     true,
