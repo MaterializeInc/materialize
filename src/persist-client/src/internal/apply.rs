@@ -15,7 +15,7 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
@@ -91,7 +91,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub async fn new(
         cfg: PersistConfig,

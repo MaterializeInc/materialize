@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail};
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use mz_dyncfg::{Config, ConfigSet};
@@ -427,7 +427,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     let metrics = Arc::new(Metrics::new(&cfg, metrics_registry));
     let consensus = make_consensus(&cfg, consensus_uri, commit, Arc::clone(&metrics)).await?;
@@ -573,7 +573,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     let state_versions = Arc::new(StateVersions::new(
         cfg.clone(),
@@ -737,7 +737,7 @@ pub async fn dangerous_force_compaction_and_break_pushdown<K, V, T, D>(
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     let machine = write.machine.clone();
 

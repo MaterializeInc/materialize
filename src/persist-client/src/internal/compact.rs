@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::{Stream, pin_mut};
@@ -175,7 +175,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     pub fn new(
         cfg: PersistConfig,

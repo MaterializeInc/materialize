@@ -17,7 +17,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
@@ -437,7 +437,7 @@ impl StateCache {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
         F: Future<Output = Result<TypedState<K, V, T, D>, Box<CodecMismatch>>>,
         InitFn: FnMut() -> F,
     {
