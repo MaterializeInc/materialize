@@ -240,8 +240,12 @@ where
                     let res = Self::compact_and_apply(&machine, req)
                         .instrument(compact_span)
                         .await;
-                    if let Ok(maintenance) = res {
-                        maintenance.start_performing(&machine, &gc);
+
+                    match res {
+                        Ok(maintenance) => maintenance.start_performing(&machine, &gc),
+                        Err(err) => {
+                            debug!(shard_id =? machine.shard_id(), "compaction failed: {err:#}")
+                        }
                     }
 
                     // we can safely ignore errors here, it's possible the caller
