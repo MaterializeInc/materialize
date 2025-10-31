@@ -46,12 +46,11 @@ use mz_timely_util::probe::ProbeNotify;
 use mz_txn_wal::operator::{TxnsContext, txns_progress};
 use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
-use timely::communication::Push;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::ScopeParent;
-use timely::dataflow::channels::Message;
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::operators::generic::OutputHandleCore;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
+use timely::dataflow::operators::generic::{OutputBuilder, OutputBuilderSession};
 use timely::dataflow::operators::{Capability, Leave, OkErr};
 use timely::dataflow::operators::{CapabilitySet, ConnectLoop, Feedback};
 use timely::dataflow::scopes::Child;
@@ -439,8 +438,8 @@ where
     let operator_info = builder.operator_info();
 
     let mut fetched_input = builder.new_input(fetched, Pipeline);
-    let (mut updates_output, updates_stream) =
-        builder.new_output::<ConsolidatingContainerBuilder<_>>();
+    let (updates_output, updates_stream) = builder.new_output();
+    let mut updates_output = OutputBuilder::from(updates_output);
 
     // Re-used state for processing and building rows.
     let mut datum_vec = mz_repr::DatumVec::new();
@@ -542,7 +541,7 @@ impl PendingPart {
 impl PendingWork {
     /// Perform work, reading from the fetched part, decoding, and sending outputs, while checking
     /// `yield_fn` whether more fuel is available.
-    fn do_work<P, YFn>(
+    fn do_work<YFn>(
         &mut self,
         work: &mut usize,
         name: &str,
@@ -552,7 +551,7 @@ impl PendingWork {
         map_filter_project: Option<&MfpPlan>,
         datum_vec: &mut DatumVec,
         row_builder: &mut Row,
-        output: &mut OutputHandleCore<
+        output: &mut OutputBuilderSession<
             '_,
             (mz_repr::Timestamp, Subtime),
             ConsolidatingContainerBuilder<
@@ -562,20 +561,9 @@ impl PendingWork {
                     Diff,
                 )>,
             >,
-            P,
         >,
     ) -> bool
     where
-        P: Push<
-            Message<
-                (mz_repr::Timestamp, Subtime),
-                Vec<(
-                    Result<Row, DataflowError>,
-                    (mz_repr::Timestamp, Subtime),
-                    Diff,
-                )>,
-            >,
-        >,
         YFn: Fn(Instant, usize) -> bool,
     {
         let mut session = output.session_with_builder(&self.capability);
@@ -767,7 +755,7 @@ where
         format!("persist_source_backpressure({})", name),
         scope.clone(),
     );
-    let (data_output, data_stream) = builder.new_output();
+    let (data_output, data_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut data_input = builder.new_disconnected_input(data, Pipeline);
     let mut flow_control_input = builder.new_disconnected_input(&summaried_flow, Pipeline);

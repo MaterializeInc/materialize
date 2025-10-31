@@ -13,11 +13,11 @@ workspace = true
 anyhow = "1.0.100"
 async-stream = "0.3.6"
 bytesize = "2.1.0"
-columnar = "0.10.2"
+columnar = "0.11.0"
 crossbeam-channel = "0.5.15"
 dec = { version = "0.4.8", features = ["serde"] }
-differential-dataflow = "0.17.0"
-differential-dogs3 = "0.17.0"
+differential-dataflow = "0.18.0"
+differential-dogs3 = "0.18.0"
 futures = "0.3.31"
 itertools = "0.14.0"
 lgalloc = "0.6"
@@ -41,7 +41,7 @@ prometheus = { version = "0.14.0", default-features = false }
 scopeguard = "1.2.0"
 serde = { version = "1.0.219", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["serde", "union"] }
-timely = "0.24.0"
+timely = "0.25.1"
 tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "net"] }
 tracing = "0.1.37"
 uuid = { version = "1.18.1", features = ["serde", "v4"] }

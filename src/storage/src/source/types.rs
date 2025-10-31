@@ -55,7 +55,7 @@ pub enum ProgressStatisticsUpdate {
 }
 
 pub type StackedCollection<G, T> =
-    Collection<G, T, Diff, TimelyStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
+    Collection<G, TimelyStack<(T, <G as ScopeParent>::Timestamp, Diff)>>;
 
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {

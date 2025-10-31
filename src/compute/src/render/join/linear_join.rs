@@ -17,7 +17,7 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
@@ -99,7 +99,7 @@ impl LinearJoinSpec {
         arranged2: &Arranged<G, Tr2>,
         shutdown_probe: ShutdownProbe,
         result: L,
-    ) -> Collection<G, I::Item, Diff>
+    ) -> VecCollection<G, I::Item, Diff>
     where
         G: Scope,
         G::Timestamp: Lattice,
@@ -194,7 +194,7 @@ where
     T: MzTimestamp,
 {
     /// Streamed data as a collection.
-    Collection(Collection<G, Row, Diff>),
+    Collection(VecCollection<G, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<G, RowRowAgent<G::Timestamp, Diff>>),
     /// An imported arrangement.
@@ -348,8 +348,8 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<Collection<S, DataflowError, Diff>>,
-    ) -> Collection<S, Row, Diff>
+        errors: &mut Vec<VecCollection<S, DataflowError, Diff>>,
+    ) -> VecCollection<S, Row, Diff>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -410,7 +410,7 @@ where
 
         match joined {
             JoinedFlavor::Collection(_) => {
-                unreachable!("JoinedFlavor::Collection variant avoided at top of method");
+                unreachable!("JoinedFlavor::VecCollection variant avoided at top of method");
             }
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
@@ -471,8 +471,8 @@ where
         next_input: Arranged<S, Tr2>,
         closure: JoinClosure,
     ) -> (
-        Collection<S, Row, Diff>,
-        Option<Collection<S, DataflowError, Diff>>,
+        VecCollection<S, Row, Diff>,
+        Option<VecCollection<S, DataflowError, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,

@@ -180,7 +180,7 @@ where
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (remap_output, remap_stream) = builder.new_output();
+    let (remap_output, remap_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {

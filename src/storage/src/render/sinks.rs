@@ -16,7 +16,7 @@ use differential_dataflow::operators::arrange::Arrange;
 use differential_dataflow::trace::implementations::ord_neu::{
     ColValBatcher, ColValBuilder, ColValSpine,
 };
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use mz_interchange::avro::DiffPair;
 use mz_interchange::envelopes::combine_at_timestamp;
 use mz_persist_client::operators::shard_source::SnapshotMode;
@@ -33,7 +33,7 @@ use tracing::warn;
 use crate::healthcheck::HealthStatusMessage;
 use crate::storage_state::StorageState;
 
-/// _Renders_ complete _differential_ [`Collection`]s
+/// _Renders_ complete _differential_ Collections
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
 pub(crate) fn render_sink<G>(
@@ -97,8 +97,8 @@ fn zip_into_diff_pairs<G>(
     sink_id: GlobalId,
     sink: &StorageSinkDesc<CollectionMetadata, mz_repr::Timestamp>,
     sink_render: &dyn SinkRender<G>,
-    collection: Collection<G, Row, Diff>,
-) -> Collection<G, (Option<Row>, DiffPair<Row>), Diff>
+    collection: VecCollection<G, Row, Diff>,
+) -> VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>
 where
     G: Scope<Timestamp = Timestamp>,
 {
@@ -204,8 +204,8 @@ where
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        sinked_collection: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
-        err_collection: Collection<G, DataflowError, Diff>,
+        sinked_collection: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+        err_collection: VecCollection<G, DataflowError, Diff>,
     ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>);
 }
 

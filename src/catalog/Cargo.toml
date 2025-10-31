@@ -19,7 +19,7 @@ bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 derivative = "2.2.0"
-differential-dataflow = "0.17.0"
+differential-dataflow = "0.18.0"
 futures = "0.3.31"
 ipnet = "2.11.0"
 itertools = "0.14.0"
@@ -64,7 +64,7 @@ serde_plain = "1.0.2"
 static_assertions = "1.1"
 sha2 = "0.10.9"
 thiserror = "2.0.17"
-timely = "0.24.0"
+timely = "0.25.1"
 tokio = { version = "1.44.1" }
 tracing = "0.1.37"
 uuid = "1.18.1"

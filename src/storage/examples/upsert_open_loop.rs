@@ -595,7 +595,7 @@ async fn run_benchmark(
                 upsert_stream.sink(
                     Exchange::new(move |_| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
-                    move |input| {
+                    move |(input, input_frontier)| {
                         if !active_worker {
                             return;
                         }
@@ -611,7 +611,7 @@ async fn run_benchmark(
                             }
                         });
 
-                        if input.frontier().is_empty() {
+                        if input_frontier.is_empty() {
                             assert_eq!(num_records_total, num_additions);
                             info!(
                                 "Processing source {source_id} finished \
@@ -621,9 +621,9 @@ async fn run_benchmark(
                             );
                         } else if PartialOrder::less_than(
                             &frontier.borrow(),
-                            &input.frontier().frontier(),
+                            &input_frontier.frontier(),
                         ) {
-                            frontier = input.frontier().frontier().to_owned();
+                            frontier = input_frontier.frontier().to_owned();
                             let data_timestamp = frontier.clone().into_option().unwrap();
                             let elapsed = start.elapsed();
 
@@ -916,7 +916,8 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<_>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1014,7 +1015,8 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<_>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
