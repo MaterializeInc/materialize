@@ -70,7 +70,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                 "timely logs",
                 config.interval,
                 event_queue.activator,
-            ) } else {
+            )
+        } else {
             let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
             (empty(scope), token)
         };
@@ -174,30 +175,39 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
 
         // TODO: `consolidate_and_pack` requires columnation, which `ChannelDatum` does not
         // implement. Consider consolidating here once we support columnar.
-        let channels = channels.unary::<ColumnBuilder<_>, _, _, _>(Pipeline, "ToRow Channels", |_cap, _info| {
-            let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
-            move |input, output| {
-                input.for_each_time(|time, data| {
-                    let mut session = output.session_with_builder(&time);
-                    for ((datum, ()), time, diff) in data.flat_map(|c| c.borrow().into_index_iter()) {
-                        let (source_node, source_port) = datum.source;
-                        let (target_node, target_port) = datum.target;
-                        let data = packer.pack_slice(&[
-                            Datum::UInt64(u64::cast_from(datum.id)),
-                            Datum::UInt64(u64::cast_from(worker_id)),
-                            Datum::UInt64(u64::cast_from(source_node)),
-                            Datum::UInt64(u64::cast_from(source_port)),
-                            Datum::UInt64(u64::cast_from(target_node)),
-                            Datum::UInt64(u64::cast_from(target_port)),
-                            Datum::String(datum.typ),
-                        ]);
-                        session.give((data, time, diff));
-                    }
-                });
-            }
-        });
+        let channels = channels.unary::<ColumnBuilder<_>, _, _, _>(
+            Pipeline,
+            "ToRow Channels",
+            |_cap, _info| {
+                let mut packer = PermutedRowPacker::new(TimelyLog::Channels);
+                move |input, output| {
+                    input.for_each_time(|time, data| {
+                        let mut session = output.session_with_builder(&time);
+                        for d in data.flat_map(|c| c.borrow().into_index_iter()) {
+                            let ((datum, ()), time, diff) = d;
+                            let (source_node, source_port) = datum.source;
+                            let (target_node, target_port) = datum.target;
+                            let data = packer.pack_slice(&[
+                                Datum::UInt64(u64::cast_from(datum.id)),
+                                Datum::UInt64(u64::cast_from(worker_id)),
+                                Datum::UInt64(u64::cast_from(source_node)),
+                                Datum::UInt64(u64::cast_from(source_port)),
+                                Datum::UInt64(u64::cast_from(target_node)),
+                                Datum::UInt64(u64::cast_from(target_port)),
+                                Datum::String(datum.typ),
+                            ]);
+                            session.give((data, time, diff));
+                        }
+                    });
+                }
+            },
+        );
 
-        let addresses = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        // Types to make rustfmt happy.
+        type KVB<K, V, T, D> = KeyValBatcher<K, V, T, D>;
+        type KB<K, T, D> = KeyBatcher<K, T, D>;
+
+        let addresses = consolidate_and_pack::<_, KVB<_, _, _, _>, ColumnBuilder<_>, _, _>(
             &addresses,
             TimelyLog::Addresses,
             move |data, packer, session| {
@@ -206,7 +216,8 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
                         0 => packer.push(Datum::UInt64(u64::cast_from(*id))),
                         1 => packer.push(Datum::UInt64(u64::cast_from(worker_id))),
                         2 => {
-                            packer.push_list(address.iter().map(|i| Datum::UInt64(u64::cast_from(*i))))
+                            let list = address.iter().map(|i| Datum::UInt64(u64::cast_from(*i)));
+                            packer.push_list(list)
                         }
                         _ => unreachable!("Addresses relation has three columns"),
                     });
@@ -215,7 +226,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let parks = consolidate_and_pack::<_, KeyBatcher<_, _, _>, ColumnBuilder<_>, _, _>(
+        let parks = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
             &parks,
             TimelyLog::Parks,
             move |data, packer, session| {
@@ -233,7 +244,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let batches_sent = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let batches_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
             &batches_sent,
             TimelyLog::BatchesSent,
             move |data, packer, session| {
@@ -248,7 +259,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let batches_received = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let batches_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
             &batches_received,
             TimelyLog::BatchesReceived,
             move |data, packer, session| {
@@ -263,8 +274,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-
-        let messages_sent = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let messages_sent = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
             &messages_sent,
             TimelyLog::MessagesSent,
             move |data, packer, session| {
@@ -279,7 +289,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let messages_received = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let messages_received = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
             &messages_received,
             TimelyLog::MessagesReceived,
             move |data, packer, session| {
@@ -294,12 +304,13 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-        let elapsed = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let elapsed = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
             &schedules_duration,
             TimelyLog::Elapsed,
             move |data, packer, session| {
                 for ((operator, ()), time, diff) in data.iter() {
-                    let data = packer.pack_slice(&[Datum::UInt64(u64::cast_from(*operator)),
+                    let data = packer.pack_slice(&[
+                        Datum::UInt64(u64::cast_from(*operator)),
                         Datum::UInt64(u64::cast_from(worker_id)),
                     ]);
                     session.give((data, time, diff));
@@ -307,8 +318,7 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
             },
         );
 
-
-        let histogram = consolidate_and_pack::<_, KeyValBatcher<_, _, _, _>, ColumnBuilder<_>, _, _>(
+        let histogram = consolidate_and_pack::<_, KB<_, _, _>, ColumnBuilder<_>, _, _>(
             &schedules_histogram,
             TimelyLog::Histogram,
             move |data, packer, session| {
@@ -344,9 +354,14 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         for (variant, collection) in logs {
             let variant = LogVariant::Timely(variant);
             if config.index_logs.contains_key(&variant) {
+                // Extract types to make rustfmt happy.
+                type Batcher<K, V, T, R> = Col2ValBatcher<K, V, T, R>;
+                type Builder<T, R> = RowRowBuilder<T, R>;
                 let trace = collection
-                    .mz_arrange_core::<_, Col2ValBatcher<_, _, _, _>, RowRowBuilder<_, _>, RowRowSpine<_, _>>(
-                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, Diff>),
+                    .mz_arrange_core::<_, Batcher<_, _, _, _>, Builder<_, _>, RowRowSpine<_, _>>(
+                        ExchangeCore::<ColumnBuilder<_>, _>::new_core(
+                            columnar_exchange::<mz_repr::Row, mz_repr::Row, Timestamp, Diff>,
+                        ),
                         &format!("Arrange {variant:?}"),
                     )
                     .trace;
@@ -725,7 +740,8 @@ impl DemuxHandler<'_, '_, '_> {
                 };
 
                 let elapsed_ns = self.time.saturating_sub(start_time).as_nanos();
-                let elapsed_diff = Diff::from(i64::try_from(elapsed_ns).expect("must fit"));
+                let elapsed_i64 = i64::try_from(elapsed_ns).expect("must fit");
+                let elapsed_diff = Diff::from(elapsed_i64);
                 let elapsed_pow = u64::try_from(elapsed_ns.next_power_of_two()).expect("must fit");
 
                 let ts = self.ts();

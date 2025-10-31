@@ -194,7 +194,7 @@ where
     T: MzTimestamp,
 {
     /// Streamed data as a collection.
-    VecCollection(VecCollection<G, Row, Diff>),
+    Collection(VecCollection<G, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<G, RowRowAgent<G::Timestamp, Diff>>),
     /// An imported arrangement.
@@ -279,7 +279,7 @@ where
                     errors.push(errs);
                 }
 
-                JoinedFlavor::VecCollection(joined)
+                JoinedFlavor::Collection(joined)
             }
         };
 
@@ -294,13 +294,13 @@ where
                 &mut errors,
             );
             // Update joined results and capture any errors.
-            joined = JoinedFlavor::VecCollection(stream);
+            joined = JoinedFlavor::Collection(stream);
         }
 
         // We have completed the join building, but may have work remaining.
         // For example, we may have expressions not pushed down (e.g. literals)
         // and projections that could not be applied (e.g. column repetition).
-        let bundle = if let JoinedFlavor::VecCollection(mut joined) = joined {
+        let bundle = if let JoinedFlavor::Collection(mut joined) = joined {
             if let Some(closure) = linear_plan.final_closure {
                 let name = "LinearJoinFinalization";
                 type CB<C> = ConsolidatingContainerBuilder<C>;
@@ -354,7 +354,7 @@ where
         S: Scope<Timestamp = G::Timestamp>,
     {
         // If we have only a streamed collection, we must first form an arrangement.
-        if let JoinedFlavor::VecCollection(stream) = joined {
+        if let JoinedFlavor::Collection(stream) = joined {
             let name = "LinearJoinKeyPreparation";
             let (keyed, errs) = stream
                 .inner
@@ -409,7 +409,7 @@ where
             .expect("Arrangement absent despite explicit construction");
 
         match joined {
-            JoinedFlavor::VecCollection(_) => {
+            JoinedFlavor::Collection(_) => {
                 unreachable!("JoinedFlavor::VecCollection variant avoided at top of method");
             }
             JoinedFlavor::Local(local) => match arrangement {
