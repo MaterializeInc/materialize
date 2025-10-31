@@ -18,8 +18,8 @@ Materialize is available as:
   Kubernetes environment.
   {{< include-md file="shared-content/self-managed/editions-available.md" >}}
 
-  - 🚀 **To get started**, [install self-managed](/) and try out the
-    [Quickstart](/get-started/quickstart/).
+  - 🚀 **To get started**, [install self-managed](/get-started/install/) and try
+    out the [Quickstart](/get-started/quickstart/).
 
 
 - **Materialize Emulator**. Materialize Emulator is an all-in-one Docker image
