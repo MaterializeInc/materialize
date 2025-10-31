@@ -1,24 +1,49 @@
 ---
-title: "Reference"
-description: "A single page with every SQL command, function, type, and keyword."
+title: "SQL commands"
+description: "SQL commands reference."
 disable_list: true
+menu:
+  main:
+    identifier: "commands"
+    parent: "reference"
+    weight: 100
+
 ---
 
-[//]: # "TODO(morsapaes) Re-hash this page into something more useful, and add it as an Overview sub-menu under Reference"
+## Create/Alter/Drop Objects
 
-We want Materialize to be easy to use, so we designed it to work with SQL. However, every database implements SQL a little differently, and none matches the full standard. In general, we model our implementation after PostgreSQL.
+{{< sql-commands-table-by-label label="object" group_by="object" >}}
 
-This section is a reference that details the SQL commands and features we support.
+## Create/Read/Update/Delete Data
 
-## Architecture
+The following commands perform CRUD operations on materialized views, views,
+sources, and tables:
 
-- [Data types](./types)
-- [Functions + operators](./functions)
-- [Identifiers](./identifiers)
-- [Namespaces](./namespaces)
-- [System catalog](./system-catalog)
-- [Isolation level](./isolation-level)
+{{< yaml-table data="sql_commands_crud" noHeader=true >}}
 
-## Statements
+## RBAC
 
-To see information about a statement, select it in the left nav bar.
+Commands to manage roles and privileges:
+
+{{< yaml-table data="sql_commands_rbac" noHeader=true >}}
+
+
+## Query Introspection (`Explain`)
+
+{{< yaml-list data="sql_commands_all" label="explain" numColumns="1" >}}
+
+## Object Introspection (`SHOW`) { #show }
+
+{{< yaml-list data="sql_commands_all" label="show" numColumns="3" >}}
+
+## Session
+
+Commands related with session state and configurations:
+
+{{< yaml-list data="sql_commands_all" label="session" numColumns="1" >}}
+
+See also [`SHOW` commands](#show).
+
+## Other
+
+{{< yaml-list data="sql_commands_all" label="other" >}}
