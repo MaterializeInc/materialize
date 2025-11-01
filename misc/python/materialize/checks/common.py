@@ -7,6 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from materialize.checks.mzcompose_actions import MzcomposeAction, PromoteMz, WaitReadyMz
+
+
 KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD = """
        $ set keyschema={
            "type": "record",
@@ -24,3 +27,7 @@ KAFKA_SCHEMA_WITH_SINGLE_STRING_FIELD = """
            ]
          }
     """
+
+
+def wait_ready_and_promote(mz_service: str) -> list[MzcomposeAction]:
+    return [WaitReadyMz(mz_service), PromoteMz(mz_service)]
