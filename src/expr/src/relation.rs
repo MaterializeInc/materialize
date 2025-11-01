@@ -3392,7 +3392,7 @@ impl JoinInputCharacteristicsV1 {
 /// The generic parameters are for accommodating prepared statement parameters in
 /// `limit` and `offset`: the planner can hold these fields as HirScalarExpr long enough to call
 /// `bind_parameters` on them.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct RowSetFinishing<L = NonNeg<i64>, O = usize> {
     /// Order rows by the given columns.
     pub order_by: Vec<ColumnOrder>,

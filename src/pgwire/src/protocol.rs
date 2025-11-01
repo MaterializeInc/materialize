@@ -20,10 +20,7 @@ use byteorder::{ByteOrder, NetworkEndian};
 use futures::future::{BoxFuture, FutureExt, pending};
 use itertools::Itertools;
 use mz_adapter::client::RecordFirstRowStream;
-use mz_adapter::session::{
-    EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState,
-    SessionConfig, TransactionStatus,
-};
+use mz_adapter::session::{EndTransactionAction, InProgressRows, LifecycleTimestamps, PortalRefMut, PortalState, SessionConfig, Transaction, TransactionOps, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
     AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, metrics,
@@ -1083,8 +1080,29 @@ where
 
         // Implicit transactions are closed at the end of a Query message.
         {
-            if self.adapter_client.session().transaction().is_implicit() {
+
+            //println!("###### self.adapter_client.session().transaction():\n{:?}\n", self.adapter_client.session().transaction());
+
+            let single_query_peek = {
+                match self.adapter_client.session().transaction() {
+                    TransactionStatus::Started(Transaction {
+                        ops: TransactionOps::Peeks {
+                            ..
+                        },
+                        ..
+                    }) => {
+                        true
+                    },
+                    _ => false,
+                }
+            };
+
+            if self.adapter_client.session().transaction().is_implicit() && !single_query_peek {
                 self.commit_transaction().await?;
+            }
+            if single_query_peek {
+                self.txn_needs_commit = false;
+                self.adapter_client.session().clear_transaction();
             }
         }
 

@@ -21,15 +21,20 @@ use mz_compute_types::ComputeInstanceId;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
+use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -153,6 +158,23 @@ pub enum Command {
     Dump {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
+
+    GetComputeInstanceClient {
+        instance_id: ComputeInstanceId,
+        tx: oneshot::Sender<
+            Result<
+                mz_compute_client::controller::instance::Client<mz_repr::Timestamp>,
+                mz_compute_client::controller::error::InstanceMissing,
+            >,
+        >,
+    },
+
+    GetOracle {
+        timeline: Timeline,
+        tx: oneshot::Sender<
+            Result<Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>, AdapterError>,
+        >,
+    },
 }
 
 impl Command {
@@ -172,7 +194,9 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. } => None,
         }
     }
 
@@ -192,7 +216,9 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. } => None,
         }
     }
 }
@@ -216,6 +242,15 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+    pub storage_collections: Arc<
+        dyn mz_storage_client::storage_collections::StorageCollections<
+                Timestamp = mz_repr::Timestamp,
+            > + Send
+            + Sync,
+    >,
+    pub transient_id_gen: Arc<TransientIdGen>,
+    pub optimizer_metrics: OptimizerMetrics,
+    pub persist_client: PersistClient,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).
