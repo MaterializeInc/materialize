@@ -96,7 +96,7 @@ impl Optimize<HirRelationExpr> for Optimizer<'_> {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
-            self.metrics.as_ref(),
+            self.metrics.as_mut(),
             None,
         );
 
