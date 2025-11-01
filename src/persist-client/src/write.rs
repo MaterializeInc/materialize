@@ -160,14 +160,9 @@ where
         write_schemas: Schemas<K, V>,
     ) -> Self {
         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
-        let compact = cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                cfg.clone(),
-                Arc::clone(&metrics),
-                write_schemas.clone(),
-                gc.clone(),
-            )
-        });
+        let compact = cfg
+            .compaction_enabled
+            .then(|| Compactor::new(cfg.clone(), Arc::clone(&metrics), gc.clone()));
         let debug_state = HandleDebugState {
             hostname: cfg.hostname.to_owned(),
             purpose: purpose.to_owned(),
