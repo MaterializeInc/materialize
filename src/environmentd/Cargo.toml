@@ -76,6 +76,7 @@ mz-segment = { path = "../segment" }
 mz-server-core = { path = "../server-core" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing", optional = true }
 nix = { version = "0.30.1", features = ["signal"] }

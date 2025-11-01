@@ -88,6 +88,7 @@ use crate::http::sql::SqlError;
 mod catalog;
 mod cluster;
 mod console;
+mod mcp;
 mod memory;
 mod metrics;
 mod metrics_viz;
@@ -405,6 +406,40 @@ impl HttpServer {
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()));
             router = router.merge(metrics_router);
+        }
+
+        // MCP (Model Context Protocol) endpoints
+        // Enabled via runtime `routes_enabled.mcp_agents` and `routes_enabled.mcp_observatory` configuration
+        if routes_enabled.mcp_agents || routes_enabled.mcp_observatory {
+            use tracing::info;
+
+            let mut mcp_router = Router::new();
+
+            if routes_enabled.mcp_agents {
+                info!("Enabling MCP agents endpoint: /api/mcp/agents");
+                mcp_router =
+                    mcp_router.route("/api/mcp/agents", routing::post(mcp::handle_mcp_agents));
+            }
+
+            if routes_enabled.mcp_observatory {
+                info!("Enabling MCP observatory endpoint: /api/mcp/observatory");
+                mcp_router = mcp_router.route(
+                    "/api/mcp/observatory",
+                    routing::post(mcp::handle_mcp_observatory),
+                );
+            }
+
+            mcp_router = mcp_router
+                .layer(auth_middleware.clone())
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(active_connection_counter.clone()))
+                .layer(
+                    CorsLayer::new()
+                        .allow_methods(Method::POST)
+                        .allow_origin(AllowOrigin::mirror_request())
+                        .allow_headers(Any),
+                );
+            router = router.merge(mcp_router);
         }
 
         base_router = base_router
