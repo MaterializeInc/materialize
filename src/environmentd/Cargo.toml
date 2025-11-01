@@ -76,6 +76,7 @@ mz-segment = { path = "../segment" }
 mz-server-core = { path = "../server-core" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
+mz-sql-parser = { path = "../sql-parser" }
 mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing", optional = true }
 nix = { version = "0.30.1", features = ["signal"] }
@@ -178,6 +179,10 @@ default = ["tokio-console", "mz-alloc-default", "workspace-hack"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-alloc/jemalloc"]
+# Enable Model Context Protocol (MCP) server endpoints.
+# This is experimental and should be enabled only for testing.
+# Uses manual JSON-RPC 2.0 implementation (no external SDK dependency).
+mcp = []
 test = [
     "postgres",
     "regex",

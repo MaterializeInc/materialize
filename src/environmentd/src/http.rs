@@ -88,6 +88,8 @@ use crate::http::sql::SqlError;
 mod catalog;
 mod cluster;
 mod console;
+#[cfg(feature = "mcp")]
+mod mcp;
 mod memory;
 mod metrics;
 mod probe;
@@ -400,6 +402,24 @@ impl HttpServer {
                 .layer(Extension(adapter_client_rx.clone()))
                 .layer(Extension(active_connection_counter.clone()));
             router = router.merge(metrics_router);
+        }
+
+        // MCP (Model Context Protocol) endpoints - feature-flagged for safety
+        #[cfg(feature = "mcp")]
+        if routes_enabled.base {
+            use tracing::info;
+            info!("Enabling MCP endpoints: /api/mcp/agents and /api/mcp/observatory");
+
+            let mcp_router = Router::new()
+                .route("/api/mcp/agents", routing::post(mcp::handle_mcp_agents))
+                .route(
+                    "/api/mcp/observatory",
+                    routing::post(mcp::handle_mcp_observatory),
+                )
+                .layer(auth_middleware.clone())
+                .layer(Extension(adapter_client_rx.clone()))
+                .layer(Extension(active_connection_counter.clone()));
+            router = router.merge(mcp_router);
         }
 
         base_router = base_router
