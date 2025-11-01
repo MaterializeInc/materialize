@@ -59,6 +59,8 @@ for details.
 If you do not have Helm 3.2.0+, install. For details, see the [Helm
 documentation](https://helm.sh/docs/intro/install/).
 
+{{< include-md file="shared-content/license-key-required.md" >}}
+
 ## Set up AWS Kubernetes environment and install Materialize
 
 {{< warning >}}
@@ -278,6 +280,7 @@ components:
          cpu_request    = "1"
          memory_request = "2Gi"
          memory_limit   = "2Gi"
+         license_key    = ""
        }
    ]
    EOF

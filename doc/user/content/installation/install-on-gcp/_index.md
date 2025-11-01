@@ -91,6 +91,8 @@ If you do not have Helm version 3.2.0+ installed, install.  For details, see the
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
 
+{{< include-md file="shared-content/license-key-required.md" >}}
+
 ## A. Configure GCP project and service account
 
 1. Open a Terminal window.
@@ -400,6 +402,7 @@ components:
          cpu_request    = "1"
          memory_request = "2Gi"
          memory_limit   = "2Gi"
+         license_key    = ""
        }
    ]
    EOF
