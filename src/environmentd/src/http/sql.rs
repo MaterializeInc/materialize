@@ -551,10 +551,19 @@ pub struct ExtendedRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SqlResponse {
     /// The results for each query in the request.
-    results: Vec<SqlResult>,
+    pub(in crate::http) results: Vec<SqlResult>,
 }
 
-enum StatementResult {
+impl SqlResponse {
+    /// Creates a new empty SqlResponse for collecting results.
+    pub(in crate::http) fn new() -> Self {
+        Self {
+            results: Vec::new(),
+        }
+    }
+}
+
+pub(in crate::http) enum StatementResult {
     SqlResult(SqlResult),
     Subscribe {
         desc: RelationDesc,
@@ -823,7 +832,7 @@ pub struct CommandStarting {
 /// accumulate into a Vec and send all at once. WebSocket clients send each
 /// message as they occur.
 #[async_trait]
-trait ResultSender: Send {
+pub(in crate::http) trait ResultSender: Send {
     const SUPPORTS_STREAMING_NOTICES: bool = false;
 
     /// Adds a result to the client. The first component of the return value is
@@ -1210,7 +1219,11 @@ async fn execute_stmt_group<S: ResultSender>(
 ///
 /// See the user-facing documentation about the HTTP API for a description of
 /// the semantics of this function.
-async fn execute_request<S: ResultSender>(
+/// Executes a SQL request and sends results to the provided sender.
+///
+/// Made visible to http submodules (like mcp) via `pub(in crate::http)` to allow
+/// reuse of SQL execution logic.
+pub(in crate::http) async fn execute_request<S: ResultSender>(
     client: &mut AuthedClient,
     request: SqlRequest,
     sender: &mut S,
