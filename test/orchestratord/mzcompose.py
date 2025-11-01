@@ -45,7 +45,7 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import all_subclasses
 from materialize.version_list import (
     get_all_self_managed_versions,
-    get_self_managed_versions,
+    get_self_managed_major_release_latest_versions,
 )
 
 SERVICES = [
@@ -1129,7 +1129,9 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
     current_version = get_tag(args.tag)
 
     # Following https://materialize.com/docs/self-managed/v25.2/installation/install-on-local-kind/
-    for version in reversed(get_self_managed_versions() + [current_version]):
+    for version in reversed(
+        get_self_managed_major_release_latest_versions() + [current_version]
+    ):
         dir = "my-local-mz"
         if os.path.exists(dir):
             shutil.rmtree(dir)

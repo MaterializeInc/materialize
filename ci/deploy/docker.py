@@ -13,7 +13,10 @@ from pathlib import Path
 from materialize import ci_util, git, mzbuild, spawn
 from materialize.mz_version import MzVersion
 from materialize.rustc_flags import Sanitizer
-from materialize.version_list import get_all_mz_versions, get_self_managed_versions
+from materialize.version_list import (
+    get_all_mz_versions,
+    get_self_managed_major_release_latest_versions,
+)
 from materialize.xcompile import Arch
 
 
@@ -62,7 +65,9 @@ def main() -> None:
 
         version = MzVersion.parse_mz(ci_mz_version)
         latest_version = max(
-            t for t in get_self_managed_versions() if t.prerelease is None
+            t
+            for t in get_self_managed_major_release_latest_versions()
+            if t.prerelease is None
         )
         if version == latest_version:
             mzbuild.tag_multiarch_images("latest-self-managed", ci_mz_version, deps)
