@@ -1,0 +1,192 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_mz_notices TO true
+----
+COMPLETE 0
+
+# Disable rbac checks in order to select from mz_notices.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks TO false
+----
+COMPLETE 0
+
+statement ok
+CREATE SCHEMA notices;
+
+statement ok
+SET SCHEMA = notices;
+
+statement ok
+CREATE TABLE t1(a int, b int);
+
+statement ok
+CREATE TABLE t2(x int, y int);
+
+# EXPLAIN a peek with a cross join
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR
+SELECT *
+FROM t1, t2;
+----
+Explained Query:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      ReadStorage materialize.notices.t1
+    ArrangeBy keys=[[]]
+      ReadStorage materialize.notices.t2
+
+Source materialize.notices.t1
+Source materialize.notices.t2
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Cross join. The join will be completely skewed to one worker thread, which can lead to performance problems if an input relation to a cross join is large.
+    Hint: If you encounter slow queries or slow hydrations where only one CPU core is being utilized for extended periods of time, try to eliminate the cross join by changing your query.
+
+EOF
+
+# Materialize view with a cross join
+statement ok
+CREATE MATERIALIZED VIEW mv1 AS
+SELECT *
+FROM t1, t2;
+
+# Notice should be present in both EXPLAIN and in the internal table.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR MATERIALIZED VIEW mv1
+----
+materialize.notices.mv1:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      ReadStorage materialize.notices.t1
+    ArrangeBy keys=[[]]
+      ReadStorage materialize.notices.t2
+
+Source materialize.notices.t1
+Source materialize.notices.t2
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Cross join. The join will be completely skewed to one worker thread, which can lead to performance problems if an input relation to a cross join is large.
+    Hint: If you encounter slow queries or slow hydrations where only one CPU core is being utilized for extended periods of time, try to eliminate the cross join by changing your query.
+
+EOF
+
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_materialized_views mv ON(n.object_id = mv.id)
+WHERE
+  mv.name = 'mv1';
+----
+Cross join
+Cross join. The join will be completely skewed to one worker thread, which can lead to performance problems if an input relation to a cross join is large.
+NULL
+If you encounter slow queries or slow hydrations where only one CPU core is being utilized for extended periods of time, try to eliminate the cross join by changing your query.
+NULL
+NULL
+NULL
+NULL
+
+# Index on view with a cross join
+
+statement ok
+CREATE VIEW v1 AS
+SELECT *
+FROM t1, t2;
+
+statement ok
+CREATE INDEX v1_ind_a_b ON v1(a, b);
+
+# Notice should be present in both EXPLAIN and in the internal table.
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN FOR INDEX v1_ind_a_b
+----
+materialize.notices.v1_ind_a_b:
+  ArrangeBy keys=[[#0{a}, #1{b}]]
+    ReadGlobalFromSameDataflow materialize.notices.v1
+
+materialize.notices.v1:
+  CrossJoin type=differential
+    ArrangeBy keys=[[]]
+      ReadStorage materialize.notices.t1
+    ArrangeBy keys=[[]]
+      ReadStorage materialize.notices.t2
+
+Source materialize.notices.t1
+Source materialize.notices.t2
+
+Target cluster: quickstart
+
+Notices:
+  - Notice: Cross join. The join will be completely skewed to one worker thread, which can lead to performance problems if an input relation to a cross join is large.
+    Hint: If you encounter slow queries or slow hydrations where only one CPU core is being utilized for extended periods of time, try to eliminate the cross join by changing your query.
+
+EOF
+
+query TTTTTTTT
+SELECT
+  n.notice_type, n.message, n.redacted_message, n.hint, n.redacted_hint, n.action, n.redacted_action, n.action_type
+FROM
+  mz_internal.mz_notices n JOIN
+  mz_catalog.mz_indexes idx ON(n.object_id = idx.id)
+WHERE
+  idx.name = 'v1_ind_a_b';
+----
+Cross join
+Cross join. The join will be completely skewed to one worker thread, which can lead to performance problems if an input relation to a cross join is large.
+NULL
+If you encounter slow queries or slow hydrations where only one CPU core is being utilized for extended periods of time, try to eliminate the cross join by changing your query.
+NULL
+NULL
+NULL
+NULL
+
+# Drop the objects with the cross joins. All the notices should disappear from the internal table.
+
+statement ok
+DROP VIEW v1 CASCADE;
+
+statement ok
+DROP MATERIALIZED VIEW mv1;
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_notices;
+----
+0
+
+# Negative example, no notice should be generated.
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS
+SELECT *
+FROM t1, t2
+WHERE t1.a = t2.x;
+
+query I
+SELECT count(*)
+FROM mz_internal.mz_notices;
+----
+0
+
+
+# todo: more queries (positive and negative examples)
+
+
+# This further tests `drop_plans_and_metainfos`
+statement ok
+DROP SCHEMA notices CASCADE;

@@ -1961,6 +1961,12 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_notices_for_cross_joins,
+        desc: "emitting notices for cross joins (doesn't affect EXPLAIN)",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
         name: enable_alter_swap,
         desc: "the ALTER SWAP feature for objects",
         default: true,
