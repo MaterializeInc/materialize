@@ -1123,11 +1123,12 @@ impl Coordinator {
         let (data_source, status_collection_id) = match source.data_source {
             DataSourceDesc::Ingestion { desc, cluster_id } => {
                 let desc = desc.into_inline_connection(self.catalog().state());
-                let item_global_id =
-                    self.catalog().get_entry(&item_id).latest_global_id();
+                let item_global_id = self.catalog().get_entry(&item_id).latest_global_id();
 
                 let ingestion = mz_storage_types::sources::IngestionDescription::new(
-                    desc, cluster_id, item_global_id,
+                    desc,
+                    cluster_id,
+                    item_global_id,
                 );
 
                 (
