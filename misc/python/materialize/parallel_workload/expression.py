@@ -12,7 +12,6 @@ from enum import Enum
 
 from materialize.data_ingest.data_type import (
     DATA_TYPES,
-    UUID,
     Boolean,
     Bytea,
     DataType,
@@ -260,10 +259,11 @@ FUNC_OPS[IntList] += [
     FuncOp("list_cat({}, {})", [IntList, IntList]),
 ]
 
-FUNC_OPS[UUID] += [
-    FuncOp("uuid_generate_v5({}, {})", [UUID, Text]),
-    # FuncOp("cast({} as uuid)", [Text]),
-]
+# uuid_generate_v5 can return NULL
+# FUNC_OPS[UUID] += [
+#     FuncOp("uuid_generate_v5({}, {})", [UUID, Text]),
+#     # FuncOp("cast({} as uuid)", [Text]),
+# ]
 
 
 def expression(
@@ -277,7 +277,7 @@ def expression(
     level: int = 0,
 ) -> str:
     if level < 60:
-        if FUNC_OPS[data_type] and rng.random() < 0.5:
+        if FUNC_OPS[data_type] and rng.random() < 0.7:
             fnop = rng.choice(FUNC_OPS[data_type])
             if (
                 kind == ExprKind.ALL
