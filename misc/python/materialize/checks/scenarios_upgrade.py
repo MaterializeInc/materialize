@@ -592,7 +592,9 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
             + self.self_managed_future_versions
         )
 
-        print(f"Upgrading through versions {[str(version) for version in versions]}")
+        print(
+            f"Upgrading through versions {[str(version if version is not None else MzVersion.parse_cargo()) for version in versions]}"
+        )
 
         mz_services = create_mz_service_upgrade_info_list(versions)
 
@@ -652,6 +654,10 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
             self.self_managed_previous_versions
             + [None]
             + self.self_managed_future_versions
+        )
+
+        print(
+            f"Upgrading through versions {[str(version if version is not None else MzVersion.parse_cargo()) for version in versions]}"
         )
 
         mz_services = create_mz_service_upgrade_info_list(

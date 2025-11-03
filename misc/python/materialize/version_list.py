@@ -78,11 +78,13 @@ def get_self_managed_versions() -> list[MzVersion]:
 def get_supported_self_managed_versions() -> tuple[list[MzVersion], list[MzVersion]]:
     self_managed_versions = fetch_self_managed_versions()
     current_version = MzVersion.parse_cargo()
+    # TODO (multiversion2): Change this to filter on versions between the next and previous unskippable major release
+    # when unskippable versions are implemented.
     filtered_versions = sorted(
         {
             v.version
             for v in self_managed_versions
-            if v.helm_version.major == 25 or v.helm_version.major == 26
+            if v.helm_version.major == 25 and v.helm_version.minor == 2
         }
     )
     previous_versions = [v for v in filtered_versions if v < current_version]
