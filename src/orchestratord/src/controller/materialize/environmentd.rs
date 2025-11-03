@@ -14,7 +14,6 @@ use std::{
     time::Duration,
 };
 
-use anyhow::bail;
 use k8s_openapi::{
     api::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
@@ -40,12 +39,13 @@ use mz_server_core::listeners::{
     ListenersConfig, SqlListenerConfig,
 };
 use rand::{Rng, thread_rng};
-use reqwest::StatusCode;
+use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tracing::{trace, warn};
 
+use super::Error;
 use super::matching_image_from_environmentd_image_ref;
 use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
@@ -98,6 +98,11 @@ pub enum DeploymentStatus {
     Promoting,
     /// This deployment is the leader.
     IsLeader,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GetLeaderStatusResponse {
+    status: DeploymentStatus,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -174,10 +179,9 @@ impl Resources {
         client: &Client,
         force_promote: bool,
         namespace: &str,
-    ) -> Result<Option<Action>, anyhow::Error> {
+    ) -> Result<Option<Action>, Error> {
         let environmentd_network_policy_api: Api<NetworkPolicy> =
             Api::namespaced(client.clone(), namespace);
-        let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
         let service_account_api: Api<ServiceAccount> = Api::namespaced(client.clone(), namespace);
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
@@ -236,7 +240,71 @@ impl Resources {
             return Ok(Some(retry_action));
         }
 
-        let http_client = match &self.connection_info.mz_system_secret_name {
+        let http_client = match self.get_http_client(client.clone(), namespace).await {
+            Ok(http_client) => http_client,
+            Err(e) => {
+                trace!("failed to create working http client: {e:?}: retrying...");
+                return Ok(Some(retry_action));
+            }
+        };
+        let status_url = reqwest::Url::parse(&format!(
+            "{}/api/leader/status",
+            self.connection_info.environmentd_url,
+        ))
+        .unwrap();
+
+        match http_client.get(status_url.clone()).send().await {
+            Ok(response) => {
+                let response: GetLeaderStatusResponse = match response.error_for_status() {
+                    Ok(response) => response.json().await?,
+                    Err(e) => {
+                        trace!("failed to get status of environmentd, retrying... ({e})");
+                        return Ok(Some(retry_action));
+                    }
+                };
+                if force_promote {
+                    trace!("skipping cluster catchup");
+                    let skip_catchup_url = reqwest::Url::parse(&format!(
+                        "{}/api/leader/skip-catchup",
+                        self.connection_info.environmentd_url,
+                    ))
+                    .unwrap();
+                    let response = http_client.post(skip_catchup_url).send().await?;
+                    if response.status() == StatusCode::BAD_REQUEST {
+                        let err: SkipCatchupError = response.json().await?;
+                        return Err(
+                            anyhow::anyhow!("failed to skip catchup: {}", err.message).into()
+                        );
+                    }
+                } else {
+                    match response.status {
+                        DeploymentStatus::Initializing => {
+                            trace!("environmentd is still initializing, retrying...");
+                            return Ok(Some(retry_action));
+                        }
+                        DeploymentStatus::ReadyToPromote
+                        | DeploymentStatus::Promoting
+                        | DeploymentStatus::IsLeader => trace!("environmentd is ready"),
+                    }
+                }
+            }
+            Err(e) => {
+                trace!("failed to connect to environmentd, retrying... ({e})");
+                return Ok(Some(retry_action));
+            }
+        }
+
+        Ok(None)
+    }
+
+    #[instrument]
+    async fn get_http_client(
+        &self,
+        client: Client,
+        namespace: &str,
+    ) -> Result<HttpClient, anyhow::Error> {
+        let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+        Ok(match &self.connection_info.mz_system_secret_name {
             Some(mz_system_secret_name) => {
                 let http_client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(10))
@@ -266,12 +334,12 @@ impl Resources {
                             Ok(response) => {
                                 if let Err(e) = response.error_for_status() {
                                     trace!("failed to login to environmentd, retrying... ({e})");
-                                    return Ok(Some(retry_action));
+                                    return Err(e.into());
                                 }
                             }
                             Err(e) => {
                                 trace!("failed to connect to environmentd, retrying... ({e})");
-                                return Ok(Some(retry_action));
+                                return Err(e.into());
                             }
                         };
                     }
@@ -282,47 +350,16 @@ impl Resources {
                 .timeout(std::time::Duration::from_secs(10))
                 .build()
                 .unwrap(),
-        };
-        let status_url = reqwest::Url::parse(&format!(
-            "{}/api/leader/status",
-            self.connection_info.environmentd_url,
-        ))
-        .unwrap();
+        })
+    }
 
-        match http_client.get(status_url.clone()).send().await {
-            Ok(response) => {
-                let response: BTreeMap<String, DeploymentStatus> = match response.error_for_status()
-                {
-                    Ok(response) => response.json().await?,
-                    Err(e) => {
-                        trace!("failed to get status of environmentd, retrying... ({e})");
-                        return Ok(Some(retry_action));
-                    }
-                };
-                if force_promote {
-                    trace!("skipping cluster catchup");
-                    let skip_catchup_url = reqwest::Url::parse(&format!(
-                        "{}/api/leader/skip-catchup",
-                        self.connection_info.environmentd_url,
-                    ))
-                    .unwrap();
-                    let response = http_client.post(skip_catchup_url).send().await?;
-                    if response.status() == StatusCode::BAD_REQUEST {
-                        let err: SkipCatchupError = response.json().await?;
-                        bail!("failed to skip catchup: {}", err.message);
-                    }
-                } else if response["status"] == DeploymentStatus::Initializing {
-                    trace!("environmentd is still initializing, retrying...");
-                    return Ok(Some(retry_action));
-                } else {
-                    trace!("environmentd is ready");
-                }
-            }
-            Err(e) => {
-                trace!("failed to connect to environmentd, retrying... ({e})");
-                return Ok(Some(retry_action));
-            }
-        }
+    #[instrument]
+    pub async fn promote_services(
+        &self,
+        client: &Client,
+        namespace: &str,
+    ) -> Result<Option<Action>, Error> {
+        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
 
         let promote_url = reqwest::Url::parse(&format!(
             "{}/api/leader/promote",
@@ -330,25 +367,15 @@ impl Resources {
         ))
         .unwrap();
 
-        // !!!!!!!!!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        // It is absolutely critical that this promotion is done last!
-        //
-        // If there are any failures in this method, the error handler in
-        // the caller will attempt to revert and delete the new environmentd.
-        // After promotion, the new environmentd is active, so that would
-        // cause an outage!
-        // !!!!!!!!!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        let http_client = self.get_http_client(client.clone(), namespace).await?;
+
         trace!("promoting new environmentd to leader");
         let response = http_client.post(promote_url).send().await?;
-        let response: BecomeLeaderResponse = match response.error_for_status() {
-            Ok(response) => response.json().await?,
-            Err(e) => {
-                trace!("failed to promote environmentd, retrying... ({e})");
-                return Ok(Some(retry_action));
-            }
-        };
+        let response: BecomeLeaderResponse = response.error_for_status()?.json().await?;
         if let BecomeLeaderResult::Failure { message } = response.result {
-            bail!("failed to promote new environmentd: {message}");
+            Err(anyhow::anyhow!(
+                "failed to promote new environmentd: {message}"
+            ))?;
         }
 
         // A successful POST to the promotion endpoint only indicates
@@ -362,13 +389,19 @@ impl Resources {
         // we must wait to see at least one `IsLeader` status returned
         // from the environment.
 
+        let status_url = reqwest::Url::parse(&format!(
+            "{}/api/leader/status",
+            self.connection_info.environmentd_url,
+        ))
+        .unwrap();
+        let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
         match http_client.get(status_url.clone()).send().await {
             Ok(response) => {
-                let response: BTreeMap<String, DeploymentStatus> = response.json().await?;
-                if response["status"] != DeploymentStatus::IsLeader {
+                let response: GetLeaderStatusResponse = response.json().await?;
+                if response.status != DeploymentStatus::IsLeader {
                     trace!(
                         "environmentd is still promoting (status: {:?}), retrying...",
-                        response["status"]
+                        response.status
                     );
                     return Ok(Some(retry_action));
                 } else {
@@ -381,21 +414,10 @@ impl Resources {
             }
         }
 
-        Ok(None)
-    }
-
-    #[instrument]
-    pub async fn promote_services(
-        &self,
-        client: &Client,
-        namespace: &str,
-    ) -> Result<(), anyhow::Error> {
-        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
-
         trace!("applying environmentd public service");
         apply_resource(&service_api, &*self.public_service).await?;
 
-        Ok(())
+        Ok(None)
     }
 
     #[instrument]
