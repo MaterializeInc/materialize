@@ -1134,6 +1134,18 @@ steps:
               composition: platform-checks
               args: [--scenario=SelfManagedLinearUpgradePathManipulateDuringUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-self-managed-earliest-to-latest-direct-upgrade
+        label: "Checks Self-Managed earliest to latest direct upgrade"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedEarliestToLatestDirectUpgrade, "--seed=$BUILDKITE_JOB_ID"]
+
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery
     steps:

@@ -572,7 +572,7 @@ def print_upgrade_path(versions: list[MzVersion | None]):
 
 class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
     """
-    Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release to main.
+    Upgrade from the oldest Self-Managed version in the supported window to the current version.
     Run all manipulation phases before any upgrades.
     """
 
@@ -628,7 +628,7 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
 
 class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
     """
-    Upgrade from the oldest Self-Managed version to the latest Self-Managed version to main.
+    Upgrade from the oldest Self-Managed version in the supported window to the current version.
     Run the first manipulation phase before all upgrades and the second during the upgrade.
     """
 
@@ -690,3 +690,51 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
                 )
 
         return actions
+
+
+class SelfManagedEarliestToLatestDirectUpgrade(Scenario):
+    """
+    Upgrade from the oldest Self-Managed version in the supported window directly to the current version.
+    """
+
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        self.self_managed_versions = get_supported_self_managed_versions()
+        super().__init__(checks, executor, features, seed)
+
+    def base_version(self) -> MzVersion:
+        return self.self_managed_versions[0]
+
+    def actions(self) -> list[Action]:
+        print(f"Upgrading from tag {self.base_version()}")
+
+        (
+            oldest_version_service_info,
+            current_version_service_info,
+        ) = create_mz_service_upgrade_info_list([self.base_version(), None])
+        return [
+            StartMz(
+                self,
+                tag=oldest_version_service_info.version,
+                mz_service=oldest_version_service_info.service_name,
+                system_parameter_defaults=oldest_version_service_info.system_parameter_defaults,
+            ),
+            Initialize(self, mz_service=oldest_version_service_info.service_name),
+            Manipulate(
+                self, phase=1, mz_service=oldest_version_service_info.service_name
+            ),
+            *upgrade_service_actions(
+                self,
+                service_info=current_version_service_info,
+                previous_service_info=oldest_version_service_info,
+            ),
+            Manipulate(
+                self, phase=2, mz_service=current_version_service_info.service_name
+            ),
+            Validate(self, mz_service=current_version_service_info.service_name),
+        ]
