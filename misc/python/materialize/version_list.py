@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import os
 from collections.abc import Callable
 from pathlib import Path
@@ -30,6 +31,29 @@ from materialize.mz_version import MzVersion
 MZ_ROOT = Path(os.environ["MZ_ROOT"])
 
 
+@dataclass
+class SelfManagedVersion:
+    helm_version: MzVersion
+    version: MzVersion
+
+
+def fetch_self_managed_versions() -> list[SelfManagedVersion]:
+    result: list[SelfManagedVersion] = []
+    for entry in yaml.safe_load(
+        requests.get("https://materializeinc.github.io/materialize/index.yaml").text
+    )["entries"]["materialize-operator"]:
+        self_managed_version = SelfManagedVersion(
+            MzVersion.parse_mz(entry["version"]),
+            MzVersion.parse_mz(entry["appVersion"]),
+        )
+        if (
+            not self_managed_version.version.prerelease
+            and self_managed_version.version not in INVALID_VERSIONS
+        ):
+            result.append(self_managed_version)
+    return result
+
+
 def get_self_managed_versions() -> list[MzVersion]:
     result = set()
     for entry in yaml.safe_load(
@@ -39,6 +63,24 @@ def get_self_managed_versions() -> list[MzVersion]:
         if not version.prerelease:
             result.add(version)
     return sorted(result)
+
+
+# Gets the previous and future supported self managed versions relative to the current version
+def get_supported_self_managed_versions() -> tuple[list[MzVersion], list[MzVersion]]:
+    self_managed_versions = fetch_self_managed_versions()
+    current_version = MzVersion.parse_cargo()
+    # TODO (multiversion2): Change this to filter on versions between the next and previous unskippable major release
+    # when unskippable versions are implemented.
+    filtered_versions = sorted(
+        {
+            v.version
+            for v in self_managed_versions
+            if v.helm_version.major == 25 and v.helm_version.minor == 2
+        }
+    )
+    previous_versions = [v for v in filtered_versions if v < current_version]
+    future_versions = [v for v in filtered_versions if v > current_version]
+    return previous_versions, future_versions
 
 
 # not released on Docker
@@ -92,7 +134,7 @@ def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
 
 
 def _create_ancestor_image_resolution(
-    ancestor_overrides: dict[str, MzVersion]
+    ancestor_overrides: dict[str, MzVersion],
 ) -> AncestorImageResolutionBase:
     if buildkite.is_in_buildkite():
         return AncestorImageResolutionInBuildkite(ancestor_overrides)
