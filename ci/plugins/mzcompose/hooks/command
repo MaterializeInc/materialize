@@ -350,6 +350,8 @@ cleanup() {
       exit 1
   fi
 
+  # Don't run the cleanup function twice
+  trap - EXIT SIGTERM SIGINT
   exit "$CI_ANNOTATE_ERRORS_RESULT"
 }
 

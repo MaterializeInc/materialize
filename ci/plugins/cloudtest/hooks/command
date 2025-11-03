@@ -185,6 +185,8 @@ cleanup() {
   sudo systemctl restart docker
   docker ps --all --quiet | xargs --no-run-if-empty docker rm --force --volumes
 
+  # Don't run the cleanup function twice
+  trap - EXIT SIGTERM SIGINT
   exit "$CI_ANNOTATE_ERRORS_RESULT"
 }
 
