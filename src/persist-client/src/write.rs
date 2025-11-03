@@ -557,7 +557,10 @@ where
     where
         D: Send + Sync,
     {
-        for batch in batches.iter() {
+        // Before we append any data, we require a registered write schema.
+        let schema_id = self.ensure_schema_registered().await;
+
+        for batch in batches.iter_mut() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Err(InvalidUsage::BatchNotFromThisShard {
                     batch_shard: batch.shard_id(),
@@ -574,10 +577,12 @@ where
                     TODO: Error on very old versions once the leaked blob detector exists."
                 )
             }
-        }
 
-        // Before we append any data, we require a registered write schema.
-        self.ensure_schema_registered().await;
+            // The batch may have been written by a writer without a registered schema.
+            // Ensure we have a schema ID in the batch metadata before we append, to avoid type
+            // confusion later.
+            ensure_batch_schema(batch, schema_id);
+        }
 
         let lower = expected_upper.clone();
         let upper = new_upper;
@@ -1088,6 +1093,39 @@ impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
             || format!("WriteHandle::expire ({})", self.writer_id),
             expire_fn.0().instrument(expire_span),
         );
+    }
+}
+
+/// Ensure the given batch uses the given schema ID.
+///
+/// If the batch has no schema set, initialize it to the given one.
+/// If the batch has a schema set, assert that it matches the given one.
+fn ensure_batch_schema<K, V, T, D>(batch: &mut Batch<K, V, T, D>, schema_id: SchemaId)
+where
+    K: Debug + Codec,
+    V: Debug + Codec,
+    T: Timestamp + Lattice + Codec64,
+    D: Monoid + Codec64,
+{
+    let shard_id = batch.shard_id();
+    let ensure = |id: &mut Option<SchemaId>| match id {
+        Some(id) => assert_eq!(*id, schema_id, "schema ID mismatch; shard={shard_id}"),
+        None => *id = Some(schema_id),
+    };
+
+    for run_meta in &mut batch.batch.run_meta {
+        ensure(&mut run_meta.schema);
+    }
+    for part in &mut batch.batch.parts {
+        match part {
+            RunPart::Single(BatchPart::Hollow(part)) => ensure(&mut part.schema_id),
+            RunPart::Single(BatchPart::Inline { schema_id, .. }) => ensure(schema_id),
+            RunPart::Many(_hollow_run_ref) => {
+                // TODO: Fetch the parts in this run and rewrite them too. Alternatively, make
+                // `run_meta` the only place we keep schema IDs, so rewriting parts isn't
+                // necessary.
+            }
+        }
     }
 }
 
