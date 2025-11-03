@@ -1,0 +1,554 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MaterializeSpec",
+  "type": "object",
+  "properties": {
+    "environmentdImageRef": {
+      "description": "The environmentd image to run.",
+      "type": "string"
+    },
+    "environmentdExtraArgs": {
+      "description": "Extra args to pass to the environmentd binary.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      }
+    },
+    "environmentdExtraEnv": {
+      "description": "Extra environment variables to pass to the environmentd binary.",
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "$ref": "#/$defs/io.k8s.api.core.v1.EnvVar"
+      }
+    },
+    "environmentdIamRoleArn": {
+      "description": "DEPRECATED\nIf running in AWS, override the IAM role to use to give\nenvironmentd access to the persist S3 bucket.\nDEPRECATED\nUse `service_account_annotations` to set \"eks.amazonaws.com/role-arn\" instead.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "environmentdConnectionRoleArn": {
+      "description": "If running in AWS, override the IAM role to use to support\nthe CREATE CONNECTION feature.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "environmentdResourceRequirements": {
+      "description": "Resource requirements for the environmentd pod.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/io.k8s.api.core.v1.ResourceRequirements"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "environmentdScratchVolumeStorageRequirement": {
+      "description": "Amount of disk to allocate, if a storage class is provided.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/io.k8s.apimachinery.pkg.api.resource.Quantity"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "balancerdResourceRequirements": {
+      "description": "Resource requirements for the balancerd pod.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/io.k8s.api.core.v1.ResourceRequirements"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "consoleResourceRequirements": {
+      "description": "Resource requirements for the console pod.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/io.k8s.api.core.v1.ResourceRequirements"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "balancerdReplicas": {
+      "description": "Number of balancerd pods to create.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "consoleReplicas": {
+      "description": "Number of console pods to create.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int32"
+    },
+    "serviceAccountName": {
+      "description": "Name of the kubernetes service account to use.\nIf not set, we will create one with the same name as this Materialize object.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "serviceAccountAnnotations": {
+      "description": "Annotations to apply to the service account.\n\nAnnotations on service accounts are commonly used by cloud providers for IAM.\nAWS uses \"eks.amazonaws.com/role-arn\".\nAzure uses \"azure.workload.identity/client-id\", but\nadditionally requires \"azure.workload.identity/use\": \"true\" on the pods.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "serviceAccountLabels": {
+      "description": "Labels to apply to the service account.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "podAnnotations": {
+      "description": "Annotations to apply to the pods.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "podLabels": {
+      "description": "Labels to apply to the pods.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "requestRollout": {
+      "description": "When changes are made to the environmentd resources (either via\nmodifying fields in the spec here or by deploying a new\norchestratord version which changes how resources are generated),\nexisting environmentd processes won't be automatically restarted.\nIn order to trigger a restart, the request_rollout field should be\nset to a new (random) value. Once the rollout completes, the value\nof `status.lastCompletedRolloutRequest` will be set to this value\nto indicate completion.\n\nDefaults to a random value in order to ensure that the first\ngeneration rollout is automatically triggered.",
+      "type": "string",
+      "format": "uuid",
+      "default": "00000000-0000-0000-0000-000000000000"
+    },
+    "forcePromote": {
+      "description": "If `forcePromote` is set to the same value as `requestRollout`, the\ncurrent rollout will skip waiting for clusters in the new\ngeneration to rehydrate before promoting the new environmentd to\nleader.",
+      "type": "string",
+      "format": "uuid",
+      "default": "00000000-0000-0000-0000-000000000000"
+    },
+    "forceRollout": {
+      "description": "This value will be written to an annotation in the generated\nenvironmentd statefulset, in order to force the controller to\ndetect the generated resources as changed even if no other changes\nhappened. This can be used to force a rollout to a new generation\neven without making any meaningful changes, by setting it to the\nsame value as `requestRollout`.",
+      "type": "string",
+      "format": "uuid",
+      "default": "00000000-0000-0000-0000-000000000000"
+    },
+    "inPlaceRollout": {
+      "description": "Deprecated and ignored. Use `rolloutStrategy` instead.",
+      "type": "boolean",
+      "default": false
+    },
+    "rolloutStrategy": {
+      "description": "Rollout strategy to use when upgrading this Materialize instance.",
+      "$ref": "#/$defs/MaterializeRolloutStrategy",
+      "default": "WaitUntilReady"
+    },
+    "backendSecretName": {
+      "description": "The name of a secret containing `metadata_backend_url` and `persist_backend_url`.\nIt may also contain `external_login_password_mz_system`, which will be used as\nthe password for the `mz_system` user if `authenticatorKind` is `Password`.",
+      "type": "string"
+    },
+    "authenticatorKind": {
+      "description": "How to authenticate with Materialize.",
+      "$ref": "#/$defs/AuthenticatorKind",
+      "default": "None"
+    },
+    "enableRbac": {
+      "description": "Whether to enable role based access control. Defaults to false.",
+      "type": "boolean",
+      "default": false
+    },
+    "environmentId": {
+      "description": "The value used by environmentd (via the --environment-id flag) to\nuniquely identify this instance. Must be globally unique, and\nis required if a license key is not provided.\nNOTE: This value MUST NOT be changed in an existing instance,\nsince it affects things like the way data is stored in the persist\nbackend.",
+      "type": "string",
+      "format": "uuid",
+      "default": "00000000-0000-0000-0000-000000000000"
+    },
+    "balancerdExternalCertificateSpec": {
+      "description": "The configuration for generating an x509 certificate using cert-manager for balancerd\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MaterializeCertSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "consoleExternalCertificateSpec": {
+      "description": "The configuration for generating an x509 certificate using cert-manager for the console\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\nNot yet implemented.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MaterializeCertSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "internalCertificateSpec": {
+      "description": "The cert-manager Issuer or ClusterIssuer to use for database internal communication.\nThe `issuerRef` field is required.\nThis currently is only used for environmentd, but will eventually support clusterd.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MaterializeCertSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "environmentdImageRef",
+    "backendSecretName"
+  ],
+  "$defs": {
+    "io.k8s.api.core.v1.EnvVar": {
+      "description": "EnvVar represents an environment variable present in a Container.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Name of the environment variable. Must be a C_IDENTIFIER.",
+          "type": "string"
+        },
+        "value": {
+          "description": "Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. \"$$(VAR_NAME)\" will produce the string literal \"$(VAR_NAME)\". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to \"\".",
+          "type": "string"
+        },
+        "valueFrom": {
+          "description": "Source for the environment variable's value. Cannot be used if value is not empty.",
+          "$ref": "#/$defs/io.k8s.api.core.v1.EnvVarSource"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "io.k8s.api.core.v1.EnvVarSource": {
+      "description": "EnvVarSource represents a source for the value of an EnvVar.",
+      "type": "object",
+      "properties": {
+        "configMapKeyRef": {
+          "description": "Selects a key of a ConfigMap.",
+          "$ref": "#/$defs/io.k8s.api.core.v1.ConfigMapKeySelector"
+        },
+        "fieldRef": {
+          "description": "Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`, spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.",
+          "$ref": "#/$defs/io.k8s.api.core.v1.ObjectFieldSelector"
+        },
+        "resourceFieldRef": {
+          "description": "Selects a resource of the container: only resources limits and requests (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.",
+          "$ref": "#/$defs/io.k8s.api.core.v1.ResourceFieldSelector"
+        },
+        "secretKeyRef": {
+          "description": "Selects a key of a secret in the pod's namespace",
+          "$ref": "#/$defs/io.k8s.api.core.v1.SecretKeySelector"
+        }
+      }
+    },
+    "io.k8s.api.core.v1.ConfigMapKeySelector": {
+      "description": "Selects a key from a ConfigMap.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The key to select.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the referent. This field is effectively required, but due to backwards compatibility is allowed to be empty. Instances of this type with an empty value here are almost certainly wrong. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+          "type": "string"
+        },
+        "optional": {
+          "description": "Specify whether the ConfigMap or its key must be defined",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "name"
+      ]
+    },
+    "io.k8s.api.core.v1.ObjectFieldSelector": {
+      "description": "ObjectFieldSelector selects an APIVersioned field of an object.",
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "description": "Version of the schema the FieldPath is written in terms of, defaults to \"v1\".",
+          "type": "string"
+        },
+        "fieldPath": {
+          "description": "Path of the field to select in the specified API version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "fieldPath"
+      ]
+    },
+    "io.k8s.api.core.v1.ResourceFieldSelector": {
+      "description": "ResourceFieldSelector represents container resources (cpu, memory) and their output format",
+      "type": "object",
+      "properties": {
+        "containerName": {
+          "description": "Container name: required for volumes, optional for env vars",
+          "type": "string"
+        },
+        "divisor": {
+          "description": "Specifies the output format of the exposed resources, defaults to \"1\"",
+          "$ref": "#/$defs/io.k8s.apimachinery.pkg.api.resource.Quantity"
+        },
+        "resource": {
+          "description": "Required: resource to select",
+          "type": "string"
+        }
+      },
+      "required": [
+        "resource"
+      ]
+    },
+    "io.k8s.apimachinery.pkg.api.resource.Quantity": {
+      "description": "Quantity is a fixed-point representation of a number. It provides convenient marshaling/unmarshaling in JSON and YAML, in addition to String() and AsInt64() accessors.\n\nThe serialization format is:\n\n``` <quantity>        ::= <signedNumber><suffix>\n\n\t(Note that <suffix> may be empty, from the \"\" case in <decimalSI>.)\n\n<digit>           ::= 0 | 1 | ... | 9 <digits>          ::= <digit> | <digit><digits> <number>          ::= <digits> | <digits>.<digits> | <digits>. | .<digits> <sign>            ::= \"+\" | \"-\" <signedNumber>    ::= <number> | <sign><number> <suffix>          ::= <binarySI> | <decimalExponent> | <decimalSI> <binarySI>        ::= Ki | Mi | Gi | Ti | Pi | Ei\n\n\t(International System of units; See: http://physics.nist.gov/cuu/Units/binary.html)\n\n<decimalSI>       ::= m | \"\" | k | M | G | T | P | E\n\n\t(Note that 1024 = 1Ki but 1000 = 1k; I didn't choose the capitalization.)\n\n<decimalExponent> ::= \"e\" <signedNumber> | \"E\" <signedNumber> ```\n\nNo matter which of the three exponent forms is used, no quantity may represent a number greater than 2^63-1 in magnitude, nor may it have more than 3 decimal places. Numbers larger or more precise will be capped or rounded up. (E.g.: 0.1m will rounded up to 1m.) This may be extended in the future if we require larger or smaller quantities.\n\nWhen a Quantity is parsed from a string, it will remember the type of suffix it had, and will use the same type again when it is serialized.\n\nBefore serializing, Quantity will be put in \"canonical form\". This means that Exponent/suffix will be adjusted up or down (with a corresponding increase or decrease in Mantissa) such that:\n\n- No precision is lost - No fractional digits will be emitted - The exponent (or suffix) is as large as possible.\n\nThe sign will be omitted unless the number is negative.\n\nExamples:\n\n- 1.5 will be serialized as \"1500m\" - 1.5Gi will be serialized as \"1536Mi\"\n\nNote that the quantity will NEVER be internally represented by a floating point number. That is the whole point of this exercise.\n\nNon-canonical values will still parse as long as they are well formed, but will be re-emitted in their canonical form. (So always use canonical form, or don't diff.)\n\nThis format is intended to make it difficult to use these numbers without writing some sort of special handling code in the hopes that that will cause implementors to also use a fixed point implementation.",
+      "type": "string"
+    },
+    "io.k8s.api.core.v1.SecretKeySelector": {
+      "description": "SecretKeySelector selects a key of a Secret.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "The key of the secret to select from.  Must be a valid secret key.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the referent. This field is effectively required, but due to backwards compatibility is allowed to be empty. Instances of this type with an empty value here are almost certainly wrong. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
+          "type": "string"
+        },
+        "optional": {
+          "description": "Specify whether the Secret or its key must be defined",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "name"
+      ]
+    },
+    "io.k8s.api.core.v1.ResourceRequirements": {
+      "description": "ResourceRequirements describes the compute resource requirements.",
+      "type": "object",
+      "properties": {
+        "claims": {
+          "description": "Claims lists the names of resources, defined in spec.resourceClaims, that are used by this container.\n\nThis is an alpha field and requires enabling the DynamicResourceAllocation feature gate.\n\nThis field is immutable. It can only be set for containers.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/io.k8s.api.core.v1.ResourceClaim"
+          }
+        },
+        "limits": {
+          "description": "Limits describes the maximum amount of compute resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/io.k8s.apimachinery.pkg.api.resource.Quantity"
+          }
+        },
+        "requests": {
+          "description": "Requests describes the minimum amount of compute resources required. If Requests is omitted for a container, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests cannot exceed Limits. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/io.k8s.apimachinery.pkg.api.resource.Quantity"
+          }
+        }
+      }
+    },
+    "io.k8s.api.core.v1.ResourceClaim": {
+      "description": "ResourceClaim references one entry in PodSpec.ResourceClaims.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Name must match the name of one entry in pod.spec.resourceClaims of the Pod where this field is used. It makes that resource available inside a container.",
+          "type": "string"
+        },
+        "request": {
+          "description": "Request is the name chosen for a request in the referenced claim. If empty, everything from the claim is made available, otherwise only the result of this request.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "MaterializeRolloutStrategy": {
+      "oneOf": [
+        {
+          "description": "Create a new generation of pods, leaving the old generation around until the\nnew ones are ready to take over.\nThis minimizes downtime, and is what almost everyone should use.",
+          "type": "string",
+          "const": "WaitUntilReady"
+        },
+        {
+          "description": "WARNING!!!\n\nTHIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!\n\nWARNING!!!\n\nTear down the old generation of pods and promote the new generation of pods immediately,\nwithout waiting for the new generation of pods to be ready.\n\nThis strategy should ONLY be used by customers with physical hardware who do not have\nenough hardware for the WaitUntilReady strategy. If you think you want this, please\nconsult with Materialize engineering to discuss your situation.",
+          "type": "string",
+          "const": "ImmediatelyPromoteCausingDowntime"
+        }
+      ]
+    },
+    "AuthenticatorKind": {
+      "oneOf": [
+        {
+          "description": "Authenticate users using Frontegg.",
+          "type": "string",
+          "const": "Frontegg"
+        },
+        {
+          "description": "Authenticate users using internally stored password hashes.\nThe backend secret must contain external_login_password_mz_system.",
+          "type": "string",
+          "const": "Password"
+        },
+        {
+          "description": "Authenticate users using SASL.",
+          "type": "string",
+          "const": "Sasl"
+        },
+        {
+          "description": "Do not authenticate users. Trust they are who they say they are without verification.",
+          "type": "string",
+          "const": "None"
+        }
+      ]
+    },
+    "MaterializeCertSpec": {
+      "type": "object",
+      "properties": {
+        "dnsNames": {
+          "description": "Additional DNS names the certificate will be valid for.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "duration": {
+          "description": "Duration the certificate will be requested for.\nValue must be in units accepted by Go `time.ParseDuration`\nhttps://golang.org/pkg/time/#ParseDuration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "renewBefore": {
+          "description": "Duration before expiration the certificate will be renewed.\nValue must be in units accepted by Go `time.ParseDuration`\nhttps://golang.org/pkg/time/#ParseDuration.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "issuerRef": {
+          "description": "Reference to an `Issuer` or `ClusterIssuer` that will generate the certificate.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CertificateIssuerRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "secretTemplate": {
+          "description": "Additional annotations and labels to include in the Certificate object.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CertificateSecretTemplate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "CertificateIssuerRef": {
+      "description": "Reference to the issuer responsible for issuing the certificate.\nIf the issuer is namespace-scoped, it must be in the same namespace\nas the Certificate. If the issuer is cluster-scoped, it can be used\nfrom any namespace.\n\nThe `name` field of the reference must always be specified.",
+      "type": "object",
+      "properties": {
+        "group": {
+          "description": "Group of the resource being referred to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "Kind of the resource being referred to.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Name of the resource being referred to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "CertificateSecretTemplate": {
+      "description": "Defines annotations and labels to be copied to the Certificate's Secret.\nLabels and annotations on the Secret will be changed as they appear on the\nSecretTemplate when added or removed. SecretTemplate annotations are added\nin conjunction with, and cannot overwrite, the base set of annotations\ncert-manager sets on the Certificate's Secret.",
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "description": "Annotations is a key value map to be copied to the target Kubernetes Secret.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "labels": {
+          "description": "Labels is a key value map to be copied to the target Kubernetes Secret.",
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

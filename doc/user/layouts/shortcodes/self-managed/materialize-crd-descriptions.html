@@ -1,0 +1,25 @@
+{{ range $.Site.Data.self_managed.materialize_crd_descriptions }}
+#### {{ index . 0 }}
+<table>
+<thead>
+<tr>
+<th>Field Name</th>
+<th>Type</th>
+<th>Default Value</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+{{ range (index . 1) }}
+<tr>
+<td><code>{{ .name }}</code></td>
+<td><code>{{ .type }}</code></td>
+<td><code>{{ .default }}</code></td>
+<td><code>{{ .required }}</code></td>
+<td>{{ .description }}</td>
+</tr>
+{{ end }}
+</tbody>
+</table>
+{{ end }}
