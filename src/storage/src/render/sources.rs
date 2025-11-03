@@ -45,7 +45,7 @@ use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::{UpsertKey, UpsertValue};
 
-/// _Renders_ complete _differential_ Collections
+/// _Renders_ complete _differential_ collections
 /// that represent the final source and its errors
 /// as requested by the original `CREATE SOURCE` statement,
 /// encapsulated in the passed `SourceInstanceDesc`.

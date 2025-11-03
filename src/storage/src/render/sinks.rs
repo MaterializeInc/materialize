@@ -33,7 +33,7 @@ use tracing::warn;
 use crate::healthcheck::HealthStatusMessage;
 use crate::storage_state::StorageState;
 
-/// _Renders_ complete _differential_ Collections
+/// _Renders_ complete _differential_ collections
 /// that represent the sink and its errors as requested
 /// by the original `CREATE SINK` statement.
 pub(crate) fn render_sink<G>(
