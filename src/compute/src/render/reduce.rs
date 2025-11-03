@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use dec::OrderedDecimal;
-use differential_dataflow::Data;
+use differential_dataflow::Diff as _;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, CopyRegion};
@@ -24,7 +24,7 @@ use differential_dataflow::hashable::Hashable;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
 use differential_dataflow::trace::{Builder, Trace};
-use differential_dataflow::{Collection, Diff as _};
+use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, MonotonicPlan,
@@ -173,8 +173,8 @@ where
     fn render_reduce_plan<S>(
         &self,
         plan: ReducePlan,
-        collection: Collection<S, (Row, Row), Diff>,
-        err_input: Collection<S, DataflowError, Diff>,
+        collection: VecCollection<S, (Row, Row), Diff>,
+        err_input: VecCollection<S, DataflowError, Diff>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> CollectionBundle<S, T>
@@ -197,8 +197,8 @@ where
     fn render_reduce_plan_inner<S>(
         &self,
         plan: ReducePlan,
-        collection: Collection<S, (Row, Row), Diff>,
-        errors: &mut Vec<Collection<S, DataflowError, Diff>>,
+        collection: VecCollection<S, (Row, Row), Diff>,
+        errors: &mut Vec<VecCollection<S, DataflowError, Diff>>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
     ) -> Arranged<S, RowRowAgent<S::Timestamp, Diff>>
@@ -314,7 +314,7 @@ where
         aggregate_types: Vec<ReductionType>,
         scope: &mut S,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
+    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -503,11 +503,11 @@ where
     /// Build the dataflow to compute the set of distinct keys.
     fn build_distinct<S>(
         &self,
-        collection: Collection<S, (Row, Row), Diff>,
+        collection: VecCollection<S, (Row, Row), Diff>,
         mfp_after: Option<SafeMfpPlan>,
     ) -> (
         Arranged<S, TraceAgent<RowRowSpine<S::Timestamp, Diff>>>,
-        Collection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowError, Diff>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -579,11 +579,11 @@ where
     /// in the order specified by `aggrs`.
     fn build_basic_aggregates<S>(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: VecCollection<S, (Row, Row), Diff>,
         aggrs: Vec<(usize, AggregateExpr)>,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
+    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -686,7 +686,7 @@ where
     /// This method also applies distinctness if required.
     fn build_basic_aggregate<S>(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: VecCollection<S, (Row, Row), Diff>,
         index: usize,
         aggr: &AggregateExpr,
         validating: bool,
@@ -695,7 +695,7 @@ where
         fused_unnest_list: bool,
     ) -> (
         RowRowArrangement<S>,
-        Option<Collection<S, DataflowError, Diff>>,
+        Option<VecCollection<S, DataflowError, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -937,7 +937,7 @@ where
 
     fn build_reduce_inaccumulable_distinct<S, Bu, Tr>(
         &self,
-        input: Collection<S, Row, Diff>,
+        input: VecCollection<S, Row, Diff>,
         name_tag: Option<&str>,
     ) -> Arranged<S, TraceAgent<Tr>>
     where
@@ -1004,7 +1004,7 @@ where
     /// stage.
     fn build_bucketed<S>(
         &self,
-        input: Collection<S, (Row, Row), Diff>,
+        input: VecCollection<S, (Row, Row), Diff>,
         BucketedPlan {
             aggr_funcs,
             skips,
@@ -1012,11 +1012,11 @@ where
         }: BucketedPlan,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
+    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
-        let mut err_output: Option<Collection<S, _, _>> = None;
+        let mut err_output: Option<VecCollection<S, _, _>> = None;
         let arranged_output = input.scope().region_named("ReduceHierarchical", |inner| {
             let input = input.enter(inner);
 
@@ -1199,11 +1199,11 @@ where
     fn build_bucketed_stage<S>(
         &self,
         aggr_funcs: &Vec<AggregateFunc>,
-        input: &Collection<S, (Row, Row), Diff>,
+        input: &VecCollection<S, (Row, Row), Diff>,
         validating: bool,
     ) -> (
-        Collection<S, (Row, Row), Diff>,
-        Option<Collection<S, DataflowError, Diff>>,
+        VecCollection<S, (Row, Row), Diff>,
+        Option<VecCollection<S, DataflowError, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -1255,7 +1255,7 @@ where
     /// with all diffs in the reduction's output negated.
     fn build_bucketed_negated_output<S, Bu, Tr>(
         &self,
-        input: &Collection<S, (Row, Row), Diff>,
+        input: &VecCollection<S, (Row, Row), Diff>,
         aggrs: Vec<AggregateFunc>,
     ) -> (
         Arranged<S, TraceAgent<RowRowSpine<G::Timestamp, Diff>>>,
@@ -1338,14 +1338,14 @@ where
     /// on monotonic inputs.
     fn build_monotonic<S>(
         &self,
-        collection: Collection<S, (Row, Row), Diff>,
+        collection: VecCollection<S, (Row, Row), Diff>,
         MonotonicPlan {
             aggr_funcs,
             skips,
             must_consolidate,
         }: MonotonicPlan,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
+    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -1463,7 +1463,7 @@ where
     /// yield the final aggregate.
     fn build_accumulable<S>(
         &self,
-        collection: Collection<S, (Row, Row), Diff>,
+        collection: VecCollection<S, (Row, Row), Diff>,
         AccumulablePlan {
             full_aggrs,
             simple_aggrs,
@@ -1471,7 +1471,7 @@ where
         }: AccumulablePlan,
         key_arity: usize,
         mfp_after: Option<SafeMfpPlan>,
-    ) -> (RowRowArrangement<S>, Collection<S, DataflowError, Diff>)
+    ) -> (RowRowArrangement<S>, VecCollection<S, DataflowError, Diff>)
     where
         S: Scope<Timestamp = G::Timestamp>,
     {

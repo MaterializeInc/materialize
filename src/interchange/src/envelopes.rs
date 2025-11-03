@@ -14,7 +14,7 @@ use std::sync::LazyLock;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use itertools::{EitherOrBoth, Itertools};
 use maplit::btreemap;
 use mz_ore::cast::CastFrom;
@@ -35,7 +35,7 @@ use crate::avro::DiffPair;
 // a given key at each timestamp.
 pub fn combine_at_timestamp<G: Scope, Tr>(
     arranged: Arranged<G, Tr>,
-) -> Collection<G, (Tr::KeyOwn, Vec<DiffPair<Tr::ValOwn>>), Diff>
+) -> VecCollection<G, (Tr::KeyOwn, Vec<DiffPair<Tr::ValOwn>>), Diff>
 where
     G::Timestamp: Lattice + Copy,
     Tr: Clone
@@ -45,21 +45,21 @@ where
         .stream
         .unary(Pipeline, "combine_at_timestamp", move |_, _| {
             move |input, output| {
-                while let Some((cap, batches)) = input.next() {
-                    let mut session = output.session(&cap);
-                    for batch in batches.drain(..) {
+                input.for_each_time(|time, batches| {
+                    let mut session = output.session(&time);
+                    for batch in batches.flat_map(IntoIterator::into_iter) {
                         let mut befores = vec![];
                         let mut afters = vec![];
 
                         let mut cursor = batch.cursor();
-                        while cursor.key_valid(&batch) {
-                            let k = cursor.key(&batch);
+                        while cursor.key_valid(batch) {
+                            let k = cursor.key(batch);
 
                             // Partition updates into retractions (befores)
                             // and insertions (afters).
-                            while cursor.val_valid(&batch) {
-                                let v = cursor.val(&batch);
-                                cursor.map_times(&batch, |t, diff| {
+                            while cursor.val_valid(batch) {
+                                let v = cursor.val(batch);
+                                cursor.map_times(batch, |t, diff| {
                                     let diff = Tr::owned_diff(diff);
                                     let update = (
                                         Tr::owned_time(t),
@@ -72,7 +72,7 @@ where
                                         afters.push(update);
                                     }
                                 });
-                                cursor.step_val(&batch);
+                                cursor.step_val(batch);
                             }
 
                             // Sort by timestamp.
@@ -112,10 +112,10 @@ where
                                 session.give(((Tr::owned_key(k), group), t, Diff::ONE));
                             }
 
-                            cursor.step_key(&batch);
+                            cursor.step_key(batch);
                         }
                     }
-                }
+                });
             }
         })
         .as_collection()

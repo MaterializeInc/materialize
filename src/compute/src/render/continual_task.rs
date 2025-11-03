@@ -154,7 +154,7 @@ use std::sync::Arc;
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::{Future, FutureExt, StreamExt};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, ContinualTaskConnection};
@@ -175,6 +175,7 @@ use mz_timely_util::operator::CollectionExt;
 use mz_timely_util::probe;
 use mz_timely_util::probe::ProbeNotify;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::{Filter, FrontierNotificator, Map, Operator};
 use timely::dataflow::{ProbeHandle, Scope};
@@ -194,7 +195,7 @@ pub(crate) struct ContinualTaskCtx<G: Scope<Timestamp = Timestamp>> {
     inputs_with_snapshot: Option<bool>,
     ct_inputs: BTreeSet<GlobalId>,
     ct_outputs: BTreeSet<GlobalId>,
-    pub ct_times: Vec<Collection<G, (), Diff>>,
+    pub ct_times: Vec<VecCollection<G, (), Diff>>,
 }
 
 /// An encapsulation of the transformation logic necessary on data coming into a
@@ -266,12 +267,12 @@ impl ContinualTaskSourceTransformer {
     /// were changed in the inputs.
     pub fn transform<S: Scope<Timestamp = Timestamp>>(
         &self,
-        oks: Collection<S, Row, Diff>,
-        errs: Collection<S, DataflowError, Diff>,
+        oks: VecCollection<S, Row, Diff>,
+        errs: VecCollection<S, DataflowError, Diff>,
     ) -> (
-        Collection<S, Row, Diff>,
-        Collection<S, DataflowError, Diff>,
-        Collection<S, (), Diff>,
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+        VecCollection<S, (), Diff>,
     ) {
         use ContinualTaskSourceTransformer::*;
         match self {
@@ -292,7 +293,7 @@ impl ContinualTaskSourceTransformer {
                 (oks.as_collection(), errs, times)
             }
             NormalReference => {
-                let times = Collection::empty(&oks.scope());
+                let times = VecCollection::empty(&oks.scope());
                 (oks, errs, times)
             }
             // When computing an self-referential output at `T`, start by
@@ -300,7 +301,7 @@ impl ContinualTaskSourceTransformer {
             // module rustdoc for how this fits into the larger picture.
             SelfReference { source_id } => {
                 let name = source_id.to_string();
-                let times = Collection::empty(&oks.scope());
+                let times = VecCollection::empty(&oks.scope());
                 // step_forward will panic at runtime if it receives a data or
                 // capability with a time that cannot be stepped forward (i.e.
                 // because it is already the max). We're safe here because this
@@ -400,7 +401,7 @@ impl<G: Scope<Timestamp = Timestamp>> ContinualTaskCtx<G> {
         Some(transformer)
     }
 
-    pub fn input_times(&self, scope: &G) -> Option<Collection<G, (), Diff>> {
+    pub fn input_times(&self, scope: &G) -> Option<VecCollection<G, (), Diff>> {
         // We have a name iff this is a CT dataflow.
         assert_eq!(self.is_ct_dataflow(), self.name.is_some());
         let Some(name) = self.name.as_ref() else {
@@ -431,9 +432,9 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        oks: Collection<G, Row, Diff>,
-        errs: Collection<G, DataflowError, Diff>,
-        append_times: Option<Collection<G, (), Diff>>,
+        oks: VecCollection<G, Row, Diff>,
+        errs: VecCollection<G, DataflowError, Diff>,
+        append_times: Option<VecCollection<G, (), Diff>>,
         flow_control_probe: &probe::Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         let name = sink_id.to_string();
@@ -498,8 +499,8 @@ where
 
 fn continual_task_sink<G: Scope<Timestamp = Timestamp>>(
     name: &str,
-    to_append: Collection<G, SourceData, Diff>,
-    append_times: Collection<G, (), Diff>,
+    to_append: VecCollection<G, SourceData, Diff>,
+    append_times: VecCollection<G, (), Diff>,
     as_of: Antichain<Timestamp>,
     write_handle: impl Future<Output = WriteHandle<SourceData, (), Timestamp, StorageDiff>>
     + Send
@@ -771,19 +772,21 @@ trait StepForward<G: Scope, D, R> {
     /// The caller is responsible for ensuring that all data and capabilities given
     /// to this operator can be stepped forward without panicking, otherwise the
     /// operator will panic at runtime.
-    fn step_forward(&self, name: &str) -> Collection<G, D, R>;
+    fn step_forward(&self, name: &str) -> VecCollection<G, D, R>;
 }
 
-impl<G, D, R> StepForward<G, D, R> for Collection<G, D, R>
+impl<G, D, R> StepForward<G, D, R> for VecCollection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
     R: Semigroup + 'static,
 {
-    fn step_forward(&self, name: &str) -> Collection<G, D, R> {
+    fn step_forward(&self, name: &str) -> VecCollection<G, D, R> {
         let name = format!("ct_step_forward({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
-        let (mut output, output_stream) = builder.new_output();
+        let (output, output_stream) = builder.new_output();
+        let mut output = OutputBuilder::from(output);
+
         // We step forward (by one) each data timestamp and capability. As a
         // result the output's frontier is guaranteed to be one past the input
         // frontier, so make this promise to timely.
@@ -824,31 +827,38 @@ trait TimesExtract<G: Scope, D, R> {
     ///
     /// The output may be partially consolidated, but no consolidation
     /// guarantees are made.
-    fn times_extract(&self, name: &str) -> (Collection<G, D, R>, Collection<G, (), R>);
+    fn times_extract(&self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>);
 }
 
-impl<G, D, R> TimesExtract<G, D, R> for Collection<G, D, R>
+impl<G, D, R> TimesExtract<G, D, R> for VecCollection<G, D, R>
 where
     G: Scope<Timestamp = Timestamp>,
     D: Clone + 'static,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_extract(&self, name: &str) -> (Collection<G, D, R>, Collection<G, (), R>) {
+    fn times_extract(&self, name: &str) -> (VecCollection<G, D, R>, VecCollection<G, (), R>) {
         let name = format!("ct_times_extract({})", name);
         let mut builder = OperatorBuilder::new(name, self.scope());
-        let (mut passthrough, passthrough_stream) = builder.new_output();
-        let (mut times, times_stream) = builder.new_output::<ConsolidatingContainerBuilder<_>>();
+        let (passthrough, passthrough_stream) = builder.new_output();
+        let mut passthrough = OutputBuilder::from(passthrough);
+        let (times, times_stream) = builder.new_output();
+        let mut times = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(times);
         let mut input = builder.new_input(&self.inner, Pipeline);
         builder.set_notify(false);
         builder.build(|_caps| {
             move |_frontiers| {
                 let mut passthrough = passthrough.activate();
                 let mut times = times.activate();
-                while let Some((cap, data)) = input.next() {
-                    let times_iter = data.iter().map(|(_data, ts, diff)| ((), *ts, diff.clone()));
-                    times.session_with_builder(&cap).give_iterator(times_iter);
-                    passthrough.session(&cap).give_container(data);
-                }
+                input.for_each_time(|time, data| {
+                    let mut times_session = times.session_with_builder(&time);
+                    let mut passthrough_session = passthrough.session(&time);
+                    for data in data {
+                        let times_iter =
+                            data.iter().map(|(_data, ts, diff)| ((), *ts, diff.clone()));
+                        times_session.give_iterator(times_iter);
+                        passthrough_session.give_container(data);
+                    }
+                });
             }
         });
         (
@@ -861,22 +871,22 @@ where
 trait TimesReduce<G: Scope, R> {
     /// This is essentially a specialized impl of consolidate, with a HashMap
     /// instead of the Trace.
-    fn times_reduce(&self, name: &str) -> Collection<G, (), R>;
+    fn times_reduce(&self, name: &str) -> VecCollection<G, (), R>;
 }
 
-impl<G, R> TimesReduce<G, R> for Collection<G, (), R>
+impl<G, R> TimesReduce<G, R> for VecCollection<G, (), R>
 where
     G: Scope<Timestamp = Timestamp>,
     R: Semigroup + 'static + std::fmt::Debug,
 {
-    fn times_reduce(&self, name: &str) -> Collection<G, (), R> {
+    fn times_reduce(&self, name: &str) -> VecCollection<G, (), R> {
         let name = format!("ct_times_reduce({})", name);
         self.inner
             .unary_frontier(Pipeline, &name, |_caps, _info| {
                 let mut notificator = FrontierNotificator::default();
                 let mut stash = HashMap::<_, R>::new();
-                move |input, output| {
-                    while let Some((cap, data)) = input.next() {
+                move |(input, frontier), output| {
+                    input.for_each(|cap, data| {
                         for ((), ts, diff) in data.drain(..) {
                             notificator.notify_at(cap.delayed(&ts));
                             if let Some(sum) = stash.get_mut(&ts) {
@@ -885,8 +895,8 @@ where
                                 stash.insert(ts, diff);
                             }
                         }
-                    }
-                    notificator.for_each(&[input.frontier()], |cap, _not| {
+                    });
+                    notificator.for_each(&[frontier], |cap, _not| {
                         if let Some(diff) = stash.remove(cap.time()) {
                             output.session(&cap).give(((), cap.time().clone(), diff));
                         }
@@ -933,7 +943,7 @@ mod tests {
 
                 // We should get the data out advanced by `step_forward` and
                 // also, crucially, the output frontier should do the same (i.e.
-                // this is why we can't simply use `Collection::delay`).
+                // this is why we can't simply use `VecCollection::delay`).
                 worker.step_while(|| probe.less_than(&out_ts.step_forward()));
                 expected.push((i, out_ts, 1));
             }

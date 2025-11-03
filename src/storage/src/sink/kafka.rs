@@ -85,7 +85,7 @@ use crate::render::sinks::SinkRender;
 use crate::statistics::SinkStatistics;
 use crate::storage_state::StorageState;
 use anyhow::{Context, anyhow, bail};
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use maplit::btreemap;
 use mz_expr::MirScalarExpr;
@@ -133,6 +133,7 @@ use rdkafka::types::RDKafkaErrorCode;
 use rdkafka::{Message, Offset, Statistics, TopicPartitionList};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use timely::PartialOrder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
@@ -157,10 +158,10 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
         storage_state: &mut StorageState,
         sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
         sink_id: GlobalId,
-        input: Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
+        input: VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
         // TODO(benesch): errors should stream out through the sink,
         // if we figure out a protocol for that.
-        _err_collection: Collection<G, DataflowError, Diff>,
+        _err_collection: VecCollection<G, DataflowError, Diff>,
     ) -> (Stream<G, HealthStatusMessage>, Vec<PressOnDropButton>) {
         let mut scope = input.scope();
 
@@ -627,7 +628,7 @@ struct KafkaHeader {
 /// Updates are sent in ascending timestamp order.
 fn sink_collection<G: Scope<Timestamp = Timestamp>>(
     name: String,
-    input: &Collection<G, KafkaMessage, Diff>,
+    input: &VecCollection<G, KafkaMessage, Diff>,
     sink_id: GlobalId,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
@@ -1358,18 +1359,18 @@ async fn fetch_partition_count_loop<F>(
 /// Input [`Row`] updates must me compatible with the given implementor of [`Encode`].
 fn encode_collection<G: Scope>(
     name: String,
-    input: &Collection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    input: &VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
     envelope: SinkEnvelope,
     connection: KafkaSinkConnection,
     storage_configuration: StorageConfiguration,
 ) -> (
-    Collection<G, KafkaMessage, Diff>,
+    VecCollection<G, KafkaMessage, Diff>,
     Stream<G, HealthStatusMessage>,
     PressOnDropButton,
 ) {
     let mut builder = AsyncOperatorBuilder::new(name, input.inner.scope());
 
-    let (output, stream) = builder.new_output();
+    let (output, stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let mut input = builder.new_input_for(&input.inner, Pipeline, &output);
 
     let (button, errors) = builder.build_fallible(move |caps| {

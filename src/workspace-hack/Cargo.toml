@@ -38,7 +38,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
-bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
+bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
@@ -76,7 +76,7 @@ hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", defaul
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.17", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
-itertools = { version = "0.13.0" }
+itertools = { version = "0.10.5" }
 libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -136,7 +136,7 @@ subtle = { version = "2.6.1" }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.106", features = ["extra-traits", "full", "visit", "visit-mut"] }
 thrift = { version = "0.17.0" }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
-timely = { version = "0.24.0" }
+timely = { version = "0.25.1" }
 tokio = { version = "1.47.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
@@ -183,7 +183,7 @@ bit-set = { version = "0.8.0" }
 bit-vec = { version = "0.8.0" }
 brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
-bytemuck = { version = "1.23.1", default-features = false, features = ["latest_stable_rust"] }
+bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.44", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
@@ -223,7 +223,7 @@ hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", defaul
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.17", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
-itertools = { version = "0.13.0" }
+itertools = { version = "0.10.5" }
 libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.22", features = ["static"] }
 lock_api = { version = "0.4.14", features = ["serde"] }
@@ -286,7 +286,7 @@ syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.106", features = ["extr
 thrift = { version = "0.17.0" }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
-timely = { version = "0.24.0" }
+timely = { version = "0.25.1" }
 tokio = { version = "1.47.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }

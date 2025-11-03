@@ -425,9 +425,10 @@ mod columnation {
 mod columnar {
     use columnar::common::PushIndexAs;
     use columnar::{
-        AsBytes, Clear, Columnar, Container, FromBytes, HeapSize, Index, IndexAs, Len, Push,
+        AsBytes, Borrow, Clear, Columnar, Container, FromBytes, HeapSize, Index, IndexAs, Len, Push,
     };
     use mz_ore::cast::CastFrom;
+    use std::ops::Range;
 
     use crate::{Row, RowRef};
 
@@ -459,7 +460,7 @@ mod columnar {
         }
     }
 
-    impl<BC: PushIndexAs<u64>> Container for Rows<BC, Vec<u8>> {
+    impl<BC: PushIndexAs<u64>> Borrow for Rows<BC, Vec<u8>> {
         type Ref<'a> = &'a RowRef;
         type Borrowed<'a>
             = Rows<BC::Borrowed<'a>, &'a [u8]>
@@ -489,7 +490,38 @@ mod columnar {
         {
             item
         }
+    }
 
+    impl<BC: PushIndexAs<u64>> Container for Rows<BC, Vec<u8>> {
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            if !range.is_empty() {
+                // Imported bounds will be relative to this starting offset.
+                let values_len: u64 = self.values.len().try_into().expect("must fit");
+
+                // Push all bytes that we can, all at once.
+                let other_lower = if range.start == 0 {
+                    0
+                } else {
+                    other.bounds.index_as(range.start - 1)
+                };
+                let other_upper = other.bounds.index_as(range.end - 1);
+                self.values.extend_from_self(
+                    other.values,
+                    usize::try_from(other_lower).expect("must fit")
+                        ..usize::try_from(other_upper).expect("must fit"),
+                );
+
+                // Each bound needs to be shifted by `values_len - other_lower`.
+                if values_len == other_lower {
+                    self.bounds.extend_from_self(other.bounds, range);
+                } else {
+                    for index in range {
+                        let shifted = other.bounds.index_as(index) - other_lower + values_len;
+                        self.bounds.push(&shifted)
+                    }
+                }
+            }
+        }
         fn reserve_for<'a, I>(&mut self, selves: I)
         where
             Self: 'a,

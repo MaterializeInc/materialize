@@ -107,6 +107,7 @@ use mz_storage_types::sources::mysql::{GtidPartition, gtid_set_frontier};
 use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::operators::{CapabilitySet, Concat};
 use timely::dataflow::{Scope, Stream};
@@ -141,9 +142,10 @@ pub(crate) fn render<G: Scope<Timestamp = GtidPartition>>(
         AsyncOperatorBuilder::new(format!("MySqlSnapshotReader({})", config.id), scope.clone());
 
     let (raw_handle, raw_data) = builder.new_output::<AccountedStackBuilder<_>>();
-    let (rewinds_handle, rewinds) = builder.new_output();
+    let (rewinds_handle, rewinds) = builder.new_output::<CapacityContainerBuilder<_>>();
     // Captures DefiniteErrors that affect the entire source, including all outputs
-    let (definite_error_handle, definite_errors) = builder.new_output();
+    let (definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
 
     // A global view of all outputs that will be snapshot by all workers.
     let mut all_outputs = vec![];

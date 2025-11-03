@@ -72,6 +72,7 @@ mod columnar_timestamp {
     use crate::Timestamp;
     use columnar::Columnar;
     use mz_ore::cast::CastFrom;
+    use std::ops::Range;
 
     /// A newtype wrapper for a vector of `Timestamp` values.
     #[derive(Clone, Copy, Default, Debug)]
@@ -118,7 +119,7 @@ mod columnar_timestamp {
         }
     }
 
-    impl columnar::Container for Timestamps<Vec<Timestamp>> {
+    impl columnar::Borrow for Timestamps<Vec<Timestamp>> {
         type Ref<'a> = Timestamp;
         type Borrowed<'a>
             = Timestamps<&'a [Timestamp]>
@@ -143,7 +144,13 @@ mod columnar_timestamp {
         {
             item
         }
+    }
 
+    impl columnar::Container for Timestamps<Vec<Timestamp>> {
+        #[inline(always)]
+        fn extend_from_self(&mut self, other: Self::Borrowed<'_>, range: Range<usize>) {
+            self.0.extend_from_self(other.0, range)
+        }
         #[inline(always)]
         fn reserve_for<'a, I>(&mut self, selves: I)
         where

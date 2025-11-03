@@ -8,12 +8,13 @@
 // by the Apache License, Version 2.0.
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_ore::soft_panic_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Diff, Timestamp};
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 
 /// This is for REFRESH options on materialized views. It adds an operator that rounds up the
@@ -23,9 +24,9 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 /// Note that this currently only works with 1-dim timestamps. (This is not an issue for WMR,
 /// because iteration numbers should disappear by the time the data gets to the Persist sink.)
 pub(crate) fn apply_refresh<G, D>(
-    coll: Collection<G, D, Diff>,
+    coll: VecCollection<G, D, Diff>,
     refresh_schedule: RefreshSchedule,
-) -> Collection<G, D, Diff>
+) -> VecCollection<G, D, Diff>
 where
     G: Scope<Timestamp = Timestamp>,
     D: Data,
@@ -34,7 +35,9 @@ where
     // like to round up frontiers as well as data: as soon as our input frontier passes a refresh
     // time, we'll round it up to the next refresh time.
     let mut builder = OperatorBuilder::new("apply_refresh".to_string(), coll.scope());
-    let (mut output_buf, output_stream) = builder.new_output::<ConsolidatingContainerBuilder<_>>();
+    let (output_buf, output_stream) = builder.new_output();
+    let mut output_buf = OutputBuilder::<_, ConsolidatingContainerBuilder<_>>::from(output_buf);
+
     let mut input = builder.new_input_connection(&coll.inner, Pipeline, []);
     builder.build(move |capabilities| {
         // This capability directly controls this operator's output frontier (because we have

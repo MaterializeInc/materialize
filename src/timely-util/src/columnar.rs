@@ -22,7 +22,7 @@ pub mod builder;
 
 use std::hash::Hash;
 
-use columnar::Container as _;
+use columnar::Borrow;
 use columnar::bytes::{EncodeDecode, Indexed};
 use columnar::common::IterOwn;
 use columnar::{Columnar, Ref};
@@ -33,7 +33,7 @@ use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, Me
 use mz_ore::region::Region;
 use timely::Accountable;
 use timely::bytes::arc::Bytes;
-use timely::container::{DrainContainer, IterContainer, PushInto};
+use timely::container::{DrainContainer, PushInto};
 use timely::dataflow::channels::ContainerBytes;
 
 /// A batcher for columnar storage.
@@ -65,15 +65,15 @@ pub enum Column<C: Columnar> {
 impl<C: Columnar> Column<C> {
     /// Borrows the container as a reference.
     #[inline]
-    pub fn borrow(&self) -> <C::Container as columnar::Container>::Borrowed<'_> {
+    pub fn borrow(&self) -> <C::Container as Borrow>::Borrowed<'_> {
         match self {
             Column::Typed(t) => t.borrow(),
-            Column::Bytes(b) => <<C::Container as columnar::Container>::Borrowed<'_>>::from_bytes(
+            Column::Bytes(b) => <<C::Container as Borrow>::Borrowed<'_>>::from_bytes(
                 &mut Indexed::decode(bytemuck::cast_slice(b)),
             ),
-            Column::Align(a) => <<C::Container as columnar::Container>::Borrowed<'_>>::from_bytes(
-                &mut Indexed::decode(a),
-            ),
+            Column::Align(a) => {
+                <<C::Container as Borrow>::Borrowed<'_>>::from_bytes(&mut Indexed::decode(a))
+            }
         }
     }
 }
@@ -116,18 +116,10 @@ impl<C: Columnar> Accountable for Column<C> {
     }
 }
 impl<C: Columnar> DrainContainer for Column<C> {
-    type Item<'a> = columnar::Ref<'a, C>;
-    type DrainIter<'a> = IterOwn<<C::Container as columnar::Container>::Borrowed<'a>>;
+    type Item<'a> = Ref<'a, C>;
+    type DrainIter<'a> = IterOwn<<C::Container as Borrow>::Borrowed<'a>>;
     #[inline]
     fn drain(&mut self) -> Self::DrainIter<'_> {
-        self.borrow().into_index_iter()
-    }
-}
-impl<C: Columnar> IterContainer for Column<C> {
-    type ItemRef<'a> = columnar::Ref<'a, C>;
-    type Iter<'a> = IterOwn<<C::Container as columnar::Container>::Borrowed<'a>>;
-    #[inline]
-    fn iter(&self) -> Self::Iter<'_> {
         self.borrow().into_index_iter()
     }
 }
@@ -231,13 +223,19 @@ mod tests {
         let column_typed: Column<i32> = Column::Typed(columns);
         let column_typed2 = column_typed.clone();
 
-        assert_eq!(column_typed2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        assert_eq!(
+            column_typed2.borrow().into_index_iter().collect::<Vec<_>>(),
+            vec![&1, &2, &3]
+        );
 
         let bytes = BytesMut::from(raw_columnar_bytes()).freeze();
         let column_bytes: Column<i32> = Column::Bytes(bytes);
         let column_bytes2 = column_bytes.clone();
 
-        assert_eq!(column_bytes2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        assert_eq!(
+            column_bytes2.borrow().into_index_iter().collect::<Vec<_>>(),
+            vec![&1, &2, &3]
+        );
 
         let raw = raw_columnar_bytes();
         let mut region: Region<u64> = crate::containers::alloc_aligned_zeroed(raw.len() / 8);
@@ -246,7 +244,10 @@ mod tests {
         let column_align: Column<i32> = Column::Align(region);
         let column_align2 = column_align.clone();
 
-        assert_eq!(column_align2.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        assert_eq!(
+            column_align2.borrow().into_index_iter().collect::<Vec<_>>(),
+            vec![&1, &2, &3]
+        );
     }
 
     /// Assert the desired contents of raw_columnar_bytes so that diagnosing test failures is
@@ -275,7 +276,10 @@ mod tests {
 
         let column: Column<i32> = Column::from_bytes(aligned_bytes);
         assert!(matches!(column, Column::Bytes(_)));
-        assert_eq!(column.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        assert_eq!(
+            column.borrow().into_index_iter().collect::<Vec<_>>(),
+            vec![&1, &2, &3]
+        );
 
         let buf = vec![0; raw.len() + 8];
         let align = buf.as_ptr().align_offset(std::mem::size_of::<u64>());
@@ -286,6 +290,9 @@ mod tests {
 
         let column: Column<i32> = Column::from_bytes(unaligned_bytes);
         assert!(matches!(column, Column::Align(_)));
-        assert_eq!(column.iter().collect::<Vec<_>>(), vec![&1, &2, &3]);
+        assert_eq!(
+            column.borrow().into_index_iter().collect::<Vec<_>>(),
+            vec![&1, &2, &3]
+        );
     }
 }

@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::iter;
 use std::sync::Arc;
 
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use mz_ore::cast::CastLossy;
 use mz_persist_client::operators::shard_source::SnapshotMode;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker};
@@ -45,12 +45,12 @@ use crate::source::types::{DecodeResult, SourceOutput, SourceRender};
 use crate::source::{self, RawSourceCreationConfig, SourceExportCreationConfig};
 use crate::upsert::{UpsertKey, UpsertValue};
 
-/// _Renders_ complete _differential_ [`Collection`]s
+/// _Renders_ complete _differential_ collections
 /// that represent the final source and its errors
 /// as requested by the original `CREATE SOURCE` statement,
 /// encapsulated in the passed `SourceInstanceDesc`.
 ///
-/// The first element in the returned tuple is the pair of [`Collection`]s,
+/// The first element in the returned tuple is the pair of Collections,
 /// the second is a type-erased token that will keep the source
 /// alive as long as it is not dropped.
 ///
@@ -68,8 +68,8 @@ pub fn render_source<'g, G, C>(
     BTreeMap<
         GlobalId,
         (
-            Collection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
-            Collection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
+            VecCollection<Child<'g, G, mz_repr::Timestamp>, Row, Diff>,
+            VecCollection<Child<'g, G, mz_repr::Timestamp>, DataflowError, Diff>,
         ),
     >,
     Vec<Stream<G, HealthStatusMessage>>,
@@ -162,15 +162,15 @@ fn render_source_stream<G, FromTime>(
     scope: &mut G,
     dataflow_debug_name: &String,
     export_id: GlobalId,
-    ok_source: Collection<G, SourceOutput<FromTime>, Diff>,
+    ok_source: VecCollection<G, SourceOutput<FromTime>, Diff>,
     data_config: SourceExportDataConfig,
     description: &IngestionDescription<CollectionMetadata>,
-    error_collections: &mut Vec<Collection<G, DataflowError, Diff>>,
+    error_collections: &mut Vec<VecCollection<G, DataflowError, Diff>>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: &RawSourceCreationConfig,
     rehydrated_token: impl std::any::Any + 'static,
 ) -> (
-    Collection<G, Row, Diff>,
+    VecCollection<G, Row, Diff>,
     Vec<PressOnDropButton>,
     Vec<Stream<G, HealthStatusMessage>>,
 )
@@ -457,8 +457,8 @@ struct KV {
 }
 
 fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
-    results: Collection<G, DecodeResult<FromTime>, Diff>,
-) -> Collection<G, KV, Diff> {
+    results: VecCollection<G, DecodeResult<FromTime>, Diff>,
+) -> VecCollection<G, KV, Diff> {
     results.map(move |res| {
         let val = res.value.map(|val_result| {
             val_result.map(|mut val| {
@@ -475,9 +475,9 @@ fn append_metadata_to_value<G: Scope, FromTime: Timestamp>(
 
 /// Convert from streams of [`DecodeResult`] to UpsertCommands, inserting the Key according to [`KeyEnvelope`]
 fn upsert_commands<G: Scope, FromTime: Timestamp>(
-    input: Collection<G, DecodeResult<FromTime>, Diff>,
+    input: VecCollection<G, DecodeResult<FromTime>, Diff>,
     upsert_envelope: UpsertEnvelope,
-) -> Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff> {
+) -> VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff> {
     let mut row_buf = Row::default();
     input.map(move |result| {
         let from_time = result.from_time;
@@ -604,8 +604,8 @@ fn upsert_commands<G: Scope, FromTime: Timestamp>(
 /// Convert from streams of [`DecodeResult`] to Rows, inserting the Key according to [`KeyEnvelope`]
 fn flatten_results_prepend_keys<G>(
     none_envelope: &NoneEnvelope,
-    results: Collection<G, KV, Diff>,
-) -> Collection<G, Result<Row, DataflowError>, Diff>
+    results: VecCollection<G, KV, Diff>,
+) -> VecCollection<G, Result<Row, DataflowError>, Diff>
 where
     G: Scope,
 {

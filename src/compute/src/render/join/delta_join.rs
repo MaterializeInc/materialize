@@ -18,17 +18,18 @@ use std::collections::{BTreeMap, BTreeSet};
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::delta_join::{DeltaJoinPlan, DeltaPathPlan, DeltaStagePlan};
 use mz_expr::MirScalarExpr;
 use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, Diff, Row, RowArena, SharedRow};
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::operator::{CollectionExt, SessionFor, StreamExt};
+use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::generic::Session;
 use timely::dataflow::operators::{Map, OkErr};
 use timely::progress::Antichain;
 use timely::progress::timestamp::Refines;
@@ -319,7 +320,7 @@ where
 /// the time of the update. This is crucial for correctness, as the total order on times of updates is used
 /// to ensure that any two updates are matched at most once.
 fn build_halfjoin<G, Tr, CF>(
-    updates: Collection<G, (Row, G::Timestamp), Diff>,
+    updates: VecCollection<G, (Row, G::Timestamp), Diff>,
     trace: Arranged<G, Tr>,
     prev_key: Vec<MirScalarExpr>,
     prev_thinning: Vec<usize>,
@@ -327,8 +328,8 @@ fn build_halfjoin<G, Tr, CF>(
     closure: JoinClosure,
     shutdown_probe: ShutdownProbe,
 ) -> (
-    Collection<G, (Row, G::Timestamp), Diff>,
-    Collection<G, DataflowError, Diff>,
+    VecCollection<G, (Row, G::Timestamp), Diff>,
+    VecCollection<G, DataflowError, Diff>,
 )
 where
     G: Scope,
@@ -374,7 +375,7 @@ where
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |session: &mut SessionFor<G, CB<Vec<_>>>,
+            move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
                   key,
                   stream_row,
                   lookup_row,
@@ -429,7 +430,7 @@ where
             // in that we seem to yield too much and do too little work when we do.
             |_timer, count| count > 1_000_000,
             // TODO(mcsherry): consider `RefOrMut` in `half_join` interface to allow re-use.
-            move |session: &mut SessionFor<G, CB<Vec<_>>>,
+            move |session: &mut Session<'_, '_, G::Timestamp, CB<Vec<_>>, _>,
                   key,
                   stream_row,
                   lookup_row,
@@ -476,7 +477,10 @@ fn build_update_stream<G, Tr>(
     as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
-) -> (Collection<G, Row, Diff>, Collection<G, DataflowError, Diff>)
+) -> (
+    VecCollection<G, Row, Diff>,
+    VecCollection<G, DataflowError, Diff>,
+)
 where
     G: Scope,
     G::Timestamp: RenderTimestamp,

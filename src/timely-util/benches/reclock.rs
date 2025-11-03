@@ -105,7 +105,7 @@ fn bench_reclock_simple(c: &mut Criterion) {
                                     data_cap.downgrade(&Partitioned::new_singleton(0, ts - 1));
                                 }
                                 if ts.is_multiple_of(data_interval) {
-                                    data.session(data_cap.clone()).give((
+                                    data.activate().session(&data_cap).give((
                                         ts,
                                         Partitioned::new_singleton(0, ts),
                                         Diff::ONE,

@@ -97,7 +97,7 @@ use std::time::Duration;
 
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -277,7 +277,7 @@ pub(crate) fn render<G>(
     scope: &G,
     collection_id: GlobalId,
     target: CollectionMetadata,
-    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
@@ -347,7 +347,7 @@ fn mint_batch_descriptions<G>(
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
     Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
@@ -377,7 +377,7 @@ where
         scope.clone(),
     );
 
-    let (output, output_stream) = mint_op.new_output();
+    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
     let (data_output, data_output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
 
     // The description and the data-passthrough outputs are both driven by this input, so
@@ -530,7 +530,7 @@ fn write_batches<G>(
     operator_name: &str,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     busy_signal: Arc<Semaphore>,

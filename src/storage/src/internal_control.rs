@@ -21,7 +21,7 @@ use mz_storage_types::sources::IngestionDescription;
 use serde::{Deserialize, Serialize};
 use timely::communication::Allocate;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::generic::{OutputHandle, source};
+use timely::dataflow::operators::generic::source;
 use timely::dataflow::operators::{Broadcast, Operator};
 use timely::progress::Antichain;
 use timely::scheduling::{Activator, Scheduler};
@@ -185,12 +185,12 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                 let mut cmd_index = 0;
                 let mut capability = Some(cap);
 
-                move |output: &mut OutputHandle<_, _, _>| {
-                    let Some(cap) = &capability else {
+                move |output| {
+                    let Some(cap) = capability.clone() else {
                         return;
                     };
 
-                    let mut session = output.session(cap);
+                    let mut session = output.session(&cap);
                     loop {
                         match input_rx.try_recv() {
                             Ok(command) => {
@@ -227,18 +227,18 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                     // current index of the next command.
                     let mut pending_commands = vec![(BTreeSet::new(), 0); scope.peers()];
 
-                    move |input, output: &mut OutputHandle<_, _, _>| {
-                        let Some(cap) = &capability else {
+                    move |(input, frontier), output| {
+                        let Some(cap) = capability.clone() else {
                             return;
                         };
 
-                        while let Some((_cap, data)) = input.next() {
+                        input.for_each(|_time, data| {
                             for (worker_id, cmd) in data.drain(..) {
                                 pending_commands[worker_id].0.insert(cmd);
                             }
-                        }
+                        });
 
-                        let mut session = output.session(cap);
+                        let mut session = output.session(&cap);
                         for (commands, next_idx) in &mut pending_commands {
                             while commands.first().is_some_and(|c| c.index == *next_idx) {
                                 let mut cmd = commands.pop_first().unwrap();
@@ -250,7 +250,9 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                             }
                         }
 
-                        if input.frontier().is_empty() {
+                        let _ = session;
+
+                        if frontier.is_empty() {
                             // Drop our capability to shut down.
                             capability = None;
                         }
@@ -268,10 +270,10 @@ pub(crate) fn setup_command_sequencer<'w, A: Allocate>(
                 let mut pending_commands = BTreeSet::new();
                 let mut next_idx = 0;
 
-                move |input| {
-                    while let Some((_cap, data)) = input.next() {
+                move |(input, _frontier)| {
+                    input.for_each(|_time, data| {
                         pending_commands.extend(data.drain(..));
-                    }
+                    });
 
                     while pending_commands
                         .first()

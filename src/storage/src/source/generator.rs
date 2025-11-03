@@ -262,7 +262,7 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
     }
 
     let (_progress_output, progress_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (health_output, health_stream) = builder.new_output();
+    let (health_output, health_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let busy_signal = Arc::clone(&config.busy_signal);
     let source_resume_uppers = config.source_resume_uppers.clone();
