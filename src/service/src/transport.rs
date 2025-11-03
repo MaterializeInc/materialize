@@ -230,9 +230,18 @@ where
                     println!("###### serve_connection after conn.send");
                     res
                 },
-                None => bail!("client disconnected"),
+                None => {
+                    println!("###### serve_connection client disconnected");
+                    bail!("client disconnected")
+                },
             },
-            _ = &mut cancel_rx => bail!("connection canceled"),
+            _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                println!("###### serve_connection sleep");
+            }
+            _ = &mut cancel_rx => {
+                println!("###### serve_connection connection canceled");
+                bail!("connection canceled")
+            },
         }
     }
 }
