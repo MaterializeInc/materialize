@@ -208,9 +208,17 @@ where
     Out: Message,
     H: GenericClient<In, Out>,
 {
-    println!("###### serve_connection");
+    println!(
+        "###### In: {}, Out: {}. serve_connection",
+        std::any::type_name::<In>(),
+        std::any::type_name::<Out>()
+    );
     let mut conn = Connection::start(stream, version, server_fqdn, timeout, metrics).await?;
-    println!("###### serve_connection after start");
+    println!(
+        "###### In: {}, Out: {}. serve_connection after start",
+        std::any::type_name::<In>(),
+        std::any::type_name::<Out>()
+    );
 
     let mut cancel_rx = cancel_rx;
     loop {
@@ -218,28 +226,28 @@ where
             // `Connection::recv` is documented to be cancel safe.
             inbound = conn.recv() => {
                 let msg = inbound?;
-                println!("###### serve_connection before handler.send({:?})", msg);
+                println!("###### In: {}, Out: {}. serve_connection before handler.send({:?})", std::any::type_name::<In>(), std::any::type_name::<Out>(), msg);
                 handler.send(msg).await?;
-                println!("###### serve_connection after handler.send");
+                println!("###### In: {}, Out: {}. serve_connection after handler.send", std::any::type_name::<In>(), std::any::type_name::<Out>());
             },
             // `GenericClient::recv` is documented to be cancel safe.
             outbound = handler.recv() => match outbound? {
                 Some(msg) => {
-                    println!("###### serve_connection before conn.send({:?})", msg);
+                    println!("###### In: {}, Out: {}. serve_connection before conn.send({:?})", std::any::type_name::<In>(), std::any::type_name::<Out>(), msg);
                     let res = conn.send(msg).await?;
-                    println!("###### serve_connection after conn.send");
+                    println!("###### In: {}, Out: {}. serve_connection after conn.send", std::any::type_name::<In>(), std::any::type_name::<Out>());
                     res
                 },
                 None => {
-                    println!("###### serve_connection client disconnected");
+                    println!("###### In: {}, Out: {}. serve_connection client disconnected", std::any::type_name::<In>(), std::any::type_name::<Out>());
                     bail!("client disconnected")
                 },
             },
             _ = tokio::time::sleep(Duration::from_secs(10)) => {
-                println!("###### serve_connection sleep");
+                println!("###### In: {}, Out: {}. serve_connection sleep", std::any::type_name::<In>(), std::any::type_name::<Out>());
             }
             _ = &mut cancel_rx => {
-                println!("###### serve_connection connection canceled");
+                println!("###### In: {}, Out: {}. serve_connection connection canceled", std::any::type_name::<In>(), std::any::type_name::<Out>());
                 bail!("connection canceled")
             },
         }
