@@ -277,7 +277,7 @@ def expression(
     level: int = 0,
 ) -> str:
     if level < 60:
-        if FUNC_OPS[data_type] and rng.random() < 0.7:
+        if FUNC_OPS[data_type] and rng.random() < 0.5:
             fnop = rng.choice(FUNC_OPS[data_type])
             if (
                 kind == ExprKind.ALL
