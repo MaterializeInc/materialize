@@ -140,7 +140,7 @@ timely = { version = "0.24.0" }
 tokio = { version = "1.47.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
-tokio-util = { version = "0.7.16", features = ["codec", "compat", "io", "time"] }
+tokio-util = { version = "0.7.17", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
@@ -152,7 +152,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
-unicode-normalization = { version = "0.1.24" }
+unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
@@ -290,7 +290,7 @@ timely = { version = "0.24.0" }
 tokio = { version = "1.47.1", features = ["full", "test-util", "tracing"] }
 tokio-postgres = { git = "https://github.com/MaterializeInc/rust-postgres", features = ["serde", "with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 tokio-stream = { version = "0.1.17", features = ["net", "sync"] }
-tokio-util = { version = "0.7.16", features = ["codec", "compat", "io", "time"] }
+tokio-util = { version = "0.7.17", features = ["codec", "compat", "io", "time"] }
 toml_datetime = { version = "0.6.11", default-features = false, features = ["serde"] }
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
@@ -302,7 +302,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
-unicode-normalization = { version = "0.1.24" }
+unicode-normalization = { version = "0.1.25" }
 url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
