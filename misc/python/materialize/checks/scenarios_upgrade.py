@@ -548,7 +548,6 @@ def upgrade_service_actions(
     scenario: Scenario,
     service_info: MzServiceUpgradeInfo,
     previous_service_info: MzServiceUpgradeInfo,
-    should_run_validate_action: bool = True,
 ) -> list[Action]:
     return [
         start_mz_read_only(
@@ -560,11 +559,6 @@ def upgrade_service_actions(
         ),
         WaitReadyMz(service_info.service_name),
         PromoteMz(service_info.service_name),
-        *(
-            [Validate(scenario, mz_service=service_info.service_name)]
-            if should_run_validate_action
-            else []
-        ),
         # Cleanup the previous service
         KillMz(capture_logs=True, mz_service=previous_service_info.service_name),
     ]
@@ -592,40 +586,42 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         return self.self_managed_previous_versions[0]
 
     def actions(self) -> list[Action]:
-        print(f"Upgrading from tag {self.base_version()}")
-        actions = []
         versions = (
             self.self_managed_previous_versions
             + [None]
             + self.self_managed_future_versions
         )
 
+        print(f"Upgrading through versions {[str(version) for version in versions]}")
+
         mz_services = create_mz_service_upgrade_info_list(versions)
 
-        for i, service_info in enumerate(mz_services):
-            if i == 0:
-                actions.extend(
-                    [
-                        StartMz(
-                            self,
-                            tag=service_info.version,
-                            mz_service=service_info.service_name,
-                            system_parameter_defaults=service_info.system_parameter_defaults,
-                        ),
-                        Initialize(self, mz_service=service_info.service_name),
-                        Manipulate(self, phase=1, mz_service=service_info.service_name),
-                        Manipulate(self, phase=2, mz_service=service_info.service_name),
-                        Validate(self, mz_service=service_info.service_name),
-                    ]
+        actions = [
+            StartMz(
+                self,
+                tag=mz_services[0].version,
+                mz_service=mz_services[0].service_name,
+                system_parameter_defaults=mz_services[0].system_parameter_defaults,
+            ),
+            Initialize(self, mz_service=mz_services[0].service_name),
+            Manipulate(self, phase=1, mz_service=mz_services[0].service_name),
+            Manipulate(self, phase=2, mz_service=mz_services[0].service_name),
+            Validate(self, mz_service=mz_services[0].service_name),
+        ]
+
+        for i, service_info in enumerate[MzServiceUpgradeInfo](
+            mz_services[1:], start=1
+        ):
+            actions.extend(
+                upgrade_service_actions(
+                    self,
+                    service_info=service_info,
+                    previous_service_info=mz_services[i - 1],
                 )
-            else:
-                actions.extend(
-                    upgrade_service_actions(
-                        self,
-                        service_info=service_info,
-                        previous_service_info=mz_services[i - 1],
-                    )
-                )
+                + [
+                    Validate(self, mz_service=service_info.service_name),
+                ]
+            )
 
         return actions
 
@@ -652,8 +648,6 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         return self.self_managed_previous_versions[0]
 
     def actions(self) -> list[Action]:
-        print(f"Upgrading from tag {self.base_version()}")
-        actions = []
         versions = (
             self.self_managed_previous_versions
             + [None]
@@ -664,44 +658,39 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
             versions,
         )
 
-        for i, service_info in enumerate(mz_services):
-            if i == 0:
+        actions = [
+            StartMz(
+                self,
+                tag=mz_services[0].version,
+                mz_service=mz_services[0].service_name,
+                system_parameter_defaults=mz_services[0].system_parameter_defaults,
+            ),
+            Initialize(self, mz_service=mz_services[0].service_name),
+            Manipulate(self, phase=1, mz_service=mz_services[0].service_name),
+        ]
+
+        for i, service_info in enumerate[MzServiceUpgradeInfo](
+            mz_services[1:], start=1
+        ):
+            actions.extend(
+                upgrade_service_actions(
+                    self,
+                    service_info=service_info,
+                    previous_service_info=mz_services[i - 1],
+                )
+            )
+
+            if i == 1:
+                # Manipulate the MZ instance after the first upgrade
                 actions.extend(
                     [
-                        StartMz(
-                            self,
-                            tag=service_info.version,
-                            mz_service=service_info.service_name,
-                            system_parameter_defaults=service_info.system_parameter_defaults,
-                        ),
-                        Initialize(self, mz_service=service_info.service_name),
-                        Manipulate(self, phase=1, mz_service=service_info.service_name),
+                        Manipulate(self, phase=2, mz_service=service_info.service_name),
+                        Validate(self, mz_service=service_info.service_name),
                     ]
                 )
             else:
-                if i == 1:
-                    # Manipulate the MZ instance after the first upgrade and
-                    # don't run validate since the second manipulation phase hasn't completed yet.
-                    actions.extend(
-                        upgrade_service_actions(
-                            self,
-                            service_info=service_info,
-                            previous_service_info=mz_services[i - 1],
-                            should_run_validate_action=False,
-                        )
-                        + [
-                            Manipulate(
-                                self, phase=2, mz_service=service_info.service_name
-                            ),
-                        ]
-                    )
-                else:
-                    actions.extend(
-                        upgrade_service_actions(
-                            self,
-                            service_info=service_info,
-                            previous_service_info=mz_services[i - 1],
-                        )
-                    )
+                actions.append(
+                    Validate(self, mz_service=service_info.service_name),
+                )
 
         return actions
