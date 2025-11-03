@@ -955,6 +955,8 @@ pub fn create_new_client_config(
             .as_millis()
             .to_string(),
     );
+    // TODO: workaround for https://github.com/confluentinc/librdkafka/issues/4833
+    config.set("enable.metrics.push", "false");
 
     config
 }
