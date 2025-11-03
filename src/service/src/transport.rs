@@ -208,7 +208,9 @@ where
     Out: Message,
     H: GenericClient<In, Out>,
 {
+    println!("###### serve_connection");
     let mut conn = Connection::start(stream, version, server_fqdn, timeout, metrics).await?;
+    println!("###### serve_connection after start");
 
     let mut cancel_rx = cancel_rx;
     loop {
@@ -216,11 +218,18 @@ where
             // `Connection::recv` is documented to be cancel safe.
             inbound = conn.recv() => {
                 let msg = inbound?;
+                println!("###### serve_connection before handler.send({:?})", msg);
                 handler.send(msg).await?;
+                println!("###### serve_connection after handler.send");
             },
             // `GenericClient::recv` is documented to be cancel safe.
             outbound = handler.recv() => match outbound? {
-                Some(msg) => conn.send(msg).await?,
+                Some(msg) => {
+                    println!("###### serve_connection before conn.send({:?})", msg);
+                    let res = conn.send(msg).await?;
+                    println!("###### serve_connection after conn.send");
+                    res
+                },
                 None => bail!("client disconnected"),
             },
             _ = &mut cancel_rx => bail!("connection canceled"),
