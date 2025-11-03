@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v25.3.0-beta.1](https://img.shields.io/badge/Version-v25.3.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.162.3](https://img.shields.io/badge/AppVersion-v0.162.3-informational?style=flat-square)
+![Version: v25.3.0-beta.1](https://img.shields.io/badge/Version-v25.3.0--beta.1-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v0.162.4](https://img.shields.io/badge/AppVersion-v0.162.4-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -159,7 +159,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` |  | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.162.3"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v0.162.4"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``nil`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
@@ -185,7 +185,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v0.162.3 \
+  --set operator.image.tag=v0.162.4 \
   materialize/materialize-operator
 ```
 
@@ -220,7 +220,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.162.3
+  environmentdImageRef: materialize/environmentd:v0.162.4
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:
