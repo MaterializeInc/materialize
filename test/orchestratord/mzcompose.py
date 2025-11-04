@@ -131,11 +131,7 @@ def retry(fn: Callable, timeout: int) -> None:
 # TODO: Cover https://materialize.com/docs/self-managed/v25.2/installation/configuration/
 
 
-class Operation:
-    pass
-
-
-class Fault(Operation):
+class Fault:
     def __init__(self, value: Any):
         self.value = value
 
@@ -199,7 +195,7 @@ class DeletePod(Fault):
         pass
 
 
-class Modification(Operation):
+class Modification:
     pick_by_default: bool = True
 
     def __init__(self, value: Any):
@@ -872,7 +868,7 @@ class SwapEnabledGlobal(Modification):
             validate_node_selector(node_selector, self.value, mods[StorageClass])
 
         # Clusterd can take a while to start up
-        retry(check_pods, 120)
+        retry(check_pods, 180)
 
         # TODO check that pods can actually use swap
 
