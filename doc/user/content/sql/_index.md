@@ -42,8 +42,6 @@ Commands related with session state and configurations:
 
 {{< yaml-list data="sql_commands_all" label="session" numColumns="1" >}}
 
-See also [`SHOW` commands](#show).
-
-## Other
+## Validations
 
 {{< yaml-list data="sql_commands_all" label="other" >}}
