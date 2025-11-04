@@ -99,7 +99,8 @@ const SELF_MANAGED_VERSIONS: &[Version] = &[
 pub struct PersistConfig {
     /// Info about which version of the code is running.
     pub build_version: Version,
-    /// Hostname of this persist user. Stored in state and used for debugging.
+    /// An opaque string describing the host of this persist client.
+    /// Stored in state and used for debugging.
     pub hostname: String,
     /// Whether this persist instance is running in a "cc" sized cluster.
     pub is_cc_active: bool,
@@ -181,7 +182,13 @@ impl PersistConfig {
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is
             // conditionally enabled by the process orchestrator.
-            hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
+            hostname: {
+                use std::fmt::Write;
+                let mut name = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned());
+                write!(&mut name, " {}", build_info.version)
+                    .expect("writing to string should not fail");
+                name
+            },
         }
     }
 
