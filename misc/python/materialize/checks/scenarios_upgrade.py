@@ -649,10 +649,100 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         versions = self.self_managed_versions + [None]
 
         print_upgrade_path(versions)
+        mz_services = create_mz_service_upgrade_info_list(
+            versions,
+        )
+
+        actions = [
+            StartMz(
+                self,
+                tag=mz_services[0].version,
+                mz_service=mz_services[0].service_name,
+                system_parameter_defaults=mz_services[0].system_parameter_defaults,
+            ),
+            Initialize(self, mz_service=mz_services[0].service_name),
+            Manipulate(self, phase=1, mz_service=mz_services[0].service_name),
+        ]
+
+        for i, service_info in enumerate[MzServiceUpgradeInfo](
+            mz_services[1:], start=1
+        ):
+            actions.extend(
+                upgrade_service_actions(
+                    self,
+                    service_info=service_info,
+                    previous_service_info=mz_services[i - 1],
+                )
+            )
+
+            if i == 1:
+                # Manipulate the MZ instance after the first upgrade
+                actions.extend(
+                    [
+                        Manipulate(self, phase=2, mz_service=service_info.service_name),
+                        Validate(self, mz_service=service_info.service_name),
+                    ]
+                )
+            else:
+                actions.append(
+                    Validate(self, mz_service=service_info.service_name),
+                )
+
+        return actions
+
+
+class SelfManagedRandomUpgradePath(Scenario):
+    """
+    Upgrade through a random selection of Self-Managed versions in the supported window, then
+    to the current version.
+    Run the first manipulation phase before all upgrades and the second during the upgrade.
+    """
+
+    def __init__(
+        self,
+        checks: list[type[Check]],
+        executor: Executor,
+        features: Features,
+        seed: str | None = None,
+    ):
+        self.self_managed_versions = get_supported_self_managed_versions()
+        super().__init__(checks, executor, features, seed)
+
+    def _generate_random_upgrade_path(
+        self,
+        versions: list[MzVersion],
+    ) -> list[MzVersion]:
+
+        # Return all versions if no seed is provided.
+        if self.rng is None or len(versions) == 0:
+            return versions
+
+        selected_versions = []
+        # For each version in the input list, randomly select it with a 50% chance.
+        for v in versions:
+            if self.rng.random() < 0.5:
+                selected_versions.append(v)
+
+        # Always include at least one version to avoid empty paths.
+        if len(selected_versions) == 0:
+            selected_versions.append(self.rng.choice(versions))
+
+        return selected_versions
+
+    def base_version(self) -> MzVersion:
+        return self.self_managed_versions[0]
+
+    def actions(self) -> list[Action]:
+
+        versions = self._generate_random_upgrade_path(self.self_managed_versions) + [
+            None
+        ]
 
         mz_services = create_mz_service_upgrade_info_list(
             versions,
         )
+
+        print_upgrade_path(versions)
 
         actions = [
             StartMz(
@@ -711,12 +801,14 @@ class SelfManagedEarliestToLatestDirectUpgrade(Scenario):
         return self.self_managed_versions[0]
 
     def actions(self) -> list[Action]:
-        print(f"Upgrading from tag {self.base_version()}")
+        versions = [self.base_version(), None]
+
+        print_upgrade_path(versions)
 
         (
             oldest_version_service_info,
             current_version_service_info,
-        ) = create_mz_service_upgrade_info_list([self.base_version(), None])
+        ) = create_mz_service_upgrade_info_list(versions)
         return [
             StartMz(
                 self,

@@ -1146,6 +1146,44 @@ steps:
               composition: platform-checks
               args: [--scenario=SelfManagedEarliestToLatestDirectUpgrade, "--seed=$BUILDKITE_JOB_ID"]
 
+
+      - id: checks-self-managed-random-upgrade-path-1
+        label: "Checks Self-Managed first random upgrade path"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=$((RANDOM + 1))"]
+
+
+      - id: checks-self-managed-random-upgrade-path-2
+        label: "Checks Self-Managed second random upgrade path"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=$((RANDOM + 2))"]
+
+      - id: checks-self-managed-random-upgrade-path-3
+        label: "Checks Self-Managed third random upgrade path"
+        depends_on: build-x86_64
+        timeout_in_minutes: 180
+        parallelism: 3
+        agents:
+          queue: hetzner-x86-64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=$((RANDOM + 3))"]
+
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery
     steps:
