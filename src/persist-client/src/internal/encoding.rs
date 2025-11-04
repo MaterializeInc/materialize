@@ -202,14 +202,14 @@ pub(crate) fn parse_id(id_prefix: &str, id_type: &str, encoded: &str) -> Result<
     Ok(*uuid.as_bytes())
 }
 
-pub(crate) fn check_data_version(code_version: &Version, data_version: &Version) {
-    if let Err(msg) = cfg::check_data_version(code_version, data_version) {
+pub(crate) fn assert_code_can_read_data(code_version: &Version, data_version: &Version) {
+    if !cfg::code_can_read_data(code_version, data_version) {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
         if cfg!(test) {
-            panic!("{msg}");
+            panic!("code at version {code_version} cannot read data with version {data_version}");
         } else {
-            halt!("{msg}");
+            halt!("code at version {code_version} cannot read data with version {data_version}");
         }
     }
 }
@@ -324,7 +324,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
         let diff = Self::from_proto(proto).expect("internal error: invalid encoded state");
-        check_data_version(build_version, &diff.applier_version);
+        assert_code_can_read_data(build_version, &diff.applier_version);
         diff
     }
 }
@@ -736,7 +736,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         let state = Rollup::from_proto(proto)
             .expect("internal error: invalid encoded state")
             .state;
-        check_data_version(build_version, &state.state.collections.version);
+        assert_code_can_read_data(build_version, &state.state.collections.version);
         state
     }
 }
@@ -2158,209 +2158,61 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn check_data_versions_with_self_managed_versions() {
-        #[track_caller]
-        fn testcase(
-            code: &str,
-            data: &str,
-            self_managed_versions: &[Version],
-            expected: Result<(), ()>,
-        ) {
-            let code = Version::parse(code).unwrap();
-            let data = Version::parse(data).unwrap();
-            let actual = cfg::check_data_version_with_self_managed_versions(
-                &code,
-                &data,
-                self_managed_versions,
-            )
-            .map_err(|_| ());
-            assert_eq!(actual, expected);
-        }
-
-        let none = [];
-        let one = [Version::new(0, 130, 0)];
-        let two = [Version::new(0, 130, 0), Version::new(0, 140, 0)];
-        let three = [
-            Version::new(0, 130, 0),
-            Version::new(0, 140, 0),
-            Version::new(0, 150, 0),
-        ];
-
-        testcase("0.130.0", "0.128.0", &none, Ok(()));
-        testcase("0.130.0", "0.129.0", &none, Ok(()));
-        testcase("0.130.0", "0.130.0", &none, Ok(()));
-        testcase("0.130.0", "0.130.1", &none, Ok(()));
-        testcase("0.130.1", "0.130.0", &none, Ok(()));
-        testcase("0.130.0", "0.131.0", &none, Ok(()));
-        testcase("0.130.0", "0.132.0", &none, Err(()));
-
-        testcase("0.129.0", "0.127.0", &none, Ok(()));
-        testcase("0.129.0", "0.128.0", &none, Ok(()));
-        testcase("0.129.0", "0.129.0", &none, Ok(()));
-        testcase("0.129.0", "0.129.1", &none, Ok(()));
-        testcase("0.129.1", "0.129.0", &none, Ok(()));
-        testcase("0.129.0", "0.130.0", &none, Ok(()));
-        testcase("0.129.0", "0.131.0", &none, Err(()));
-
-        testcase("0.130.0", "0.128.0", &one, Ok(()));
-        testcase("0.130.0", "0.129.0", &one, Ok(()));
-        testcase("0.130.0", "0.130.0", &one, Ok(()));
-        testcase("0.130.0", "0.130.1", &one, Ok(()));
-        testcase("0.130.1", "0.130.0", &one, Ok(()));
-        testcase("0.130.0", "0.131.0", &one, Ok(()));
-        testcase("0.130.0", "0.132.0", &one, Ok(()));
-
-        testcase("0.129.0", "0.127.0", &one, Ok(()));
-        testcase("0.129.0", "0.128.0", &one, Ok(()));
-        testcase("0.129.0", "0.129.0", &one, Ok(()));
-        testcase("0.129.0", "0.129.1", &one, Ok(()));
-        testcase("0.129.1", "0.129.0", &one, Ok(()));
-        testcase("0.129.0", "0.130.0", &one, Ok(()));
-        testcase("0.129.0", "0.131.0", &one, Err(()));
-
-        testcase("0.131.0", "0.129.0", &one, Ok(()));
-        testcase("0.131.0", "0.130.0", &one, Ok(()));
-        testcase("0.131.0", "0.131.0", &one, Ok(()));
-        testcase("0.131.0", "0.131.1", &one, Ok(()));
-        testcase("0.131.1", "0.131.0", &one, Ok(()));
-        testcase("0.131.0", "0.132.0", &one, Ok(()));
-        testcase("0.131.0", "0.133.0", &one, Err(()));
-
-        testcase("0.130.0", "0.128.0", &two, Ok(()));
-        testcase("0.130.0", "0.129.0", &two, Ok(()));
-        testcase("0.130.0", "0.130.0", &two, Ok(()));
-        testcase("0.130.0", "0.130.1", &two, Ok(()));
-        testcase("0.130.1", "0.130.0", &two, Ok(()));
-        testcase("0.130.0", "0.131.0", &two, Ok(()));
-        testcase("0.130.0", "0.132.0", &two, Ok(()));
-        testcase("0.130.0", "0.135.0", &two, Ok(()));
-        testcase("0.130.0", "0.138.0", &two, Ok(()));
-        testcase("0.130.0", "0.139.0", &two, Ok(()));
-        testcase("0.130.0", "0.140.0", &two, Ok(()));
-        testcase("0.130.9", "0.140.0", &two, Ok(()));
-        testcase("0.130.0", "0.140.1", &two, Ok(()));
-        testcase("0.130.3", "0.140.1", &two, Ok(()));
-        testcase("0.130.3", "0.140.9", &two, Ok(()));
-        testcase("0.130.0", "0.141.0", &two, Err(()));
-        testcase("0.129.0", "0.133.0", &two, Err(()));
-        testcase("0.129.0", "0.140.0", &two, Err(()));
-        testcase("0.131.0", "0.133.0", &two, Err(()));
-        testcase("0.131.0", "0.140.0", &two, Err(()));
-
-        testcase("0.130.0", "0.128.0", &three, Ok(()));
-        testcase("0.130.0", "0.129.0", &three, Ok(()));
-        testcase("0.130.0", "0.130.0", &three, Ok(()));
-        testcase("0.130.0", "0.130.1", &three, Ok(()));
-        testcase("0.130.1", "0.130.0", &three, Ok(()));
-        testcase("0.130.0", "0.131.0", &three, Ok(()));
-        testcase("0.130.0", "0.132.0", &three, Ok(()));
-        testcase("0.130.0", "0.135.0", &three, Ok(()));
-        testcase("0.130.0", "0.138.0", &three, Ok(()));
-        testcase("0.130.0", "0.139.0", &three, Ok(()));
-        testcase("0.130.0", "0.140.0", &three, Ok(()));
-        testcase("0.130.9", "0.140.0", &three, Ok(()));
-        testcase("0.130.0", "0.140.1", &three, Ok(()));
-        testcase("0.130.3", "0.140.1", &three, Ok(()));
-        testcase("0.130.3", "0.140.9", &three, Ok(()));
-        testcase("0.130.0", "0.141.0", &three, Err(()));
-        testcase("0.129.0", "0.133.0", &three, Err(()));
-        testcase("0.129.0", "0.140.0", &three, Err(()));
-        testcase("0.131.0", "0.133.0", &three, Err(()));
-        testcase("0.131.0", "0.140.0", &three, Err(()));
-        testcase("0.130.0", "0.150.0", &three, Err(()));
-
-        testcase("0.140.0", "0.138.0", &three, Ok(()));
-        testcase("0.140.0", "0.139.0", &three, Ok(()));
-        testcase("0.140.0", "0.140.0", &three, Ok(()));
-        testcase("0.140.0", "0.140.1", &three, Ok(()));
-        testcase("0.140.1", "0.140.0", &three, Ok(()));
-        testcase("0.140.0", "0.141.0", &three, Ok(()));
-        testcase("0.140.0", "0.142.0", &three, Ok(()));
-        testcase("0.140.0", "0.145.0", &three, Ok(()));
-        testcase("0.140.0", "0.148.0", &three, Ok(()));
-        testcase("0.140.0", "0.149.0", &three, Ok(()));
-        testcase("0.140.0", "0.150.0", &three, Ok(()));
-        testcase("0.140.9", "0.150.0", &three, Ok(()));
-        testcase("0.140.0", "0.150.1", &three, Ok(()));
-        testcase("0.140.3", "0.150.1", &three, Ok(()));
-        testcase("0.140.3", "0.150.9", &three, Ok(()));
-        testcase("0.140.0", "0.151.0", &three, Err(()));
-        testcase("0.139.0", "0.143.0", &three, Err(()));
-        testcase("0.139.0", "0.150.0", &three, Err(()));
-        testcase("0.141.0", "0.143.0", &three, Err(()));
-        testcase("0.141.0", "0.150.0", &three, Err(()));
-
-        testcase("0.150.0", "0.148.0", &three, Ok(()));
-        testcase("0.150.0", "0.149.0", &three, Ok(()));
-        testcase("0.150.0", "0.150.0", &three, Ok(()));
-        testcase("0.150.0", "0.150.1", &three, Ok(()));
-        testcase("0.150.1", "0.150.0", &three, Ok(()));
-        testcase("0.150.0", "0.151.0", &three, Ok(()));
-        testcase("0.150.0", "0.152.0", &three, Ok(()));
-        testcase("0.150.0", "0.155.0", &three, Ok(()));
-        testcase("0.150.0", "0.158.0", &three, Ok(()));
-        testcase("0.150.0", "0.159.0", &three, Ok(()));
-        testcase("0.150.0", "0.160.0", &three, Ok(()));
-        testcase("0.150.9", "0.160.0", &three, Ok(()));
-        testcase("0.150.0", "0.160.1", &three, Ok(()));
-        testcase("0.150.3", "0.160.1", &three, Ok(()));
-        testcase("0.150.3", "0.160.9", &three, Ok(()));
-        testcase("0.150.0", "0.161.0", &three, Ok(()));
-        testcase("0.149.0", "0.153.0", &three, Err(()));
-        testcase("0.149.0", "0.160.0", &three, Err(()));
-        testcase("0.151.0", "0.153.0", &three, Err(()));
-        testcase("0.151.0", "0.160.0", &three, Err(()));
-    }
-
-    #[mz_ore::test]
     fn check_data_versions() {
         #[track_caller]
         fn testcase(code: &str, data: &str, expected: Result<(), ()>) {
             let code = Version::parse(code).unwrap();
             let data = Version::parse(data).unwrap();
             #[allow(clippy::disallowed_methods)]
-            let actual =
-                std::panic::catch_unwind(|| check_data_version(&code, &data)).map_err(|_| ());
-            assert_eq!(actual, expected);
+            let actual = cfg::code_can_write_data(&code, &data)
+                .then_some(())
+                .ok_or(());
+            assert_eq!(actual, expected, "data at {data} read by code {code}");
         }
 
-        testcase("0.10.0-dev", "0.10.0-dev", Ok(()));
-        testcase("0.10.0-dev", "0.10.0", Ok(()));
+        testcase("0.160.0-dev", "0.160.0-dev", Ok(()));
+        testcase("0.160.0-dev", "0.160.0", Err(()));
         // Note: Probably useful to let tests use two arbitrary shas on main, at
         // the very least for things like git bisect.
-        testcase("0.10.0-dev", "0.11.0-dev", Ok(()));
-        testcase("0.10.0-dev", "0.11.0", Ok(()));
-        testcase("0.10.0-dev", "0.12.0-dev", Err(()));
-        testcase("0.10.0-dev", "0.12.0", Err(()));
-        testcase("0.10.0-dev", "0.13.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.161.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.161.0", Err(()));
+        testcase("0.160.0-dev", "0.162.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.162.0", Err(()));
+        testcase("0.160.0-dev", "0.163.0-dev", Err(()));
 
-        testcase("0.10.0", "0.8.0-dev", Ok(()));
-        testcase("0.10.0", "0.8.0", Ok(()));
-        testcase("0.10.0", "0.9.0-dev", Ok(()));
-        testcase("0.10.0", "0.9.0", Ok(()));
-        testcase("0.10.0", "0.10.0-dev", Ok(()));
-        testcase("0.10.0", "0.10.0", Ok(()));
-        // Note: This is what it would look like to run a version of the catalog
-        // upgrade checker built from main.
-        testcase("0.10.0", "0.11.0-dev", Ok(()));
-        testcase("0.10.0", "0.11.0", Ok(()));
-        testcase("0.10.0", "0.11.1", Ok(()));
-        testcase("0.10.0", "0.11.1000000", Ok(()));
-        testcase("0.10.0", "0.12.0-dev", Err(()));
-        testcase("0.10.0", "0.12.0", Err(()));
-        testcase("0.10.0", "0.13.0-dev", Err(()));
+        testcase("0.160.0", "0.158.0-dev", Ok(()));
+        testcase("0.160.0", "0.158.0", Ok(()));
+        testcase("0.160.0", "0.159.0-dev", Ok(()));
+        testcase("0.160.0", "0.159.0", Ok(()));
+        testcase("0.160.0", "0.160.0-dev", Ok(()));
+        testcase("0.160.0", "0.160.0", Ok(()));
 
-        testcase("0.10.1", "0.9.0", Ok(()));
-        testcase("0.10.1", "0.10.0", Ok(()));
-        testcase("0.10.1", "0.11.0", Ok(()));
-        testcase("0.10.1", "0.11.1", Ok(()));
-        testcase("0.10.1", "0.11.100", Ok(()));
+        testcase("0.160.0", "0.161.0-dev", Err(()));
+        testcase("0.160.0", "0.161.0", Err(()));
+        testcase("0.160.0", "0.161.1", Err(()));
+        testcase("0.160.0", "0.161.1000000", Err(()));
+        testcase("0.160.0", "0.162.0-dev", Err(()));
+        testcase("0.160.0", "0.162.0", Err(()));
+        testcase("0.160.0", "0.163.0-dev", Err(()));
 
-        // This is probably a bad idea (seems as if we've downgraded from
-        // running v0.10.1 to v0.10.0, an earlier patch version of the same
-        // minor version), but not much we can do, given the `state_version =
-        // max(code_version, prev_state_version)` logic we need to prevent
-        // rolling back an arbitrary number of versions.
-        testcase("0.10.0", "0.10.1", Ok(()));
+        testcase("0.160.1", "0.159.0", Ok(()));
+        testcase("0.160.1", "0.160.0", Ok(()));
+        testcase("0.160.1", "0.161.0", Err(()));
+        testcase("0.160.1", "0.161.1", Err(()));
+        testcase("0.160.1", "0.161.100", Err(()));
+        testcase("0.160.0", "0.160.1", Err(()));
+
+        testcase("0.160.1", "26.0.0", Err(()));
+        testcase("26.0.0", "0.160.1", Ok(()));
+        testcase("26.2.0", "0.160.1", Ok(()));
+        testcase("26.200.200", "0.160.1", Ok(()));
+
+        testcase("27.0.0", "0.160.1", Err(()));
+        testcase("27.0.0", "0.16000.1", Err(()));
+        testcase("27.0.0", "26.0.1", Ok(()));
+        testcase("27.1000.100", "26.0.1", Ok(()));
+        testcase("28.0.0", "26.0.1", Err(()));
+        testcase("28.0.0", "26.1000.1", Err(()));
+        testcase("28.0.0", "27.0.0", Ok(()));
     }
 }

@@ -2386,7 +2386,7 @@ Trace {
                         name: "catalog_content_version",
                     },
                     SettingValue {
-                        value: "0.0.0",
+                        value: "0.0.0+dummy",
                     },
                 ),
                 2,

@@ -558,12 +558,14 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_unopened_deploy_generation_fencing() {
-    let persist_client = PersistClient::new_for_tests().await;
+    let mut persist_cache = PersistClientCache::new_no_metrics();
+    persist_cache.cfg.build_version = semver::Version::new(0, 1, 0);
+    let persist_client = persist_cache
+        .open(PersistLocation::new_in_mem())
+        .await
+        .unwrap();
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_unopened_deploy_generation_fencing(state_builder).await;
-}
 
-async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogStateBuilder) {
     // Initialize catalog.
     let deploy_generation = 0;
     let version = semver::Version::new(0, 1, 0);
@@ -654,10 +656,7 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         .await
         .unwrap_err();
     assert!(
-        matches!(
-            err,
-            DurableCatalogError::Fence(FenceError::DeployGeneration { .. })
-        ),
+        matches!(err, DurableCatalogError::IncompatiblePersistVersion { .. }),
         "unexpected err: {err:?}"
     );
 }
@@ -893,8 +892,14 @@ async fn test_persist_version_fencing() {
     }
 
     testcase("0.10.0", "0.10.0", Ok(())).await;
-    testcase("0.10.0", "0.11.0", Ok(())).await;
-    testcase("0.10.0", "0.12.0", Err(())).await;
+    testcase("0.147.0", "0.148.1", Ok(())).await;
+    testcase("0.10.0", "0.148.1", Err(())).await;
+    testcase("0.147.0", "0.158.0", Ok(())).await;
+    testcase("0.147.0", "26.0.0", Ok(())).await;
+    testcase("0.160.0", "26.0.0", Ok(())).await;
+    testcase("26.0.0", "26.10.0", Ok(())).await;
+    testcase("26.1.0", "27.0.0", Ok(())).await;
+    testcase("0.147.0", "27.0.0", Err(())).await;
 }
 
 #[mz_ore::test(tokio::test)]
