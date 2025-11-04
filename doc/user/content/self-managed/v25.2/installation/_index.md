@@ -1,6 +1,6 @@
 ---
 title: "Installation"
-description: "Installation guides for self-managed Materialize."
+description: "Installation guides for Self-Managed Materialize."
 disable_list: true
 aliases:
   - /self-managed/installation/

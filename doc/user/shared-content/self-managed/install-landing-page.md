@@ -1,5 +1,5 @@
-You can install self-managed Materialize on a Kubernetes cluster running locally
-or on a cloud provider. Self-managed Materialize requires:
+You can install Self-Managed Materialize on a Kubernetes cluster running locally
+or on a cloud provider. Self-Managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 

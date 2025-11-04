@@ -1,0 +1,424 @@
+columns:
+  - column: command
+  - column: object
+  - column: labels
+rows:
+  - command: "[`ALTER CLUSTER`](/sql/alter-cluster)"
+    object: "Cluster"
+    labels:
+      - "object"
+  - command: "[`ALTER CONNECTION`](/sql/alter-connection)"
+    object: "Connection"
+    labels:
+      - "object"
+      - "connection"
+  - command: "[`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges)"
+    object: "Default Privileges"
+    labels:
+      - "rbac"
+      - "privilege"
+  - command: "[`ALTER INDEX`](/sql/alter-index)"
+    object: "Index"
+    labels:
+      - "object"
+  - command: "[`ALTER MATERIALIZED VIEW`](/sql/alter-materialized-view)"
+    object: "Materialized View"
+    labels:
+      - "object"
+  - command: "[`ALTER NETWORK POLICY`](/sql/alter-network-policy)"
+    object: "Network Policy"
+    labels:
+      - "object"
+      - "connection"
+  - command: "[`ALTER OWNER`](/sql/alter-owner)"
+    object: "Owner"
+    labels:
+      - "rbac"
+      - "owner"
+  - command: "[`ALTER ... RENAME`](/sql/alter-rename)"
+    labels:
+      - "object"
+  - command: "[`ALTER ROLE`](/sql/alter-role)"
+    object: "Role"
+    labels:
+      - "object"
+      - "rbac"
+      - "role"
+  - command: "[`ALTER SECRET`](/sql/alter-secret)"
+    object: "Secret"
+    labels:
+      - "object"
+  - command: "[`ALTER SINK`](/sql/alter-sink)"
+    object: "Sink"
+    labels:
+      - "object"
+      - "output"
+      - "sink"
+  - command: "[`ALTER SOURCE`](/sql/alter-source)"
+    object: "Source"
+    labels:
+      - "object"
+  - command: "[`ALTER ... SWAP`](/sql/alter-swap)"
+    labels:
+      - "object"
+  - command: "[`ALTER SYSTEM RESET`](/sql/alter-system-reset)"
+    labels:
+      - "system"
+  - command: "[`ALTER SYSTEM SET`](/sql/alter-system-set)"
+    labels:
+      - "system"
+  - command: "[`ALTER TABLE`](/sql/alter-table)"
+    object: "Table"
+    labels:
+      - "object"
+  - command: "[`BEGIN`](/sql/begin)"
+    labels:
+      - "txn"
+  - command: "[`CLOSE`](/sql/close)"
+    labels:
+      - "cursor"
+  - command: "[`COMMENT ON`](/sql/comment-on)"
+    labels:
+      - "misc"
+  - command: "[`COMMIT`](/sql/commit)"
+    labels:
+      - "txn"
+  - command: "[`COPY FROM`](/sql/copy-from)"
+    labels:
+      - "crud"
+  - command: "[`COPY TO`](/sql/copy-to)"
+    labels:
+      - "Query Related"
+      - "output"
+  - command: "[`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica)"
+    object: "Cluster Replica"
+    labels:
+      - "object"
+  - command: "[`CREATE CLUSTER`](/sql/create-cluster)"
+    object: "Cluster"
+    labels:
+      - "object"
+  - command: "[`CREATE CONNECTION`](/sql/create-connection)"
+    object: "Connection"
+    labels:
+      - "object"
+  - command: "[`CREATE DATABASE`](/sql/create-database)"
+    object: "Database"
+    labels:
+      - "object"
+  - command: "[`CREATE INDEX`](/sql/create-index)"
+    object: "Index"
+    labels:
+      - "object"
+  - command: "[`CREATE MATERIALIZED VIEW`](/sql/create-materialized-view)"
+    object: "Materialized View"
+    labels:
+      - "object"
+  - command: "[`CREATE NETWORK POLICY`](/sql/create-network-policy)"
+    object: "Network Policy"
+    labels:
+      - "object"
+  - command: "[`CREATE ROLE`](/sql/create-role)"
+    object: "Role"
+    labels:
+      - "object"
+      - "rbac"
+      - "role"
+  - command: "[`CREATE SCHEMA`](/sql/create-schema)"
+    object: "Schema"
+    labels:
+      - "object"
+  - command: "[`CREATE SECRET`](/sql/create-secret)"
+    object: "Secret"
+    labels:
+      - "object"
+  - command: "[`CREATE SINK`](/sql/create-sink)"
+    object: "Sink"
+    labels:
+      - "object"
+      - "output"
+      - "sink"
+  - command: "[`CREATE SOURCE`](/sql/create-source)"
+    object: "Source"
+    labels:
+      - "object"
+  - command: "[`CREATE TABLE`](/sql/create-table)"
+    object: "Table"
+    labels:
+      - "object"
+  - command: "[`CREATE TYPE`](/sql/create-type)"
+    object: "Type"
+    labels:
+      - "object"
+  - command: "[`CREATE VIEW`](/sql/create-view)"
+    object: "View"
+    labels:
+      - "object"
+  - command: "[`DEALLOCATE`](/sql/deallocate)"
+    labels:
+      - "prepared statements"
+  - command: "[`DECLARE`](/sql/declare)"
+    labels:
+      - "output"
+      - "cursor"
+  - command: "[`DELETE`](/sql/delete)"
+    labels:
+      - "crud"
+  - command: "[`DISCARD`](/sql/discard)"
+    object: "session state"
+    labels:
+      - "session"
+  - command: "[`DROP CLUSTER REPLICA`](/sql/drop-cluster-replica)"
+    object: "Cluster Replica"
+    labels:
+      - "object"
+  - command: "[`DROP CLUSTER`](/sql/drop-cluster)"
+    object: "Cluster"
+    labels:
+      - "object"
+  - command: "[`DROP CONNECTION`](/sql/drop-connection)"
+    object: "Connection"
+    labels:
+      - "object"
+  - command: "[`DROP DATABASE`](/sql/drop-database)"
+    object: "Database"
+    labels:
+      - "object"
+  - command: "[`DROP INDEX`](/sql/drop-index)"
+    object: "Index"
+    labels:
+      - "object"
+  - command: "[`DROP MATERIALIZED VIEW`](/sql/drop-materialized-view)"
+    object: "Materialized View"
+    labels:
+      - "object"
+  - command: "[`DROP NETWORK POLICY`](/sql/drop-network-policy)"
+    object: "Network Policy"
+    labels:
+      - "object"
+  - command: "[`DROP OWNED`](/sql/drop-owned)"
+    labels:
+      - "rbac"
+      - "owner"
+  - command: "[`DROP ROLE`](/sql/drop-role) <br>[`DROP USER`](/sql/drop-user)"
+    object: "Role"
+    labels:
+      - "object"
+      - "rbac"
+      - "role"
+  - command: "[`DROP SCHEMA`](/sql/drop-schema)"
+    object: "Schema"
+    labels:
+      - "object"
+  - command: "[`DROP SECRET`](/sql/drop-secret)"
+    object: "Secret"
+    labels:
+      - "object"
+  - command: "[`DROP SINK`](/sql/drop-sink)"
+    object: "Sink"
+    labels:
+      - "object"
+      - "sink"
+  - command: "[`DROP SOURCE`](/sql/drop-source)"
+    object: "Source"
+    labels:
+      - "object"
+  - command: "[`DROP TABLE`](/sql/drop-table)"
+    object: "Table"
+    labels:
+      - "object"
+  - command: "[`DROP TYPE`](/sql/drop-type)"
+    object: "Type"
+    labels:
+      - "object"
+  - command: "[`DROP VIEW`](/sql/drop-view)"
+    object: "View"
+    labels:
+      - "object"
+  - command: "[`EXECUTE`](/sql/execute)"
+    labels:
+      - "prepared statements"
+  - command: "[`EXPLAIN ANALYZE`](/sql/explain-analyze)"
+    labels:
+      - "explain"
+  - command: "[`EXPLAIN FILTER PUSHDOWN`](/sql/explain-filter-pushdown)"
+    labels:
+      - "explain"
+  - command: "[`EXPLAIN PLAN`](/sql/explain-plan)"
+    labels:
+      - "explain"
+  - command: "[`EXPLAIN SCHEMA`](/sql/explain-schema)"
+    labels:
+      - "explain"
+  - command: "[`EXPLAIN TIMESTAMP`](/sql/explain-timestamp)"
+    labels:
+      - "explain"
+  - command: "[`FETCH`](/sql/fetch)"
+    labels:
+      - "crud"
+      - "output"
+      - "cursor"
+  - command: "[`GRANT PRIVILEGE`](/sql/grant-privilege)"
+    object: "role_privilege"
+    labels:
+      - "rbac"
+      - "privilege"
+  - command: "[`GRANT ROLE`](/sql/grant-role)"
+    object: "Role"
+    labels:
+      - "rbac"
+      - "role"
+  - command: "[`INSERT`](/sql/insert)"
+    labels:
+      - "crud"
+  - command: "[`PREPARE`](/sql/prepare)"
+    labels:
+      - "prepared statements"
+  - command: "[`REASSIGN OWNED`](/sql/reassign-owned)"
+    object: "Owner"
+    labels:
+      - "rbac"
+      - "owner"
+  - command: "[`RESET`](/sql/reset)"
+    object: "config"
+    labels:
+      - "session"
+  - command: "[`REVOKE PRIVILEGE`](/sql/revoke-privilege)"
+    object: "role_privilege"
+    labels:
+      - "rbac"
+      - "privilege"
+  - command: "[`REVOKE ROLE`](/sql/revoke-role)"
+    object: "Role"
+    labels:
+      - "rbac"
+      - "role"
+  - command: "[`ROLLBACK`](/sql/rollback)"
+    labels:
+      - "txn"
+  - command: "[`SELECT`](/sql/select)"
+    labels:
+      - "crud"
+      - "output"
+      - "select_subscribe"
+  - command: "[`SET`](/sql/set)"
+    object: "config"
+    labels:
+      - "session"
+  - command: "[`SHOW`](/sql/show)"
+    object: "config"
+    labels:
+      - "show"
+      - "session"
+  - command: "[`SHOW CLUSTER REPLICAS`](/sql/show-cluster-replicas)"
+    labels:
+      - "show"
+  - command: "[`SHOW CLUSTERS`](/sql/show-clusters)"
+    labels:
+      - "show"
+  - command: "[`SHOW COLUMNS`](/sql/show-columns)"
+    labels:
+      - "show"
+  - command: "[`SHOW CONNECTIONS`](/sql/show-connections)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE CLUSTER`](/sql/show-create-cluster)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE CONNECTION`](/sql/show-create-connection)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE INDEX`](/sql/show-create-index)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE MATERIALIZED VIEW`](/sql/show-create-materialized-view)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE SINK`](/sql/show-create-sink)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE SOURCE`](/sql/show-create-source)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE TABLE`](/sql/show-create-table)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE TYPE`](/sql/show-create-type)"
+    labels:
+      - "show"
+  - command: "[`SHOW CREATE VIEW`](/sql/show-create-view)"
+    labels:
+      - "show"
+  - command: "[`SHOW DATABASES`](/sql/show-databases)"
+    labels:
+      - "show"
+  - command: "[`SHOW DEFAULT PRIVILEGES`](/sql/show-default-privileges)"
+    labels:
+      - "show"
+  - command: "[`SHOW INDEXES`](/sql/show-indexes)"
+    labels:
+      - "show"
+  - command: "[`SHOW MATERIALIZED VIEWS`](/sql/show-materialized-views)"
+    labels:
+      - "show"
+  - command: "[`SHOW NETWORK POLICIES (Cloud)`](/sql/show-network-policies)"
+    labels:
+      - "show"
+  - command: "[`SHOW OBJECTS`](/sql/show-objects)"
+    labels:
+      - "show"
+  - command: "[`SHOW PRIVILEGES`](/sql/show-privileges)"
+    labels:
+      - "show"
+  - command: "[`SHOW ROLE MEMBERSHIP`](/sql/show-role-membership)"
+    labels:
+      - "show"
+      - "rbac"
+      - "role membership"
+  - command: "[`SHOW ROLES`](/sql/show-roles)"
+    labels:
+      - "show"
+      - "rbac"
+      - "role"
+  - command: "[`SHOW SCHEMAS`](/sql/show-schemas)"
+    labels:
+      - "show"
+  - command: "[`SHOW SECRETS`](/sql/show-secrets)"
+    labels:
+      - "show"
+  - command: "[`SHOW SINKS`](/sql/show-sinks)"
+    labels:
+      - "show"
+  - command: "[`SHOW SOURCES`](/sql/show-sources)"
+    labels:
+      - "show"
+  - command: "[`SHOW SUBSOURCES`](/sql/show-subsources)"
+    labels:
+      - "show"
+  - command: "[`SHOW TABLES`](/sql/show-tables)"
+    labels:
+      - "show"
+  - command: "[`SHOW TYPES`](/sql/show-types)"
+    labels:
+      - "show"
+  - command: "[`SHOW VIEWS`](/sql/show-views)"
+    labels:
+      - "show"
+  - command: "[`SUBSCRIBE`](/sql/subscribe)"
+    labels:
+      - "crud"
+      - "output"
+      - "select_subscribe"
+  - command: "[`TABLE`](/sql/table)"
+    labels:
+      - "crud"
+  - command: "[`UPDATE`](/sql/update)"
+    labels:
+      - "crud"
+  - command: "[`VALIDATE CONNECTION`](/sql/validate-connection)"
+    labels:
+      - "connection"
+      - "other"
+  - command: "[`VALUES`](/sql/values)"
+    labels:
+      - "crud"
