@@ -411,6 +411,10 @@ class SqlCommand(Command):
         composition.default_port(args.service)
 
         image = service["image"].rsplit(":", 1)[0]
+        ghcr_prefix = "ghcr.io/materializeinc/"
+        if image.startswith(ghcr_prefix):
+            image.removeprefix(ghcr_prefix)
+
         if image == "materialize/materialized":
             deps = composition.repo.resolve_dependencies(
                 [composition.repo.images["psql"]]
