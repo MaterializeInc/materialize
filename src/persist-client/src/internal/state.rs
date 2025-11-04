@@ -2368,11 +2368,7 @@ where
     where
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
-        // Now that we support one minor version of forward compatibility, tag
-        // each version of state with the _max_ version of code that has ever
-        // contributed to it. Otherwise, we'd erroneously allow rolling back an
-        // arbitrary number of versions if they were done one-by-one.
-        let new_applier_version = std::cmp::max(&self.collections.version, &cfg.build_version);
+        // We do not increment the version by default, though work_fn can if it chooses to.
         let mut new_state = State {
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
@@ -2380,7 +2376,6 @@ where
             hostname: cfg.hostname.clone(),
             collections: self.collections.clone(),
         };
-        new_state.collections.version = new_applier_version.clone();
 
         // Make sure walltime_ms is strictly increasing, in case clocks are
         // offset.
@@ -2838,12 +2833,12 @@ pub(crate) mod tests {
     use proptest::strategy::ValueTree;
 
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
-    use crate::PersistLocation;
     use crate::cache::PersistClientCache;
     use crate::internal::encoding::any_some_lazy_part_stats;
     use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
     use crate::tests::new_test_client_cache;
+    use crate::{Diagnostics, PersistLocation};
 
     use super::*;
 
@@ -4385,6 +4380,10 @@ pub(crate) mod tests {
             let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
             // Run in a task so we can catch the panic.
             mz_ore::task::spawn(|| version.to_string(), async move {
+                let () = client
+                    .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+                    .await
+                    .expect("valid usage");
                 let (mut write, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
                 let current = *write.upper().as_option().unwrap();
                 // Do a write so that we tag the state with the version.
@@ -4403,9 +4402,9 @@ pub(crate) mod tests {
         let res = open_and_write(&mut clients, Version::new(0, 11, 0), shard_id).await;
         assert_ok!(res);
 
-        // Downgrade to v0.10.0 is allowed.
+        // Downgrade to v0.10.0 is no longer allowed.
         let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
-        assert_ok!(res);
+        assert!(res.unwrap_err().is_panic());
 
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;

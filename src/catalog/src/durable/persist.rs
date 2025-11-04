@@ -395,36 +395,27 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Increment the version in the catalog upgrade shard to the code's current version.
     async fn increment_catalog_upgrade_shard_version(&self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
-        let mut write_handle: WriteHandle<(), (), Timestamp, StorageDiff> = self
+
+        let () = self
             .persist_client
-            .open_writer(
+            .upgrade_version::<(), (), Timestamp, StorageDiff>(
                 upgrade_shard_id,
-                Arc::new(UnitSchema::default()),
-                Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: UPGRADE_SHARD_NAME.to_string(),
-                    handle_purpose: "increment durable catalog upgrade shard version".to_string(),
+                    handle_purpose: "durable catalog state upgrade".to_string(),
                 },
             )
             .await
             .expect("invalid usage");
-        const EMPTY_UPDATES: &[(((), ()), Timestamp, StorageDiff)] = &[];
-        let mut upper = write_handle.fetch_recent_upper().await.clone();
-        loop {
-            let next_upper = upper
-                .iter()
-                .map(|timestamp| timestamp.step_forward())
-                .collect();
-            match write_handle
-                .compare_and_append(EMPTY_UPDATES, upper, next_upper)
-                .await
-                .expect("invalid usage")
-            {
-                Ok(()) => break,
-                Err(upper_mismatch) => {
-                    upper = upper_mismatch.current;
-                }
-            }
+
+        if cfg!(debug_assertions) {
+            let fetched_version =
+                fetch_catalog_upgrade_shard_version(&self.persist_client, upgrade_shard_id).await;
+            assert_eq!(
+                Some(&self.catalog_content_version),
+                fetched_version.as_ref(),
+                "code version should match the upgraded data version"
+            );
         }
     }
 
@@ -998,16 +989,12 @@ impl UnopenedPersistCatalogState {
         // If this is `None`, no version was found in the upgrade shard. This is a brand-new
         // environment, and we don't need to worry about fencing existing users.
         if let Some(version_in_upgrade_shard) = version_in_upgrade_shard {
-            // IMPORTANT: We swap the order of arguments here! Normally it's
-            // `code_version, data_version`, and we check whether a given code
-            // version, which is usually _older_, is allowed to touch a shard
-            // that has been touched by a _future_ version.
-            //
-            // By inverting argument order, we check if our version is too far
-            // ahead of the version in the shard.
-            if mz_persist_client::cfg::check_data_version(&version_in_upgrade_shard, &version)
-                .is_err()
-            {
+            // Check that the current version of the code can handle data from the shard.
+            // (We used to reverse this check, to confirm that whatever code wrote the data
+            // in the shard would be able to read data written by the current version... but
+            // we now require the current code to be able to maintain compat with whatever
+            // data format versions pass this check.)
+            if !mz_persist_client::cfg::code_can_write_data(&version, &version_in_upgrade_shard) {
                 return Err(DurableCatalogError::IncompatiblePersistVersion {
                     found_version: version_in_upgrade_shard,
                     catalog_version: version,

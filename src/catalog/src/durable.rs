@@ -450,7 +450,7 @@ impl TestCatalogStateBuilder {
         Self {
             persist_client,
             organization_id: Uuid::new_v4(),
-            version: semver::Version::new(0, 0, 0),
+            version: mz_build_info::DUMMY_BUILD_INFO.semver_version(),
             deploy_generation: None,
             metrics: Arc::new(Metrics::new(&MetricsRegistry::new())),
         }

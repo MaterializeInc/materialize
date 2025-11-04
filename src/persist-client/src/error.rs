@@ -19,6 +19,11 @@ use crate::ShardId;
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub enum InvalidUsage<T> {
+    /// The data format of the shard is not compatible with the current code version.
+    IncompatibleVersion {
+        /// The version of the metadata.
+        version: semver::Version,
+    },
     /// Append bounds were invalid
     InvalidBounds {
         /// The given lower bound
@@ -84,6 +89,9 @@ pub enum InvalidUsage<T> {
 impl<T: Debug> std::fmt::Display for InvalidUsage<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            InvalidUsage::IncompatibleVersion { version } => {
+                write!(f, "incompatible with data version {}", version)
+            }
             InvalidUsage::InvalidBounds { lower, upper } => {
                 write!(f, "invalid bounds [{:?}, {:?})", lower, upper)
             }
