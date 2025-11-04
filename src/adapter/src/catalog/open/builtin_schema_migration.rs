@@ -53,6 +53,7 @@ use mz_persist_client::{Diagnostics, PersistClient};
 use mz_persist_types::ShardId;
 use mz_persist_types::codec_impls::{ShardIdSchema, UnitSchema};
 use mz_persist_types::schema::backward_compatible;
+use mz_repr::namespaces::{MZ_CATALOG_SCHEMA, MZ_INTERNAL_SCHEMA};
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
 use mz_sql::catalog::{CatalogItemType, NameReference};
 use mz_storage_client::controller::StorageTxn;
@@ -69,7 +70,55 @@ use crate::catalog::migrate::get_migration_version;
 /// Migration steps for old versions must be retained around according to the upgrade policy. For
 /// example, if we support upgrading one major version at a time, the release of version `N.0.0`
 /// can delete all migration steps with versions before `(N-1).0.0`.
-const MIGRATIONS: &[MigrationStep] = &[];
+///
+/// Smallest supported version: 0.147.0
+const MIGRATIONS: &[MigrationStep] = &[
+    MigrationStep {
+        version: Version::new(0, 149, 0),
+        object: Object {
+            type_: CatalogItemType::Source,
+            schema: MZ_INTERNAL_SCHEMA,
+            name: "mz_sink_statistics_raw",
+        },
+        mechanism: Mechanism::Replacement,
+    },
+    MigrationStep {
+        version: Version::new(0, 149, 0),
+        object: Object {
+            type_: CatalogItemType::Source,
+            schema: MZ_INTERNAL_SCHEMA,
+            name: "mz_source_statistics_raw",
+        },
+        mechanism: Mechanism::Replacement,
+    },
+    MigrationStep {
+        version: Version::new(0, 159, 0),
+        object: Object {
+            type_: CatalogItemType::Source,
+            schema: MZ_INTERNAL_SCHEMA,
+            name: "mz_cluster_replica_metrics_history",
+        },
+        mechanism: Mechanism::Evolution,
+    },
+    MigrationStep {
+        version: Version::new(0, 160, 0),
+        object: Object {
+            type_: CatalogItemType::Table,
+            schema: MZ_CATALOG_SCHEMA,
+            name: "mz_roles",
+        },
+        mechanism: Mechanism::Replacement,
+    },
+    MigrationStep {
+        version: Version::new(0, 160, 0),
+        object: Object {
+            type_: CatalogItemType::Table,
+            schema: MZ_CATALOG_SCHEMA,
+            name: "mz_sinks",
+        },
+        mechanism: Mechanism::Replacement,
+    },
+];
 
 /// A migration required to upgrade past a specific version.
 #[derive(Clone, Debug)]
