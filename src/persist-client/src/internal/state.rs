@@ -1304,6 +1304,11 @@ pub struct NoOpStateTransition<T>(pub T);
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateCollections<T> {
+    /// The version of this state. This is typically identical to the version of the code
+    /// that wrote it, but may diverge during 0dt upgrades and similar operations when a
+    /// new version of code is intentionally interoperating with an older state format.
+    pub(crate) version: Version,
+
     // - Invariant: `<= all reader.since`
     // - Invariant: Doesn't regress across state versions.
     pub(crate) last_gc_req: SeqNo,
@@ -2221,10 +2226,6 @@ where
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct State<T> {
-    /// The version of this state. This is typically identical to the version of the code
-    /// that wrote it, but may diverge during 0dt upgrades and similar operations when a
-    /// new version of code is intentionally interoperating with an older state format.
-    pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
     pub(crate) seqno: SeqNo,
@@ -2254,10 +2255,9 @@ pub struct TypedState<K, V, T, D> {
 
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     #[cfg(any(test, debug_assertions))]
-    pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
+    pub(crate) fn clone(&self, hostname: String) -> Self {
         TypedState {
             state: State {
-                applier_version,
                 shard_id: self.shard_id.clone(),
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
@@ -2271,7 +2271,6 @@ impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     pub(crate) fn clone_for_rollup(&self) -> Self {
         TypedState {
             state: State {
-                applier_version: self.applier_version.clone(),
                 shard_id: self.shard_id.clone(),
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
@@ -2338,12 +2337,12 @@ where
         walltime_ms: u64,
     ) -> Self {
         let state = State {
-            applier_version,
             shard_id,
             seqno: SeqNo::minimum(),
             walltime_ms,
             hostname,
             collections: StateCollections {
+                version: applier_version,
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
                 active_rollup: None,
@@ -2373,15 +2372,16 @@ where
         // each version of state with the _max_ version of code that has ever
         // contributed to it. Otherwise, we'd erroneously allow rolling back an
         // arbitrary number of versions if they were done one-by-one.
-        let new_applier_version = std::cmp::max(&self.applier_version, &cfg.build_version);
+        let new_applier_version = std::cmp::max(&self.collections.version, &cfg.build_version);
         let mut new_state = State {
-            applier_version: new_applier_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
             walltime_ms: (cfg.now)(),
             hostname: cfg.hostname.clone(),
             collections: self.collections.clone(),
         };
+        new_state.collections.version = new_applier_version.clone();
+
         // Make sure walltime_ms is strictly increasing, in case clocks are
         // offset.
         if new_state.walltime_ms <= self.walltime_ms {
@@ -2752,13 +2752,13 @@ fn serialize_diffs_sum<S: Serializer>(val: &Option<[u8; 8]>, s: S) -> Result<S::
 impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let State {
-            applier_version,
             shard_id,
             seqno,
             walltime_ms,
             hostname,
             collections:
                 StateCollections {
+                    version: applier_version,
                     last_gc_req,
                     rollups,
                     active_rollup,
@@ -3140,12 +3140,12 @@ pub(crate) mod tests {
                 (shard_id, seqno, walltime_ms, hostname, last_gc_req, rollups, active_rollup),
                 (active_gc, leased_readers, critical_readers, writers, schemas, trace),
             )| State {
-                applier_version: semver::Version::new(1, 2, 3),
                 shard_id,
                 seqno,
                 walltime_ms,
                 hostname,
                 collections: StateCollections {
+                    version: Version::new(1, 2, 3),
                     last_gc_req,
                     rollups,
                     active_rollup,
