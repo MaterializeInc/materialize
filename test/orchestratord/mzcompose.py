@@ -131,7 +131,75 @@ def retry(fn: Callable, timeout: int) -> None:
 # TODO: Cover https://materialize.com/docs/self-managed/v25.2/installation/configuration/
 
 
-class Modification:
+class Operation:
+    pass
+
+
+class Fault(Operation):
+    def __init__(self, value: Any):
+        self.value = value
+
+    @classmethod
+    def values(cls) -> list[Any]:
+        raise NotImplementedError
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"fault": self.__class__.__name__, "value": self.value}
+
+    def __eq__(self, other: "Fault"):
+        if not isinstance(other, self.__class__):
+            return NotImplemented
+        return self.__class__ == other.__class__ and self.value == other.value
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Fault":
+        name = data["fault"]
+        for subclass in all_subclasses(Fault):
+            if subclass.__name__ == name:
+                break
+        else:
+            raise ValueError(
+                f"No fault with name {name} found, only know {[subclass.__name__ for subclass in all_faults()]}"
+            )
+        return subclass(data["value"])
+
+    def inject(self) -> None:
+        raise NotImplementedError
+
+    def remediate(self) -> None:
+        raise NotImplementedError
+
+
+def all_faults() -> list[type[Fault]]:
+    return [fault_class for fault_class in all_subclasses(Fault)]
+
+
+class DeletePod(Fault):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return ["balancerd", "console", "environmentd", "clusterd"]
+
+    def inject(self) -> None:
+        spawn.runv(
+            [
+                "kubectl",
+                "delete",
+                "pod",
+                "-l",
+                f"app={self.value}",
+                "-n",
+                "materialize-environment",
+            ]
+        )
+
+    def remediate(self) -> None:
+        pass
+
+
+class Modification(Operation):
     pick_by_default: bool = True
 
     def __init__(self, value: Any):
@@ -1116,6 +1184,7 @@ class Action(Enum):
     Noop = "noop"
     Upgrade = "upgrade"
     UpgradeChain = "upgrade-chain"
+    Faults = "faults"
 
 
 def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1388,6 +1457,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         choices=[elem.value for elem in Properties],
     )
     parser.add_argument("--modification", action="append", type=str, default=[])
+    parser.add_argument("--fault", action="append", type=str, default=[])
     parser.add_argument("--runtime", type=int, help="Runtime in seconds")
     args = parser.parse_args()
 
@@ -1472,6 +1542,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if mod_class.__name__ in args.modification
         ]
 
+    fault_classes = sorted(all_faults(), key=repr)
+    if args.fault:
+        fault_classes = [
+            fault_class
+            for fault_class in fault_classes
+            if fault_class.__name__ in args.faults
+        ]
+
     if args.scenario:
         assert not args.runtime
         assert not args.modification
@@ -1516,6 +1594,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if action == Action.Noop:
             for mods in mods_it:
                 run_scenario([mods], definition)
+        elif action == Action.Faults:
+            if properties == Properties.Defaults:
+                for mod in mods_it:
+                    fault_class = rng.choice(fault_classes)
+                    fault = fault_class(rng.choice(fault_class.values()))
+                    run_scenario([mod, [fault], mod], definition)
+            else:
+                for mods1, mods2 in zip(mods_it, mods_it):
+                    fault_class = rng.choice(fault_classes)
+                    fault = fault_class(rng.choice(fault_class.values()))
+                    run_scenario([mods1, [fault], mods2], definition)
         elif action == Action.Upgrade:
             assert args.runtime
             end_time = (
@@ -1529,7 +1618,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 except StopIteration:
                     mods_it = get_mods()
                     mod = next(mods_it)
-                scenario = [
+                scenario: list[list[Modification] | list[Fault]] = [
                     [EnvironmentdImageRef(str(version))] + mod
                     for version in selected_versions
                 ]
@@ -1629,49 +1718,61 @@ DONE_SCENARIOS = set()
 
 
 def run_scenario(
-    scenario: list[list[Modification]],
+    scenario: list,  # list[list[Fault] | list[Modification]], but mypy is annoying
     original_definition: dict[str, Any],
     modify: bool = True,
 ) -> None:
     initialize = True
-    scenario_json = json.dumps([[mod.to_dict() for mod in mods] for mods in scenario])
+    scenario_json = json.dumps([[op.to_dict() for op in ops] for ops in scenario])
     if scenario_json in DONE_SCENARIOS:
         return
     DONE_SCENARIOS.add(scenario_json)
     print(f"--- Running with {scenario_json}")
-    for mods in scenario:
-        definition = copy.deepcopy(original_definition)
-        expect_fail = False
-        if modify:
-            for mod in mods:
-                mod.modify(definition)
-                if mod.value in mod.failed_reconciliation_values():
-                    expect_fail = True
-        if not initialize:
-            definition["materialize"]["spec"][
-                "rolloutStrategy"
-            ] = "ImmediatelyPromoteCausingDowntime"
-            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
-            run(definition, expect_fail)
-        if initialize:
-            init(definition)
-            run(definition, expect_fail)
-            initialize = False  # only initialize once
-        else:
-            upgrade(definition, expect_fail)
-        mod_dict = {mod.__class__: mod.value for mod in mods}
-        for subclass in all_subclasses(Modification):
-            if subclass not in mod_dict:
-                mod_dict[subclass] = subclass.default()
-        try:
-            if not expect_fail:
+    for ops in scenario:
+        if all(isinstance(op, Fault) for op in ops):
+            faults = ops
+            for fault in faults:
+                fault.inject()
+            time.sleep(10)
+            for fault in faults:
+                fault.remediate()
+            time.sleep(10)
+        elif all(isinstance(op, Modification) for op in ops):
+            mods = ops
+            definition = copy.deepcopy(original_definition)
+            expect_fail = False
+            if modify:
                 for mod in mods:
-                    mod.validate(mod_dict)
-        except:
-            print(
-                f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
-            )
-            raise
+                    mod.modify(definition)
+                    if mod.value in mod.failed_reconciliation_values():
+                        expect_fail = True
+            if not initialize:
+                definition["materialize"]["spec"][
+                    "rolloutStrategy"
+                ] = "ImmediatelyPromoteCausingDowntime"
+                definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+                run(definition, expect_fail)
+            if initialize:
+                init(definition)
+                run(definition, expect_fail)
+                initialize = False  # only initialize once
+            else:
+                upgrade(definition, expect_fail)
+            mod_dict = {mod.__class__: mod.value for mod in mods}
+            for subclass in all_subclasses(Modification):
+                if subclass not in mod_dict:
+                    mod_dict[subclass] = subclass.default()
+            try:
+                if not expect_fail:
+                    for mod in mods:
+                        mod.validate(mod_dict)
+            except:
+                print(
+                    f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
+                )
+                raise
+        else:
+            raise TypeError(f"Mixed or unknown types: {ops}")
 
 
 def init(definition: dict[str, Any]) -> None:

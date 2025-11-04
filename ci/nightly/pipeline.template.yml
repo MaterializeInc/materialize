@@ -2389,3 +2389,39 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-faults-default-properties
+        label: "Orchestratord faults (defaults for properties)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=faults, --properties=defaults, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-faults-individual
+        label: "Orchestratord faults (individual properties)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=faults, --properties=individual, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-faults-combine
+        label: "Orchestratord faults (combine properties)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: [--action=faults, --properties=combine, --runtime=3600, --recreate-cluster]
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
