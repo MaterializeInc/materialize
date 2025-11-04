@@ -736,7 +736,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         let state = Rollup::from_proto(proto)
             .expect("internal error: invalid encoded state")
             .state;
-        check_data_version(build_version, &state.state.applier_version);
+        check_data_version(build_version, &state.state.collections.version);
         state
     }
 }
@@ -864,7 +864,7 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
 impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
     fn into_proto(&self) -> ProtoRollup {
         ProtoRollup {
-            applier_version: self.state.state.applier_version.to_string(),
+            applier_version: self.state.state.collections.version.to_string(),
             shard_id: self.state.state.shard_id.into_proto(),
             seqno: self.state.state.seqno.into_proto(),
             walltime_ms: self.state.state.walltime_ms.into_proto(),
@@ -972,6 +972,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             .transpose()?;
         let active_gc = x.active_gc.map(|gc| gc.into_rust()).transpose()?;
         let collections = StateCollections {
+            version: applier_version.clone(),
             rollups,
             active_rollup,
             active_gc,
@@ -983,7 +984,6 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             trace: x.trace.into_rust_if_some("trace")?,
         };
         let state = State {
-            applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
             walltime_ms: x.walltime_ms,
