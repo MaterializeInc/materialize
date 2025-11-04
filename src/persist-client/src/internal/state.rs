@@ -2221,6 +2221,9 @@ where
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct State<T> {
+    /// The version of this state. This is typically identical to the version of the code
+    /// that wrote it, but may diverge during 0dt upgrades and similar operations when a
+    /// new version of code is intentionally interoperating with an older state format.
     pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
