@@ -2345,11 +2345,11 @@ steps:
       - id: orchestratord-upgrade-individual
         label: "Orchestratord test (upgrade, individual props)"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade, --properties=individual, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade, --properties=individual, --runtime=1800, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -2357,11 +2357,11 @@ steps:
       - id: orchestratord-upgrade-combine
         label: "Orchestratord test (upgrade, combine props)"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade, --properties=combine, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade, --properties=combine, --runtime=1800, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -2369,11 +2369,11 @@ steps:
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade-chain, --properties=individual, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade-chain, --properties=individual, --runtime=1800, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
@@ -2381,11 +2381,11 @@ steps:
       - id: orchestratord-upgrade-chain-combine
         label: "Orchestratord test (upgrade chain, combine props)"
         depends_on: build-aarch64
-        timeout_in_minutes: 120
+        timeout_in_minutes: 60
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade-chain, --properties=combine, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade-chain, --properties=combine, --runtime=1800, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
