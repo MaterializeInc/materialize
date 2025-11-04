@@ -20,6 +20,8 @@ try:
 except ImportError:
     from semver import VersionInfo as Version  # type: ignore
 
+from materialize import MZ_ROOT
+
 T = TypeVar("T", bound="TypedVersionBase")
 
 
@@ -107,7 +109,8 @@ class MzVersion(TypedVersionBase):
         """Uses the cargo mz-environmentd package info to get the version of current source code state"""
         metadata = json.loads(
             subprocess.check_output(
-                ["cargo", "metadata", "--no-deps", "--format-version=1"]
+                ["cargo", "metadata", "--no-deps", "--format-version=1"],
+                cwd=MZ_ROOT,
             )
         )
         for package in metadata["packages"]:
