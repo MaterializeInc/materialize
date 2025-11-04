@@ -564,6 +564,12 @@ def upgrade_service_actions(
     ]
 
 
+def print_upgrade_path(versions: list[MzVersion | None]):
+    print(
+        f"Upgrading through versions {[str(version) if version is not None else "current" for version in versions]}"
+    )
+
+
 class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
     """
     Upgrade from the oldest v25.2 patch release to the latest v25.2 patch release to main.
@@ -577,24 +583,16 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        (self.self_managed_previous_versions, self.self_managed_future_versions) = (
-            get_supported_self_managed_versions()
-        )
+        self.self_managed_versions = get_supported_self_managed_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
-        return self.self_managed_previous_versions[0]
+        return self.self_managed_versions[0]
 
     def actions(self) -> list[Action]:
-        versions = (
-            self.self_managed_previous_versions
-            + [None]
-            + self.self_managed_future_versions
-        )
+        versions = self.self_managed_versions + [None]
 
-        print(
-            f"Upgrading through versions {[str(version if version is not None else MzVersion.parse_cargo()) for version in versions]}"
-        )
+        print_upgrade_path(versions)
 
         mz_services = create_mz_service_upgrade_info_list(versions)
 
@@ -641,24 +639,16 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        (self.self_managed_previous_versions, self.self_managed_future_versions) = (
-            get_supported_self_managed_versions()
-        )
+        self.self_managed_versions = get_supported_self_managed_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
-        return self.self_managed_previous_versions[0]
+        return self.self_managed_versions[0]
 
     def actions(self) -> list[Action]:
-        versions = (
-            self.self_managed_previous_versions
-            + [None]
-            + self.self_managed_future_versions
-        )
+        versions = self.self_managed_versions + [None]
 
-        print(
-            f"Upgrading through versions {[str(version if version is not None else MzVersion.parse_cargo()) for version in versions]}"
-        )
+        print_upgrade_path(versions)
 
         mz_services = create_mz_service_upgrade_info_list(
             versions,
