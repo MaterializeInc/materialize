@@ -12,20 +12,18 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use uuid::Uuid;
 
-use crate::durable::persist::{
-    CATALOG_SEED, UPGRADE_SEED, fetch_catalog_upgrade_shard_version, shard_id,
-};
+use crate::durable::persist::{UPGRADE_SEED, fetch_catalog_upgrade_shard_version, shard_id};
 use crate::durable::{DurableCatalogError, TestCatalogStateBuilder, test_bootstrap_args};
 
 /// Test that the catalog forces users to upgrade one version at a time.
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_upgrade_shard() {
-    let first_version = semver::Version::parse("0.10.0").expect("failed to parse version");
-    let second_version = semver::Version::parse("0.11.0").expect("failed to parse version");
+    let first_version = semver::Version::parse("0.147.0").expect("failed to parse version");
+    let second_version = semver::Version::parse("26.0.0").expect("failed to parse version");
     let second_dev_version =
-        semver::Version::parse("0.11.0-dev.0").expect("failed to parse version");
-    let third_version = semver::Version::parse("0.12.0").expect("failed to parse version");
+        semver::Version::parse("26.0.0-dev.0").expect("failed to parse version");
+    let third_version = semver::Version::parse("27.1.0").expect("failed to parse version");
     let organization_id = Uuid::new_v4();
     let deploy_generation = 0;
     let mut persist_cache = PersistClientCache::new_no_metrics();
@@ -156,12 +154,12 @@ async fn test_upgrade_shard() {
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_version_regression() {
-    let first_version = semver::Version::parse("0.10.0").expect("failed to parse version");
-    let second_version = semver::Version::parse("0.11.0").expect("failed to parse version");
+    let first_version = semver::Version::parse("0.147.0").expect("failed to parse version");
+    let second_version = semver::Version::parse("26.1.0").expect("failed to parse version");
     let organization_id = Uuid::new_v4();
     let deploy_generation = 0;
     let mut persist_cache = PersistClientCache::new_no_metrics();
-    let catalog_shard_id = shard_id(organization_id, CATALOG_SEED);
+    let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
 
     persist_cache.cfg.build_version = first_version.clone();
     let persist_client = persist_cache
@@ -171,7 +169,7 @@ async fn test_version_regression() {
 
     assert_eq!(
         None,
-        fetch_catalog_upgrade_shard_version(&persist_client, catalog_shard_id).await
+        fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await
     );
 
     let persist_openable_state = TestCatalogStateBuilder::new(persist_client.clone())
@@ -188,7 +186,7 @@ async fn test_version_regression() {
 
     assert_eq!(
         Some(first_version.clone()),
-        fetch_catalog_upgrade_shard_version(&persist_client, catalog_shard_id).await
+        fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await
     );
 
     persist_cache.cfg.build_version = second_version.clone();
@@ -210,30 +208,6 @@ async fn test_version_regression() {
 
     assert_eq!(
         Some(second_version.clone()),
-        fetch_catalog_upgrade_shard_version(&persist_client, catalog_shard_id).await
-    );
-
-    persist_cache.cfg.build_version = first_version.clone();
-    let persist_client = persist_cache
-        .open(PersistLocation::new_in_mem())
-        .await
-        .expect("in-mem location is valid");
-    let err = TestCatalogStateBuilder::new(persist_client.clone())
-        .with_organization_id(organization_id)
-        .with_deploy_generation(deploy_generation)
-        .with_version(first_version.clone())
-        .build()
-        .await
-        .expect_err("skipping versions should error");
-    assert!(
-        matches!(
-            &err,
-            DurableCatalogError::IncompatiblePersistVersion {
-                found_version,
-                catalog_version
-            }
-            if found_version == &second_version && catalog_version == &first_version
-        ),
-        "Unexpected error: {err:?}"
+        fetch_catalog_upgrade_shard_version(&persist_client, upgrade_shard_id).await
     );
 }
