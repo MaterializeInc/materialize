@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "CreateIndex":
+        # PR#33938 (Update columnar, timely, differential) increases latency
+        min_ancestor_mz_version_per_commit[
+            "c28d0061a6c9e63ee50a5f555c5d90373d006686"
+        ] = MzVersion.parse_mz("v0.164.0")
+
     if scenario_class_name in ("CrossJoin", "AccumulateReductions"):
         # PR#31501 (Remove ChunkedStack and related) increases latency for inserts
         min_ancestor_mz_version_per_commit[
