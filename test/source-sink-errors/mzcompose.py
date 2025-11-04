@@ -331,7 +331,8 @@ class KafkaSinkDisruption:
         c.testdrive(
             dedent(
                 f"""
-                $ set-sql-timeout duration=60s
+                # Takes > 60s following librdkafka update
+                $ set-sql-timeout duration=240s
                 # Sinks generally halt after receiving an error, which means that they may alternate
                 # between `stalled` and `starting`. Instead of relying on the current status, we
                 # check that there is a stalled status with the expected error.
