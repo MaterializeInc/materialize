@@ -14,12 +14,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_adapter::ResultExt;
+use mz_catalog::durable::DurableCatalogState;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
 use mz_ore::channel::trigger;
 use mz_ore::exit;
 use mz_ore::halt;
+use mz_ore::str::{bracketed, separated};
 use mz_persist_client::PersistClient;
-use mz_repr::Timestamp;
+use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::catalog::EnvironmentId;
 use tracing::info;
 
@@ -115,10 +117,10 @@ pub async fn preflight_0dt(
                 .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let mut should_skip_catchup = false;
+
             loop {
                 tokio::select! {
                     biased;
-
                     () = &mut skip_catchup => {
                         info!("skipping waiting for deployment to catch up due to administrator request");
                         should_skip_catchup = true;
@@ -227,6 +229,8 @@ pub async fn preflight_0dt(
 /// Check if there have been any DDL that create new collections or replicas,
 /// restart in read-only mode if so, in order to pick up those new items and
 /// start hydrating them before cutting over.
+///
+/// We do this by enumerating the set of IDs that need to be allocated after the ddl check began and seeing if any were committed to the catalog.
 async fn check_ddl_changes(
     boot_ts: Timestamp,
     persist_client: PersistClient,
@@ -237,26 +241,103 @@ async fn check_ddl_changes(
     initial_next_user_item_id: u64,
     initial_next_replica_id: u64,
 ) {
-    let (next_user_item_id, next_replica_id) = get_next_ids(
-        boot_ts,
-        persist_client.clone(),
-        environment_id.clone(),
-        deploy_generation,
-        Arc::clone(&catalog_metrics),
-        bootstrap_args.clone(),
+    let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+        persist_client,
+        environment_id.organization_id(),
+        BUILD_INFO.semver_version(),
+        Some(deploy_generation),
+        catalog_metrics,
     )
-    .await;
+    .await
+    .expect("incompatible catalog/persist version");
+
+    // We must explicitly check the catalog for theses IDs rather than
+    // checking if new IDs were allocated since the ddl check began. This is because new IDs can be allocated during sequencing/planning when
+    // DDL hasn't fully committed to the Catalog yet. This would result in false positives from the ddl check.
+    let (mut catalog, _audit_logs) = openable_adapter_storage
+        .open_savepoint(boot_ts, &bootstrap_args)
+        .await
+        .unwrap_or_terminate("can open in savepoint mode");
+
+    let (next_user_item_id, next_replica_id) = get_next_ids_from_catalog(&mut catalog).await;
+
+    let tx = catalog
+        .transaction()
+        .await
+        .unwrap_or_terminate("unexpected error while getting transaction");
+
+    let replica_ids_in_catalog = tx
+        .get_cluster_replicas()
+        .filter_map(|replica| {
+            if replica.replica_id.is_user() {
+                Some(replica.replica_id.inner_id())
+            } else {
+                None
+            }
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    let object_ids_in_catalog = tx
+        .get_items()
+        .filter_map(|item| match item.id {
+            CatalogItemId::User(id) => Some(id),
+            _ => None,
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+
+    // Because IDs are incremented sequentially, the range of IDs to be allocated since the ddl check began and the next IDs to be allocated
+    // give us the set of IDs that would indicate DDL changes if committed to the catalog.
+    let mut object_ids_to_check = initial_next_user_item_id..=next_user_item_id;
+    let mut replica_ids_to_check = initial_next_replica_id..=next_replica_id;
+
+    let format_inclusive_range = |range: &std::ops::RangeInclusive<u64>| {
+        format!("{}", bracketed("{", "}", separated(", ", range.clone())))
+    };
 
     tracing::info!(
-        %initial_next_user_item_id,
-        %initial_next_replica_id,
-        %next_user_item_id,
-        %next_replica_id,
-        "checking if there was any relevant DDL");
+        last_replica_id_in_catalog = replica_ids_in_catalog.last(),
+        replica_ids_to_check = format_inclusive_range(&replica_ids_to_check),
+        last_object_id_in_catalog = object_ids_in_catalog.last(),
+        object_ids_to_check = format_inclusive_range(&object_ids_to_check),
+        "checking if there have been new IDs committed to the catalog since the DDL check began;"
+    );
 
-    if next_user_item_id > initial_next_user_item_id || next_replica_id > initial_next_replica_id {
-        halt!("there have been DDL that we need to react to; rebooting in read-only mode")
+    let maybe_new_replica_id_committed_to_catalog =
+        replica_ids_to_check.find(|id| replica_ids_in_catalog.contains(id));
+
+    let maybe_new_object_id_committed_to_catalog =
+        object_ids_to_check.find(|id| object_ids_in_catalog.contains(id));
+
+    if maybe_new_replica_id_committed_to_catalog.is_some()
+        || maybe_new_object_id_committed_to_catalog.is_some()
+    {
+        let extra_info = format!(
+            "{}{}",
+            maybe_new_replica_id_committed_to_catalog
+                .map(|id| format!(" (replica_id: {})", id))
+                .unwrap_or_default(),
+            maybe_new_object_id_committed_to_catalog
+                .map(|id| format!(" (object_id: {})", id))
+                .unwrap_or_default()
+        );
+        halt!(
+            "there have been DDL that we need to react to; rebooting in read-only mode{}",
+            &extra_info
+        )
     }
+}
+
+async fn get_next_ids_from_catalog(catalog: &mut Box<dyn DurableCatalogState>) -> (u64, u64) {
+    let next_user_item_id = catalog
+        .get_next_user_item_id()
+        .await
+        .expect("can access catalog");
+    let next_replica_item_id = catalog
+        .get_next_user_replica_id()
+        .await
+        .expect("can access catalog");
+
+    (next_user_item_id, next_replica_item_id)
 }
 
 /// Gets and returns the next user item ID and user replica ID that would be
@@ -284,14 +365,5 @@ async fn get_next_ids(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
-    let next_user_item_id = catalog
-        .get_next_user_item_id()
-        .await
-        .expect("can access catalog");
-    let next_replica_item_id = catalog
-        .get_next_user_replica_id()
-        .await
-        .expect("can access catalog");
-
-    (next_user_item_id, next_replica_item_id)
+    get_next_ids_from_catalog(&mut catalog).await
 }
