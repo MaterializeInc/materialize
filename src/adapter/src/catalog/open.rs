@@ -60,12 +60,13 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
+use crate::catalog::migrate::{self, get_migration_version, set_migration_version};
 use crate::catalog::open::builtin_item_migration::{
     BuiltinItemMigrationResult, migrate_builtin_items,
 };
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
-    BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name, migrate,
+    BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name,
 };
 
 pub struct InitializeStateResult {
@@ -408,10 +409,8 @@ impl Catalog {
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
-        let last_seen_version = txn
-            .get_catalog_content_version()
-            .unwrap_or("new")
-            .to_string();
+        let last_seen_version =
+            get_migration_version(&txn).map_or_else(|| "new".into(), |v| v.to_string());
 
         let mz_authentication_mock_nonce =
             txn.get_authentication_mock_nonce().ok_or_else(|| {
@@ -496,6 +495,9 @@ impl Catalog {
         .await?;
         builtin_table_updates.extend(builtin_table_update);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
+
+        // Bump the migration version immediately before committing.
+        set_migration_version(&mut txn, config.build_info.semver_version())?;
 
         txn.commit(config.boot_ts).await?;
 
