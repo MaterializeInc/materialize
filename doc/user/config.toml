@@ -7,8 +7,8 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = ""
-bannerLink = ""
+bannerMessage = "This is the v25.2 Self-Managed Materialize documentation. For the latest documentation, go to materialize.com/docs."
+bannerLink = "https://materialize.com/docs/"
 
 [frontmatter]
 publishDate = ["publishDate"]
