@@ -350,6 +350,8 @@ pub enum ExecuteResponse {
     CreatedType,
     /// The requested network policy was created.
     CreatedNetworkPolicy,
+    /// The requested replacement materialized view was created.
+    CreatedReplacementMaterializedView,
     /// The requested prepared statement was removed.
     Deallocate { all: bool },
     /// The requested cursor was declared.
@@ -518,6 +520,9 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
             ExecuteResponseKind::CreatedNetworkPolicy => Ok(ExecuteResponse::CreatedNetworkPolicy),
             ExecuteResponseKind::CreatedContinualTask => Ok(ExecuteResponse::CreatedContinualTask),
             ExecuteResponseKind::CreatedType => Ok(ExecuteResponse::CreatedType),
+            ExecuteResponseKind::CreatedReplacementMaterializedView => {
+                Ok(ExecuteResponse::CreatedReplacementMaterializedView)
+            }
             ExecuteResponseKind::Deallocate => Err(()),
             ExecuteResponseKind::DeclaredCursor => Ok(ExecuteResponse::DeclaredCursor),
             ExecuteResponseKind::Deleted => Err(()),
@@ -581,6 +586,9 @@ impl ExecuteResponse {
             CreatedContinualTask { .. } => Some("CREATE CONTINUAL TASK".into()),
             CreatedType => Some("CREATE TYPE".into()),
             CreatedNetworkPolicy => Some("CREATE NETWORKPOLICY".into()),
+            CreatedReplacementMaterializedView { .. } => {
+                Some("CREATE REPLACEMENT MATERIALIZED VIEW".into())
+            }
             Deallocate { all } => Some(format!("DEALLOCATE{}", if *all { " ALL" } else { "" })),
             DeclaredCursor => Some("DECLARE CURSOR".into()),
             Deleted(n) => Some(format!("DELETE {}", n)),
@@ -635,6 +643,7 @@ impl ExecuteResponse {
             | AlterClusterReplicaRename
             | AlterOwner
             | AlterItemRename
+            | AlterMaterializedViewApplyReplacement
             | AlterRetainHistory
             | AlterNoop
             | AlterSchemaRename
@@ -671,6 +680,7 @@ impl ExecuteResponse {
             CreateContinualTask => &[CreatedContinualTask],
             CreateIndex => &[CreatedIndex],
             CreateType => &[CreatedType],
+            CreateReplacementMaterializedView => &[CreatedReplacementMaterializedView],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
             CreateNetworkPolicy => &[CreatedNetworkPolicy],
             Declare => &[DeclaredCursor],

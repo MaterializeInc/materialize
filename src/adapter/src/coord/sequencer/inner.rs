@@ -128,6 +128,7 @@ mod create_materialized_view;
 mod create_view;
 mod explain_timestamp;
 mod peek;
+mod replace_materialized_view;
 mod secret;
 mod subscribe;
 
@@ -3421,7 +3422,8 @@ impl Coordinator {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => unreachable!(),
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::ReplacementMaterializedView(_) => unreachable!(),
                 };
                 match cluster {
                     Some(cluster) => {

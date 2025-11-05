@@ -809,7 +809,7 @@ impl Coordinator {
 
     /// Select the initial `dataflow_as_of`, `storage_as_of`, and `until` frontiers for a
     /// materialized view.
-    fn select_timestamps(
+    pub(super) fn select_timestamps(
         &self,
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,

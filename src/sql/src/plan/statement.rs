@@ -33,9 +33,9 @@ use crate::catalog::{
 };
 use crate::names::{
     self, Aug, DatabaseId, FullItemName, ItemQualifiers, ObjectId, PartialItemName,
-    QualifiedItemName, RawDatabaseSpecifier, ResolvedColumnReference, ResolvedDataType,
-    ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName, ResolvedSchemaName, SchemaSpecifier,
-    SystemObjectId,
+    QualifiedItemName, RawDatabaseSpecifier, ResolvedClusterName, ResolvedColumnReference,
+    ResolvedDataType, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName, ResolvedSchemaName,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::normalize;
 use crate::plan::error::PlanError;
@@ -126,6 +126,9 @@ pub fn describe(
         Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::describe_alter_materialized_view_apply_replacement(&scx, stmt)?
+        }
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRetainHistory(stmt) => ddl::describe_alter_retain_history(&scx, stmt)?,
@@ -163,6 +166,9 @@ pub fn describe(
         }
         Statement::CreateContinualTask(stmt) => ddl::describe_create_continual_task(&scx, stmt)?,
         Statement::CreateNetworkPolicy(stmt) => ddl::describe_create_network_policy(&scx, stmt)?,
+        Statement::CreateReplacementMaterializedView(stmt) => {
+            ddl::describe_create_replacement_materialized_view(&scx, stmt)?
+        }
         Statement::DropObjects(stmt) => ddl::describe_drop_objects(&scx, stmt)?,
         Statement::DropOwned(stmt) => ddl::describe_drop_owned(&scx, stmt)?,
 
@@ -322,6 +328,9 @@ pub fn plan(
         Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::plan_alter_materialized_view_apply_replacement(scx, stmt)
+        }
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRetainHistory(stmt) => ddl::plan_alter_retain_history(scx, stmt),
@@ -355,6 +364,9 @@ pub fn plan(
         Statement::CreateMaterializedView(stmt) => ddl::plan_create_materialized_view(scx, stmt),
         Statement::CreateContinualTask(stmt) => ddl::plan_create_continual_task(scx, stmt),
         Statement::CreateNetworkPolicy(stmt) => ddl::plan_create_network_policy(scx, stmt),
+        Statement::CreateReplacementMaterializedView(stmt) => {
+            ddl::plan_create_replacement_materialized_view(scx, stmt)
+        }
         Statement::DropObjects(stmt) => ddl::plan_drop_objects(scx, stmt),
         Statement::DropOwned(stmt) => ddl::plan_drop_owned(scx, stmt),
 
@@ -1012,11 +1024,18 @@ impl<'a> StatementContext<'a> {
     }
 }
 
-pub fn resolve_cluster_for_materialized_view<'a>(
-    catalog: &'a dyn SessionCatalog,
+pub fn resolve_cluster_for_materialized_view(
+    catalog: &dyn SessionCatalog,
     stmt: &CreateMaterializedViewStatement<Aug>,
 ) -> Result<ClusterId, PlanError> {
-    Ok(match &stmt.in_cluster {
+    resolve_cluster(catalog, stmt.in_cluster.as_ref())
+}
+
+pub fn resolve_cluster(
+    catalog: &dyn SessionCatalog,
+    in_cluster: Option<&ResolvedClusterName>,
+) -> Result<ClusterId, PlanError> {
+    Ok(match in_cluster {
         None => catalog.resolve_cluster(None)?.id(),
         Some(in_cluster) => in_cluster.id,
     })
@@ -1049,6 +1068,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::AlterCluster(_) => DDL,
             Statement::AlterConnection(_) => DDL,
             Statement::AlterIndex(_) => DDL,
+            Statement::AlterMaterializedViewApplyReplacement(_) => DDL,
             Statement::AlterObjectRename(_) => DDL,
             Statement::AlterObjectSwap(_) => DDL,
             Statement::AlterNetworkPolicy(_) => DDL,
@@ -1082,6 +1102,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::CreateView(_) => DDL,
             Statement::CreateMaterializedView(_) => DDL,
             Statement::CreateNetworkPolicy(_) => DDL,
+            Statement::CreateReplacementMaterializedView(_) => DDL,
             Statement::DropObjects(_) => DDL,
             Statement::DropOwned(_) => DDL,
 

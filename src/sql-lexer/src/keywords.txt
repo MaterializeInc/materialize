@@ -40,6 +40,7 @@ Analysis
 Analyze
 And
 Any
+Apply
 Arity
 Arn
 Arranged
@@ -390,6 +391,7 @@ Rename
 Reoptimize
 Repeatable
 Replace
+Replacement
 Replan
 Replica
 Replicas

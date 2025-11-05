@@ -305,6 +305,11 @@ pub enum Message {
         span: Span,
         stage: CreateMaterializedViewStage,
     },
+    CreateReplacementMaterializedViewStageReady {
+        ctx: ExecuteContext,
+        span: Span,
+        stage: CreateReplacementMaterializedViewStage,
+    },
     SubscribeStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -397,6 +402,9 @@ impl Message {
             Message::CreateViewStageReady { .. } => "create_view_stage_ready",
             Message::CreateMaterializedViewStageReady { .. } => {
                 "create_materialized_view_stage_ready"
+            }
+            Message::CreateReplacementMaterializedViewStageReady { .. } => {
+                "create_replacement_materialized_view_stage_ready"
             }
             Message::SubscribeStageReady { .. } => "subscribe_stage_ready",
             Message::IntrospectionSubscribeStageReady { .. } => {
@@ -833,6 +841,33 @@ pub struct CreateMaterializedViewExplain {
     plan: plan::CreateMaterializedViewPlan,
     df_meta: DataflowMetainfo,
     explain_ctx: ExplainPlanContext,
+}
+
+#[derive(Debug)]
+pub enum CreateReplacementMaterializedViewStage {
+    Optimize(CreateReplacementMaterializedViewOptimize),
+    Finish(CreateReplacementMaterializedViewFinish),
+}
+
+#[derive(Debug)]
+pub struct CreateReplacementMaterializedViewOptimize {
+    validity: PlanValidity,
+    plan: plan::CreateReplacementMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+}
+
+#[derive(Debug)]
+pub struct CreateReplacementMaterializedViewFinish {
+    /// The ID of this Replacement Materialized View in the Catalog.
+    item_id: CatalogItemId,
+    /// The ID of the durable pTVC backing this Materialized View.
+    global_id: GlobalId,
+    validity: PlanValidity,
+    plan: plan::CreateReplacementMaterializedViewPlan,
+    resolved_ids: ResolvedIds,
+    local_mir_plan: optimize::materialized_view::LocalMirPlan,
+    global_mir_plan: optimize::materialized_view::GlobalMirPlan,
+    global_lir_plan: optimize::materialized_view::GlobalLirPlan,
 }
 
 #[derive(Debug)]
@@ -2155,6 +2190,52 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, ct.cluster_id, None).await;
                     self.allow_writes(ct.cluster_id, ct.global_id());
                 }
+                CatalogItem::ReplacementMaterializedView(mview) => {
+                    policies_to_set
+                        .entry(
+                            policy
+                                .expect("replacement materialized views have a compaction window"),
+                        )
+                        .or_insert_with(Default::default)
+                        .storage_ids
+                        .insert(mview.global_id());
+
+                    let mut df_desc = self
+                        .catalog()
+                        .try_get_physical_plan(&mview.global_id())
+                        .expect("added in `bootstrap_dataflow_plans`")
+                        .clone();
+
+                    if let Some(initial_as_of) = mview.initial_as_of.clone() {
+                        df_desc.set_initial_as_of(initial_as_of);
+                    }
+
+                    // If we have a refresh schedule that has a last refresh, then set the `until` to the last refresh.
+                    let until = mview
+                        .refresh_schedule
+                        .as_ref()
+                        .and_then(|s| s.last_refresh())
+                        .and_then(|r| r.try_step_forward());
+                    if let Some(until) = until {
+                        df_desc.until.meet_assign(&Antichain::from_elem(until));
+                    }
+
+                    let df_meta = self
+                        .catalog()
+                        .try_get_dataflow_metainfo(&mview.global_id())
+                        .expect("added in `bootstrap_dataflow_plans`");
+
+                    if self.catalog().state().system_config().enable_mz_notices() {
+                        // Collect optimization hint updates.
+                        self.catalog().state().pack_optimizer_notices(
+                            &mut builtin_table_updates,
+                            df_meta.optimizer_notices.iter(),
+                            Diff::ONE,
+                        );
+                    }
+
+                    self.ship_dataflow(df_desc, mview.cluster_id, None).await;
+                }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
@@ -2807,14 +2888,15 @@ impl Coordinator {
                     collections.extend(collection_descs);
                     compute_collections.push((mv.global_id_writes(), mv.desc.latest()));
                 }
+                CatalogItem::ReplacementMaterializedView(rp) => {
+                    let collection_desc =
+                        CollectionDescription::for_other(rp.desc.clone(), rp.initial_as_of.clone());
+                    collections.push((rp.global_id(), collection_desc));
+                    compute_collections.push((rp.global_id(), rp.desc.clone()));
+                }
                 CatalogItem::ContinualTask(ct) => {
-                    let collection_desc = CollectionDescription {
-                        desc: ct.desc.clone(),
-                        data_source: DataSource::Other,
-                        since: ct.initial_as_of.clone(),
-                        status_collection_id: None,
-                        timeline: None,
-                    };
+                    let collection_desc =
+                        CollectionDescription::for_other(ct.desc.clone(), ct.initial_as_of.clone());
                     if ct.global_id().is_system() && collection_desc.since.is_none() {
                         // We need a non-0 since to make as_of selection work. Fill it in below with
                         // the `bootstrap_builtin_continual_tasks` call, which can only be run after
@@ -3218,6 +3300,100 @@ impl Coordinator {
 
                     compute_instance.insert_collection(ct.global_id());
                 }
+                CatalogItem::ReplacementMaterializedView(mv) => {
+                    // Collect optimizer parameters.
+                    let compute_instance =
+                        instance_snapshots.entry(mv.cluster_id).or_insert_with(|| {
+                            self.instance_snapshot(mv.cluster_id)
+                                .expect("compute instance exists")
+                        });
+                    let global_id = mv.global_id();
+
+                    let (optimized_plan, physical_plan, metainfo) =
+                        match cached_global_exprs.remove(&global_id) {
+                            Some(global_expressions)
+                                if global_expressions.optimizer_features
+                                    == optimizer_config.features =>
+                            {
+                                debug!("global expression cache hit for {global_id:?}");
+                                (
+                                    global_expressions.global_mir,
+                                    global_expressions.physical_plan,
+                                    global_expressions.dataflow_metainfos,
+                                )
+                            }
+                            Some(_) | None => {
+                                let (_, internal_view_id) = self.allocate_transient_id();
+                                let debug_name = self
+                                    .catalog()
+                                    .resolve_full_name(entry.name(), None)
+                                    .to_string();
+                                let force_non_monotonic = Default::default();
+
+                                let (optimized_plan, global_lir_plan) = {
+                                    // Build an optimizer for this MATERIALIZED VIEW.
+                                    let mut optimizer = optimize::materialized_view::Optimizer::new(
+                                        self.owned_catalog().as_optimizer_catalog(),
+                                        compute_instance.clone(),
+                                        global_id,
+                                        internal_view_id,
+                                        mv.desc.iter_names().cloned().collect(),
+                                        mv.non_null_assertions.clone(),
+                                        mv.refresh_schedule.clone(),
+                                        debug_name,
+                                        optimizer_config.clone(),
+                                        self.optimizer_metrics(),
+                                        force_non_monotonic,
+                                    );
+
+                                    // MIR ⇒ MIR optimization (global)
+                                    let global_mir_plan =
+                                        optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
+                                    let optimized_plan = global_mir_plan.df_desc().clone();
+
+                                    // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+                                    let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+
+                                    (optimized_plan, global_lir_plan)
+                                };
+
+                                let (physical_plan, metainfo) = global_lir_plan.unapply();
+                                let metainfo = {
+                                    // Pre-allocate a vector of transient GlobalIds for each notice.
+                                    let notice_ids =
+                                        std::iter::repeat_with(|| self.allocate_transient_id())
+                                            .map(|(_item_id, global_id)| global_id)
+                                            .take(metainfo.optimizer_notices.len())
+                                            .collect::<Vec<_>>();
+                                    // Return a metainfo with rendered notices.
+                                    self.catalog().render_notices(
+                                        metainfo,
+                                        notice_ids,
+                                        Some(mv.global_id()),
+                                    )
+                                };
+                                uncached_expressions.insert(
+                                    global_id,
+                                    GlobalExpressions {
+                                        global_mir: optimized_plan.clone(),
+                                        physical_plan: physical_plan.clone(),
+                                        dataflow_metainfos: metainfo.clone(),
+                                        optimizer_features: OptimizerFeatures::from(
+                                            self.catalog().system_config(),
+                                        ),
+                                    },
+                                );
+                                (optimized_plan, physical_plan, metainfo)
+                            }
+                        };
+
+                    let catalog = self.catalog_mut();
+                    catalog.set_optimized_plan(mv.global_id(), optimized_plan);
+                    catalog.set_physical_plan(mv.global_id(), physical_plan);
+                    catalog.set_dataflow_metainfo(mv.global_id(), metainfo);
+
+                    compute_instance.insert_collection(mv.global_id());
+                }
                 _ => (),
             }
         }
@@ -3243,6 +3419,7 @@ impl Coordinator {
                 CatalogItem::Index(idx) => idx.global_id(),
                 CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
                 CatalogItem::ContinualTask(ct) => ct.global_id(),
+                CatalogItem::ReplacementMaterializedView(mv) => mv.global_id(),
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
                 | CatalogItem::Log(_)

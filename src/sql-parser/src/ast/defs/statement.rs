@@ -65,12 +65,14 @@ pub enum Statement<T: AstInfo> {
     CreateClusterReplica(CreateClusterReplicaStatement<T>),
     CreateSecret(CreateSecretStatement<T>),
     CreateNetworkPolicy(CreateNetworkPolicyStatement<T>),
+    CreateReplacementMaterializedView(CreateReplacementMaterializedViewStatement<T>),
     AlterCluster(AlterClusterStatement<T>),
     AlterOwner(AlterOwnerStatement<T>),
     AlterObjectRename(AlterObjectRenameStatement),
     AlterObjectSwap(AlterObjectSwapStatement),
     AlterRetainHistory(AlterRetainHistoryStatement<T>),
     AlterIndex(AlterIndexStatement<T>),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementStatement<T>),
     AlterSecret(AlterSecretStatement<T>),
     AlterSetCluster(AlterSetClusterStatement<T>),
     AlterSink(AlterSinkStatement<T>),
@@ -143,6 +145,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::CreateCluster(stmt) => f.write_node(stmt),
             Statement::CreateClusterReplica(stmt) => f.write_node(stmt),
             Statement::CreateNetworkPolicy(stmt) => f.write_node(stmt),
+            Statement::CreateReplacementMaterializedView(stmt) => f.write_node(stmt),
             Statement::AlterCluster(stmt) => f.write_node(stmt),
             Statement::AlterNetworkPolicy(stmt) => f.write_node(stmt),
             Statement::AlterOwner(stmt) => f.write_node(stmt),
@@ -150,6 +153,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterRetainHistory(stmt) => f.write_node(stmt),
             Statement::AlterObjectSwap(stmt) => f.write_node(stmt),
             Statement::AlterIndex(stmt) => f.write_node(stmt),
+            Statement::AlterMaterializedViewApplyReplacement(stmt) => f.write_node(stmt),
             Statement::AlterSetCluster(stmt) => f.write_node(stmt),
             Statement::AlterSecret(stmt) => f.write_node(stmt),
             Statement::AlterSink(stmt) => f.write_node(stmt),
@@ -224,11 +228,15 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::CreateClusterReplica => "create_cluster_replica",
         StatementKind::CreateSecret => "create_secret",
         StatementKind::CreateNetworkPolicy => "create_network_policy",
+        StatementKind::CreateReplacementMaterializedView => "create_replacement_materialized_view",
         StatementKind::AlterCluster => "alter_cluster",
         StatementKind::AlterObjectRename => "alter_object_rename",
         StatementKind::AlterRetainHistory => "alter_retain_history",
         StatementKind::AlterObjectSwap => "alter_object_swap",
         StatementKind::AlterIndex => "alter_index",
+        StatementKind::AlterMaterializedViewApplyReplacement => {
+            "alter_materialized_view_apply_replacement"
+        }
         StatementKind::AlterNetworkPolicy => "alter_network_policy",
         StatementKind::AlterRole => "alter_role",
         StatementKind::AlterSecret => "alter_secret",
@@ -1431,6 +1439,53 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
     }
 }
 impl_display_t!(CreateMaterializedViewStatement);
+
+/// `CREATE REPLACEMENT .. FOR MATERIALIZED VIEW`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CreateReplacementMaterializedViewStatement<T: AstInfo> {
+    pub name: UnresolvedItemName,
+    pub target_name: T::ItemName,
+    pub columns: Vec<Ident>,
+    pub in_cluster: Option<T::ClusterName>,
+    pub query: Query<T>,
+    pub as_of: Option<u64>,
+    pub with_options: Vec<MaterializedViewOption<T>>,
+}
+
+impl<T: AstInfo> AstDisplay for CreateReplacementMaterializedViewStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("CREATE REPLACEMENT ");
+        f.write_node(&self.name);
+        f.write_str(" FOR MATERIALIZED VIEW ");
+        f.write_node(&self.target_name);
+
+        if !self.columns.is_empty() {
+            f.write_str(" (");
+            f.write_node(&display::comma_separated(&self.columns));
+            f.write_str(")");
+        }
+
+        if let Some(cluster) = &self.in_cluster {
+            f.write_str(" IN CLUSTER ");
+            f.write_node(cluster);
+        }
+
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
+
+        f.write_str(" AS ");
+        f.write_node(&self.query);
+
+        if let Some(time) = &self.as_of {
+            f.write_str(" AS OF ");
+            f.write_str(time);
+        }
+    }
+}
+impl_display_t!(CreateReplacementMaterializedViewStatement);
 
 /// `CREATE CONTINUAL TASK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -2821,6 +2876,23 @@ impl<T: AstInfo> AstDisplay for AlterIndexStatement<T> {
 }
 
 impl_display_t!(AlterIndexStatement);
+
+/// `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT ..`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterMaterializedViewApplyReplacementStatement<T: AstInfo> {
+    pub materialized_view_name: T::ItemName,
+    pub replacement_name: T::ItemName,
+}
+
+impl<T: AstInfo> AstDisplay for AlterMaterializedViewApplyReplacementStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("ALTER MATERIALIZED VIEW ");
+        f.write_node(&self.materialized_view_name);
+        f.write_str(" APPLY REPLACEMENT ");
+        f.write_node(&self.replacement_name);
+    }
+}
+impl_display_t!(AlterMaterializedViewApplyReplacementStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum AlterSinkAction<T: AstInfo> {

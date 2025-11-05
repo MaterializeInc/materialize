@@ -131,3 +131,17 @@ ALTER TABLE IF EXISTS t1 ADD COLUMN IF NOT EXISTS bar text
 ALTER TABLE IF EXISTS t1 ADD COLUMN IF NOT EXISTS bar text
 =>
 AlterTableAddColumn(AlterTableAddColumnStatement { if_exists: true, name: UnresolvedItemName([Ident("t1")]), if_col_not_exist: true, column_name: Ident("bar"), data_type: Other { name: Name(UnresolvedItemName([Ident("text")])), typ_mod: [] } })
+
+parse-statement
+ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp1
+----
+ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp1
+=>
+AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementStatement { materialized_view_name: Name(UnresolvedItemName([Ident("mv1")])), replacement_name: Name(UnresolvedItemName([Ident("rp1")])) })
+
+parse-statement
+ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp1 rp2
+----
+error: Expected end of statement, found identifier "rp2"
+ALTER MATERIALIZED VIEW mv1 APPLY REPLACEMENT rp1 rp2
+                                                  ^

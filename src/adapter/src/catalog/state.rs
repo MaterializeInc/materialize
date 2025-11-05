@@ -32,8 +32,8 @@ use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
     Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
-    NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
-    TableDataSource, Type, View,
+    NetworkPolicy, ReplacementMaterializedView, Role, RoleAuth, Schema, Secret, Sink, Source,
+    SourceReferences, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaAllocation, ReplicaLocation,
@@ -76,9 +76,9 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateReplacementMaterializedViewPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -423,7 +423,8 @@ impl CatalogState {
             item @ (CatalogItem::View(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_)) => {
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::ReplacementMaterializedView(_)) => {
                 // TODO(jkosh44) Unclear if this table wants to include all uses or only references.
                 for item_id in item.references().items() {
                     self.introspection_dependencies_inner(*item_id, out);
@@ -1452,6 +1453,86 @@ impl CatalogState {
                 details,
                 resolved_ids,
             }),
+            Plan::CreateReplacementMaterializedView(CreateReplacementMaterializedViewPlan {
+                materialized_view,
+                replaces,
+                ..
+            }) => {
+                // Collect optimizer parameters.
+                let optimizer_config =
+                    optimize::OptimizerConfig::from(session_catalog.system_vars());
+                let previous_exprs = previous_item.map(|item| match item {
+                    CatalogItem::ReplacementMaterializedView(materialized_view) => {
+                        (materialized_view.raw_expr, materialized_view.optimized_expr)
+                    }
+                    item => {
+                        unreachable!("expected replacement materialized view, found: {item:#?}")
+                    }
+                });
+
+                let (raw_expr, optimized_expr) = match (cached_expr, previous_exprs) {
+                    (Some(local_expr), _)
+                        if local_expr.optimizer_features == optimizer_config.features =>
+                    {
+                        debug!("local expression cache hit for {global_id:?}");
+                        (
+                            Arc::new(materialized_view.expr),
+                            Arc::new(local_expr.local_mir),
+                        )
+                    }
+                    // If the new expr is equivalent to the old expr, then we don't need to re-optimize.
+                    (_, Some((raw_expr, optimized_expr)))
+                        if *raw_expr == materialized_view.expr =>
+                    {
+                        (Arc::clone(&raw_expr), Arc::clone(&optimized_expr))
+                    }
+                    (cached_expr, _) => {
+                        let optimizer_features = optimizer_config.features.clone();
+                        // TODO(aalexandrov): ideally this should be a materialized_view::Optimizer.
+                        let mut optimizer = optimize::view::Optimizer::new(optimizer_config, None);
+
+                        let raw_expr = materialized_view.expr;
+                        let optimized_expr = match optimizer.optimize(raw_expr.clone()) {
+                            Ok(optimized_expr) => optimized_expr,
+                            Err(err) => return Err((err.into(), cached_expr)),
+                        };
+
+                        uncached_expr = Some((optimized_expr.clone(), optimizer_features));
+
+                        (Arc::new(raw_expr), Arc::new(optimized_expr))
+                    }
+                };
+                let mut typ = optimized_expr.typ();
+                for &i in &materialized_view.non_null_assertions {
+                    typ.column_types[i].nullable = false;
+                }
+                let desc = RelationDesc::new(typ, materialized_view.column_names);
+
+                let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
+
+                // Resolve all item dependencies from the HIR expression.
+                let dependencies = raw_expr
+                    .depends_on()
+                    .into_iter()
+                    .map(|gid| self.get_entry_by_global_id(&gid).id())
+                    .collect();
+
+                CatalogItem::ReplacementMaterializedView(ReplacementMaterializedView {
+                    create_sql: materialized_view.create_sql,
+                    global_id,
+                    replaces,
+                    raw_expr,
+                    optimized_expr,
+                    desc,
+                    resolved_ids,
+                    dependencies,
+                    cluster_id: materialized_view.cluster_id,
+                    non_null_assertions: materialized_view.non_null_assertions,
+                    custom_logical_compaction_window: materialized_view.compaction_window,
+                    refresh_schedule: materialized_view.refresh_schedule,
+                    initial_as_of,
+                })
+            }
             _ => {
                 return Err((
                     Error::new(ErrorKind::Corruption {
