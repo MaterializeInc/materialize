@@ -50,6 +50,7 @@ mz-adapter-types = { path = "../adapter-types" }
 mz-catalog = { path = "../catalog" }
 mz-cloud-resources = { path = "../cloud-resources" }
 mz-controller = { path = "../controller" }
+mz-controller-types = { path = "../controller-types" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-frontegg-auth = { path = "../frontegg-auth" }

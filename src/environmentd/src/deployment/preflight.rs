@@ -14,12 +14,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mz_adapter::ResultExt;
-use mz_catalog::durable::DurableCatalogState;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
+use mz_controller_types::ReplicaId;
 use mz_ore::channel::trigger;
 use mz_ore::exit;
 use mz_ore::halt;
-use mz_ore::str::{bracketed, separated};
+use mz_ore::str::separated;
 use mz_persist_client::PersistClient;
 use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::catalog::EnvironmentId;
@@ -225,12 +225,12 @@ pub async fn preflight_0dt(
         exit!(0, "this deployment has been fenced out");
     }
 }
-
 /// Check if there have been any DDL that create new collections or replicas,
 /// restart in read-only mode if so, in order to pick up those new items and
 /// start hydrating them before cutting over.
 ///
-/// We do this by enumerating the set of IDs that need to be allocated after the ddl check began and seeing if any were committed to the catalog.
+/// We do this by checking if new IDs that need to be allocated when the preflight
+/// check began were committed to the catalog.
 async fn check_ddl_changes(
     boot_ts: Timestamp,
     persist_client: PersistClient,
@@ -251,93 +251,67 @@ async fn check_ddl_changes(
     .await
     .expect("incompatible catalog/persist version");
 
-    // We must explicitly check the catalog for theses IDs rather than
-    // checking if new IDs were allocated since the ddl check began. This is because new IDs can be allocated during sequencing/planning when
-    // DDL hasn't fully committed to the Catalog yet. This would result in false positives from the ddl check.
     let (mut catalog, _audit_logs) = openable_adapter_storage
         .open_savepoint(boot_ts, &bootstrap_args)
         .await
         .unwrap_or_terminate("can open in savepoint mode");
-
-    let (next_user_item_id, next_replica_id) = get_next_ids_from_catalog(&mut catalog).await;
 
     let tx = catalog
         .transaction()
         .await
         .unwrap_or_terminate("unexpected error while getting transaction");
 
-    let replica_ids_in_catalog = tx
+    // We must explicitly check the catalog for these IDs since IDs can be
+    // allocated during sequencing/planning but not yet committed to the catalog.
+    let new_replicas = tx
         .get_cluster_replicas()
-        .filter_map(|replica| {
-            if replica.replica_id.is_user() {
-                Some(replica.replica_id.inner_id())
-            } else {
-                None
-            }
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-
-    let object_ids_in_catalog = tx
-        .get_items()
-        .filter_map(|item| match item.id {
-            CatalogItemId::User(id) => Some(id),
+        .filter_map(|replica| match replica.replica_id {
+            ReplicaId::User(id) if id >= initial_next_replica_id => Some(replica),
             _ => None,
         })
-        .collect::<std::collections::BTreeSet<_>>();
+        .collect::<Vec<_>>();
 
-    // Because IDs are incremented sequentially, the range of IDs to be allocated since the ddl check began and the next IDs to be allocated
-    // give us the set of IDs that would indicate DDL changes if committed to the catalog.
-    let mut object_ids_to_check = initial_next_user_item_id..=next_user_item_id;
-    let mut replica_ids_to_check = initial_next_replica_id..=next_replica_id;
-
-    let format_inclusive_range = |range: &std::ops::RangeInclusive<u64>| {
-        format!("{}", bracketed("{", "}", separated(", ", range.clone())))
-    };
+    let new_objects = tx
+        .get_items()
+        .filter_map(|item| match item.id {
+            CatalogItemId::User(id) if id >= initial_next_user_item_id => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
 
     tracing::info!(
-        last_replica_id_in_catalog = replica_ids_in_catalog.last(),
-        replica_ids_to_check = format_inclusive_range(&replica_ids_to_check),
-        last_object_id_in_catalog = object_ids_in_catalog.last(),
-        object_ids_to_check = format_inclusive_range(&object_ids_to_check),
+        potential_new_user_item_id=%initial_next_user_item_id,
+        potential_new_replica_id=%initial_next_replica_id,
         "checking if there have been new IDs committed to the catalog since the DDL check began;"
     );
 
-    let maybe_new_replica_id_committed_to_catalog =
-        replica_ids_to_check.find(|id| replica_ids_in_catalog.contains(id));
+    if !new_replicas.is_empty() || !new_objects.is_empty() {
+        let mut info_parts = Vec::new();
 
-    let maybe_new_object_id_committed_to_catalog =
-        object_ids_to_check.find(|id| object_ids_in_catalog.contains(id));
+        if !new_replicas.is_empty() {
+            let replicas = new_replicas.iter().map(|r| {
+                format!(
+                    "{{replica_id: {}, replica_name: {}, cluster_id: {}}}",
+                    r.replica_id, r.name, r.cluster_id
+                )
+            });
+            info_parts.push(format!("New replicas: [{}]", separated(", ", replicas)));
+        }
 
-    if maybe_new_replica_id_committed_to_catalog.is_some()
-        || maybe_new_object_id_committed_to_catalog.is_some()
-    {
-        let extra_info = format!(
-            "{}{}",
-            maybe_new_replica_id_committed_to_catalog
-                .map(|id| format!(" (replica_id: {})", id))
-                .unwrap_or_default(),
-            maybe_new_object_id_committed_to_catalog
-                .map(|id| format!(" (object_id: {})", id))
-                .unwrap_or_default()
-        );
+        if !new_objects.is_empty() {
+            let objects = new_objects
+                .iter()
+                .map(|o| format!("{{object_id: {}, object_name: {}}}", o.id, o.name));
+            info_parts.push(format!("New objects: [{}]", separated(", ", objects)));
+        }
+
+        let extra_info = separated(". ", info_parts);
+
         halt!(
-            "there have been DDL that we need to react to; rebooting in read-only mode{}",
-            &extra_info
+            "there have been DDL that we need to react to; rebooting in read-only mode. {}",
+            extra_info
         )
     }
-}
-
-async fn get_next_ids_from_catalog(catalog: &mut Box<dyn DurableCatalogState>) -> (u64, u64) {
-    let next_user_item_id = catalog
-        .get_next_user_item_id()
-        .await
-        .expect("can access catalog");
-    let next_replica_item_id = catalog
-        .get_next_user_replica_id()
-        .await
-        .expect("can access catalog");
-
-    (next_user_item_id, next_replica_item_id)
 }
 
 /// Gets and returns the next user item ID and user replica ID that would be
@@ -365,5 +339,14 @@ async fn get_next_ids(
         .await
         .unwrap_or_terminate("can open in savepoint mode");
 
-    get_next_ids_from_catalog(&mut catalog).await
+    let next_user_item_id = catalog
+        .get_next_user_item_id()
+        .await
+        .expect("can access catalog");
+    let next_replica_item_id = catalog
+        .get_next_user_replica_id()
+        .await
+        .expect("can access catalog");
+
+    (next_user_item_id, next_replica_item_id)
 }

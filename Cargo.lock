@@ -6121,6 +6121,7 @@ dependencies = [
  "mz-catalog",
  "mz-cloud-resources",
  "mz-controller",
+ "mz-controller-types",
  "mz-dyncfg",
  "mz-dyncfgs",
  "mz-environmentd",
