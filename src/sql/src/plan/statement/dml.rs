@@ -30,7 +30,8 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainAnalyzeComputationProperty, ExplainAnalyzeProperty, ExplainAnalyzeStatement,
+    CteBlock, ExplainAnalyzeClusterStatement, ExplainAnalyzeComputationProperties,
+    ExplainAnalyzeComputationProperty, ExplainAnalyzeObjectStatement, ExplainAnalyzeProperty,
     ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement, ExplainSinkSchemaFor,
     ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
     SetExpr, SubscribeOutput, UnresolvedItemName,
@@ -359,9 +360,9 @@ pub fn describe_explain_pushdown(
     )
 }
 
-pub fn describe_explain_analyze(
+pub fn describe_explain_analyze_object(
     _scx: &StatementContext,
-    statement: ExplainAnalyzeStatement<Aug>,
+    statement: ExplainAnalyzeObjectStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     if statement.as_sql {
         let relation_desc = RelationDesc::builder()
@@ -371,7 +372,10 @@ pub fn describe_explain_analyze(
     }
 
     match statement.properties {
-        ExplainAnalyzeProperty::Computation { properties, skew } => {
+        ExplainAnalyzeProperty::Computation(ExplainAnalyzeComputationProperties {
+            properties,
+            skew,
+        }) => {
             let mut relation_desc = RelationDesc::builder()
                 .with_column("operator", SqlScalarType::String.nullable(false));
 
@@ -441,6 +445,13 @@ pub fn describe_explain_analyze(
             Ok(StatementDesc::new(Some(relation_desc)))
         }
     }
+}
+
+pub fn describe_explain_analyze_cluster(
+    _scx: &StatementContext,
+    _statement: ExplainAnalyzeClusterStatement,
+) -> Result<StatementDesc, PlanError> {
+    todo!("XXX MMG")
 }
 
 pub fn describe_explain_timestamp(
@@ -797,9 +808,9 @@ pub fn plan_explain_pushdown(
     Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
 
-pub fn plan_explain_analyze(
+pub fn plan_explain_analyze_object(
     scx: &StatementContext,
-    statement: ExplainAnalyzeStatement<Aug>,
+    statement: ExplainAnalyzeObjectStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let explainee_name = statement
@@ -837,7 +848,10 @@ pub fn plan_explain_analyze(
     let mut order_by = vec!["mlm.lir_id DESC"];
 
     match statement.properties {
-        ExplainAnalyzeProperty::Computation { properties, skew } => {
+        ExplainAnalyzeProperty::Computation(ExplainAnalyzeComputationProperties {
+            properties,
+            skew,
+        }) => {
             let mut worker_id = None;
             let mut seen_properties = BTreeSet::new();
             for property in properties {
@@ -1012,6 +1026,14 @@ ORDER BY {order_by}"#
         let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
         show_select.plan()
     }
+}
+
+pub fn plan_explain_analyze_cluster(
+    _scx: &StatementContext,
+    _statement: ExplainAnalyzeClusterStatement,
+    _params: &Params,
+) -> Result<Plan, PlanError> {
+    todo!("XXX MMG")
 }
 
 pub fn plan_explain_timestamp(

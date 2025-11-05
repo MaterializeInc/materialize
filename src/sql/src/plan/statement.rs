@@ -231,7 +231,10 @@ pub fn describe(
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
         Statement::ExplainPlan(stmt) => dml::describe_explain_plan(&scx, stmt)?,
         Statement::ExplainPushdown(stmt) => dml::describe_explain_pushdown(&scx, stmt)?,
-        Statement::ExplainAnalyze(stmt) => dml::describe_explain_analyze(&scx, stmt)?,
+        Statement::ExplainAnalyzeObject(stmt) => dml::describe_explain_analyze_object(&scx, stmt)?,
+        Statement::ExplainAnalyzeCluster(stmt) => {
+            dml::describe_explain_analyze_cluster(&scx, stmt)?
+        }
         Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
         Statement::ExplainSinkSchema(stmt) => dml::describe_explain_schema(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -369,7 +372,12 @@ pub fn plan(
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
         Statement::ExplainPushdown(stmt) => dml::plan_explain_pushdown(scx, stmt, params),
-        Statement::ExplainAnalyze(stmt) => dml::plan_explain_analyze(scx, stmt, params),
+        Statement::ExplainAnalyzeObject(stmt) => {
+            dml::plan_explain_analyze_object(scx, stmt, params)
+        }
+        Statement::ExplainAnalyzeCluster(stmt) => {
+            dml::plan_explain_analyze_cluster(scx, stmt, params)
+        }
         Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt),
         Statement::ExplainSinkSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
@@ -1091,7 +1099,8 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Delete(_) => DML,
             Statement::ExplainPlan(_) => DML,
             Statement::ExplainPushdown(_) => DML,
-            Statement::ExplainAnalyze(_) => DML,
+            Statement::ExplainAnalyzeObject(_) => DML,
+            Statement::ExplainAnalyzeCluster(_) => DML,
             Statement::ExplainTimestamp(_) => DML,
             Statement::ExplainSinkSchema(_) => DML,
             Statement::Insert(_) => DML,

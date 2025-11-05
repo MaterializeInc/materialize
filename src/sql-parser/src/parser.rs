@@ -8845,7 +8845,7 @@ impl<'a> Parser<'a> {
                 .map_parser_err(StatementKind::ExplainPushdown)
         } else if self.parse_keyword(ANALYZE) || self.parse_keyword(ANALYSE) {
             self.parse_explain_analyze()
-                .map_parser_err(StatementKind::ExplainAnalyze)
+                .map_parser_err(StatementKind::ExplainAnalyzeObject)
         } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSinkSchema)
@@ -9044,27 +9044,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_explain_analyze(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // EXPLAIN ANALYZE CLUSTER (MEMORY | CPU) [WITH SKEW] [AS SQL]
+        if self.parse_keyword(CLUSTER) {
+            let properties = self.parse_explain_analyze_computation_properties()?;
+            let as_sql = self.parse_keywords(&[AS, SQL]);
+            return Ok(Statement::ExplainAnalyzeCluster(
+                ExplainAnalyzeClusterStatement { properties, as_sql },
+            ));
+        }
+
         // EXPLAIN ANALYZE ((MEMORY | CPU) [WITH SKEW] | HINTS) FOR (INDEX ... | MATERIALIZED VIEW ...) [AS SQL]
 
         let properties = if self.parse_keyword(HINTS) {
             ExplainAnalyzeProperty::Hints
         } else {
-            let mut computation_properties = vec![CPU, MEMORY];
-            let (kw, property) =
-                self.parse_explain_analyze_computation_property(&computation_properties)?;
-            let mut properties = vec![property];
-            computation_properties.retain(|p| p != &kw);
-
-            while self.consume_token(&Token::Comma) {
-                let (kw, property) =
-                    self.parse_explain_analyze_computation_property(&computation_properties)?;
-                computation_properties.retain(|p| p != &kw);
-                properties.push(property);
-            }
-
-            let skew = self.parse_keywords(&[WITH, SKEW]);
-
-            ExplainAnalyzeProperty::Computation { properties, skew }
+            ExplainAnalyzeProperty::Computation(
+                self.parse_explain_analyze_computation_properties()?,
+            )
         };
 
         self.expect_keyword(FOR)?;
@@ -9080,11 +9076,34 @@ impl<'a> Parser<'a> {
 
         let as_sql = self.parse_keywords(&[AS, SQL]);
 
-        Ok(Statement::ExplainAnalyze(ExplainAnalyzeStatement {
-            properties,
-            explainee,
-            as_sql,
-        }))
+        Ok(Statement::ExplainAnalyzeObject(
+            ExplainAnalyzeObjectStatement {
+                properties,
+                explainee,
+                as_sql,
+            },
+        ))
+    }
+
+    fn parse_explain_analyze_computation_properties(
+        &mut self,
+    ) -> Result<ExplainAnalyzeComputationProperties, ParserError> {
+        let mut computation_properties = vec![CPU, MEMORY];
+        let (kw, property) =
+            self.parse_explain_analyze_computation_property(&computation_properties)?;
+        let mut properties = vec![property];
+        computation_properties.retain(|p| p != &kw);
+
+        while self.consume_token(&Token::Comma) {
+            let (kw, property) =
+                self.parse_explain_analyze_computation_property(&computation_properties)?;
+            computation_properties.retain(|p| p != &kw);
+            properties.push(property);
+        }
+
+        let skew = self.parse_keywords(&[WITH, SKEW]);
+
+        Ok(ExplainAnalyzeComputationProperties { properties, skew })
     }
 
     fn parse_explain_analyze_computation_property(
