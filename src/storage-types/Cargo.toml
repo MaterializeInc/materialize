@@ -76,8 +76,10 @@ url = { version = "2.3.1", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 base64 = "0.22.1"
-iceberg = "0.6.0"
-iceberg-catalog-rest = "0.6.0"
+iceberg = "0.7.0"
+iceberg-catalog-rest = "0.7.0"
+iceberg-catalog-s3tables = "0.7.0"
+aws-sdk-s3tables = "1.28.0"
 
 [dev-dependencies]
 criterion = { version = "0.6.0" }
