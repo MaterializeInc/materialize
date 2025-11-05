@@ -319,10 +319,12 @@ def run_one_scenario(
     return result
 
 
-resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str] = {}
+resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str | None] = {}
 
 
-def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
+def resolve_tag(
+    tag: str, scenario_class: type[Scenario], scale: str | None
+) -> str | None:
     if tag == "common-ancestor":
         overrides = get_ancestor_overrides_for_performance_regressions(
             scenario_class, scale

@@ -148,7 +148,7 @@ def get_latest_version(
 
 def get_tags_of_current_commit(include_tags: YesNoOnce = YesNoOnce.ONCE) -> list[str]:
     if include_tags:
-        fetch(include_tags=include_tags, only_tags=True)
+        fetch(get_remote(), include_tags=include_tags, only_tags=True)
 
     result = spawn.capture(["git", "tag", "--points-at", "HEAD"])
 

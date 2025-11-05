@@ -138,7 +138,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         raise FailedTestExecutionError(errors=test_summary.failures)
 
 
-def resolve_tag(tag: str) -> str:
+def resolve_tag(tag: str) -> str | None:
     if tag == "common-ancestor":
         return resolve_ancestor_image_tag(
             ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS

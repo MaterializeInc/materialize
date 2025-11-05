@@ -126,7 +126,7 @@ class MaterializeContainer(MaterializeNonRemote):
         self,
         composition: Composition,
         specified_target: str,
-        resolved_target: str,
+        resolved_target: str | None,
         use_balancerd: bool,
         image: str | None = None,
         alternative_image: str | None = None,
@@ -141,7 +141,7 @@ class MaterializeContainer(MaterializeNonRemote):
         self.use_balancerd = use_balancerd
         super().__init__(specified_target)
 
-    def resolved_target(self) -> str:
+    def resolved_target(self) -> str | None:
         return self._resolved_target
 
     def port(self) -> int:
