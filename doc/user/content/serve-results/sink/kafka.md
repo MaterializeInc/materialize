@@ -15,7 +15,10 @@ menu:
 ## Connectors
 
 Materialize bundles a **native connector** that allow writing data to Kafka and
-Redpanda.
+Redpanda. When a user defines a sink to Kafka/Redpanda, Materialize
+automatically generates the required schema and writes down the stream of
+changes to that view or source. In effect, Materialize sinks act as change data
+capture (CDC) producers for the given source or view.
 
 For details on the connector, including syntax, supported formats and examples,
 refer to [`CREATE SINK`](/sql/create-sink/kafka).
@@ -24,9 +27,13 @@ refer to [`CREATE SINK`](/sql/create-sink/kafka).
 
 Redpanda uses the same syntax as Kafka [`CREATE SINK`](/sql/create-sink/kafka).
 
-{{</ tip >}}
+{{< /tip >}}
 
 ## Features
+
+### Memory use during creation
+
+During creation, sinks need to load an entire snapshot of the data in memory.
 
 ### Automatic topic creation
 
