@@ -128,7 +128,9 @@ fn handle_typecheck(
         Ok(typ) => format!("{}\n", columns_pretty(&typ, catalog).trim()),
         Err(err) => format!(
             "{}\n",
-            mz_transform::reprtypecheck::TypeErrorHumanizer::new(&err, catalog).to_string().trim(),
+            mz_transform::reprtypecheck::TypeErrorHumanizer::new(&err, catalog)
+                .to_string()
+                .trim(),
         ),
     }
 }
