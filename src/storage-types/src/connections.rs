@@ -15,7 +15,10 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
-use iceberg::{Catalog, CatalogBuilder};
+use aws_sdk_sts::config::ProvideCredentials;
+use iceberg::Catalog;
+use iceberg::CatalogBuilder;
+use iceberg::io::{S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY};
 use iceberg_catalog_rest::{
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RestCatalogBuilder,
 };
@@ -493,17 +496,33 @@ impl IcebergCatalogConnection<InlinedConnection> {
         }
     }
 
+    pub fn catalog_type(&self) -> IcebergCatalogType {
+        match self.catalog {
+            IcebergCatalogImpl::S3TablesRest(_) => IcebergCatalogType::S3TablesRest,
+            IcebergCatalogImpl::Rest(_) => IcebergCatalogType::Rest,
+        }
+    }
+
+    pub fn s3tables_catalog(&self) -> Option<&S3TablesRestIcebergCatalog> {
+        match &self.catalog {
+            IcebergCatalogImpl::S3TablesRest(s3tables) => Some(s3tables),
+            _ => None,
+        }
+    }
+
+    pub fn rest_catalog(&self) -> Option<&RestIcebergCatalog> {
+        match &self.catalog {
+            IcebergCatalogImpl::Rest(rest) => Some(rest),
+            _ => None,
+        }
+    }
+
     async fn connect_s3tables(
         &self,
         s3tables: &S3TablesRestIcebergCatalog,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
-        let mut props = BTreeMap::from([(
-            REST_CATALOG_PROP_URI.to_string(),
-            self.uri.to_string().clone(),
-        )]);
-
         let aws_ref = &s3tables.aws_connection;
         let aws_config = aws_ref
             .connection
@@ -514,16 +533,46 @@ impl IcebergCatalogConnection<InlinedConnection> {
             )
             .await?;
 
-        props.insert(
-            REST_CATALOG_PROP_WAREHOUSE.to_string(),
-            s3tables.warehouse.clone(),
-        );
+        let provider = aws_config
+            .credentials_provider()
+            .context("No credentials provider in AWS config")?;
+
+        let creds = provider
+            .provide_credentials()
+            .await
+            .context("Failed to get AWS credentials")?;
+
+        let access_key_id = creds.access_key_id();
+        let secret_access_key = creds.secret_access_key();
+
+        let aws_region = aws_config
+            .region()
+            .map(|r| r.as_ref())
+            .unwrap_or("us-east-1");
+
+        let props = vec![
+            (S3_REGION.to_string(), aws_region.to_string()),
+            (S3_DISABLE_EC2_METADATA.to_string(), "true".to_string()),
+            (S3_ACCESS_KEY_ID.to_string(), access_key_id.to_string()),
+            (
+                S3_SECRET_ACCESS_KEY.to_string(),
+                secret_access_key.to_string(),
+            ),
+            (
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                s3tables.warehouse.clone(),
+            ),
+            (
+                REST_CATALOG_PROP_URI.to_string(),
+                self.uri.to_string().clone(),
+            ),
+        ];
 
         let catalog = RestCatalogBuilder::default()
-            .with_aws_client(aws_config)
+            .with_aws_config(aws_config)
             .load("IcebergCatalog", props.into_iter().collect())
-            .await
-            .map_err(|e| anyhow!("failed to create Iceberg catalog: {e}"))?;
+            .await?;
+
         Ok(Arc::new(catalog))
     }
 

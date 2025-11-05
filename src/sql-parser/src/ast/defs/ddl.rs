@@ -1092,6 +1092,7 @@ impl_display_t!(KafkaSinkConfigOption);
 pub enum IcebergSinkConfigOptionName {
     Namespace,
     Table,
+    CommitInterval,
 }
 
 impl AstDisplay for IcebergSinkConfigOptionName {
@@ -1099,6 +1100,7 @@ impl AstDisplay for IcebergSinkConfigOptionName {
         f.write_str(match self {
             IcebergSinkConfigOptionName::Namespace => "NAMESPACE",
             IcebergSinkConfigOptionName::Table => "TABLE",
+            IcebergSinkConfigOptionName::CommitInterval => "COMMIT INTERVAL",
         })
     }
 }
@@ -1112,7 +1114,9 @@ impl WithOptionName for IcebergSinkConfigOptionName {
     /// on the conservative side and return `true`.
     fn redact_value(&self) -> bool {
         match self {
-            IcebergSinkConfigOptionName::Namespace | IcebergSinkConfigOptionName::Table => false,
+            IcebergSinkConfigOptionName::Namespace
+            | IcebergSinkConfigOptionName::Table
+            | IcebergSinkConfigOptionName::CommitInterval => false,
         }
     }
 }

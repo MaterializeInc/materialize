@@ -3783,6 +3783,7 @@ fn iceberg_sink_builder(
     let IcebergSinkConfigOptionExtracted {
         table,
         namespace,
+        commit_interval,
         seen: _,
     }: IcebergSinkConfigOptionExtracted = options.try_into()?;
 
@@ -3792,6 +3793,9 @@ fn iceberg_sink_builder(
     let Some(namespace) = namespace else {
         sql_bail!("Iceberg sink must specify NAMESPACE");
     };
+    let Some(commit_interval) = commit_interval else {
+        sql_bail!("Iceberg sink must specify COMMIT INTERVAL");
+    };
 
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
         catalog_connection_id,
@@ -3800,6 +3804,7 @@ fn iceberg_sink_builder(
         aws_connection: aws_connection_id,
         table,
         namespace,
+        commit_interval,
         relation_key_indices,
         key_desc_and_indices,
     }))
