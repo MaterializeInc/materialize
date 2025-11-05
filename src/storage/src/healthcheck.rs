@@ -53,6 +53,7 @@ pub enum StatusNamespace {
     Ssh,
     Upsert,
     Decode,
+    Iceberg,
     Internal,
 }
 
@@ -75,6 +76,7 @@ impl fmt::Display for StatusNamespace {
             Upsert => write!(f, "upsert"),
             Decode => write!(f, "decode"),
             Internal => write!(f, "internal"),
+            Iceberg => write!(f, "iceberg"),
         }
     }
 }

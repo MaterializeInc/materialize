@@ -641,6 +641,7 @@ pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub namespace: String,
     pub table: String,
+    pub commit_interval: Duration,
 }
 
 impl<C: ConnectionAccess> IcebergSinkConnection<C> {
@@ -661,6 +662,7 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
             key_desc_and_indices,
             namespace,
             table,
+            commit_interval,
         } = self;
 
         let compatibility_checks = [
@@ -694,6 +696,7 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
             ),
             (namespace == &other.namespace, "namespace"),
             (table == &other.table, "table"),
+            (commit_interval == &other.commit_interval, "commit_interval"),
         ];
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -724,6 +727,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             key_desc_and_indices,
             namespace,
             table,
+            commit_interval,
         } = self;
         IcebergSinkConnection {
             catalog_connection_id,
@@ -736,6 +740,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             key_desc_and_indices,
             namespace,
             table,
+            commit_interval,
         }
     }
 }
