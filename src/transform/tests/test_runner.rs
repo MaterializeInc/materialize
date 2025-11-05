@@ -34,7 +34,7 @@ mod tests {
     use mz_transform::dataflow::{
         DataflowMetainfo, optimize_dataflow_demand_inner, optimize_dataflow_filters_inner,
     };
-    use mz_transform::{Optimizer, Transform, TransformCtx, typecheck};
+    use mz_transform::{Optimizer, Transform, TransformCtx, reprtypecheck, typecheck};
     use proc_macro2::TokenTree;
 
     use crate::explain::Explainable;
@@ -51,10 +51,12 @@ mod tests {
     fn full_transform_list() -> Vec<Box<dyn Transform>> {
         let features = OptimizerFeatures::default();
         let typecheck_ctx = typecheck::empty_context();
+        let repr_typecheck_ctx = reprtypecheck::empty_context();
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &features,
             &typecheck_ctx,
+            &repr_typecheck_ctx,
             &mut df_meta,
             None,
             Some(TEST_GLOBAL_ID),
@@ -185,10 +187,12 @@ mod tests {
     ) -> Result<String, Error> {
         let features = OptimizerFeatures::default();
         let typecheck_ctx = typecheck::empty_context();
+        let repr_typecheck_ctx = reprtypecheck::empty_context();
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &features,
             &typecheck_ctx,
+            &repr_typecheck_ctx,
             &mut df_meta,
             None,
             Some(TEST_GLOBAL_ID),
@@ -369,10 +373,12 @@ mod tests {
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
+            let repr_typecheck_ctx = reprtypecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
             let mut transform_ctx = TransformCtx::local(
                 &features,
                 &typecheck_ctx,
+                &repr_typecheck_ctx,
                 &mut df_meta,
                 None,
                 Some(TEST_GLOBAL_ID),
@@ -410,10 +416,12 @@ mod tests {
         if test_type == TestType::Opt {
             let features = OptimizerFeatures::default();
             let typecheck_ctx = typecheck::empty_context();
+            let repr_typecheck_ctx = reprtypecheck::empty_context();
             let mut df_meta = DataflowMetainfo::default();
             let mut transform_ctx = TransformCtx::local(
                 &features,
                 &typecheck_ctx,
+                &repr_typecheck_ctx,
                 &mut df_meta,
                 None,
                 Some(TEST_GLOBAL_ID),

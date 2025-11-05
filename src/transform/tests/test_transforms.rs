@@ -266,10 +266,12 @@ fn apply_transform<T: mz_transform::Transform>(
     features.enable_dequadratic_eqprop_map = true;
     features.enable_eq_classes_withholding_errors = true;
     let typecheck_ctx = mz_transform::typecheck::empty_context();
+    let repr_typecheck_ctx = mz_transform::reprtypecheck::empty_context();
     let mut df_meta = DataflowMetainfo::default();
     let mut transform_ctx = mz_transform::TransformCtx::local(
         &features,
         &typecheck_ctx,
+        &repr_typecheck_ctx,
         &mut df_meta,
         None,
         Some(TEST_GLOBAL_ID),
