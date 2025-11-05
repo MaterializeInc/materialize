@@ -18,7 +18,6 @@ use mz_repr::explain::{ExplainConfig, PlanRenderingContext};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_transform::analysis::annotate_plan;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::typecheck::TypeErrorHumanizer;
 
 const TEST_GLOBAL_ID: GlobalId = GlobalId::Transient(1234567);
 
@@ -118,8 +117,8 @@ fn handle_typecheck(
     };
 
     // Apply the transformation, returning early on TransformError.
-    use mz_transform::typecheck::{Typecheck, columns_pretty};
-    let ctx = mz_transform::typecheck::empty_context();
+    use mz_transform::reprtypecheck::{Typecheck, columns_pretty};
+    let ctx = mz_transform::reprtypecheck::empty_context();
 
     let tc = Typecheck::new(std::sync::Arc::clone(&ctx));
 
@@ -129,7 +128,7 @@ fn handle_typecheck(
         Ok(typ) => format!("{}\n", columns_pretty(&typ, catalog).trim()),
         Err(err) => format!(
             "{}\n",
-            TypeErrorHumanizer::new(&err, catalog).to_string().trim(),
+            mz_transform::reprtypecheck::TypeErrorHumanizer::new(&err, catalog).to_string().trim(),
         ),
     }
 }
