@@ -20,6 +20,7 @@ import random
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -47,6 +48,7 @@ from materialize.version_list import (
     get_all_self_managed_versions,
     get_self_managed_versions,
 )
+from materialize.xcompile import Arch
 
 SERVICES = [
     Testdrive(),
@@ -1479,22 +1481,53 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "balancerd",
         ]
         c.up(*[Service(service, idle=True) for service in services])
+
+        # Workaround for https://github.com/kubernetes-sigs/kind/issues/3795,
+        # we can switch back to the original code after it's fixed
         for service in services:
-            spawn.runv(
-                [
-                    "docker",
-                    "tag",
-                    c.compose["services"][service]["image"],
-                    get_image(c.compose["services"][service]["image"], None),
-                ]
-            )
-        spawn.runv(
-            ["kind", "load", "docker-image", "--name", cluster]
-            + [
-                get_image(c.compose["services"][service]["image"], None)
-                for service in services
-            ]
-        )
+            image = c.compose["services"][service]["image"]
+            tagged_image = get_image(image, None)
+            spawn.runv(["docker", "tag", image, tagged_image])
+            with tempfile.NamedTemporaryFile(suffix=".tar", delete=False) as tmp:
+                archive_path = tmp.name
+            try:
+                arch = Arch.host().go_str()
+                spawn.runv(
+                    [
+                        "docker",
+                        "save",
+                        "--platform",
+                        f"linux/{arch}",
+                        "-o",
+                        archive_path,
+                        tagged_image,
+                    ]
+                )
+                spawn.runv(
+                    ["kind", "load", "image-archive", "--name", cluster, archive_path]
+                )
+            finally:
+                try:
+                    os.remove(archive_path)
+                except FileNotFoundError:
+                    pass
+        # Original code:
+        # for service in services:
+        #     spawn.runv(
+        #         [
+        #             "docker",
+        #             "tag",
+        #             c.compose["services"][service]["image"],
+        #             get_image(c.compose["services"][service]["image"], None),
+        #         ]
+        #     )
+        # spawn.runv(
+        #     ["kind", "load", "docker-image", "--name", cluster]
+        #     + [
+        #         get_image(c.compose["services"][service]["image"], None)
+        #         for service in services
+        #     ]
+        # )
 
     definition: dict[str, Any] = {}
 
