@@ -222,7 +222,7 @@ pub enum ReprColumnTypeDifference {
     /// `sub` and `sup` are both records, but some fields in `sub` are not subtypes of fields in `sup`
     RecordFields {
         /// The differences, by field
-        fields: Vec<(ColumnName, ReprColumnTypeDifference)>,
+        fields: Vec<ReprColumnTypeDifference>,
     },
 }
 
@@ -261,7 +261,7 @@ impl ReprColumnTypeDifference {
             RecordFields { fields } => {
                 let fields = fields
                     .into_iter()
-                    .flat_map(|(col, diff)| diff.ignore_nullability().map(|diff| (col, diff)))
+                    .flat_map(|diff| diff.ignore_nullability())
                     .collect::<Vec<_>>();
 
                 if fields.is_empty() {
@@ -408,6 +408,103 @@ pub fn scalar_subtype_difference(
             }
         }
     };
+
+    diffs
+}
+
+/// Unions `other` into `typ`, returning a list of differences on failure
+///
+/// This function returns an empty list when `typ` and `other` are a union
+pub fn scalar_union(
+    typ: &mut ReprScalarType,
+    other: &ReprScalarType,
+) -> Vec<ReprColumnTypeDifference> {
+    use ReprScalarType::*;
+
+    let mut diffs = Vec::new();
+
+    // precomputing to appease the borrow checker
+    let ctor = ReprScalarBaseType::from(&*typ);
+    match (typ, other) {
+        (
+            List {
+                element_type: typ_elt,
+            },
+            List {
+                element_type: other_elt,
+            },
+        )
+        | (
+            Map {
+                value_type: typ_elt,
+            },
+            Map {
+                value_type: other_elt,
+            },
+        )
+        | (
+            Range {
+                element_type: typ_elt,
+            },
+            Range {
+                element_type: other_elt,
+            },
+        )
+        | (Array(typ_elt), Array(other_elt)) => {
+            let res = scalar_union(typ_elt.as_mut(), other_elt.as_ref());
+            diffs.extend(
+                res.into_iter()
+                    .map(|diff| ReprColumnTypeDifference::ElementType {
+                        ctor: format!("{ctor:?}"),
+                        element_type: Box::new(diff),
+                    }),
+            );
+        }
+        (
+            Record { fields: typ_fields },
+            Record {
+                fields: other_fields,
+            },
+        ) => {
+            if typ_fields.len() != other_fields.len() {
+                diffs.push(ReprColumnTypeDifference::NotSubtype {
+                    sub: ReprScalarType::Record {
+                        fields: typ_fields.clone(),
+                    },
+                    sup: other.clone(),
+                });
+                return diffs;
+            }
+
+            for (typ_ty, other_ty) in typ_fields.iter_mut().zip_eq(other_fields.iter()) {
+                diffs.extend(column_union(typ_ty, other_ty));
+            }
+        }
+        (typ, _) => {
+            if ctor != ReprScalarBaseType::from(other) {
+                diffs.push(ReprColumnTypeDifference::NotSubtype {
+                    sub: typ.clone(),
+                    sup: other.clone(),
+                })
+            }
+        }
+    };
+
+    diffs
+}
+
+/// Unions `other` into `typ`, returning a list of differences on failure
+///
+/// This function returns an empty list when `typ` and `other` are a union
+pub fn column_union(
+    typ: &mut ReprColumnType,
+    other: &ReprColumnType,
+) -> Vec<ReprColumnTypeDifference> {
+    let diffs = scalar_union(&mut typ.scalar_type, &other.scalar_type);
+
+    if diffs.is_empty() {
+        typ.nullable |= other.nullable;
+    }
 
     diffs
 }
@@ -884,9 +981,9 @@ impl Typecheck {
                     }
 
                     for (base_col, input_col) in t_base.iter_mut().zip_eq(t_input) {
-                        let diffs = scalar_subtype_difference(&base_col.scalar_type, &input_col.scalar_type);
+                        let diffs = column_union(base_col, &input_col);
                         if !diffs.is_empty() {
-                             return Err(TypeError::MismatchColumn {
+                            return Err(TypeError::MismatchColumn {
                                     source: expr,
                                     got: input_col,
                                     expected: base_col.clone(),
@@ -894,10 +991,9 @@ impl Typecheck {
                                     message:
                                         "couldn't compute union of column types in Union"
                                     .to_string(),
-                                })
-                            }
+                            });
+                        }
 
-                        base_col.nullable |= input_col.nullable;
                     }
                 }
 
@@ -939,7 +1035,7 @@ impl Typecheck {
                     if let Some(ctx_typ) = ctx.get_mut(&id) {
                         for (base_col, input_col) in ctx_typ.iter_mut().zip_eq(typ) {
                             // we expect an EXACT match, but don't care about nullability
-                            let diffs = scalar_subtype_difference(&base_col.scalar_type, &input_col.scalar_type);
+                            let diffs = column_union(base_col, &input_col);
                             if !diffs.is_empty() {
                                  return Err(TypeError::MismatchColumn {
                                         source: expr,
@@ -950,9 +1046,7 @@ impl Typecheck {
                                             "couldn't compute union of column types in LetRec"
                                         .to_string(),
                                     })
-                                }
-
-                            base_col.nullable |= input_col.nullable;
+                            }
                         }
                     } else {
                         // dead code: no `Get` references this relation anywhere. we record the type anyway
@@ -1020,10 +1114,7 @@ impl Typecheck {
                         }
 
                         for (base_col, input_col) in ctx_typ.iter_mut().zip_eq(typ) {
-                            let diffs = scalar_subtype_difference(
-                                &base_col.scalar_type,
-                                &input_col.scalar_type,
-                            );
+                            let diffs = column_union(base_col, &input_col);
                             if !diffs.is_empty() {
                                 return Err(TypeError::MismatchColumn {
                                     source: expr,
@@ -1035,8 +1126,6 @@ impl Typecheck {
                                             .to_string(),
                                 });
                             }
-
-                            base_col.nullable |= input_col.nullable;
                         }
                     } else {
                         ctx.insert(
@@ -1203,8 +1292,7 @@ impl Typecheck {
                 let mut then_type = tc.typecheck_scalar(then, source, column_types)?;
                 let else_type = tc.typecheck_scalar(els, source, column_types)?;
 
-                let diffs =
-                    scalar_subtype_difference(&then_type.scalar_type, &else_type.scalar_type);
+                let diffs = column_union(&mut then_type, &else_type);
                 if !diffs.is_empty() {
                     return Err(TypeError::MismatchColumn {
                         source,
@@ -1215,7 +1303,6 @@ impl Typecheck {
                     });
                 }
 
-                then_type.nullable |= else_type.nullable;
                 Ok(then_type)
             }
         })
@@ -1432,8 +1519,8 @@ impl ReprColumnTypeDifference {
             RecordFields { fields } => {
                 writeln!(f, "{} record fields differ:", fields.len())?;
 
-                for (col, diff) in fields {
-                    writeln!(f, "{:indent$}  field '{col}':", "")?;
+                for (i, diff) in fields.iter().enumerate() {
+                    writeln!(f, "{:indent$}  field {i}:", "")?;
                     diff.humanize(indent + 4, h, f)?;
                 }
                 Ok(())
