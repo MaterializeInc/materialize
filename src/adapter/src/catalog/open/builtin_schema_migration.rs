@@ -34,7 +34,7 @@ use std::sync::Arc;
 use anyhow::bail;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use mz_build_info::BuildInfo;
+use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BUILTINS_STATIC, Builtin, Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
     RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
@@ -196,6 +196,12 @@ pub(super) async fn run(
 ) -> Result<MigrationResult, Error> {
     // Sanity check to ensure we're not touching durable state in read-only mode.
     assert_eq!(config.read_only, txn.is_savepoint());
+
+    // Tests may provide a dummy build info that confuses the migration step selection logic. Skip
+    // migrations if we observe this build info.
+    if *build_info == DUMMY_BUILD_INFO {
+        return Ok(MigrationResult::default());
+    }
 
     let Some(durable_version) = get_migration_version(txn) else {
         // New catalog; nothing to do.
