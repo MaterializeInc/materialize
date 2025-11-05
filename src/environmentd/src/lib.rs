@@ -209,6 +209,9 @@ pub struct Config {
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
+    /// If `Some`, force running builtin schema migration using the specified
+    /// migration mechanism ("evolution" or "replacement").
+    pub force_builtin_schema_migration: Option<String>,
 }
 
 /// Configuration for the Catalog.
@@ -786,6 +789,7 @@ impl Listeners {
             helm_chart_version: config.helm_chart_version.clone(),
             license_key: config.license_key,
             external_login_password_mz_system: config.external_login_password_mz_system,
+            force_builtin_schema_migration: config.force_builtin_schema_migration,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

@@ -721,6 +721,7 @@ impl Catalog {
                 builtin_item_migration_config: BuiltinItemMigrationConfig {
                     persist_client: persist_client.clone(),
                     read_only,
+                    force_migration: None,
                 },
                 persist_client,
                 enable_expression_cache_override,

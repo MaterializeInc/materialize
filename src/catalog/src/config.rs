@@ -104,6 +104,7 @@ pub struct StateConfig {
 pub struct BuiltinItemMigrationConfig {
     pub persist_client: PersistClient,
     pub read_only: bool,
+    pub force_migration: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

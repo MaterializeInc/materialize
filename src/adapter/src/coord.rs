@@ -1066,6 +1066,7 @@ pub struct Config {
     pub helm_chart_version: Option<String>,
     pub license_key: ValidatedLicenseKey,
     pub external_login_password_mz_system: Option<Password>,
+    pub force_builtin_schema_migration: Option<String>,
 }
 
 /// Metadata about an active connection.
@@ -4014,6 +4015,7 @@ pub fn serve(
         helm_chart_version,
         license_key,
         external_login_password_mz_system,
+        force_builtin_schema_migration,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -4121,6 +4123,7 @@ pub fn serve(
             BuiltinItemMigrationConfig {
                 persist_client: persist_client.clone(),
                 read_only: read_only_controllers,
+                force_migration: force_builtin_schema_migration,
             }
         ;
         let OpenCatalogResult {

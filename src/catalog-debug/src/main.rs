@@ -651,6 +651,7 @@ async fn upgrade_check(
                 // client.
                 persist_client: PersistClient::new_for_tests().await,
                 read_only,
+                force_migration: None,
             },
             persist_client: persist_client.clone(),
             enable_expression_cache_override: None,

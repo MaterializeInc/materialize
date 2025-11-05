@@ -288,14 +288,20 @@ impl<'a, 'b> Migration<'a, 'b> {
 
         self.validate_migration_steps(steps);
 
-        if self.source_version == self.target_version {
+        let (force, plan) = match self.config.force_migration.as_deref() {
+            None => (false, self.plan_migration(steps)),
+            Some("evolution") => (true, self.plan_forced_migration(Mechanism::Evolution)),
+            Some("replacement") => (true, self.plan_forced_migration(Mechanism::Replacement)),
+            Some(other) => panic!("unknown force migration mechanism: {other}"),
+        };
+
+        if self.source_version == self.target_version && !force {
             info!("skipping migration: already at target version");
             return Ok(Default::default());
         } else if self.source_version > self.target_version {
             bail!("downgrade not supported");
         }
 
-        let plan = self.plan_migration(steps);
         info!("executing migration plan: {plan:?}");
 
         self.migrate_evolve(&plan.evolve).await?;
@@ -389,6 +395,24 @@ impl<'a, 'b> Migration<'a, 'b> {
                 Mechanism::Evolution => plan.evolve.push(object.into()),
                 Mechanism::Replacement => plan.replace.push(object.into()),
             }
+        }
+
+        plan
+    }
+
+    /// Plan a forced migration of all objects using the given mechanism.
+    fn plan_forced_migration(&self, mechanism: Mechanism) -> Plan {
+        let objects = self
+            .builtins
+            .iter()
+            .filter(|(_, builtin)| matches!(builtin, Builtin::Table(..) | Builtin::Source(..)))
+            .map(|(object, _)| object.clone())
+            .collect();
+
+        let mut plan = Plan::default();
+        match mechanism {
+            Mechanism::Evolution => plan.evolve = objects,
+            Mechanism::Replacement => plan.replace = objects,
         }
 
         plan
