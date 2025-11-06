@@ -43,7 +43,7 @@ use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
 use super::Error;
 use super::matching_image_from_environmentd_image_ref;
@@ -240,12 +240,8 @@ impl Resources {
             return Ok(Some(retry_action));
         }
 
-        let http_client = match self.get_http_client(client.clone(), namespace).await {
-            Ok(http_client) => http_client,
-            Err(e) => {
-                trace!("failed to create working http client: {e:?}: retrying...");
-                return Ok(Some(retry_action));
-            }
+        let Some(http_client) = self.get_http_client(client.clone(), namespace).await else {
+            return Ok(Some(retry_action));
         };
         let status_url = reqwest::Url::parse(&format!(
             "{}/api/leader/status",
@@ -298,13 +294,9 @@ impl Resources {
     }
 
     #[instrument]
-    async fn get_http_client(
-        &self,
-        client: Client,
-        namespace: &str,
-    ) -> Result<HttpClient, anyhow::Error> {
+    async fn get_http_client(&self, client: Client, namespace: &str) -> Option<HttpClient> {
         let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
-        Ok(match &self.connection_info.mz_system_secret_name {
+        Some(match &self.connection_info.mz_system_secret_name {
             Some(mz_system_secret_name) => {
                 let http_client = reqwest::Client::builder()
                     .timeout(std::time::Duration::from_secs(10))
@@ -313,7 +305,16 @@ impl Resources {
                     .danger_accept_invalid_certs(true)
                     .build()
                     .unwrap();
-                if let Some(data) = secret_api.get(mz_system_secret_name).await?.data {
+
+                let secret = secret_api
+                    .get(mz_system_secret_name)
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to get backend secret: {:?}", e);
+                        e
+                    })
+                    .ok()?;
+                if let Some(data) = secret.data {
                     if let Some(password) = data.get("external_login_password_mz_system").cloned() {
                         let password = String::from_utf8_lossy(&password.0).to_string();
                         let login_url = reqwest::Url::parse(&format!(
@@ -323,10 +324,15 @@ impl Resources {
                         .unwrap();
                         match http_client
                             .post(login_url)
-                            .body(serde_json::to_string(&LoginCredentials {
-                                username: "mz_system".to_owned(),
-                                password,
-                            })?)
+                            .body(
+                                serde_json::to_string(&LoginCredentials {
+                                    username: "mz_system".to_owned(),
+                                    password,
+                                })
+                                .expect(
+                                    "Serializing a simple struct with utf8 strings doesn't fail.",
+                                ),
+                            )
                             .header("Content-Type", "application/json")
                             .send()
                             .await
@@ -334,12 +340,12 @@ impl Resources {
                             Ok(response) => {
                                 if let Err(e) = response.error_for_status() {
                                     trace!("failed to login to environmentd, retrying... ({e})");
-                                    return Err(e.into());
+                                    return None;
                                 }
                             }
                             Err(e) => {
                                 trace!("failed to connect to environmentd, retrying... ({e})");
-                                return Err(e.into());
+                                return None;
                             }
                         };
                     }
@@ -360,6 +366,7 @@ impl Resources {
         namespace: &str,
     ) -> Result<Option<Action>, Error> {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
+        let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
 
         let promote_url = reqwest::Url::parse(&format!(
             "{}/api/leader/promote",
@@ -367,15 +374,17 @@ impl Resources {
         ))
         .unwrap();
 
-        let http_client = self.get_http_client(client.clone(), namespace).await?;
+        let Some(http_client) = self.get_http_client(client.clone(), namespace).await else {
+            return Ok(Some(retry_action));
+        };
 
         trace!("promoting new environmentd to leader");
         let response = http_client.post(promote_url).send().await?;
         let response: BecomeLeaderResponse = response.error_for_status()?.json().await?;
         if let BecomeLeaderResult::Failure { message } = response.result {
-            Err(anyhow::anyhow!(
+            return Err(Error::Anyhow(anyhow::anyhow!(
                 "failed to promote new environmentd: {message}"
-            ))?;
+            )));
         }
 
         // A successful POST to the promotion endpoint only indicates
@@ -394,7 +403,6 @@ impl Resources {
             self.connection_info.environmentd_url,
         ))
         .unwrap();
-        let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
         match http_client.get(status_url.clone()).send().await {
             Ok(response) => {
                 let response: GetLeaderStatusResponse = response.json().await?;
