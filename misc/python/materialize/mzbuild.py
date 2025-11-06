@@ -1183,7 +1183,7 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = (
             "ghcr.io/materializeinc/materialize"
-            if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR")
+            if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
             else "materialize"
         ),
         image_prefix: str = "",
@@ -1289,7 +1289,7 @@ class Repository:
             "--image-registry",
             default=(
                 "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR")
+                if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
                 else "materialize"
             ),
             help="the Docker image registry to pull images from and push images to",
