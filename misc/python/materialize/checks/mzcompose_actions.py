@@ -70,6 +70,15 @@ class StartMz(MzcomposeAction):
         image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
+        listeners_config_path = (
+            f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json"
+        )
+
+        if not self.tag or self.tag >= MzVersion.parse_mz("v0.158.0-dev"):
+            listeners_config_path = (
+                f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive_sasl.json"
+            )
+
         mz = Materialized(
             name=self.mz_service,
             image=image,
@@ -89,6 +98,7 @@ class StartMz(MzcomposeAction):
             publish=self.publish,
             default_replication_factor=2,
             support_external_clusterd=True,
+            listeners_config_path=listeners_config_path,
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs

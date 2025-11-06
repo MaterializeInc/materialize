@@ -23,9 +23,12 @@ class Backup(Action):
 
 
 class Restore(Action):
+    def __init__(self, restart_mz=True):
+        self.restart_mz = restart_mz
+
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
-        c.restore()
+        c.restore(restart_mz=self.restart_mz)
 
     def join(self, e: Executor) -> None:
         # Action is blocking
