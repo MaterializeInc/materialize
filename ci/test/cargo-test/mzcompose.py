@@ -110,6 +110,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     extra_env = {}
     clusterd_thread: PropagatingThread | None = None
 
+    # TODO(def-) Remove when https://github.com/rust-lang/rust/issues/148581 is fixed
+    target_dir = os.getenv("CARGO_TARGET_DIR", "target") + "/ci"
+    spawn.runv(["rm", "-rf", target_dir])
+    os.makedirs(target_dir, exist_ok=True)
+
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
         # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
