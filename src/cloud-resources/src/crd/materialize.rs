@@ -175,10 +175,11 @@ pub mod v1alpha1 {
         pub rollout_strategy: MaterializeRolloutStrategy,
         // The name of a secret containing metadata_backend_url and persist_backend_url.
         // It may also contain external_login_password_mz_system, which will be used as
-        // the password for the mz_system user if authenticator_kind is Password.
+        // the password for the mz_system user if authenticator_kind is Password or Sasl.
         pub backend_secret_name: String,
-        // How to authenticate with Materialize. Valid options are Password and None.
-        // If set to Password, the backend secret must contain external_login_password_mz_system.
+        // How to authenticate with Materialize. Valid options are Password, Sasl, and None.
+        // If set to Password or Sasl, the backend secret must contain external_login_password_mz_system.
+        // Sasl enables SCRAM-SHA-256 authentication for PostgreSQL wire protocol connections.
         #[serde(default)]
         pub authenticator_kind: AuthenticatorKind,
         // Whether to enable role based access control. Defaults to false.

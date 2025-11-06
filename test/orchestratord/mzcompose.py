@@ -1030,7 +1030,7 @@ class AuthenticatorKind(Modification):
 
     def modify(self, definition: dict[str, Any]) -> None:
         definition["materialize"]["spec"]["authenticatorKind"] = self.value
-        if self.value == "Password":
+        if self.value == "Password" or self.value == "Sasl":
             definition["secret"]["stringData"][
                 "external_login_password_mz_system"
             ] = "superpassword"
@@ -1046,9 +1046,13 @@ class AuthenticatorKind(Modification):
         if self.value == "Password" and version <= MzVersion.parse_mz("v0.147.6"):
             return
 
+        if self.value == "Sasl" and version < MzVersion.parse_mz("v0.147.16"):
+            return
+
         port = (
             6875
-            if version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password"
+            if (version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password")
+            or (version >= MzVersion.parse_mz("v0.147.16") and self.value == "Sasl")
             else 6877
         )
         for i in range(120):
@@ -1098,7 +1102,7 @@ class AuthenticatorKind(Modification):
             # psycopg.connect(
             #     host="127.0.0.1",
             #     user="mz_system",
-            #     password="superpassword" if self.value == "Password" else None,
+            #     password="superpassword" if (self.value == "Password" or self.value == "Sasl") else None,
             #     dbname="materialize",
             #     port=port,
             # )
