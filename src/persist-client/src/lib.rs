@@ -24,7 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::{BuildInfo, build_info};
 use mz_dyncfg::ConfigSet;
-use mz_ore::{instrument, soft_assert_or_log};
+use mz_ore::instrument;
 use mz_persist::location::{Blob, Consensus, ExternalError};
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
@@ -490,10 +490,6 @@ impl PersistClient {
     ///
     /// Use this to save latency and a bit of persist traffic if you're just
     /// going to immediately drop or expire the [ReadHandle].
-    ///
-    /// The `_schema` parameter is currently unused, but should be an object
-    /// that represents the schema of the data in the shard. This will be required
-    /// in the future.
     #[instrument(level = "debug", fields(shard = %shard_id))]
     pub async fn open_writer<K, V, T, D>(
         &self,
@@ -511,23 +507,11 @@ impl PersistClient {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
-        // TODO: Because schemas are ordered, as part of the persist schema
-        // changes work, we probably want to build some way to allow persist
-        // users to control the order. For example, maybe a
-        // `PersistClient::compare_and_append_schema(current_schema_id,
-        // next_schema)`. Presumably this would then be passed in to open_writer
-        // instead of us implicitly registering it here.
-        // NB: The overwhelming common case is that this schema is already
-        // registered. In this case, the cmd breaks early and nothing is
-        // written to (or read from) CRDB.
-        let (schema_id, maintenance) = machine.register_schema(&*key_schema, &*val_schema).await;
-        maintenance.start_performing(&machine, &gc);
-        soft_assert_or_log!(
-            schema_id.is_some(),
-            "unable to register schemas {:?} {:?}",
-            key_schema,
-            val_schema,
-        );
+        // We defer registering the schema until write time, to allow opening
+        // write handles in a "read-only" mode where they don't implicitly
+        // modify persist state. But it might already be registered, in which
+        // case we can fetch its ID.
+        let schema_id = machine.find_schema(&*key_schema, &*val_schema);
 
         let writer_id = WriterId::new();
         let schemas = Schemas {
@@ -1992,7 +1976,6 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn finalize_empty_shard(dyncfgs: ConfigUpdates) {
-        const EMPTY: &[(((), ()), u64, i64)] = &[];
         let persist_client = new_test_client(&dyncfgs).await;
 
         let shard_id = ShardId::new();
@@ -2006,11 +1989,7 @@ mod tests {
         // Advance since and upper to empty, which is a pre-requisite for
         // finalization/tombstoning.
         let () = read.downgrade_since(&Antichain::new()).await;
-        let () = write
-            .compare_and_append(EMPTY, Antichain::from_elem(0), Antichain::new())
-            .await
-            .expect("usage should be valid")
-            .expect("upper should match");
+        let () = write.advance_upper(&Antichain::new()).await;
 
         let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
             .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())
@@ -2047,7 +2026,6 @@ mod tests {
     #[mz_persist_proc::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn finalize_shard(dyncfgs: ConfigUpdates) {
-        const EMPTY: &[(((), ()), u64, i64)] = &[];
         const DATA: &[(((), ()), u64, i64)] = &[(((), ()), 0, 1)];
         let persist_client = new_test_client(&dyncfgs).await;
 
@@ -2069,11 +2047,7 @@ mod tests {
         // Advance since and upper to empty, which is a pre-requisite for
         // finalization/tombstoning.
         let () = read.downgrade_since(&Antichain::new()).await;
-        let () = write
-            .compare_and_append(EMPTY, Antichain::from_elem(1), Antichain::new())
-            .await
-            .expect("usage should be valid")
-            .expect("upper should match");
+        let () = write.advance_upper(&Antichain::new()).await;
 
         let mut since_handle: SinceHandle<(), (), u64, i64, u64> = persist_client
             .open_critical_since(shard_id, CRITICAL_SINCE, Diagnostics::for_tests())

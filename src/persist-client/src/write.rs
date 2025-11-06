@@ -221,6 +221,31 @@ where
         self.write_schemas.id
     }
 
+    /// Registers the write schema, if it isn't already registered.
+    ///
+    /// # Panics
+    ///
+    /// This method expects that either the shard doesn't yet have any schema registered, or one of
+    /// the registered schemas is the same as the write schema. If all registered schemas are
+    /// different from the write schema, it panics.
+    pub async fn ensure_schema_registered(&mut self) -> SchemaId {
+        let Schemas { id, key, val } = &self.write_schemas;
+
+        if let Some(id) = id {
+            return *id;
+        }
+
+        let (schema_id, maintenance) = self.machine.register_schema(key, val).await;
+        maintenance.start_performing(&self.machine, &self.gc);
+
+        let Some(schema_id) = schema_id else {
+            panic!("unable to register schemas: {key:?} {val:?}");
+        };
+
+        self.write_schemas.id = Some(schema_id);
+        schema_id
+    }
+
     /// A cached version of the shard-global `upper` frontier.
     ///
     /// This is the most recent upper discovered by this handle. It is
@@ -254,6 +279,50 @@ where
             .fetch_upper(|current_upper| self.upper.clone_from(current_upper))
             .await;
         &self.upper
+    }
+
+    /// Advance the shard's upper by the given frontier.
+    ///
+    /// If the provided `target` is less than or equal to the shard's upper, this is a no-op.
+    ///
+    /// In contrast to the various compare-and-append methods, this method does not require the
+    /// handle's write schema to be registered with the shard. That is, it is fine to use a dummy
+    /// schema when creating a writer just to advance a shard upper.
+    pub async fn advance_upper(&mut self, target: &Antichain<T>) {
+        // We avoid `fetch_recent_upper` here, to avoid a consensus roundtrip if the known upper is
+        // already beyond the target.
+        let mut lower = self.shared_upper().clone();
+
+        while !PartialOrder::less_equal(target, &lower) {
+            let since = Antichain::from_elem(T::minimum());
+            let desc = Description::new(lower.clone(), target.clone(), since);
+            let batch = HollowBatch::empty(desc);
+
+            let heartbeat_timestamp = (self.cfg.now)();
+            let res = self
+                .machine
+                .compare_and_append(
+                    &batch,
+                    &self.writer_id,
+                    &self.debug_state,
+                    heartbeat_timestamp,
+                )
+                .await;
+
+            use CompareAndAppendRes::*;
+            let new_upper = match res {
+                Success(_seq_no, maintenance) => {
+                    maintenance.start_performing(&self.machine, &self.gc, self.compact.as_ref());
+                    batch.desc.upper().clone()
+                }
+                UpperMismatch(_seq_no, actual_upper) => actual_upper,
+                InvalidUsage(_invalid_usage) => unreachable!("batch bounds checked above"),
+                InlineBackpressure => unreachable!("batch was empty"),
+            };
+
+            self.upper.clone_from(&new_upper);
+            lower = new_upper;
+        }
     }
 
     /// Applies `updates` to this shard and downgrades this handle's upper to
@@ -488,6 +557,9 @@ where
     where
         D: Send + Sync,
     {
+        // Before we append any data, we require a registered write schema.
+        let schema_id = self.ensure_schema_registered().await;
+
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Err(InvalidUsage::BatchNotFromThisShard {
@@ -642,8 +714,12 @@ where
                 }
             }
 
-            let combined_batch =
+            let mut combined_batch =
                 HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
+            // The batch may have been written by a writer without a registered schema.
+            // Ensure we have a schema ID in the batch metadata before we append, to avoid type
+            // confusion later.
+            ensure_batch_schema(&mut combined_batch, self.shard_id(), schema_id);
             let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
@@ -1016,6 +1092,35 @@ impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
             || format!("WriteHandle::expire ({})", self.writer_id),
             expire_fn.0().instrument(expire_span),
         );
+    }
+}
+
+/// Ensure the given batch uses the given schema ID.
+///
+/// If the batch has no schema set, initialize it to the given one.
+/// If the batch has a schema set, assert that it matches the given one.
+fn ensure_batch_schema<T>(batch: &mut HollowBatch<T>, shard_id: ShardId, schema_id: SchemaId)
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    let ensure = |id: &mut Option<SchemaId>| match id {
+        Some(id) => assert_eq!(*id, schema_id, "schema ID mismatch; shard={shard_id}"),
+        None => *id = Some(schema_id),
+    };
+
+    for run_meta in &mut batch.run_meta {
+        ensure(&mut run_meta.schema);
+    }
+    for part in &mut batch.parts {
+        match part {
+            RunPart::Single(BatchPart::Hollow(part)) => ensure(&mut part.schema_id),
+            RunPart::Single(BatchPart::Inline { schema_id, .. }) => ensure(schema_id),
+            RunPart::Many(_hollow_run_ref) => {
+                // TODO: Fetch the parts in this run and rewrite them too. Alternatively, make
+                // `run_meta` the only place we keep schema IDs, so rewriting parts isn't
+                // necessary.
+            }
+        }
     }
 }
 
