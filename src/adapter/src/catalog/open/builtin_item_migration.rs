@@ -40,7 +40,7 @@ use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::sources::SourceData;
 use timely::progress::{Antichain, Timestamp as TimelyTimestamp};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::catalog::open::builtin_item_migration::persist_schema::{TableKey, TableKeySchema};
 use crate::catalog::state::LocalExpressionCache;
@@ -402,10 +402,15 @@ async fn migrate_builtin_collections_incompatible(
     );
     let mut global_id_shards: BTreeMap<_, _> = snapshot
         .into_iter()
-        .map(|((key, value), _ts, _diff)| {
-            let table_key = key.expect("persist decoding error");
-            let shard_id = value.expect("persist decoding error");
-            (table_key, shard_id)
+        .filter_map(|(data, _ts, _diff)| {
+            if let (Ok(table_key), Ok(shard_id)) = data {
+                Some((table_key, shard_id))
+            } else {
+                // If we can't decode the data, it has likely been written by a newer version, so
+                // we ignore it.
+                warn!("skipping unreadable migration shard entry: {data:?}");
+                None
+            }
         })
         .collect();
 
@@ -415,11 +420,25 @@ async fn migrate_builtin_collections_incompatible(
     let storage_collection_metadata = txn.get_collection_metadata();
     for (table_key, shard_id) in global_id_shards.clone() {
         if table_key.build_version > build_version {
-            halt!(
-                "saw build version {}, which is greater than current build version {}",
-                table_key.build_version,
-                build_version
-            );
+            if read_only {
+                halt!(
+                    "saw build version {}, which is greater than current build version {}",
+                    table_key.build_version,
+                    build_version
+                );
+            } else {
+                // If we are in leader mode, and a newer (read-only) version has started a
+                // migration, we must not allow ourselves to get fenced out! Continuing here might
+                // confuse any read-only process running the migrations concurrently, but it's
+                // better for the read-only env to crash than the leader.
+                // TODO(#9755): handle this in a more principled way
+                warn!(
+                    %table_key.build_version, %build_version,
+                    "saw build version which is greater than current build version",
+                );
+                global_id_shards.remove(&table_key);
+                continue;
+            }
         }
 
         if !migrated_storage_collections.contains(&table_key.global_id)
