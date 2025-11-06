@@ -191,6 +191,7 @@ impl Default for MigrationResult {
 /// required migrations, respectively.
 pub(super) async fn run(
     build_info: &BuildInfo,
+    deploy_generation: u64,
     txn: &mut Transaction<'_>,
     config: BuiltinItemMigrationConfig,
 ) -> Result<MigrationResult, Error> {
@@ -224,6 +225,7 @@ pub(super) async fn run(
     let migration = Migration::new(
         durable_version.clone(),
         build_version.clone(),
+        deploy_generation,
         txn,
         builtins,
         config,
@@ -251,6 +253,7 @@ struct Migration<'a, 'b> {
     ///
     /// Same as the build version of this process.
     target_version: Version,
+    deploy_generation: u64,
     txn: &'a mut Transaction<'b>,
     builtins: BTreeMap<SystemObjectDescription, &'static Builtin<NameReference>>,
     object_ids: BTreeMap<SystemObjectDescription, SystemObjectUniqueIdentifier>,
@@ -261,6 +264,7 @@ impl<'a, 'b> Migration<'a, 'b> {
     fn new(
         source_version: Version,
         target_version: Version,
+        deploy_generation: u64,
         txn: &'a mut Transaction<'b>,
         builtins: BTreeMap<SystemObjectDescription, &'static Builtin<NameReference>>,
         config: BuiltinItemMigrationConfig,
@@ -273,6 +277,7 @@ impl<'a, 'b> Migration<'a, 'b> {
         Self {
             source_version,
             target_version,
+            deploy_generation,
             txn,
             builtins,
             object_ids,
@@ -608,7 +613,7 @@ impl<'a, 'b> Migration<'a, 'b> {
     }
 
     /// Try to get or insert replacement shards for the given IDs into the migration shard, at
-    /// `target_version`.
+    /// `target_version` and `deploy_generation`.
     ///
     /// This method looks for existing entries in the migration shards and returns those if they
     /// are present. Otherwise it generates new shard IDs and tries to insert them.
@@ -625,13 +630,13 @@ impl<'a, 'b> Migration<'a, 'b> {
         let upper = persist_write.fetch_recent_upper().await;
         let write_ts = *upper.as_option().expect("migration shard not sealed");
 
-        // Another process might already have done a shard replacement at our version, in which
-        // case we can directly reuse the replacement shards.
-        //
-        // TODO: We should check for deploy generation as well as build version. Storing the deploy
-        // generation as well requires changing the key schema of the migration shard.
+        // Another process might already have done a shard replacement at our version and
+        // generation, in which case we can directly reuse the replacement shards.
         if let Some(read_ts) = write_ts.step_back() {
-            let pred = |key: &migration_shard::Key| key.build_version == self.target_version;
+            let pred = |key: &migration_shard::Key| {
+                key.build_version == self.target_version
+                    && key.deploy_generation == Some(self.deploy_generation)
+            };
             if let Some(entries) = read_migration_shard(persist_read, read_ts, pred).await {
                 let replaced_shards: BTreeMap<_, _> = entries
                     .into_iter()
@@ -667,6 +672,7 @@ impl<'a, 'b> Migration<'a, 'b> {
             let key = migration_shard::Key {
                 global_id,
                 build_version: self.target_version.clone(),
+                deploy_generation: Some(self.deploy_generation),
             };
             updates.push(((key, shard_id), write_ts, 1));
         }
@@ -947,16 +953,28 @@ mod migration_shard {
     use mz_persist_types::columnar::Schema;
     use mz_persist_types::stats::NoneStats;
     use semver::Version;
+    use serde::{Deserialize, Serialize};
 
-    #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd)]
+    #[derive(Debug, Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
     pub(super) struct Key {
         pub(super) global_id: u64,
         pub(super) build_version: Version,
+        // Versions < 26.0 didn't include the deploy generation. As long as we still might
+        // encounter migration shard entries that don't have it, we need to keep this an `Option`
+        // and keep supporting both key formats.
+        pub(super) deploy_generation: Option<u64>,
     }
 
     impl fmt::Display for Key {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            write!(f, "{}-{}", self.global_id, self.build_version)
+            if self.deploy_generation.is_some() {
+                // current format
+                let s = serde_json::to_string(self).expect("JSON serializable");
+                f.write_str(&s)
+            } else {
+                // pre-26.0 format
+                write!(f, "{}-{}", self.global_id, self.build_version)
+            }
         }
     }
 
@@ -964,6 +982,12 @@ mod migration_shard {
         type Err = String;
 
         fn from_str(s: &str) -> Result<Self, String> {
+            // current format
+            if let Ok(key) = serde_json::from_str(s) {
+                return Ok(key);
+            };
+
+            // pre-26.0 format
             let parts: Vec<_> = s.splitn(2, '-').collect();
             let &[global_id, build_version] = parts.as_slice() else {
                 return Err(format!("invalid Key '{s}'"));
@@ -975,6 +999,7 @@ mod migration_shard {
             Ok(Key {
                 global_id,
                 build_version,
+                deploy_generation: None,
             })
         }
     }
@@ -984,6 +1009,7 @@ mod migration_shard {
             Self {
                 global_id: Default::default(),
                 build_version: Version::new(0, 0, 0),
+                deploy_generation: Some(0),
             }
         }
     }

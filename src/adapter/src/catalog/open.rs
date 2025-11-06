@@ -181,6 +181,8 @@ impl Catalog {
             license_key: config.license_key,
         };
 
+        let deploy_generation = storage.get_deployment_generation().await?;
+
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
         let mut txn = storage.transaction().await?;
@@ -481,6 +483,7 @@ impl Catalog {
         // Migrate builtin items.
         let schema_migration_result = builtin_schema_migration::run(
             config.build_info,
+            deploy_generation,
             &mut txn,
             config.builtin_item_migration_config,
         )

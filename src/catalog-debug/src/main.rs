@@ -605,6 +605,7 @@ async fn upgrade_check(
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
+            deploy_generation: args.deploy_generation.unwrap_or(0),
             environment_id: args.environment_id.clone(),
             read_only,
             now,

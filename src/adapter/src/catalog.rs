@@ -684,6 +684,7 @@ impl Catalog {
                 unsafe_mode: true,
                 all_features: false,
                 build_info,
+                deploy_generation: 0,
                 environment_id: environment_id.unwrap_or_else(EnvironmentId::for_tests),
                 read_only,
                 now,

@@ -4140,6 +4140,7 @@ pub fn serve(
                 unsafe_mode,
                 all_features,
                 build_info,
+                deploy_generation: controller_config.deploy_generation,
                 environment_id: environment_id.clone(),
                 read_only: read_only_controllers,
                 now: now.clone(),

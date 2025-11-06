@@ -50,6 +50,8 @@ pub struct StateConfig {
     pub all_features: bool,
     /// Information about this build of Materialize.
     pub build_info: &'static BuildInfo,
+    /// The deploy generation with which the process was started.
+    pub deploy_generation: u64,
     /// A persistent ID associated with the environment.
     pub environment_id: EnvironmentId,
     /// Whether to start Materialize in read-only mode.
