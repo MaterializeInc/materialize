@@ -132,11 +132,8 @@ pub struct Config {
     /// testdrive will connect to via HTTP.
     pub materialize_internal_http_port: u16,
     /// The port for the password endpoints of the materialize instance that
-    /// testdrive will connect to via SQL.
+    /// testdrive will connect to via HTTP.
     pub materialize_password_sql_port: u16,
-    /// The port for the SASL endpoints of the materialize instance that
-    /// testdrive will connect to via SQL.
-    pub materialize_sasl_sql_port: u16,
     /// Session parameters to set after connecting to materialize.
     pub materialize_params: Vec<(String, String)>,
     /// An optional catalog configuration.
@@ -198,7 +195,6 @@ pub struct MaterializeState {
     internal_sql_addr: String,
     internal_http_addr: String,
     password_sql_addr: String,
-    sasl_sql_addr: String,
     user: String,
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
@@ -341,10 +337,6 @@ impl State {
         self.cmd_vars.insert(
             "testdrive.materialize-password-sql-addr".into(),
             self.materialize.password_sql_addr.clone(),
-        );
-        self.cmd_vars.insert(
-            "testdrive.materialize-sasl-sql-addr".into(),
-            self.materialize.sasl_sql_addr.clone(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
@@ -1146,11 +1138,6 @@ async fn create_materialize_state(
         materialize_url.host_str().unwrap(),
         config.materialize_password_sql_port
     );
-    let materialize_sasl_sql_addr = format!(
-        "{}:{}",
-        materialize_url.host_str().unwrap(),
-        config.materialize_sasl_sql_port
-    );
     let materialize_internal_http_addr = format!(
         "{}:{}",
         materialize_internal_url.host_str().unwrap(),
@@ -1178,7 +1165,6 @@ async fn create_materialize_state(
         internal_sql_addr: materialize_internal_sql_addr,
         internal_http_addr: materialize_internal_http_addr,
         password_sql_addr: materialize_password_sql_addr,
-        sasl_sql_addr: materialize_sasl_sql_addr,
         user: materialize_user,
         pgclient,
         environment_id,

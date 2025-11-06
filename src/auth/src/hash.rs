@@ -114,7 +114,7 @@ pub fn hash_password_with_opts(
 
 /// Hashes a password using PBKDF2 with SHA256,
 /// and returns it in the SCRAM-SHA-256 format.
-/// The format is SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
+/// The format is SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
 pub fn scram256_hash(password: &Password) -> Result<String, HashError> {
     let hashed_password = hash_password(password)?;
     Ok(scram256_hash_inner(hashed_password).to_string())
@@ -144,7 +144,7 @@ pub fn sasl_verify(
     proof: &str,
     auth_message: &str,
 ) -> Result<String, VerifyError> {
-    // Parse SCRAM hash: SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
+    // Parse SCRAM hash: SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
     let parts: Vec<&str> = hashed_password.split('$').collect();
     if parts.len() != 3 {
         return Err(VerifyError::MalformedHash);
@@ -158,35 +158,39 @@ pub fn sasl_verify(
         return Err(VerifyError::MalformedHash);
     }
 
-    let stored_key = BASE64_STANDARD
+    let client_key = BASE64_STANDARD
         .decode(auth_value[0])
         .map_err(|_| VerifyError::MalformedHash)?;
     let server_key = BASE64_STANDARD
         .decode(auth_value[1])
         .map_err(|_| VerifyError::MalformedHash)?;
 
+    // Compute stored key
+    let stored_key = openssl::sha::sha256(&client_key);
+
     // Compute client signature: HMAC(stored_key, auth_message)
     let client_signature = generate_signature(&stored_key, auth_message)?;
+
+    // Compute expected client proof: client_key XOR client_signature
+    let expected_client_proof: Vec<u8> = client_key
+        .iter()
+        .zip_eq(client_signature.iter())
+        .map(|(a, b)| a ^ b)
+        .collect();
 
     // Decode provided proof
     let provided_client_proof = BASE64_STANDARD
         .decode(proof)
         .map_err(|_| VerifyError::InvalidPassword)?;
 
-    // Recover client_key = proof XOR client_signature
-    let client_key: Vec<u8> = provided_client_proof
-        .iter()
-        .zip_eq(client_signature.iter())
-        .map(|(p, s)| p ^ s)
-        .collect();
-
-    if !constant_time_compare(&openssl::sha::sha256(&client_key), &stored_key) {
-        return Err(VerifyError::InvalidPassword);
+    if constant_time_compare(&expected_client_proof, &provided_client_proof) {
+        // Compute server verifier: HMAC(server_key, auth_message)
+        let verifier = generate_signature(&server_key, auth_message)?;
+        let verifier = BASE64_STANDARD.encode(&verifier);
+        Ok(verifier)
+    } else {
+        Err(VerifyError::InvalidPassword)
     }
-
-    // Compute server verifier: HMAC(server_key, auth_message)
-    let verifier = generate_signature(&server_key, auth_message)?;
-    Ok(BASE64_STANDARD.encode(&verifier))
 }
 
 fn generate_signature(key: &[u8], message: &str) -> Result<Vec<u8>, VerifyError> {
@@ -262,8 +266,8 @@ struct ScramSha256Hash {
     salt: [u8; 32],
     /// The server key
     server_key: [u8; SHA256_OUTPUT_LEN],
-    /// The stored key
-    stored_key: [u8; SHA256_OUTPUT_LEN],
+    /// The client key
+    client_key: [u8; SHA256_OUTPUT_LEN],
 }
 
 impl Display for ScramSha256Hash {
@@ -273,7 +277,7 @@ impl Display for ScramSha256Hash {
             "SCRAM-SHA-256${}:{}${}:{}",
             self.iterations,
             BASE64_STANDARD.encode(&self.salt),
-            BASE64_STANDARD.encode(&self.stored_key),
+            BASE64_STANDARD.encode(&self.client_key),
             BASE64_STANDARD.encode(&self.server_key)
         )
     }
@@ -285,18 +289,16 @@ fn scram256_hash_inner(hashed_password: PasswordHash) -> ScramSha256Hash {
         openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
     signer.update(b"Client Key").unwrap();
     let client_key = signer.sign_to_vec().unwrap();
-    let stored_key = openssl::sha::sha256(&client_key);
     let mut signer =
         openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key).unwrap();
     signer.update(b"Server Key").unwrap();
-    let mut server_key: [u8; SHA256_OUTPUT_LEN] = [0; SHA256_OUTPUT_LEN];
-    signer.sign(server_key.as_mut()).unwrap();
+    let server_key = signer.sign_to_vec().unwrap();
 
     ScramSha256Hash {
         iterations: hashed_password.iterations,
         salt: hashed_password.salt,
-        server_key,
-        stored_key,
+        server_key: server_key.try_into().unwrap(),
+        client_key: client_key.try_into().unwrap(),
     }
 }
 
@@ -376,41 +378,29 @@ mod tests {
         let auth_message = "n=user,r=clientnonce,s=somesalt"; // arbitrary auth message
 
         // Parse client_key and server_key from the SCRAM hash
-        // Format: SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
+        // Format: SCRAM-SHA-256$<iterations>:<salt>$<client_key>:<server_key>
         let parts: Vec<&str> = hashed_password.split('$').collect();
         assert_eq!(parts.len(), 3);
         let key_parts: Vec<&str> = parts[2].split(':').collect();
         assert_eq!(key_parts.len(), 2);
-        let stored_key = BASE64_STANDARD
+        let client_key = BASE64_STANDARD
             .decode(key_parts[0])
-            .expect("decode stored key");
+            .expect("decode client key");
         let server_key = BASE64_STANDARD
             .decode(key_parts[1])
             .expect("decode server key");
 
-        // Simulate client generating a proof
-        let client_proof: Vec<u8> = {
-            // client_key = HMAC(salted_password, "Client Key")
-            let opts = scram256_parse_opts(&hashed_password).expect("parse opts");
-            let salted_password = hash_password_with_opts(&opts, &password)
-                .expect("hash password")
-                .hash;
-            let signing_key = openssl::pkey::PKey::hmac(&salted_password).expect("signing key");
-            let mut signer =
-                openssl::sign::Signer::new(openssl::hash::MessageDigest::sha256(), &signing_key)
-                    .expect("signer");
-            signer.update(b"Client Key").expect("update");
-            let client_key = signer.sign_to_vec().expect("client key");
-            // client_proof = client_key XOR client_signature
-            let client_signature =
-                generate_signature(&stored_key, auth_message).expect("client signature");
-            client_key
-                .iter()
-                .zip_eq(client_signature.iter())
-                .map(|(c, s)| c ^ s)
-                .collect::<Vec<u8>>()
-        };
-
+        // stored_key = SHA256(client_key)
+        let stored_key = openssl::sha::sha256(&client_key);
+        // client_signature = HMAC(stored_key, auth_message)
+        let client_signature =
+            generate_signature(&stored_key, auth_message).expect("client signature");
+        // client_proof = client_key XOR client_signature
+        let client_proof: Vec<u8> = client_key
+            .iter()
+            .zip_eq(client_signature.iter())
+            .map(|(a, b)| a ^ b)
+            .collect();
         let client_proof_b64 = BASE64_STANDARD.encode(&client_proof);
 
         let verifier = sasl_verify(&hashed_password, &client_proof_b64, auth_message)

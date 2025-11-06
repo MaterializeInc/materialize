@@ -1526,9 +1526,7 @@ class Composition:
             """,
         )
 
-    def restore_cockroach(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
+    def restore_cockroach(self, mz_service: str = "materialized") -> None:
         self.kill(mz_service)
         self.exec(
             "cockroach",
@@ -1555,8 +1553,7 @@ class Composition:
             f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
-        if restart_mz:
-            self.up(mz_service)
+        self.up(mz_service)
 
     def backup_postgres(self) -> None:
         backup = self.exec(
@@ -1569,9 +1566,7 @@ class Composition:
         with open("backup.sql", "w") as f:
             f.write(backup)
 
-    def restore_postgres(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
+    def restore_postgres(self, mz_service: str = "materialized") -> None:
         self.kill(mz_service)
         self.kill("postgres-metadata")
         self.rm("postgres-metadata")
@@ -1597,8 +1592,7 @@ class Composition:
             f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
         )
-        if restart_mz:
-            self.up(mz_service)
+        self.up(mz_service)
 
     def backup(self) -> None:
         if self.metadata_store() == "cockroach":
@@ -1606,13 +1600,11 @@ class Composition:
         else:
             self.backup_postgres()
 
-    def restore(
-        self, mz_service: str = "materialized", restart_mz: bool = True
-    ) -> None:
+    def restore(self, mz_service: str = "materialized") -> None:
         if self.metadata_store() == "cockroach":
-            self.restore_cockroach(mz_service, restart_mz)
+            self.restore_cockroach(mz_service)
         else:
-            self.restore_postgres(mz_service, restart_mz)
+            self.restore_postgres(mz_service)
 
     def await_mz_deployment_status(
         self,

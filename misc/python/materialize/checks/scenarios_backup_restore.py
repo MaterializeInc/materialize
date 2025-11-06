@@ -70,8 +70,7 @@ class BackupAndRestoreToPreviousState(Scenario):
             Backup(),
             Manipulate(self, phase=2),  # Those updates will be lost here ..
             KillMz(),
-            Restore(restart_mz=False),
-            StartMz(self),
+            Restore(),
             Manipulate(self, phase=2),  # ... and redone here
             Validate(self),
         ]

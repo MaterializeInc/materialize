@@ -50,13 +50,6 @@ GRANT CREATEROLE ON SYSTEM TO materialize
 ----
 COMPLETE 0
 
-# Disable password authentication in the system to make sure we error in cloud like
-# we expect.
-simple conn=mz_system,user=mz_system
-ALTER SYSTEM SET enable_password_auth = false
-----
-COMPLETE 0
-
 statement error non inherit roles not yet supported
 CREATE ROLE foo NOINHERIT
 
