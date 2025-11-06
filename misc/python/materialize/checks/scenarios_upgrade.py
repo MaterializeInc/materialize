@@ -566,7 +566,7 @@ def upgrade_service_actions(
 
 def print_upgrade_path(versions: list[MzVersion | None]):
     print(
-        f"Upgrading through versions {[str(version) if version is not None else "current" for version in versions]}"
+        f"Upgrading through versions {[str(version) if version is not None else 'current' for version in versions]}"
     )
 
 
