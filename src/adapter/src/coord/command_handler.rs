@@ -875,6 +875,7 @@ impl Coordinator {
                     | Statement::ExplainPlan(_)
                     | Statement::ExplainPushdown(_)
                     | Statement::ExplainAnalyzeObject(_)
+                    | Statement::ExplainAnalyzeCluster(_)
                     | Statement::ExplainTimestamp(_)
                     | Statement::ExplainSinkSchema(_)
                     | Statement::Fetch(_)

@@ -449,9 +449,70 @@ pub fn describe_explain_analyze_object(
 
 pub fn describe_explain_analyze_cluster(
     _scx: &StatementContext,
-    _statement: ExplainAnalyzeClusterStatement,
+    statement: ExplainAnalyzeClusterStatement,
 ) -> Result<StatementDesc, PlanError> {
-    todo!("XXX MMG")
+    if statement.as_sql {
+        let relation_desc = RelationDesc::builder()
+            .with_column("SQL", SqlScalarType::String.nullable(false))
+            .finish();
+        return Ok(StatementDesc::new(Some(relation_desc)));
+    }
+
+    let ExplainAnalyzeComputationProperties { properties, skew } = statement.properties;
+
+    let mut relation_desc =
+        RelationDesc::builder().with_column("operator", SqlScalarType::String.nullable(false));
+
+    if skew {
+        relation_desc =
+            relation_desc.with_column("worker_id", SqlScalarType::UInt64.nullable(true));
+    }
+
+    let mut seen_properties = BTreeSet::new();
+    for property in properties {
+        // handle each property only once (belt and suspenders)
+        if !seen_properties.insert(property) {
+            continue;
+        }
+
+        match property {
+            ExplainAnalyzeComputationProperty::Memory if skew => {
+                let numeric = SqlScalarType::Numeric { max_scale: None }.nullable(true);
+                relation_desc = relation_desc
+                    .with_column("memory_ratio", numeric.clone())
+                    .with_column("worker_memory", SqlScalarType::String.nullable(true))
+                    .with_column("avg_memory", SqlScalarType::String.nullable(true))
+                    .with_column("total_memory", SqlScalarType::String.nullable(true))
+                    .with_column("records_ratio", numeric.clone())
+                    .with_column("worker_records", numeric.clone())
+                    .with_column("avg_records", numeric.clone())
+                    .with_column("total_records", numeric);
+            }
+            ExplainAnalyzeComputationProperty::Memory => {
+                relation_desc = relation_desc
+                    .with_column("total_memory", SqlScalarType::String.nullable(true))
+                    .with_column(
+                        "total_records",
+                        SqlScalarType::Numeric { max_scale: None }.nullable(true),
+                    );
+            }
+            ExplainAnalyzeComputationProperty::Cpu => {
+                if skew {
+                    relation_desc = relation_desc
+                        .with_column(
+                            "cpu_ratio",
+                            SqlScalarType::Numeric { max_scale: None }.nullable(true),
+                        )
+                        .with_column("worker_elapsed", SqlScalarType::Interval.nullable(true))
+                        .with_column("avg_elapsed", SqlScalarType::Interval.nullable(true));
+                }
+                relation_desc = relation_desc
+                    .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
+            }
+        }
+    }
+
+    Ok(StatementDesc::new(Some(relation_desc.finish())))
 }
 
 pub fn describe_explain_timestamp(
