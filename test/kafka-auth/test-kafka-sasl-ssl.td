@@ -28,7 +28,7 @@ banana
     SASL PASSWORD SECRET password,
     SECURITY PROTOCOL SASL_PLAINTEXT
   )
-contains:Disconnected during handshake; broker might require SSL encryption
+contains:Disconnected: connection closed by peer: receive 0 after POLLIN
 
 ! CREATE CONNECTION kafka_invalid TO KAFKA (
     BROKER 'kafka:9096',
