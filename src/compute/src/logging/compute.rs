@@ -1469,6 +1469,11 @@ impl CollectionLogging {
             export_id: self.export_id,
         }));
     }
+
+    /// The export global ID of this collection.
+    pub fn export_id(&self) -> GlobalId {
+        self.export_id
+    }
 }
 
 impl Drop for CollectionLogging {

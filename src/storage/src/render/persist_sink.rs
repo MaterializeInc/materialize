@@ -431,6 +431,7 @@ where
                             collection_id
                         ),
                     },
+                    None,
                 )
                 .await
                 .expect("could not open persist shard");
@@ -601,6 +602,7 @@ where
                         collection_id
                     ),
                 },
+                None,
             )
             .await
             .expect("could not open persist shard");
@@ -983,6 +985,7 @@ where
                     shard_name:collection_id.to_string(),
                     handle_purpose: format!("persist_sink::append_batches {}", collection_id)
                 },
+                None,
             )
             .await?;
 

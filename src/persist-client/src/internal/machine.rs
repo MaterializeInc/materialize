@@ -2410,6 +2410,7 @@ pub mod datadriven {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
+                None,
             )
             .await?;
 

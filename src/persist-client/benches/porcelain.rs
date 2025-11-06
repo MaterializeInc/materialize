@@ -71,6 +71,7 @@ async fn bench_writes_one_iter(
             Arc::new(VecU8Schema),
             Arc::new(VecU8Schema),
             Diagnostics::from_purpose("bench"),
+            None,
         )
         .await?;
 
@@ -217,6 +218,7 @@ pub fn bench_snapshot(
                     Arc::new(VecU8Schema),
                     Arc::new(VecU8Schema),
                     Diagnostics::from_purpose("bench"),
+                    None,
                 )
                 .await
                 .expect("failed to open shard");

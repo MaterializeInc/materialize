@@ -2689,6 +2689,7 @@ where
                         shard_name: "txns".to_owned(),
                         handle_purpose: "follow txns upper".to_owned(),
                     },
+                    None,
                 )
                 .await
                 .expect("txns schema shouldn't change");
@@ -3021,6 +3022,7 @@ where
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
                 diagnostics.clone(),
+                None,
             )
             .await
             .expect("invalid persist usage");

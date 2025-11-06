@@ -73,18 +73,18 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [Initialization Stage]: super#initialization-stage
     InitializationComplete,
 
-    /// `AllowWrites` informs the replica that it can transition out of the
+    /// `AllowWrites` informs the replica that it can transition a collection out of the
     /// read-only computation stage and into the read-write computation stage.
     /// It is now allowed to affect changes to external systems (writes).
     ///
-    /// After initialization is complete, an instance starts out in the
-    /// read-only computation stage. Only when receiving this command will it go
-    /// out of that and allow running operations to do writes.
+    /// After initialization is complete, collections start in the
+    /// read-only computation stage. Only when receiving this command they will transition
+    /// to running write operations.
     ///
-    /// An instance that has once been told that it can go into read-write mode
+    /// A collection that has once been told that it can go into read-write mode
     /// can never go out of that mode again. It is okay for a read-only
-    /// controller to re-connect to an instance that is already in read-write
-    /// mode: _someone_ has already told the instance that it is okay to write
+    /// controller to re-connect to an instance with read-write collections:
+    /// _someone_ has already told the instance that it is okay to write
     /// and there is no way in the protocol to transition an instance back to
     /// read-only mode.
     ///
@@ -93,7 +93,7 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// tighter control and could allow the instance to avoid work. However, it
     /// is more work to put in place the logic for that so we leave it as future
     /// work for now.
-    AllowWrites,
+    AllowWrites(GlobalId),
 
     /// `UpdateConfiguration` instructs the replica to update its configuration, according to the
     /// given [`ComputeParameters`].

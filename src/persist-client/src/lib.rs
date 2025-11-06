@@ -32,6 +32,7 @@ use mz_proto::{IntoRustIfSome, ProtoType};
 use semver::Version;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
+use tokio::sync::watch;
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::{BATCH_DELETE_ENABLED, Batch, BatchBuilder, ProtoBatch};
@@ -300,6 +301,7 @@ impl PersistClient {
                 Arc::clone(&key_schema),
                 Arc::clone(&val_schema),
                 diagnostics.clone(),
+                None,
             )
             .await?,
             self.open_leased_reader(
@@ -497,6 +499,7 @@ impl PersistClient {
         key_schema: Arc<K::Schema>,
         val_schema: Arc<V::Schema>,
         diagnostics: Diagnostics,
+        read_only_rx: Option<watch::Receiver<bool>>,
     ) -> Result<WriteHandle<K, V, T, D>, InvalidUsage<T>>
     where
         K: Debug + Codec,
@@ -528,6 +531,7 @@ impl PersistClient {
             writer_id,
             &diagnostics.handle_purpose,
             schemas,
+            read_only_rx,
         );
         Ok(writer)
     }
@@ -1064,6 +1068,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                None,
             )
             .await
             .expect("codec mismatch");
@@ -1093,6 +1098,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(StringSchema),
                 Diagnostics::for_tests(),
+                None,
             )
             .await
             .expect("codec mismatch");
@@ -1229,6 +1235,7 @@ mod tests {
                         Arc::new(VecU8Schema),
                         Arc::new(StringSchema),
                         Diagnostics::for_tests(),
+                        None,
                     )
                     .await
                     .unwrap_err(),

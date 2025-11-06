@@ -611,6 +611,7 @@ mod tests {
                 Arc::new(schema0.clone()),
                 Arc::new(UnitSchema),
                 d.clone(),
+                None,
             )
             .await
             .unwrap();
@@ -673,6 +674,7 @@ mod tests {
                 Arc::new(schema1),
                 Arc::new(UnitSchema),
                 d.clone(),
+                None,
             )
             .await
             .unwrap();

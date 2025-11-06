@@ -218,12 +218,6 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     storage_collections: StorageCollections<T>,
     /// Whether instance initialization has been completed.
     initialized: bool,
-    /// Whether or not this instance is in read-only mode.
-    ///
-    /// When in read-only mode, neither the controller nor the instances
-    /// controlled by it are allowed to affect changes to external systems
-    /// (largely persist).
-    read_only: bool,
     /// The workload class of this instance.
     ///
     /// This is currently only used to annotate metrics.
@@ -654,10 +648,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// the same approach, ensuring that both controllers commit their lags at roughly the same
     /// time, avoiding confusion caused by inconsistencies.
     fn maybe_record_wallclock_lag(&mut self) {
-        if self.read_only {
-            return;
-        }
-
         let duration_trunc = |datetime: DateTime<_>, interval| {
             let td = TimeDelta::from_std(interval).ok()?;
             datetime.duration_trunc(td).ok()
@@ -679,6 +669,14 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let mut history_updates = Vec::new();
         for (replica_id, replica) in &mut self.replicas {
             for (collection_id, collection) in &mut replica.collections {
+                if self
+                    .collections
+                    .get(collection_id)
+                    .expect("must exist")
+                    .read_only
+                {
+                    continue;
+                }
                 let Some(wallclock_lag_max) = &mut collection.wallclock_lag_max else {
                     continue;
                 };
@@ -703,6 +701,9 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let mut histogram_updates = Vec::new();
         let mut row_buf = Row::default();
         for (collection_id, collection) in &mut self.collections {
+            if collection.read_only {
+                continue;
+            }
             let Some(stash) = &mut collection.wallclock_lag_histogram_stash else {
                 continue;
             };
@@ -904,7 +905,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             storage_collections: _,
             peek_stash_persist_location: _,
             initialized,
-            read_only,
             workload_class,
             replicas,
             collections,
@@ -955,7 +955,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
-            field("read_only", read_only)?,
             field("workload_class", workload_class)?,
             field("replicas", replicas)?,
             field("collections", collections)?,
@@ -1012,7 +1011,6 @@ where
             storage_collections: storage,
             peek_stash_persist_location,
             initialized: false,
-            read_only: true,
             workload_class: None,
             replicas: Default::default(),
             collections,
@@ -1090,15 +1088,22 @@ where
         }
     }
 
-    /// Allows this instance to affect writes to external systems (persist).
+    /// Allows collections to affect writes to external systems (persist).
     ///
     /// Calling this method repeatedly has no effect.
     #[mz_ore::instrument(level = "debug")]
-    pub fn allow_writes(&mut self) {
-        if self.read_only {
-            self.read_only = false;
-            self.send(ComputeCommand::AllowWrites);
+    pub fn allow_writes(
+        &mut self,
+        collection_ids: impl IntoIterator<Item = GlobalId>,
+    ) -> Result<(), CollectionMissing> {
+        for collection_id in collection_ids {
+            let collection = self.collection_mut(collection_id)?;
+            if collection.read_only {
+                collection.read_only = false;
+                self.send(ComputeCommand::AllowWrites(collection_id));
+            }
         }
+        Ok(())
     }
 
     /// Shut down this instance.
@@ -2359,6 +2364,13 @@ struct CollectionState<T: ComputeControllerTimestamp> {
     /// command for it.
     scheduled: bool,
 
+    /// Whether this collection is in read-only mode.
+    ///
+    /// When in read-only mode, neither the controller nor the instances
+    /// controlled by it are allowed to affect changes to external systems
+    /// (largely persist).
+    read_only: bool,
+
     /// State shared with the `ComputeController`.
     shared: SharedCollectionState<T>,
 
@@ -2456,6 +2468,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             log_collection: false,
             dropped: false,
             scheduled: false,
+            read_only: true,
             shared,
             implied_read_hold,
             warmup_read_hold,

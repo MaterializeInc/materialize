@@ -783,7 +783,7 @@ where
         };
         let wrapped = self
             .client
-            .open_writer(data_id, key_schema, val_schema, diagnostics)
+            .open_writer(data_id, key_schema, val_schema, diagnostics, None)
             .await
             .expect("schema shouldn't change");
         DataWriteApply {
@@ -940,6 +940,7 @@ where
                 Arc::new(key_schema),
                 Arc::new(val_schema),
                 diagnostics,
+                None,
             )
             .await
             .expect("codecs shouldn't change");

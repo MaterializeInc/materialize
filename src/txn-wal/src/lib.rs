@@ -133,10 +133,10 @@
 //! // Register data shards to the txn set.
 //! let (d0, d1) = (ShardId::new(), ShardId::new());
 //! # let d0_write = client.open_writer(
-//! #    d0, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! #    d0, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests(), None,
 //! # ).await.unwrap();
 //! # let d1_write = client.open_writer(
-//! #    d1, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests()
+//! #    d1, StringSchema.into(), UnitSchema.into(), Diagnostics::for_tests(), None,
 //! # ).await.unwrap();
 //! txns.register(1u64, [d0_write]).await.expect("not previously initialized");
 //! txns.register(2u64, [d1_write]).await.expect("not previously initialized");
@@ -812,6 +812,7 @@ mod tests {
                 Arc::new(StringSchema),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
+                None,
             )
             .await
             .expect("codecs should not change")

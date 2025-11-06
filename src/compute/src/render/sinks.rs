@@ -28,6 +28,7 @@ use timely::container::CapacityContainerBuilder;
 use timely::dataflow::Scope;
 use timely::dataflow::scopes::Child;
 use timely::progress::Antichain;
+use tokio::sync::watch;
 
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
@@ -50,6 +51,7 @@ where
         start_signal: StartSignal,
         ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<mz_repr::Timestamp>,
+        read_only_rx: watch::Receiver<bool>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -163,6 +165,7 @@ where
                     err_collection.enter_region(inner),
                     ct_times.map(|x| x.enter_region(inner)),
                     output_probe,
+                    read_only_rx,
                 );
 
                 if let Some(sink_token) = sink_token {
@@ -193,6 +196,7 @@ where
         // removing the `SinkRender` trait entirely.
         ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<mz_repr::Timestamp>,
+        read_only_rx: watch::Receiver<bool>,
     ) -> Option<Rc<dyn Any>>;
 }
 

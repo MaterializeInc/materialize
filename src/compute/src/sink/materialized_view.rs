@@ -171,6 +171,7 @@ where
         mut err_collection: VecCollection<G, DataflowError, Diff>,
         _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
+        read_only_rx: watch::Receiver<bool>,
     ) -> Option<Rc<dyn Any>> {
         // Attach probes reporting the compute frontier.
         // The `apply_refresh` operator can round up frontiers, making it impossible to accurately
@@ -204,6 +205,7 @@ where
             as_of,
             compute_state,
             start_signal,
+            read_only_rx,
         );
         Some(token)
     }
@@ -235,6 +237,7 @@ pub(super) fn persist_sink<S>(
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
+    read_only_rx: watch::Receiver<bool>,
 ) -> Rc<dyn Any>
 where
     S: Scope<Timestamp = Timestamp>,
@@ -256,13 +259,14 @@ where
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
+        read_only_rx: read_only_rx.clone(),
     };
 
     let (desired, descs, sink_frontier, mint_token) = mint::render(
         sink_id,
         persist_api.clone(),
         as_of.clone(),
-        compute_state.read_only_rx.clone(),
+        read_only_rx,
         &desired,
     );
 
@@ -335,6 +339,7 @@ struct PersistApi {
     collection: CollectionMetadata,
     shard_name: String,
     purpose: String,
+    read_only_rx: watch::Receiver<bool>,
 }
 
 impl PersistApi {
@@ -356,6 +361,7 @@ impl PersistApi {
                     shard_name: self.shard_name.clone(),
                     handle_purpose: self.purpose.clone(),
                 },
+                Some(self.read_only_rx.clone()),
             )
             .await
             .unwrap_or_else(|error| panic!("error opening persist writer: {error}"))

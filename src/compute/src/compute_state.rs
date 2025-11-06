@@ -150,21 +150,6 @@ pub struct ComputeState {
     /// same dataflow.
     suspended_collections: BTreeMap<GlobalId, Rc<dyn Any>>,
 
-    /// When this replica/cluster is in read-only mode it must not affect any
-    /// changes to external state. This flag can only be changed by a
-    /// [ComputeCommand::AllowWrites].
-    ///
-    /// Everything running on this replica/cluster must obey this flag. At the
-    /// time of writing the only part that is doing this is `persist_sink`.
-    ///
-    /// NOTE: In the future, we might want a more complicated flag, for example
-    /// something that tells us after which timestamp we are allowed to write.
-    /// In this first version we are keeping things as simple as possible!
-    pub read_only_rx: watch::Receiver<bool>,
-
-    /// Send-side for read-only state.
-    pub read_only_tx: watch::Sender<bool>,
-
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
@@ -178,6 +163,11 @@ pub struct ComputeState {
     /// replica can drop diffs associated with timestamps beyond the replica expiration.
     /// The replica will panic if such dataflows are not dropped before the replica has expired.
     pub replica_expiration: Antichain<Timestamp>,
+
+    /// Whether the compute instance is currently in read-only mode.
+    ///
+    /// Only used to track whether we should enable persist compaction.
+    read_only: bool,
 }
 
 impl ComputeState {
@@ -191,10 +181,6 @@ impl ComputeState {
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
-
-        // We always initialize as read_only=true. Only when we're explicitly
-        // allowed do we switch to doing writes.
-        let (read_only_tx, read_only_rx) = watch::channel(true);
 
         Self {
             collections: Default::default(),
@@ -214,11 +200,10 @@ impl ComputeState {
             context,
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
             suspended_collections: Default::default(),
-            read_only_tx,
-            read_only_rx,
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
+            read_only: true,
         }
     }
 
@@ -414,12 +399,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 self.handle_peek(*peek)
             }
             CancelPeek { uuid } => self.handle_cancel_peek(uuid),
-            AllowWrites => {
-                self.compute_state
-                    .read_only_tx
-                    .send(false)
-                    .expect("we're holding one other end");
-                self.compute_state.persist_clients.cfg().enable_compaction();
+            AllowWrites(id) => {
+                self.handle_allow_writes(id);
             }
         }
 
@@ -523,6 +504,10 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .chain(dataflow.copy_to_ids())
             .collect();
 
+        // We always initialize as read_only=true. Only when we're explicitly
+        // allowed to we switch to read-write.
+        let (read_only_tx, read_only_rx) = watch::channel(true);
+
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
@@ -532,6 +517,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 is_subscribe_or_copy,
                 as_of.clone(),
                 metrics,
+                read_only_tx.clone(),
             );
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
@@ -571,6 +557,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             start_signal,
             until,
             dataflow_expiration,
+            read_only_rx,
         );
     }
 
@@ -629,6 +616,23 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
+    fn handle_allow_writes(&mut self, id: GlobalId) {
+        // TODO: We're turning on persist compaction on the first allow-writes command
+        // as we don't have a better signal. If any collection is in write mode,
+        // persist compaction is enabled for all collections, unless disabled for specific
+        // collections.
+        if self.compute_state.read_only {
+            self.compute_state.read_only = false;
+            self.compute_state.persist_clients.cfg().enable_compaction();
+        }
+
+        if let Some(collection) = self.compute_state.collections.get_mut(&id) {
+            collection.allow_writes();
+        } else {
+            error!(id = ?id, "allow writes for unknown collection");
+        }
+    }
+
     /// Drop the given collection.
     fn drop_collection(&mut self, id: GlobalId) {
         let collection = self
@@ -680,6 +684,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             compute_logger: logger,
         } = logging::initialize(self.timely_worker, &config);
 
+        // Log collections are always read-write.
+        let (read_only_tx, _read_only_rx) = watch::channel(true);
+
         let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
         for (log, trace) in traces {
@@ -698,6 +705,7 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 is_subscribe_or_copy,
                 as_of,
                 metrics,
+                read_only_tx.clone(),
             );
 
             let logging =
@@ -1671,6 +1679,19 @@ pub struct CollectionState {
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
     metrics: CollectionMetrics,
+    /// Send-side for read-only state.
+    ///
+    /// When this replica/cluster is in read-only mode it must not affect any
+    /// changes to external state. This flag can only be changed by a
+    /// [ComputeCommand::AllowWrites].
+    ///
+    /// Everything running on this replica/cluster must obey this flag. At the
+    /// time of writing the only part that is doing this is `persist_sink`.
+    ///
+    /// NOTE: In the future, we might want a more complicated flag, for example
+    /// something that tells us after which timestamp we are allowed to write.
+    /// In this first version we are keeping things as simple as possible!
+    read_only_tx: watch::Sender<bool>,
 }
 
 impl CollectionState {
@@ -1679,6 +1700,7 @@ impl CollectionState {
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
         metrics: CollectionMetrics,
+        read_only_tx: watch::Sender<bool>,
     ) -> Self {
         Self {
             reported_frontiers: ReportedFrontiers::new(),
@@ -1691,6 +1713,7 @@ impl CollectionState {
             compute_probe: None,
             logging: None,
             metrics,
+            read_only_tx,
         }
     }
 
@@ -1752,5 +1775,15 @@ impl CollectionState {
             ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
             ReportedFrontier::NotReported { .. } => false,
         }
+    }
+
+    /// Allow writes for this collection.
+    fn allow_writes(&self) {
+        info!(
+            dataflow_index = *self.dataflow_index,
+            export = ?self.logging.as_ref().map(|l| l.export_id()),
+            "allowing writes for dataflow",
+        );
+        let _ = self.read_only_tx.send(false);
     }
 }

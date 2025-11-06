@@ -101,7 +101,7 @@ where
         let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
-        let mut allow_writes = false;
+        let mut allow_writes = BTreeSet::new();
 
         for command in self.commands.drain(..) {
             match command {
@@ -135,8 +135,8 @@ where
                 ComputeCommand::CancelPeek { uuid } => {
                     live_peeks.remove(&uuid);
                 }
-                ComputeCommand::AllowWrites => {
-                    allow_writes = true;
+                ComputeCommand::AllowWrites(id) => {
+                    allow_writes.insert(id);
                 }
             }
         }
@@ -169,6 +169,13 @@ where
                     if frontier == &as_of {
                         final_frontiers.remove(&id);
                     }
+                }
+            }
+
+            // Remove any redundant `AllowWrites` command for dataflows that can't write anymore.
+            if as_of.is_empty() {
+                for id in dataflow.export_ids() {
+                    allow_writes.remove(&id);
                 }
             }
 
@@ -245,8 +252,8 @@ where
             self.commands.push(ComputeCommand::InitializationComplete);
         }
 
-        if allow_writes {
-            self.commands.push(ComputeCommand::AllowWrites);
+        for id in allow_writes {
+            self.commands.push(ComputeCommand::AllowWrites(id));
         }
 
         self.reduced_count = self.commands.len();

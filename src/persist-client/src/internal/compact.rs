@@ -172,6 +172,7 @@ where
         cfg: PersistConfig,
         metrics: Arc<Metrics>,
         gc: GarbageCollector<K, V, T, D>,
+        read_only_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Self {
         let (compact_req_sender, mut compact_req_receiver) = mpsc::channel::<(
             Instant,
@@ -194,9 +195,13 @@ where
                 let metrics = Arc::clone(&machine.applier.metrics);
 
                 // Only allow skipping compaction requests if the dyncfg is enabled.
-                if check_process_requests.get()
-                    && !process_requests.load(std::sync::atomic::Ordering::Relaxed)
-                {
+                let mut compaction_disabled = check_process_requests.get()
+                    && !process_requests.load(std::sync::atomic::Ordering::Relaxed);
+                if !compaction_disabled && let Some(rx) = &read_only_rx {
+                    // check if compaction is allowed for the object we're responsible for.
+                    compaction_disabled = *rx.borrow();
+                }
+                if compaction_disabled {
                     // Respond to the requester, track in our metrics, and log
                     // that compaction is disabled.
                     let _ = completer.send(Err(anyhow::anyhow!("compaction disabled")));

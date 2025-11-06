@@ -182,6 +182,7 @@ use timely::dataflow::{ProbeHandle, Scope};
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp as _};
 use timely::{Data, PartialOrder};
+use tokio::sync::watch;
 use tracing::debug;
 
 use crate::compute_state::ComputeState;
@@ -436,6 +437,7 @@ where
         errs: VecCollection<G, DataflowError, Diff>,
         append_times: Option<VecCollection<G, (), Diff>>,
         flow_control_probe: &probe::Handle<Timestamp>,
+        read_only_rx: watch::Receiver<bool>,
     ) -> Option<Rc<dyn Any>> {
         let name = sink_id.to_string();
 
@@ -462,6 +464,7 @@ where
                             shard_name: sink_id.to_string(),
                             handle_purpose,
                         },
+                        Some(read_only_rx),
                     )
                     .await
                     .expect("codecs should match")

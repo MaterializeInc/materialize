@@ -161,6 +161,7 @@ impl Coordinator {
                         .unwrap_or_terminate("cannot fail to append");
 
                     coord.ship_dataflow(physical_plan, cluster_id, None).await;
+                    coord.allow_writes(cluster_id, vec![global_id]);
                 })
             })
             .await?;
