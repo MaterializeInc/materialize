@@ -15,10 +15,7 @@ import json
 import subprocess
 from typing import TypeVar
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
+from semver.version import Version
 
 from materialize import MZ_ROOT
 
