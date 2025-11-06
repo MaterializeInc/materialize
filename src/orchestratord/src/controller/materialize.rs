@@ -245,7 +245,6 @@ pub struct NetworkPolicyConfig {
 pub enum Error {
     Anyhow(#[from] anyhow::Error),
     Kube(#[from] kube::Error),
-    Reqwest(#[from] reqwest::Error),
 }
 
 impl Display for Error {
@@ -253,7 +252,6 @@ impl Display for Error {
         match self {
             Self::Anyhow(e) => write!(f, "{e}"),
             Self::Kube(e) => write!(f, "{e}"),
-            Self::Reqwest(e) => write!(f, "{e}"),
         }
     }
 }
@@ -337,10 +335,8 @@ impl Context {
         active_generation: u64,
         desired_generation: u64,
         resources_hash: String,
-    ) -> Result<Option<Action>, Error> {
-        if let Some(action) = resources.promote_services(client, &mz.namespace()).await? {
-            return Ok(Some(action));
-        }
+    ) -> Result<(), Error> {
+        resources.promote_services(client, &mz.namespace()).await?;
         resources
             .teardown_generation(client, mz, active_generation)
             .await?;
@@ -367,7 +363,7 @@ impl Context {
             false,
         )
         .await?;
-        Ok(None)
+        Ok(())
     }
 }
 
@@ -517,7 +513,8 @@ impl k8s_controller::Context for Context {
                     desired_generation,
                     resources_hash,
                 )
-                .await
+                .await?;
+                Ok(None)
             }
             // There are changes pending, and we want to appy them.
             (false, true, true) => {
@@ -625,7 +622,8 @@ impl k8s_controller::Context for Context {
                             desired_generation,
                             resources_hash,
                         )
-                        .await
+                        .await?;
+                        Ok(None)
                     }
                     Err(e) => {
                         self.update_status(
@@ -734,30 +732,30 @@ impl k8s_controller::Context for Context {
                 debug!("no changes");
                 Ok(None)
             }
-        }?;
-
-        if let Some(action) = result {
-            return Ok(Some(action));
-        }
+        };
 
         // balancers rely on the environmentd service existing, which is
         // enforced by the environmentd rollout process being able to call
         // into the promotion endpoint
 
-        let balancer = balancer::Resources::new(&self.config, mz);
-        if self.config.create_balancers {
-            result = balancer.apply(&client, &mz.namespace()).await?;
-        } else {
-            result = balancer.cleanup(&client, &mz.namespace()).await?;
+        if !matches!(result, Ok(None)) {
+            return result.map_err(Error::Anyhow);
         }
 
-        if let Some(action) = result {
-            return Ok(Some(action));
+        let balancer = balancer::Resources::new(&self.config, mz);
+        if self.config.create_balancers {
+            result = balancer.apply(&client, &mz.namespace()).await;
+        } else {
+            result = balancer.cleanup(&client, &mz.namespace()).await;
         }
 
         // and the console relies on the balancer service existing, which is
         // enforced by balancer::Resources::apply having a check for its pods
         // being up, and not returning successfully until they are
+
+        if !matches!(result, Ok(None)) {
+            return result.map_err(Error::Anyhow);
+        }
 
         let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
         else {
@@ -788,7 +786,7 @@ impl k8s_controller::Context for Context {
             console.cleanup(&client, &mz.namespace()).await?;
         }
 
-        Ok(result)
+        result.map_err(Error::Anyhow)
     }
 
     #[instrument(fields(organization_name=mz.name_unchecked()))]

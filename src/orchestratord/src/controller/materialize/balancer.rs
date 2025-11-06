@@ -26,7 +26,7 @@ use tracing::trace;
 
 use crate::{
     controller::materialize::{
-        Error, matching_image_from_environmentd_image_ref,
+        matching_image_from_environmentd_image_ref,
         tls::{create_certificate, issuer_ref_defined},
     },
     k8s::{apply_resource, delete_resource, get_resource},
@@ -58,7 +58,11 @@ impl Resources {
     }
 
     #[instrument]
-    pub async fn apply(&self, client: &Client, namespace: &str) -> Result<Option<Action>, Error> {
+    pub async fn apply(
+        &self,
+        client: &Client,
+        namespace: &str,
+    ) -> Result<Option<Action>, anyhow::Error> {
         let certificate_api: Api<Certificate> = Api::namespaced(client.clone(), namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
