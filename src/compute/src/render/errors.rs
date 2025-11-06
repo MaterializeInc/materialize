@@ -11,6 +11,8 @@
 
 use mz_repr::Row;
 
+use crate::render::context::ShutdownProbe;
+
 /// Used to make possibly-validating code generic: think of this as a kind of `MaybeResult`,
 /// specialized for use in compute.  Validation code will only run when the error constructor is
 /// Some.
@@ -60,18 +62,24 @@ impl<T, E> MaybeValidatingRow<T, E> for Result<T, E> {
 }
 
 /// Error logger to be used by rendering code.
-// TODO: Consider removing this struct.
+///
+/// Holds onto a `[ShutdownProbe`] to ensure that no false-positive errors are logged while the
+/// dataflow is in the process of shutting down.
 #[derive(Clone)]
 pub(super) struct ErrorLogger {
+    shutdown_probe: ShutdownProbe,
     dataflow_name: String,
 }
 
 impl ErrorLogger {
-    pub fn new(dataflow_name: String) -> Self {
-        Self { dataflow_name }
+    pub fn new(shutdown_probe: ShutdownProbe, dataflow_name: String) -> Self {
+        Self {
+            shutdown_probe,
+            dataflow_name,
+        }
     }
 
-    /// Log the given error.
+    /// Log the given error, unless the dataflow is shutting down.
     ///
     /// The logging format is optimized for surfacing errors with Sentry:
     ///  * `error` is logged at ERROR level and will appear as the error title in Sentry.
@@ -88,6 +96,21 @@ impl ErrorLogger {
     ///
     // TODO(database-issues#5362): Rethink or justify our error logging strategy.
     pub fn log(&self, message: &'static str, details: &str) {
+        // It's important that we silence errors as soon as the local shutdown token has been
+        // dropped. Dataflow operators may start discarding results, thereby producing incorrect
+        // output, as soon as they observe that all workers have dropped their token. However, not
+        // all workers are guaranteed to make this observation at the same time. So it's possible
+        // that some workers have already started discarding results while other workers still see
+        // `shutdown_probe.in_shutdown() == false`.
+        if !self.shutdown_probe.in_local_shutdown() {
+            self.log_always(message, details);
+        }
+    }
+
+    /// Like [`Self::log`], but also logs errors when the dataflow is shutting down.
+    ///
+    /// Use this method to notify about errors that cannot be caused by dataflow shutdown.
+    pub fn log_always(&self, message: &'static str, details: &str) {
         tracing::warn!(
             dataflow = self.dataflow_name,
             "[customer-data] {message} ({details})"
@@ -95,7 +118,7 @@ impl ErrorLogger {
         tracing::error!(message);
     }
 
-    /// Like [`Self::log`], but panics in debug mode.
+    /// Like [`Self::log_always`], but panics in debug mode.
     ///
     /// Use this method to notify about errors that are certainly caused by bugs in Materialize.
     pub fn soft_panic_or_log(&self, message: &'static str, details: &str) {

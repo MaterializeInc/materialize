@@ -10,6 +10,7 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -28,6 +29,7 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
+use mz_timely_util::builder_async::{ButtonHandle, PressOnDropButton};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
@@ -85,6 +87,8 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
+    /// A handle that operators can probe to know whether the dataflow is shutting down.
+    pub(super) shutdown_probe: ShutdownProbe,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
@@ -134,6 +138,7 @@ where
             as_of_frontier,
             until,
             bindings: BTreeMap::new(),
+            shutdown_probe: Default::default(),
             compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
@@ -187,7 +192,7 @@ where
     }
 
     pub(super) fn error_logger(&self) -> ErrorLogger {
-        ErrorLogger::new(self.debug_name.clone())
+        ErrorLogger::new(self.shutdown_probe.clone(), self.debug_name.clone())
     }
 }
 
@@ -216,11 +221,56 @@ where
             export_ids: self.export_ids.clone(),
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
+            shutdown_probe: self.shutdown_probe.clone(),
             compute_logger: self.compute_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
             config_set: Rc::clone(&self.config_set),
+        }
+    }
+}
+
+pub(super) fn shutdown_token<G: Scope>(scope: &mut G) -> (ShutdownProbe, PressOnDropButton) {
+    let (button_handle, button) = mz_timely_util::builder_async::button(scope, scope.addr());
+    let probe = ShutdownProbe::new(button_handle);
+    let token = button.press_on_drop();
+    (probe, token)
+}
+
+/// Convenient wrapper around an optional `ButtonHandle` that can be used to check whether a
+/// dataflow is shutting down.
+///
+/// Instances created through the `Default` impl act as if the dataflow never shuts down.
+/// Instances created through [`ShutdownProbe::new`] defer to the wrapped button.
+#[derive(Clone, Default)]
+pub(super) struct ShutdownProbe(Option<Rc<RefCell<ButtonHandle>>>);
+
+impl ShutdownProbe {
+    /// Construct a `ShutdownProbe` instance that defers to `button`.
+    fn new(button: ButtonHandle) -> Self {
+        Self(Some(Rc::new(RefCell::new(button))))
+    }
+
+    /// Returns whether the dataflow is in the process of shutting down.
+    ///
+    /// The result of this method is synchronized among workers: It only returns `true` once all
+    /// workers have dropped their shutdown token.
+    pub(super) fn in_shutdown(&self) -> bool {
+        match &self.0 {
+            Some(t) => t.borrow_mut().all_pressed(),
+            None => false,
+        }
+    }
+
+    /// Returns whether the dataflow is in the process of shutting down on the current worker.
+    ///
+    /// In contrast to [`ShutdownProbe::in_shutdown`], this method returns `true` as soon as the
+    /// current worker has dropped its shutdown token, without waiting for other workers.
+    pub(super) fn in_local_shutdown(&self) -> bool {
+        match &self.0 {
+            Some(t) => t.borrow_mut().local_pressed(),
+            None => false,
         }
     }
 }

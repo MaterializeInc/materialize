@@ -17,6 +17,7 @@
 
 use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
+use std::rc::Weak;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::containers::{Columnation, TimelyStack};
@@ -90,8 +91,13 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: for<'a> FnMut(C1::Item<'a>) -> I + 'static;
 
-    /// Block progress of the frontier at `expiration` time
-    fn expire_stream_at(&self, name: &str, expiration: G::Timestamp) -> StreamCore<G, C1>;
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1>;
 }
 
 /// Extension methods for differential [`Collection`]s.
@@ -145,9 +151,13 @@ where
         I: IntoIterator<Item = Result<D2, E>>,
         L: FnMut(D1) -> I + 'static;
 
-    /// Block progress of the frontier at `expiration` time.
-    fn expire_collection_at(&self, name: &str, expiration: G::Timestamp)
-    -> VecCollection<G, D1, R>;
+    /// Block progress of the frontier at `expiration` time, unless the token is dropped.
+    fn expire_collection_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> VecCollection<G, D1, R>;
 
     /// Replaces each record with another, with a new difference type.
     ///
@@ -287,32 +297,41 @@ where
         })
     }
 
-    fn expire_stream_at(&self, name: &str, expiration: G::Timestamp) -> StreamCore<G, C1> {
+    fn expire_stream_at(
+        &self,
+        name: &str,
+        expiration: G::Timestamp,
+        token: Weak<()>,
+    ) -> StreamCore<G, C1> {
         let name = format!("expire_stream_at({name})");
         self.unary_frontier(Pipeline, &name.clone(), move |cap, _| {
             // Retain a capability for the expiration time, which we'll only drop if the token
             // is dropped. Else, block progress at the expiration time to prevent downstream
             // operators from making any statement about expiration time or any following time.
-            let cap = Some(cap.delayed(&expiration));
+            let mut cap = Some(cap.delayed(&expiration));
             let mut warned = false;
             move |(input, frontier), output| {
-                let _ = &cap;
-                let frontier = frontier.frontier();
-                if !frontier.less_than(&expiration) && !warned {
-                    // Here, we print a warning, not an error. The state is only a liveness
-                    // concern, but not relevant for correctness. Additionally, a race between
-                    // shutting down the dataflow and dropping the token can cause the dataflow
-                    // to shut down before we drop the token.  This can happen when dropping
-                    // the last remaining capability on a different worker.  We do not want to
-                    // log an error every time this happens.
+                if token.upgrade().is_none() {
+                    // In shutdown, allow to propagate.
+                    drop(cap.take());
+                } else {
+                    let frontier = frontier.frontier();
+                    if !frontier.less_than(&expiration) && !warned {
+                        // Here, we print a warning, not an error. The state is only a liveness
+                        // concern, but not relevant for correctness. Additionally, a race between
+                        // shutting down the dataflow and dropping the token can cause the dataflow
+                        // to shut down before we drop the token.  This can happen when dropping
+                        // the last remaining capability on a different worker.  We do not want to
+                        // log an error every time this happens.
 
-                    tracing::warn!(
-                        name = name,
-                        frontier = ?frontier,
-                        expiration = ?expiration,
-                        "frontier not less than expiration"
-                    );
-                    warned = true;
+                        tracing::warn!(
+                            name = name,
+                            frontier = ?frontier,
+                            expiration = ?expiration,
+                            "frontier not less than expiration"
+                        );
+                        warned = true;
+                    }
                 }
                 input.for_each(|time, data| {
                     let mut session = output.session(&time);
@@ -362,9 +381,10 @@ where
         &self,
         name: &str,
         expiration: G::Timestamp,
+        token: Weak<()>,
     ) -> VecCollection<G, D1, R> {
         self.inner
-            .expire_stream_at(name, expiration)
+            .expire_stream_at(name, expiration, token)
             .as_collection()
     }
 

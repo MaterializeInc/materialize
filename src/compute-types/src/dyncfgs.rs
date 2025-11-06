@@ -265,6 +265,13 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "Round observed timestamps to slack.",
 );
 
+/// Whether to use `drop_dataflow` to actively cancel dataflows.
+pub const ENABLE_ACTIVE_DATAFLOW_CANCELATION: Config<bool> = Config::new(
+    "enable_compute_active_dataflow_cancelation",
+    false,
+    "Whether to use `drop_dataflow` to actively cancel compute dataflows.",
+);
+
 /// Whether to enable the peek response stash, for sending back large peek
 /// responses. The response stash will only be used for results that exceed
 /// `compute_peek_response_stash_threshold_bytes`.
@@ -362,6 +369,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
+        .add(&ENABLE_ACTIVE_DATAFLOW_CANCELATION)
         .add(&ENABLE_PEEK_RESPONSE_STASH)
         .add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES)
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)

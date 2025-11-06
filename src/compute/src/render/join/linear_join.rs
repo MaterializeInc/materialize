@@ -36,7 +36,7 @@ use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
-use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownProbe};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
@@ -97,6 +97,7 @@ impl LinearJoinSpec {
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
+        shutdown_probe: ShutdownProbe,
         result: L,
     ) -> VecCollection<G, I::Item, Diff>
     where
@@ -120,19 +121,19 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
             }
         }
     }
@@ -489,21 +490,26 @@ where
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
-                .render(&prev_keyed, &next_input, move |key, old, new| {
-                    let mut row_builder = SharedRow::get();
-                    let temp_storage = RowArena::new();
+                .render(
+                    &prev_keyed,
+                    &next_input,
+                    self.shutdown_probe.clone(),
+                    move |key, old, new| {
+                        let mut row_builder = SharedRow::get();
+                        let temp_storage = RowArena::new();
 
-                    let mut datums_local = datums.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    datums_local.extend(old.to_datum_iter());
-                    datums_local.extend(new.to_datum_iter());
+                        let mut datums_local = datums.borrow();
+                        datums_local.extend(key.to_datum_iter());
+                        datums_local.extend(old.to_datum_iter());
+                        datums_local.extend(new.to_datum_iter());
 
-                    closure
-                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                        .map(|row| row.cloned())
-                        .map_err(DataflowError::from)
-                        .transpose()
-                })
+                        closure
+                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .map(|row| row.cloned())
+                            .map_err(DataflowError::from)
+                            .transpose()
+                    },
+                )
                 .inner
                 .ok_err(|(x, t, d)| {
                     // TODO(mcsherry): consider `ok_err()` for `Collection`.
@@ -515,22 +521,25 @@ where
 
             (oks.as_collection(), Some(err.as_collection()))
         } else {
-            let oks =
-                self.linear_join_spec
-                    .render(&prev_keyed, &next_input, move |key, old, new| {
-                        let mut row_builder = SharedRow::get();
-                        let temp_storage = RowArena::new();
+            let oks = self.linear_join_spec.render(
+                &prev_keyed,
+                &next_input,
+                self.shutdown_probe.clone(),
+                move |key, old, new| {
+                    let mut row_builder = SharedRow::get();
+                    let temp_storage = RowArena::new();
 
-                        let mut datums_local = datums.borrow();
-                        datums_local.extend(key.to_datum_iter());
-                        datums_local.extend(old.to_datum_iter());
-                        datums_local.extend(new.to_datum_iter());
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key.to_datum_iter());
+                    datums_local.extend(old.to_datum_iter());
+                    datums_local.extend(new.to_datum_iter());
 
-                        closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                            .expect("Closure claimed to never error")
-                            .cloned()
-                    });
+                    closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .expect("Closure claimed to never error")
+                        .cloned()
+                },
+            );
 
             (oks, None)
         }

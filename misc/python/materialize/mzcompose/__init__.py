@@ -69,7 +69,7 @@ def get_minimal_system_parameters(
     """Settings we need in order to have tests run at all, but otherwise stay
     with the defaults: not changing performance or increasing coverage."""
 
-    config = {
+    return {
         # -----
         # Unsafe functions
         "unsafe_enable_unsafe_functions": "true",
@@ -85,6 +85,7 @@ def get_minimal_system_parameters(
         "enable_alter_swap": "true",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
+        "enable_compute_active_dataflow_cancelation": "true",
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
         "enable_connection_validation_syntax": "true",
@@ -118,11 +119,6 @@ def get_minimal_system_parameters(
         "with_0dt_deployment_max_wait": "1800s",
         # End of list (ordered by name)
     }
-
-    if version < MzVersion.parse_mz("v0.163.0-dev"):
-        config["enable_compute_active_dataflow_cancelation"] = "true"
-
-    return config
 
 
 @dataclass

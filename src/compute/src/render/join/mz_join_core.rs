@@ -49,6 +49,8 @@ use timely::progress::timestamp::Timestamp;
 use timely::{Container, PartialOrder};
 use tracing::trace;
 
+use crate::render::context::ShutdownProbe;
+
 /// Joins two arranged collections with the same key type.
 ///
 /// Each matching pair of records `(key, val1)` and `(key, val2)` are subjected to the `result` function,
@@ -57,6 +59,7 @@ use tracing::trace;
 pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
+    shutdown_probe: ShutdownProbe,
     result: L,
     yield_fn: YFn,
 ) -> StreamCore<G, C>
@@ -204,6 +207,25 @@ where
             let mut trace2_option = Some(trace2);
 
             move |(input1, frontier1), (input2, frontier2), output| {
+                // If the dataflow is shutting down, discard all existing and future work.
+                if shutdown_probe.in_shutdown() {
+                    trace!(operator_id, "shutting down");
+
+                    // Discard data at the inputs.
+                    input1.for_each(|_cap, _data| ());
+                    input2.for_each(|_cap, _data| ());
+
+                    // Discard queued work.
+                    todo1.discard();
+                    todo2.discard();
+
+                    // Stop holding on to input traces.
+                    trace1_option = None;
+                    trace2_option = None;
+
+                    return;
+                }
+
                 // 1. Consuming input.
                 //
                 // The join computation repeatedly accepts batches of updates from each of its inputs.
@@ -531,6 +553,11 @@ where
         );
 
         self.todo.push_back((Box::pin(fut), capability));
+    }
+
+    /// Discard all pending work.
+    fn discard(&mut self) {
+        self.todo = Default::default();
     }
 
     /// Process pending work until none is remaining or `yield_fn` requests a yield.

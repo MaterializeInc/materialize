@@ -29,8 +29,9 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
-    PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
+    ENABLE_ACTIVE_DATAFLOW_CANCELATION, ENABLE_PEEK_RESPONSE_STASH,
+    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE,
+    PEEK_STASH_NUM_BATCHES,
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -660,9 +661,11 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
-        // Drop the dataflow, if all its exports have been dropped.
-        if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
-            self.timely_worker.drop_dataflow(index);
+        if ENABLE_ACTIVE_DATAFLOW_CANCELATION.get(&self.compute_state.worker_config) {
+            // Drop the dataflow, if all its exports have been dropped.
+            if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
+                self.timely_worker.drop_dataflow(index);
+            }
         }
 
         // Remember the collection as dropped, for emission of outstanding final compute responses.
