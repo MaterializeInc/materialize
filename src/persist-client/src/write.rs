@@ -560,7 +560,7 @@ where
         // Before we append any data, we require a registered write schema.
         let schema_id = self.ensure_schema_registered().await;
 
-        for batch in batches.iter_mut() {
+        for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Err(InvalidUsage::BatchNotFromThisShard {
                     batch_shard: batch.shard_id(),
@@ -577,11 +577,6 @@ where
                     TODO: Error on very old versions once the leaked blob detector exists."
                 )
             }
-
-            // The batch may have been written by a writer without a registered schema.
-            // Ensure we have a schema ID in the batch metadata before we append, to avoid type
-            // confusion later.
-            ensure_batch_schema(batch, schema_id);
         }
 
         let lower = expected_upper.clone();
@@ -719,8 +714,12 @@ where
                 }
             }
 
-            let combined_batch =
+            let mut combined_batch =
                 HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
+            // The batch may have been written by a writer without a registered schema.
+            // Ensure we have a schema ID in the batch metadata before we append, to avoid type
+            // confusion later.
+            ensure_batch_schema(&mut combined_batch, self.shard_id(), schema_id);
             let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
@@ -1100,23 +1099,19 @@ impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
 ///
 /// If the batch has no schema set, initialize it to the given one.
 /// If the batch has a schema set, assert that it matches the given one.
-fn ensure_batch_schema<K, V, T, D>(batch: &mut Batch<K, V, T, D>, schema_id: SchemaId)
+fn ensure_batch_schema<T>(batch: &mut HollowBatch<T>, shard_id: ShardId, schema_id: SchemaId)
 where
-    K: Debug + Codec,
-    V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Monoid + Codec64,
 {
-    let shard_id = batch.shard_id();
     let ensure = |id: &mut Option<SchemaId>| match id {
         Some(id) => assert_eq!(*id, schema_id, "schema ID mismatch; shard={shard_id}"),
         None => *id = Some(schema_id),
     };
 
-    for run_meta in &mut batch.batch.run_meta {
+    for run_meta in &mut batch.run_meta {
         ensure(&mut run_meta.schema);
     }
-    for part in &mut batch.batch.parts {
+    for part in &mut batch.parts {
         match part {
             RunPart::Single(BatchPart::Hollow(part)) => ensure(&mut part.schema_id),
             RunPart::Single(BatchPart::Inline { schema_id, .. }) => ensure(schema_id),
