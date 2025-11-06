@@ -300,7 +300,8 @@ debug = 2
 inherits = "release"
 lto = "off"
 debug = 1
-incremental = true
+# TODO: Reenable when https://github.com/rust-lang/rust/issues/148581 is fixed
+incremental = false
 
 [profile.ci]
 inherits = "optimized"
