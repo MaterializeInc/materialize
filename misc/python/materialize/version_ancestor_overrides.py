@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in ("DifferentialJoin", "Retraction", "FinishOrderByLimit"):
+        # PR#33979 (Enable active dataflow cancellation) increases latency
+        min_ancestor_mz_version_per_commit[
+            "e1944c939203eb29b84a18ce5153e2d99d157c1d"
+        ] = MzVersion.parse_mz("v0.164.0")
+
     if scenario_class_name == "CreateIndex":
         # PR#33938 (Update columnar, timely, differential) increases latency
         min_ancestor_mz_version_per_commit[
