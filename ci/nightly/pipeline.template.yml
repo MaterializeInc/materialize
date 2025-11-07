@@ -1157,7 +1157,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=$((RANDOM + 1))"]
+              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=$BUILDKITE_JOB_ID"]
 
 
       - id: checks-self-managed-random-upgrade-path-2
@@ -1170,7 +1170,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=$((RANDOM + 2))"]
+              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=BUILDKITE_JOB_ID"]
 
       - id: checks-self-managed-random-upgrade-path-3
         label: "Checks Self-Managed third random upgrade path"
@@ -1182,7 +1182,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: platform-checks
-              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=$((RANDOM + 3))"]
+              args: [--scenario=SelfManagedRandomUpgradePath, "--seed=BUILDKITE_JOB_ID"]
 
   - group: "K8s node recovery cloudtest"
     key: k8s-node-recovery
