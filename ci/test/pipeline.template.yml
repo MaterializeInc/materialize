@@ -26,8 +26,7 @@ steps:
     steps:
       - id: build-x86_64
         label: ":rust: Build x86_64"
-        # TODO(def-) Remove rm -rf when https://github.com/rust-lang/rust/issues/148581 is fixed
-        command: "rm -rf target*; bin/ci-builder run stable bin/pyactivate -m ci.test.build"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -37,8 +36,7 @@ steps:
 
       - id: build-aarch64
         label: ":rust: Build aarch64"
-        # TODO(def-) Remove rm -rf when https://github.com/rust-lang/rust/issues/148581 is fixed
-        command: "rm -rf target*; bin/ci-builder run stable bin/pyactivate -m ci.test.build"
+        command: bin/ci-builder run stable bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -231,8 +229,7 @@ steps:
 
       - id: lint-cargo-doc-test
         label: Cargo doc tests
-        # TODO(def-) Remove rm -rf when https://github.com/rust-lang/rust/issues/148581 is fixed
-        command: "rm -rf target*; bin/ci-builder run stable ci/test/lint-cargo-doc-test.sh"
+        command: bin/ci-builder run stable ci/test/lint-cargo-doc-test.sh
         inputs:
           - Cargo.lock
           - Cargo.toml
