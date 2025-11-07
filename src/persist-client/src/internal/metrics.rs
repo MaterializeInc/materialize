@@ -1288,6 +1288,7 @@ pub struct ShardsMetrics {
     pubsub_push_diff_applied: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_stale: mz_ore::metrics::IntCounterVec,
     pubsub_push_diff_not_applied_out_of_order: mz_ore::metrics::IntCounterVec,
+    stale_version: mz_ore::metrics::UIntGaugeVec,
     blob_gets: mz_ore::metrics::IntCounterVec,
     blob_sets: mz_ore::metrics::IntCounterVec,
     live_writers: mz_ore::metrics::UIntGaugeVec,
@@ -1460,6 +1461,11 @@ impl ShardsMetrics {
                 help: "number of diffs received via pubsub that did not apply due to out-of-order delivery",
                 var_labels: ["shard", "name"],
             )),
+            stale_version: registry.register(metric!(
+                name: "mz_persist_shard_stale_version",
+                help: "indicates whether the current version of the shard is less than the current version of the code",
+                var_labels: ["shard", "name"],
+            )),
             blob_gets: registry.register(metric!(
                 name: "mz_persist_shard_blob_gets",
                 help: "number of Blob::get calls for this shard",
@@ -1610,6 +1616,7 @@ pub struct ShardMetrics {
     pub pubsub_push_diff_applied: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub pubsub_push_diff_not_applied_stale: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub pubsub_push_diff_not_applied_out_of_order: DeleteOnDropCounter<AtomicU64, Vec<String>>,
+    pub stale_version: DeleteOnDropGauge<AtomicU64, Vec<String>>,
     pub blob_gets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub blob_sets: DeleteOnDropCounter<AtomicU64, Vec<String>>,
     pub live_writers: DeleteOnDropGauge<AtomicU64, Vec<String>>,
@@ -1710,6 +1717,9 @@ impl ShardMetrics {
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             pubsub_push_diff_not_applied_out_of_order: shards_metrics
                 .pubsub_push_diff_not_applied_out_of_order
+                .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
+            stale_version: shards_metrics
+                .stale_version
                 .get_delete_on_drop_metric(vec![shard.clone(), name.to_string()]),
             blob_gets: shards_metrics
                 .blob_gets
