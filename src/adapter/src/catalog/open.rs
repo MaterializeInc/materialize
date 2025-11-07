@@ -324,7 +324,10 @@ impl Catalog {
             if let Some(password) = config.external_login_password_mz_system {
                 let role_auth = RoleAuth {
                     role_id: MZ_SYSTEM_ROLE_ID,
-                    password_hash: Some(scram256_hash(&password).map_err(|_| {
+                    // The external login password for mz_system should use
+                    // the default hash iterations as that is a known secure
+                    // setting.
+                    password_hash: Some(scram256_hash(&password, &None).map_err(|_| {
                         AdapterError::Internal("Failed to hash mz_system password.".to_owned())
                     })?),
                     updated_at: SYSTEM_TIME(),
@@ -1097,17 +1100,17 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
             .get_mut(&cluster.id)
             .unwrap_or(&mut empty_map);
 
-        let builtin_cluster_boostrap_config =
+        let builtin_cluster_bootstrap_config =
             builtin_cluster_config_map.get_config(builtin_replica.cluster_name)?;
         if replica_names.remove(builtin_replica.name).is_none()
             // NOTE(SangJunBak): We need to explicitly check the replication factor because
             // BUILT_IN_CLUSTER_REPLICAS is constant throughout all deployments but the replication
             // factor is configurable on bootstrap.
-            && builtin_cluster_boostrap_config.replication_factor > 0
+            && builtin_cluster_bootstrap_config.replication_factor > 0
         {
             let replica_size = match cluster.config.variant {
                 ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
-                ClusterVariant::Unmanaged => builtin_cluster_boostrap_config.size,
+                ClusterVariant::Unmanaged => builtin_cluster_bootstrap_config.size,
             };
 
             let config = builtin_cluster_replica_config(replica_size);

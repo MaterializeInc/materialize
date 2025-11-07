@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -683,6 +684,16 @@ pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     // and mz_support users, and we want sqllogictest to have access with its user. Because the name
     // starts with "unsafe" it still won't be visible or changeable by users unless unsafe mode is
     // enabled.
+    true,
+);
+
+pub static PASSWORD_HASH_ITERATIONS: VarDefinition = VarDefinition::new(
+    "password_hash_iterations",
+    // / The default iteration count as suggested by
+    // / <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
+    value!(NonZeroU32; NonZeroU32::new(600_000).unwrap()),
+    "Iterations to use when hashing passwords. Higher iterations are more secure, but take longer to validated. \
+    Please consider the security risks before reducing this below the default value.",
     true,
 );
 
