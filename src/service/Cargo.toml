@@ -40,7 +40,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 mz-ore = { path = "../ore", features = ["turmoil"] }
 rand = "0.8.5"
 tracing-subscriber = "0.3.19"
-turmoil = "0.6.6"
+turmoil = "0.7.0"
 
 [features]
 default = ["workspace-hack"]

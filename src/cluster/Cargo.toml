@@ -30,7 +30,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 mz-ore = { path = "../ore", features = ["turmoil"] }
 tracing-subscriber = "0.3.19"
-turmoil = "0.6.6"
+turmoil = "0.7.0"
 
 [package.metadata.cargo-udeps.ignore]
 # only used on linux
