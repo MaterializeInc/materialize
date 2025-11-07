@@ -26,7 +26,7 @@ def main():
 
     remote = git.get_remote()
     latest_version = git.get_latest_version(version_type=MzVersion)
-    release_version = MzVersion.parse_mz(f"{args.release_version}.0")
+    release_version = MzVersion.parse_mz(f"{args.release_version}.0-rc.1")
     next_version = MzVersion.parse_mz(f"{args.next_version}.0-dev.0")
 
     if latest_version >= release_version:
