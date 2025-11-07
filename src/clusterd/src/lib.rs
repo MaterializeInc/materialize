@@ -200,7 +200,7 @@ pub fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = args
+    let tracing_handle = args
         .tracing
         .configure_tracing(
             StaticTracingConfig {

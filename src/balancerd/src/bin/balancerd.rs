@@ -181,7 +181,7 @@ fn main() {
         .expect("Failed building the Runtime");
 
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = runtime
+    let tracing_handle = runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "balancerd",
@@ -201,7 +201,6 @@ fn main() {
     if let Err(err) = res {
         panic!("balancer: fatal: {}", err.display_with_causes());
     }
-    drop(_tracing_guard);
 }
 
 pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(), anyhow::Error> {

@@ -170,8 +170,7 @@ async fn main() {
         enable_version_flag: true,
     });
 
-    let (_, _tracing_guard) = args
-        .tracing
+    args.tracing
         .configure_tracing(
             StaticTracingConfig {
                 service_name: "catalog-debug",

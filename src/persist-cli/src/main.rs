@@ -57,7 +57,7 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
-    let (_, _tracing_guard) = runtime
+    runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "persistcli",
@@ -87,5 +87,4 @@ fn main() {
         eprintln!("persistcli: fatal: {}", err.display_with_causes());
         std::process::exit(1);
     }
-    drop(_tracing_guard);
 }
