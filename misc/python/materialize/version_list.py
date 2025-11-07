@@ -130,7 +130,7 @@ INVALID_VERSIONS = {
 _SKIP_IMAGE_CHECK_BELOW_THIS_VERSION = MzVersion.parse_mz("v0.77.0")
 
 
-def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
+def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str | None:
     """
     Resolve the ancestor image tag.
     :param ancestor_overrides: one of #ANCESTOR_OVERRIDES_FOR_PERFORMANCE_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS, #ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS
@@ -148,7 +148,10 @@ def resolve_ancestor_image_tag(ancestor_overrides: dict[str, MzVersion]) -> str:
         return image_tag
 
     ancestor_image_resolution = _create_ancestor_image_resolution(ancestor_overrides)
-    image_tag, context = ancestor_image_resolution.resolve_image_tag()
+    result = ancestor_image_resolution.resolve_image_tag()
+    if result is None:
+        return None
+    image_tag, context = result
     print(f"Using {image_tag} as image tag for ancestor (context: {context})")
     return image_tag
 
@@ -201,7 +204,7 @@ class AncestorImageResolutionBase:
 
     def _resolve_image_tag_of_previous_release(
         self, context_prefix: str, previous_minor: bool
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str] | None:
         tagged_release_version = git.get_tagged_release_version(version_type=MzVersion)
         assert tagged_release_version is not None
         previous_release_version = get_previous_published_version(
@@ -213,11 +216,13 @@ class AncestorImageResolutionBase:
         )
 
         if override_commit is not None:
+            # TODO(def-): This currently doesn't work because we only tag the Optimized builds with tags like v0.164.0-dev.0--main.gc28d0061a6c9e63ee50a5f555c5d90373d006686, but not the Release builds we should use
             # use the commit instead of the previous release
-            return (
-                commit_to_image_tag(override_commit),
-                f"commit override instead of previous release ({previous_release_version})",
-            )
+            # return (
+            #     commit_to_image_tag(override_commit),
+            #     f"commit override instead of previous release ({previous_release_version})",
+            # )
+            return None
 
         return (
             release_version_to_image_tag(previous_release_version),
@@ -226,7 +231,7 @@ class AncestorImageResolutionBase:
 
     def _resolve_image_tag_of_previous_release_from_current(
         self, context: str
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str] | None:
         # Even though we are on main we might be in an older state, pick the
         # latest release that was before our current version.
         current_version = MzVersion.parse_cargo()
@@ -239,11 +244,13 @@ class AncestorImageResolutionBase:
         )
 
         if override_commit is not None:
+            # TODO(def-): This currently doesn't work because we only tag the Optimized builds with tags like v0.164.0-dev.0--main.gc28d0061a6c9e63ee50a5f555c5d90373d006686, but not the Release builds we should use
             # use the commit instead of the latest release
-            return (
-                commit_to_image_tag(override_commit),
-                f"commit override instead of latest release ({previous_published_version})",
-            )
+            # return (
+            #     commit_to_image_tag(override_commit),
+            #     f"commit override instead of latest release ({previous_published_version})",
+            # )
+            return None
 
         return (
             release_version_to_image_tag(previous_published_version),
@@ -254,7 +261,7 @@ class AncestorImageResolutionBase:
         self,
         context_when_image_of_commit_exists: str,
         context_when_falling_back_to_latest: str,
-    ) -> tuple[str, str]:
+    ) -> tuple[str, str] | None:
         # If the current PR has a known and accepted regression, don't compare
         # against merge base of it
         override_commit = self._get_override_commit_instead_of_version(
@@ -263,10 +270,12 @@ class AncestorImageResolutionBase:
         common_ancestor_commit = buildkite.get_merge_base()
 
         if override_commit is not None:
-            return (
-                commit_to_image_tag(override_commit),
-                f"commit override instead of merge base ({common_ancestor_commit})",
-            )
+            # TODO(def-): This currently doesn't work because we only tag the Optimized builds with tags like v0.164.0-dev.0--main.gc28d0061a6c9e63ee50a5f555c5d90373d006686, but not the Release builds we should use
+            # return (
+            #     commit_to_image_tag(override_commit),
+            #     f"commit override instead of merge base ({common_ancestor_commit})",
+            # )
+            return None
 
         if image_of_commit_exists(common_ancestor_commit):
             return (
@@ -281,7 +290,7 @@ class AncestorImageResolutionBase:
 
 
 class AncestorImageResolutionLocal(AncestorImageResolutionBase):
-    def resolve_image_tag(self) -> tuple[str, str]:
+    def resolve_image_tag(self) -> tuple[str, str] | None:
         if build_context.is_on_release_version():
             return self._resolve_image_tag_of_previous_release(
                 "previous minor release because on local release branch",
@@ -299,7 +308,7 @@ class AncestorImageResolutionLocal(AncestorImageResolutionBase):
 
 
 class AncestorImageResolutionInBuildkite(AncestorImageResolutionBase):
-    def resolve_image_tag(self) -> tuple[str, str]:
+    def resolve_image_tag(self) -> tuple[str, str] | None:
         if buildkite.is_in_pull_request():
             return self._resolve_image_tag_of_merge_base(
                 "merge base of pull request",

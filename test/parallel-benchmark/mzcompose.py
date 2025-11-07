@@ -70,7 +70,7 @@ from materialize.version_list import resolve_ancestor_image_tag
 PARALLEL_BENCHMARK_FRAMEWORK_VERSION = "1.2.0"
 
 
-def known_regression(scenario: str, other_tag: str) -> bool:
+def known_regression(scenario: str, other_tag: str | None) -> bool:
     return False
 
 
@@ -567,7 +567,7 @@ def less_than_is_regression(stat: str) -> bool:
 def check_regressions(
     this_stats: dict[Scenario, dict[str, Statistics]],
     other_stats: dict[Scenario, dict[str, Statistics]],
-    other_tag: str,
+    other_tag: str | None,
 ) -> list[TestFailureDetails]:
     failures: list[TestFailureDetails] = []
 
@@ -641,7 +641,7 @@ def check_regressions(
     return failures
 
 
-def resolve_tag(tag: str) -> str:
+def resolve_tag(tag: str) -> str | None:
     if tag == "common-ancestor":
         # TODO: We probably will need overrides too
         return resolve_ancestor_image_tag({})
