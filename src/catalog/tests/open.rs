@@ -19,6 +19,7 @@ use mz_catalog::durable::{
     DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
     MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, test_bootstrap_args,
 };
+use mz_catalog_protos::objects::{SettingKey, SettingValue};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -488,7 +489,7 @@ async fn test_persist_open() {
 async fn test_open(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
 
-    let (snapshot, audit_log) = {
+    let (mut snapshot, audit_log) = {
         let mut state = state_builder
             .clone()
             .unwrap_build()
@@ -531,6 +532,18 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .await
             .unwrap()
             .0;
+
+        // Because of the ad-hoc migration for `migration_version`, reopening the catalog does
+        // change this version currently.
+        // TODO: remove this once we only support upgrades from version >= 0.164
+        snapshot.settings.insert(
+            SettingKey {
+                name: "migration_version".into(),
+            },
+            SettingValue {
+                value: "0.0.0".into(),
+            },
+        );
 
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);

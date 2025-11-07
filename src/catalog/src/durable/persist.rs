@@ -1269,6 +1269,18 @@ impl UnopenedPersistCatalogState {
         let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
+
+            // Ad-hoc migration: Initialize the `migration_version` expected by adapter to be
+            // present in existing catalogs.
+            //
+            // Note: Need to exclude read-only catalog mode here, because in that mode all
+            // transactions are expected to be no-ops.
+            // TODO: remove this once we only support upgrades from version >= 0.164
+            if txn.get_setting("migration_version".into()).is_none() && mode != Mode::Readonly {
+                let old_version = txn.get_catalog_content_version();
+                txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
+            }
+
             txn.set_catalog_content_version(catalog_content_version)?;
             txn
         } else {

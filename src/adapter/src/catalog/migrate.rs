@@ -42,6 +42,29 @@ use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
 
+/// Catalog key of the `migration_version` setting.
+///
+/// The `migration_version` tracks the version of the binary that last successfully performed and
+/// committed all the catalog migrations (including builtin schema migrations). It can be used by
+/// migration logic to identify the source version from which to migrate.
+///
+/// Note that the durable catalog also knows a `catalog_content_version`. That doesn't work for
+/// this purpose as it is already bumped to the current binary version when the catalog is opened
+/// in writable mode, before any migrations have run.
+const MIGRATION_VERSION_KEY: &str = "migration_version";
+
+pub(crate) fn get_migration_version(txn: &Transaction<'_>) -> Option<Version> {
+    txn.get_setting(MIGRATION_VERSION_KEY.into())
+        .map(|s| s.parse().expect("valid migration version"))
+}
+
+pub(crate) fn set_migration_version(
+    txn: &mut Transaction<'_>,
+    version: Version,
+) -> Result<(), mz_catalog::durable::CatalogError> {
+    txn.set_setting(MIGRATION_VERSION_KEY.into(), Some(version.to_string()))
+}
+
 fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
 where
     F: for<'a> FnMut(
@@ -108,11 +131,7 @@ pub(crate) async fn migrate(
     _now: NowFn,
     _boot_ts: Timestamp,
 ) -> Result<MigrateResult, anyhow::Error> {
-    let catalog_version = tx.get_catalog_content_version();
-    let catalog_version = match catalog_version {
-        Some(v) => Version::parse(v)?,
-        None => Version::new(0, 0, 0),
-    };
+    let catalog_version = get_migration_version(tx).unwrap_or(Version::new(0, 0, 0));
 
     info!(
         "migrating statements from catalog version {:?}",
