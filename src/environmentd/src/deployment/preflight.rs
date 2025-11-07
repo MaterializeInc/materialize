@@ -15,11 +15,13 @@ use std::time::Duration;
 
 use mz_adapter::ResultExt;
 use mz_catalog::durable::{BootstrapArgs, CatalogError, Metrics, OpenableDurableCatalogState};
+use mz_controller_types::ReplicaId;
 use mz_ore::channel::trigger;
 use mz_ore::exit;
 use mz_ore::halt;
+use mz_ore::str::separated;
 use mz_persist_client::PersistClient;
-use mz_repr::Timestamp;
+use mz_repr::{CatalogItemId, Timestamp};
 use mz_sql::catalog::EnvironmentId;
 use tracing::info;
 
@@ -227,6 +229,9 @@ pub async fn preflight_0dt(
 /// Check if there have been any DDL that create new collections or replicas,
 /// restart in read-only mode if so, in order to pick up those new items and
 /// start hydrating them before cutting over.
+///
+/// We do this by checking if new IDs that were allocated after the preflight
+/// check began were committed to the catalog.
 async fn check_ddl_changes(
     boot_ts: Timestamp,
     persist_client: PersistClient,
@@ -237,26 +242,75 @@ async fn check_ddl_changes(
     initial_next_user_item_id: u64,
     initial_next_replica_id: u64,
 ) {
-    let (next_user_item_id, next_replica_id) = get_next_ids(
-        boot_ts,
-        persist_client.clone(),
-        environment_id.clone(),
-        deploy_generation,
-        Arc::clone(&catalog_metrics),
-        bootstrap_args.clone(),
+    let openable_adapter_storage = mz_catalog::durable::persist_backed_catalog_state(
+        persist_client,
+        environment_id.organization_id(),
+        BUILD_INFO.semver_version(),
+        Some(deploy_generation),
+        catalog_metrics,
     )
-    .await;
+    .await
+    .expect("incompatible catalog/persist version");
 
-    tracing::info!(
-        %initial_next_user_item_id,
-        %initial_next_replica_id,
-        %next_user_item_id,
-        %next_replica_id,
-        "checking if there was any relevant DDL");
+    let (mut catalog, _audit_logs) = openable_adapter_storage
+        .open_savepoint(boot_ts, &bootstrap_args)
+        .await
+        .unwrap_or_terminate("can open in savepoint mode");
 
-    if next_user_item_id > initial_next_user_item_id || next_replica_id > initial_next_replica_id {
-        halt!("there have been DDL that we need to react to; rebooting in read-only mode")
+    let tx = catalog
+        .transaction()
+        .await
+        .unwrap_or_terminate("unexpected error while getting transaction");
+
+    // We must explicitly check the catalog for these IDs since IDs can be
+    // allocated during sequencing/planning but not yet committed to the catalog.
+    // Furthermore, these IDs might never be committed to the catalog because
+    // their sequencing has been aborted.
+    let new_replicas = tx
+        .get_cluster_replicas()
+        .filter_map(|replica| match replica.replica_id {
+            ReplicaId::User(id) if id >= initial_next_replica_id => Some(replica),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let new_objects = tx
+        .get_items()
+        .filter_map(|item| match item.id {
+            CatalogItemId::User(id) if id >= initial_next_user_item_id => Some(item),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    if new_replicas.is_empty() && new_objects.is_empty() {
+        return;
     }
+
+    let mut info_parts = Vec::new();
+
+    if !new_replicas.is_empty() {
+        let replicas = new_replicas.iter().map(|r| {
+            format!(
+                "{{replica_id: {}, replica_name: {}, cluster_id: {}}}",
+                r.replica_id, r.name, r.cluster_id
+            )
+        });
+        info_parts.push(format!("New replicas: [{}]", separated(", ", replicas)));
+    }
+
+    if !new_objects.is_empty() {
+        let objects = new_objects
+            .iter()
+            .map(|o| format!("{{object_id: {}, object_name: {}}}", o.id, o.name));
+        info_parts.push(format!("New objects: [{}]", separated(", ", objects)));
+    }
+
+    let extra_info = separated(". ", info_parts);
+
+    halt!(
+        "there have been DDL that we need to react to; rebooting in read-only mode. {}",
+        extra_info
+    )
 }
 
 /// Gets and returns the next user item ID and user replica ID that would be
