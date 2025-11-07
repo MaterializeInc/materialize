@@ -537,7 +537,8 @@ mod turmoil_tests {
 
         let mut sim = turmoil::Builder::new()
             .enable_random_order()
-            .build_with_rng(Box::new(rng.clone()));
+            .rng_seed(rng.r#gen())
+            .build();
 
         let processes: Vec<_> = (0..NUM_PROCESSES).map(|i| format!("process-{i}")).collect();
         let addresses: Vec<_> = processes

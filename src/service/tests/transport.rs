@@ -20,8 +20,6 @@ use mz_ore::netio::Listener;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
 use mz_service::transport::{self, ChannelHandler, Message, NoopMetrics};
-use rand::SeedableRng;
-use rand::rngs::SmallRng;
 use semver::Version;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, oneshot};
@@ -42,11 +40,11 @@ fn setup() -> turmoil::Sim<'static> {
         .unwrap_or_else(rand::random);
 
     info!("initializing rng with seed {seed}");
-    let rng = SmallRng::seed_from_u64(seed);
 
     turmoil::Builder::new()
         .enable_random_order()
-        .build_with_rng(Box::new(rng.clone()))
+        .rng_seed(seed)
+        .build()
 }
 
 /// Helper for connecting to a CTP server that retries until it succeeds.
