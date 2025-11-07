@@ -9,9 +9,10 @@
 from textwrap import dedent
 
 from materialize.checks.actions import Testdrive
-from materialize.checks.checks import Check
+from materialize.checks.checks import Check, supports_forced_migrations
 
 
+@supports_forced_migrations(False)
 class StatementLogging(Check):
     def initialize(self) -> Testdrive:
         return Testdrive(

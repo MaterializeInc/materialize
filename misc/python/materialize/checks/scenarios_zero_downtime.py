@@ -79,6 +79,9 @@ class ZeroDowntimeRestartEntireMz(Scenario):
 
 
 class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
+    def does_forced_migrations(self) -> bool:
+        return True
+
     def actions(self) -> list[Action]:
         system_parameter_defaults = get_default_system_parameters()
         return [

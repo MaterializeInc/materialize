@@ -27,6 +27,7 @@ class Check:
     # we can change the value for the entire class in the decorator
     enabled: bool = True
     externally_idempotent: bool = True
+    supports_forced_migrations: bool = True
 
     def __init__(self, base_version: MzVersion, rng: Random | None) -> None:
         self.base_version = base_version
@@ -114,6 +115,14 @@ def disabled(ignore_reason: str):
 def externally_idempotent(externally_idempotent: bool = True):
     def decorator(cls):
         cls.externally_idempotent = externally_idempotent
+        return cls
+
+    return decorator
+
+
+def supports_forced_migrations(supports_forced_migrations: bool = True):
+    def decorator(cls):
+        cls.supports_forced_migrations = supports_forced_migrations
         return cls
 
     return decorator
