@@ -117,10 +117,10 @@ pub async fn preflight_0dt(
                 .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
             let mut should_skip_catchup = false;
-
             loop {
                 tokio::select! {
                     biased;
+
                     () = &mut skip_catchup => {
                         info!("skipping waiting for deployment to catch up due to administrator request");
                         should_skip_catchup = true;
@@ -225,11 +225,12 @@ pub async fn preflight_0dt(
         exit!(0, "this deployment has been fenced out");
     }
 }
+
 /// Check if there have been any DDL that create new collections or replicas,
 /// restart in read-only mode if so, in order to pick up those new items and
 /// start hydrating them before cutting over.
 ///
-/// We do this by checking if new IDs that need to be allocated when the preflight
+/// We do this by checking if new IDs that were allocated after the preflight
 /// check began were committed to the catalog.
 async fn check_ddl_changes(
     boot_ts: Timestamp,
@@ -263,6 +264,8 @@ async fn check_ddl_changes(
 
     // We must explicitly check the catalog for these IDs since IDs can be
     // allocated during sequencing/planning but not yet committed to the catalog.
+    // Furthermore, these IDs might never be committed to the catalog because
+    // their sequencing has been aborted.
     let new_replicas = tx
         .get_cluster_replicas()
         .filter_map(|replica| match replica.replica_id {
@@ -279,39 +282,35 @@ async fn check_ddl_changes(
         })
         .collect::<Vec<_>>();
 
-    tracing::info!(
-        potential_new_user_item_id=%initial_next_user_item_id,
-        potential_new_replica_id=%initial_next_replica_id,
-        "checking if there have been new IDs committed to the catalog since the DDL check began;"
-    );
-
-    if !new_replicas.is_empty() || !new_objects.is_empty() {
-        let mut info_parts = Vec::new();
-
-        if !new_replicas.is_empty() {
-            let replicas = new_replicas.iter().map(|r| {
-                format!(
-                    "{{replica_id: {}, replica_name: {}, cluster_id: {}}}",
-                    r.replica_id, r.name, r.cluster_id
-                )
-            });
-            info_parts.push(format!("New replicas: [{}]", separated(", ", replicas)));
-        }
-
-        if !new_objects.is_empty() {
-            let objects = new_objects
-                .iter()
-                .map(|o| format!("{{object_id: {}, object_name: {}}}", o.id, o.name));
-            info_parts.push(format!("New objects: [{}]", separated(", ", objects)));
-        }
-
-        let extra_info = separated(". ", info_parts);
-
-        halt!(
-            "there have been DDL that we need to react to; rebooting in read-only mode. {}",
-            extra_info
-        )
+    if new_replicas.is_empty() && new_objects.is_empty() {
+        return;
     }
+
+    let mut info_parts = Vec::new();
+
+    if !new_replicas.is_empty() {
+        let replicas = new_replicas.iter().map(|r| {
+            format!(
+                "{{replica_id: {}, replica_name: {}, cluster_id: {}}}",
+                r.replica_id, r.name, r.cluster_id
+            )
+        });
+        info_parts.push(format!("New replicas: [{}]", separated(", ", replicas)));
+    }
+
+    if !new_objects.is_empty() {
+        let objects = new_objects
+            .iter()
+            .map(|o| format!("{{object_id: {}, object_name: {}}}", o.id, o.name));
+        info_parts.push(format!("New objects: [{}]", separated(", ", objects)));
+    }
+
+    let extra_info = separated(". ", info_parts);
+
+    halt!(
+        "there have been DDL that we need to react to; rebooting in read-only mode. {}",
+        extra_info
+    )
 }
 
 /// Gets and returns the next user item ID and user replica ID that would be
