@@ -99,7 +99,7 @@ regex = { version = "1.11.3", optional = true }
 reqwest = { version = "0.11.13", features = ["json"] }
 rlimit = "0.10.2"
 semver = "1.0.27"
-sentry-tracing = "0.38.1"
+sentry-tracing = "0.44.0"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
 shell-words = "1.1.0"

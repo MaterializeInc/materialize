@@ -33,7 +33,7 @@ sysinfo = "0.29.11"
 tokio = "1.44.1"
 tokio-stream = "0.1.17"
 tracing = "0.1.37"
-sentry-tracing = "0.38.1"
+sentry-tracing = "0.44.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
