@@ -350,7 +350,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                 if let Some(mut compute_state) = self.activate_compute() {
                     compute_state.compute_state.traces.maintenance();
                     compute_state.report_frontiers();
-                    compute_state.report_dropped_collections();
                     compute_state.report_metrics();
                     compute_state.check_expiration();
                 }
@@ -644,11 +643,6 @@ impl<'w, A: Allocate + 'static> Worker<'w, A> {
                     logger.log(&peek.as_log_event(false));
                 }
             }
-
-            // Clear the list of dropped collections.
-            // We intended to report their dropping, but the controller does not expect to hear
-            // about them anymore.
-            compute_state.dropped_collections = Default::default();
 
             for (&id, collection) in compute_state.collections.iter_mut() {
                 // Adjust reported frontiers:
