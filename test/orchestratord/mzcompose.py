@@ -1020,9 +1020,8 @@ class ConsoleResources(Modification):
 class AuthenticatorKind(Modification):
     @classmethod
     def values(cls) -> list[Any]:
-        # TODO: Reenable with Password for >= v0.147.7 only
-        # return ["None", "Password"]
-        return ["None"]
+        # Test None, Password (v0.147.7+), and Sasl (v0.147.16+)
+        return ["None", "Password", "Sasl"]
 
     @classmethod
     def default(cls) -> Any:
@@ -1097,6 +1096,74 @@ class AuthenticatorKind(Modification):
 
         time.sleep(1)
         try:
+            # Verify listener configuration
+            listeners_cm = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "cm",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.STDOUT,
+            ).splitlines()
+            listeners_cm = [cm for cm in listeners_cm if "listeners" in cm]
+            if listeners_cm:
+                listeners_json = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        listeners_cm[0],
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.data.listeners\\.json}",
+                    ],
+                    stderr=subprocess.STDOUT,
+                )
+                import json
+
+                listeners = json.loads(listeners_json)
+
+                # Verify SQL listener authenticator
+                sql_auth = (
+                    listeners.get("sql", {})
+                    .get("external", {})
+                    .get("authenticator_kind")
+                )
+                http_auth = (
+                    listeners.get("http", {})
+                    .get("external", {})
+                    .get("authenticator_kind")
+                )
+
+                if self.value == "Sasl":
+                    assert (
+                        sql_auth == "Sasl"
+                    ), f"Expected SQL listener to use Sasl, got {sql_auth}"
+                    assert (
+                        http_auth == "Password"
+                    ), f"Expected HTTP listener to use Password with Sasl mode, got {http_auth}"
+                    print(f"SASL mode verified: SQL={sql_auth}, HTTP={http_auth}")
+                elif self.value == "Password":
+                    assert (
+                        sql_auth == "Password"
+                    ), f"Expected SQL listener to use Password, got {sql_auth}"
+                    assert (
+                        http_auth == "Password"
+                    ), f"Expected HTTP listener to use Password, got {http_auth}"
+                    print(f"Password mode verified: SQL={sql_auth}, HTTP={http_auth}")
+                elif self.value == "None":
+                    assert (
+                        sql_auth == "None"
+                    ), f"Expected SQL listener to use None, got {sql_auth}"
+                    assert (
+                        http_auth == "None"
+                    ), f"Expected HTTP listener to use None, got {http_auth}"
+                    print(f"None mode verified: SQL={sql_auth}, HTTP={http_auth}")
+
             # TODO: Figure out why this is not working in CI, but works locally
             pass
             # psycopg.connect(
