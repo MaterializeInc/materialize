@@ -211,6 +211,14 @@
         "deprecated": false
       },
       {
+        "name": "systemParameterConfigmapName",
+        "type": "String",
+        "description": "The name of a ConfigMap containing system parameters in JSON format.\nThe ConfigMap must contain a `system-params.json` key whose value\nis a valid JSON object containing valid system parameters.\n\nRun `SHOW ALL` in SQL to see a subset of configurable system parameters.\n\nExample ConfigMap:\n```yaml\ndata:\n  system-params.json: |\n    {\n      \"max_connections\": 1000\n    }\n```",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
         "name": "environmentdIamRoleArn",
         "type": "String",
         "description": "{{<warning>}}\nDeprecated.\n\nUse `service_account_annotations` to set \"eks.amazonaws.com/role-arn\" instead.\n{{</warning>}}\n\nIf running in AWS, override the IAM role to use to give\nenvironmentd access to the persist S3 bucket.",

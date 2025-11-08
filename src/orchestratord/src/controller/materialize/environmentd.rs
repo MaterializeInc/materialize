@@ -82,6 +82,14 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 pub const V161: Version = Version::new(0, 161, 0);
 
+static V26_0_0_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 0,
+    minor: 165,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 /// Describes the status of a deployment.
 ///
 /// This is a simplified representation of `DeploymentState`, suitable for
@@ -1233,25 +1241,33 @@ fn create_environmentd_statefulset_object(
     args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
 
     // Add system_param configmap
-    if let Some(ref name) = mz.spec.system_parameter_configmap_name {
-        volumes.push(Volume {
-            name: "system-params".to_string(),
-            config_map: Some(ConfigMapVolumeSource {
-                default_mode: Some(0o400),
-                name: name.to_owned(),
-                items: None,
-                optional: Some(true),
-            }),
-            ..Default::default()
-        });
-        volume_mounts.push(VolumeMount {
-            name: "system-params".to_string(),
-            // The user must write to the `config.json` entry in the config map
-            mount_path: "/etc/materialize/system-params".to_owned(),
-            read_only: Some(true),
-            ..Default::default()
-        });
-        args.push("--config-sync-file-path=/etc/materialize/system-params/config.json".to_string());
+    // This feature was enabled in 0.163 but did not have testing until after 0.164.
+    // 0.165 should work with anything greater than 0.164 including v26 and v25.
+    if mz.meets_minimum_version(&V26_0_0_DEV0) {
+        if let Some(ref name) = mz.spec.system_parameter_configmap_name {
+            volumes.push(Volume {
+                name: "system-params".to_string(),
+                config_map: Some(ConfigMapVolumeSource {
+                    default_mode: Some(0o400),
+                    name: name.to_owned(),
+                    items: None,
+                    optional: Some(true),
+                }),
+                ..Default::default()
+            });
+            volume_mounts.push(VolumeMount {
+                name: "system-params".to_string(),
+                // The user must write to the `system-params.json` entry in the config map
+                mount_path: "/system-params.json".to_owned(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+            args.push(
+                "--config-sync-file-path=/etc/materialize/system-params/system-params.json"
+                    .to_string(),
+            );
+            args.push("--config-sync-loop-interval=1s".to_string());
+        }
     }
 
     // Add Sentry arguments.

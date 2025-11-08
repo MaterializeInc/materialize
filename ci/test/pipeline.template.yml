@@ -623,6 +623,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: dyncfg
+    label: "Dyncfg"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    inputs: [test/dyncfg]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dyncfg
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: secrets-logging
     label: "Secrets Logging"
     depends_on: build-aarch64

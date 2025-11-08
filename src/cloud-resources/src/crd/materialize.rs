@@ -201,15 +201,20 @@ pub mod v1alpha1 {
         #[serde(default)]
         pub environment_id: Uuid,
 
-        // The name of a configmap containing system_parameters in json format
-        // NOTE: The configmap must contain a `config.json` key whose value
-        // is a valid json containing valid system parameters.
-        // ex:
-        // data:
-        //   config.json: |
-        //     {
-        //       "max_connections": 10
-        //     }
+        /// The name of a ConfigMap containing system parameters in JSON format.
+        /// The ConfigMap must contain a `system-params.json` key whose value
+        /// is a valid JSON object containing valid system parameters.
+        ///
+        /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
+        ///
+        /// Example ConfigMap:
+        /// ```yaml
+        /// data:
+        ///   system-params.json: |
+        ///     {
+        ///       "max_connections": 1000
+        ///     }
+        /// ```
         pub system_parameter_configmap_name: Option<String>,
 
         /// The configuration for generating an x509 certificate using cert-manager for balancerd
