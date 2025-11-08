@@ -195,11 +195,11 @@ pub mod v1alpha1 {
         pub environment_id: Uuid,
 
         // The name of a configmap containing system_parameters in json format
-        // NOTE: The configmap must contain a `config.json` key whose value
+        // NOTE: The configmap must contain a `system-params.json` key whose value
         // is a valid json containing valid system parameters.
         // ex:
         // data:
-        //   config.json: |
+        //   system-params.json: |
         //     {
         //       "max_connections": 10
         //     }

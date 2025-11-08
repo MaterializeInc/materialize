@@ -713,6 +713,90 @@ class ConsoleReplicas(Modification):
         retry(check_replicas, 120)
 
 
+class SystemParamConfigMap(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [{"max_connections": 1000}]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            # Create a configmap with system parameters
+            configmap_name = "system-params-test"
+
+            # First create the configmap in the cluster
+            configmap_yaml = f"""
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {configmap_name}
+  namespace: materialize-environment
+data:
+  system-params.json: |
+    {json.dumps(self.value)}
+"""
+            # Apply the configmap (will be done in init/run)
+            definition["system_params_configmap"] = yaml.load(
+                configmap_yaml, Loader=yaml.Loader
+            )
+            # Set the configmap name in the Materialize spec
+            definition["materialize"]["spec"][
+                "systemParameterConfigmapName"
+            ] = configmap_name
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if self.value is None:
+            return
+
+        def check() -> None:
+            environmentd = get_environmentd_data()
+
+            # Check that the volume is mounted
+            volumes = environmentd["items"][0]["spec"]["volumes"]
+            volume_found = False
+            for volume in volumes:
+                if volume.get("name") == "system-params":
+                    assert (
+                        volume.get("configMap") is not None
+                    ), f"Expected configMap in volume, but found {volume}"
+                    assert (
+                        volume["configMap"]["name"] == "system-params-test"
+                    ), f"Expected configmap name system-params-test, but found {volume['configMap']['name']}"
+                    volume_found = True
+                    break
+            assert volume_found, f"Expected to find system-params volume in {volumes}"
+
+            # Check that the volume mount is present
+            volume_mounts = environmentd["items"][0]["spec"]["containers"][0][
+                "volumeMounts"
+            ]
+            volume_mount_found = False
+            for mount in volume_mounts:
+                if mount.get("name") == "system-params":
+                    assert (
+                        mount.get("mountPath") == "/etc/materialize/system-params"
+                    ), f"Expected mount path /etc/materialize/system-params, but found {mount['mountPath']}"
+                    volume_mount_found = True
+                    break
+            assert (
+                volume_mount_found
+            ), f"Expected to find system-params volume mount in {volume_mounts}"
+
+            # Check that the config-sync-file-path arg is present
+            args = environmentd["items"][0]["spec"]["containers"][0]["args"]
+            expected_arg = "--config-sync-file-path=/etc/materialize/system-params/system-params.json"
+            assert any(
+                expected_arg in arg for arg in args
+            ), f"Expected {expected_arg} in environmentd args, but only found: {args}"
+            # TODO, validate that via SQL that the values have been updated
+            # this won't work due to a known issue with psycopg connect failing in CI.
+
+        retry(check, 240)
+
+
 def validate_cluster_replica_size(
     size: dict[str, Any], swap_enabled: bool, storage_class_name_set: bool
 ):
@@ -1759,6 +1843,8 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
     ]
     if "materialize2" in definition:
         defs.append(definition["materialize2"])
+    if "system_params_configmap" in definition:
+        defs.append(definition["system_params_configmap"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
