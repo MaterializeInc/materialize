@@ -680,8 +680,9 @@ impl Catalog {
 
                 let mut existing_role = state.get_role(&id).clone();
                 let password = attributes.password.clone();
-                let non_default_password_hash_iterations =
-                    attributes.non_default_password_hash_iterations.clone();
+                let scram_iterations = attributes
+                    .scram_iterations
+                    .unwrap_or(state.system_config().scram_iterations());
                 existing_role.attributes = attributes.into();
                 existing_role.vars = vars;
                 let password_action = if nopassword {
@@ -689,7 +690,7 @@ impl Catalog {
                 } else if let Some(password) = password {
                     PasswordAction::Set(PasswordConfig {
                         password,
-                        non_default_password_hash_iterations,
+                        scram_iterations,
                     })
                 } else {
                     PasswordAction::NoChange

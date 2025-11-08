@@ -1201,7 +1201,7 @@ impl SystemVars {
             &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
             &FORCE_SOURCE_TABLE_SYNTAX,
             &OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD,
-            &PASSWORD_HASH_ITERATIONS,
+            &SCRAM_ITERATIONS,
         ];
 
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
@@ -1890,8 +1890,8 @@ impl SystemVars {
         ))
     }
 
-    pub fn default_password_hash_iterations(&self) -> NonZeroU32 {
-        *self.expect_value(&PASSWORD_HASH_ITERATIONS)
+    pub fn scram_iterations(&self) -> NonZeroU32 {
+        *self.expect_value(&SCRAM_ITERATIONS)
     }
 
     pub fn dyncfg_updates(&self) -> ConfigUpdates {

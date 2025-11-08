@@ -3530,11 +3530,8 @@ impl Coordinator {
 
                 if let Some(password) = attrs.password {
                     attributes.password = Some(password);
-                    attributes.non_default_password_hash_iterations = Some(
-                        self.catalog()
-                            .system_config()
-                            .default_password_hash_iterations(),
-                    )
+                    attributes.scram_iterations =
+                        Some(self.catalog().system_config().scram_iterations())
                 }
 
                 if let Some(superuser) = attrs.superuser {

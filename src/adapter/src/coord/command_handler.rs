@@ -366,11 +366,7 @@ impl Coordinator {
                 let opts = mz_auth::hash::mock_sasl_challenge(
                     &role_name,
                     &mock_nonce,
-                    &Some(
-                        self.catalog()
-                            .system_config()
-                            .default_password_hash_iterations(),
-                    ),
+                    &self.catalog().system_config().scram_iterations(),
                 );
                 let _ = tx.send(Ok(SASLChallengeResponse {
                     iteration_count: mz_ore::cast::u32_to_usize(opts.iterations.get()),

@@ -687,8 +687,8 @@ pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     true,
 );
 
-pub static PASSWORD_HASH_ITERATIONS: VarDefinition = VarDefinition::new(
-    "password_hash_iterations",
+pub static SCRAM_ITERATIONS: VarDefinition = VarDefinition::new(
+    "scram_iterations",
     // / The default iteration count as suggested by
     // / <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
     value!(NonZeroU32; NonZeroU32::new(600_000).unwrap()),

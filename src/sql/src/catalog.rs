@@ -493,7 +493,7 @@ pub struct PasswordConfig {
     /// The Password.
     pub password: Password,
     /// a non default iteration count for hashing the password.
-    pub non_default_password_hash_iterations: Option<NonZeroU32>,
+    pub scram_iterations: NonZeroU32,
 }
 
 /// A modification of a role password in the catalog
@@ -517,8 +517,8 @@ pub struct RoleAttributesRaw {
     pub inherit: bool,
     /// The raw password of the role. This is for self managed auth, not cloud.
     pub password: Option<Password>,
-    /// An optoinal override of the hash iterations used to securely store passwords. This is for self-managed auth
-    pub non_default_password_hash_iterations: Option<NonZeroU32>,
+    /// Hash iterations used to securely store passwords. This is for self-managed auth
+    pub scram_iterations: Option<NonZeroU32>,
     /// Whether or not this user is a superuser.
     pub superuser: Option<bool>,
     /// Whether this role is login
@@ -546,7 +546,7 @@ impl RoleAttributesRaw {
         RoleAttributesRaw {
             inherit: true,
             password: None,
-            non_default_password_hash_iterations: None,
+            scram_iterations: None,
             superuser: None,
             login: None,
             _private: (),
@@ -617,7 +617,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
         RoleAttributesRaw {
             inherit,
             password: None,
-            non_default_password_hash_iterations: None,
+            scram_iterations: None,
             superuser,
             login,
             _private: (),
@@ -630,7 +630,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
         PlannedRoleAttributes {
             inherit,
             password,
-            non_default_password_hash_iterations,
+            scram_iterations,
             superuser,
             login,
             ..
@@ -640,7 +640,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
         RoleAttributesRaw {
             inherit: inherit.unwrap_or(default_attributes.inherit),
             password,
-            non_default_password_hash_iterations,
+            scram_iterations,
             superuser,
             login,
             _private: (),

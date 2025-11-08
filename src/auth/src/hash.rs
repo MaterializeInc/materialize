@@ -23,10 +23,6 @@ const DEFAULT_SALT_SIZE: usize = 32;
 
 const SHA256_OUTPUT_LEN: usize = 32;
 
-/// The default iteration count as suggested by
-/// <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
-const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(600_000).unwrap();
-
 /// The options for hashing a password
 #[derive(Debug, PartialEq)]
 pub struct HashOpts {
@@ -72,20 +68,22 @@ impl Display for HashError {
 /// and a random salt.
 pub fn hash_password(
     password: &Password,
-    iterations: &Option<NonZeroU32>,
+    iterations: &NonZeroU32,
 ) -> Result<PasswordHash, HashError> {
     let mut salt = [0u8; DEFAULT_SALT_SIZE];
     openssl::rand::rand_bytes(&mut salt).map_err(HashError::Openssl)?;
-    let iterations = iterations.unwrap_or(DEFAULT_ITERATIONS);
 
     let hash = hash_password_inner(
-        &HashOpts { iterations, salt },
+        &HashOpts {
+            iterations: iterations.to_owned(),
+            salt,
+        },
         password.to_string().as_bytes(),
     )?;
 
     Ok(PasswordHash {
         salt,
-        iterations,
+        iterations: iterations.to_owned(),
         hash,
     })
 }
@@ -116,10 +114,7 @@ pub fn hash_password_with_opts(
 /// Hashes a password using PBKDF2 with SHA256,
 /// and returns it in the SCRAM-SHA-256 format.
 /// The format is SCRAM-SHA-256$<iterations>:<salt>$<stored_key>:<server_key>
-pub fn scram256_hash(
-    password: &Password,
-    iterations: &Option<NonZeroU32>,
-) -> Result<String, HashError> {
+pub fn scram256_hash(password: &Password, iterations: &NonZeroU32) -> Result<String, HashError> {
     let hashed_password = hash_password(password, iterations)?;
     Ok(scram256_hash_inner(hashed_password).to_string())
 }
@@ -211,18 +206,14 @@ fn generate_signature(key: &[u8], message: &str) -> Result<Vec<u8>, VerifyError>
 // Generate a mock challenge based on the username and client nonce
 // We do this so that we can present a deterministic challenge even for
 // nonexistent users, to avoid user enumeration attacks.
-pub fn mock_sasl_challenge(
-    username: &str,
-    mock_nonce: &str,
-    iterations: &Option<NonZeroU32>,
-) -> HashOpts {
+pub fn mock_sasl_challenge(username: &str, mock_nonce: &str, iterations: &NonZeroU32) -> HashOpts {
     let mut buf = Vec::with_capacity(username.len() + mock_nonce.len());
     buf.extend_from_slice(username.as_bytes());
     buf.extend_from_slice(mock_nonce.as_bytes());
     let digest = openssl::sha::sha256(&buf);
 
     HashOpts {
-        iterations: iterations.unwrap_or(DEFAULT_ITERATIONS),
+        iterations: iterations.to_owned(),
         salt: digest,
     }
 }
@@ -330,13 +321,15 @@ mod tests {
 
     use super::*;
 
+    const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(60).expect("Trust me on this");
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
     fn test_hash_password() {
         let password = "password".to_string();
         let iterations = NonZeroU32::new(100).expect("Trust me on this");
         let hashed_password =
-            hash_password(&password.into(), &Some(iterations)).expect("Failed to hash password");
+            hash_password(&password.into(), &iterations).expect("Failed to hash password");
         assert_eq!(hashed_password.iterations, iterations);
         assert_eq!(hashed_password.salt.len(), DEFAULT_SALT_SIZE);
         assert_eq!(hashed_password.hash.len(), SHA256_OUTPUT_LEN);
@@ -346,7 +339,8 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
     fn test_scram256_hash() {
         let password = "password".into();
-        let scram_hash = scram256_hash(&password, &None).expect("Failed to hash password");
+        let scram_hash =
+            scram256_hash(&password, &DEFAULT_ITERATIONS).expect("Failed to hash password");
 
         let res = scram256_verify(&password, &scram_hash);
         assert!(res.is_ok());
@@ -362,7 +356,10 @@ mod tests {
 
         assert!(opts.is_ok());
         let opts = opts.unwrap();
-        assert_eq!(opts.iterations, DEFAULT_ITERATIONS);
+        assert_eq!(
+            opts.iterations,
+            NonZeroU32::new(600_000).expect("known valid")
+        );
         assert_eq!(opts.salt.len(), DEFAULT_SALT_SIZE);
         let decoded_salt = BASE64_STANDARD.decode(salt).expect("Failed to decode salt");
         assert_eq!(opts.salt, decoded_salt.as_ref());
@@ -373,8 +370,8 @@ mod tests {
     fn test_mock_sasl_challenge() {
         let username = "alice";
         let mock = "cnonce";
-        let opts1 = mock_sasl_challenge(username, mock, &None);
-        let opts2 = mock_sasl_challenge(username, mock, &None);
+        let opts1 = mock_sasl_challenge(username, mock, &DEFAULT_ITERATIONS);
+        let opts2 = mock_sasl_challenge(username, mock, &DEFAULT_ITERATIONS);
         assert_eq!(opts1, opts2);
     }
 
@@ -382,7 +379,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn test_sasl_verify_success() {
         let password: Password = "password".into();
-        let hashed_password = scram256_hash(&password, &None).expect("hash password");
+        let hashed_password = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash password");
         let auth_message = "n=user,r=clientnonce,s=somesalt"; // arbitrary auth message
 
         // Parse client_key and server_key from the SCRAM hash
@@ -436,7 +433,7 @@ mod tests {
     #[cfg_attr(miri, ignore)]
     fn test_sasl_verify_invalid_proof() {
         let password: Password = "password".into();
-        let hashed_password = scram256_hash(&password, &None).expect("hash password");
+        let hashed_password = scram256_hash(&password, &DEFAULT_ITERATIONS).expect("hash password");
         let auth_message = "n=user,r=clientnonce,s=somesalt";
         // Provide an obviously invalid base64 proof (different size / random)
         let bad_proof = BASE64_STANDARD.encode([0u8; 32]);

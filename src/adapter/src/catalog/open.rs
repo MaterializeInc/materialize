@@ -12,6 +12,7 @@
 mod builtin_item_migration;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -324,12 +325,14 @@ impl Catalog {
             if let Some(password) = config.external_login_password_mz_system {
                 let role_auth = RoleAuth {
                     role_id: MZ_SYSTEM_ROLE_ID,
-                    // The external login password for mz_system should use
-                    // the default hash iterations as that is a known secure
-                    // setting.
-                    password_hash: Some(scram256_hash(&password, &None).map_err(|_| {
-                        AdapterError::Internal("Failed to hash mz_system password.".to_owned())
-                    })?),
+                    // builtin roles should always use a secure scram iteration
+                    // <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
+                    password_hash: Some(
+                        scram256_hash(&password, &NonZeroU32::new(600_000).expect("known valid"))
+                            .map_err(|_| {
+                            AdapterError::Internal("Failed to hash mz_system password.".to_owned())
+                        })?,
+                    ),
                     updated_at: SYSTEM_TIME(),
                 };
                 state

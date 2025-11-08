@@ -4338,7 +4338,7 @@ pub enum PlannedAlterRoleOption {
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
     pub password: Option<Password>,
-    pub non_default_password_hash_iterations: Option<NonZeroU32>,
+    pub scram_iterations: Option<NonZeroU32>,
     /// `nopassword` is set to true if the password is from the parser is None.
     /// This is semantically different than not supplying a password at all,
     /// to allow for unsetting a password.
@@ -4354,7 +4354,7 @@ fn plan_role_attributes(
     let mut planned_attributes = PlannedRoleAttributes {
         inherit: None,
         password: None,
-        non_default_password_hash_iterations: None,
+        scram_iterations: None,
         superuser: None,
         login: None,
         nopassword: None,
@@ -4397,8 +4397,8 @@ fn plan_role_attributes(
             RoleAttribute::Password(password) => {
                 if let Some(password) = password {
                     planned_attributes.password = Some(password.into());
-                    planned_attributes.non_default_password_hash_iterations =
-                        Some(scx.catalog.system_vars().default_password_hash_iterations())
+                    planned_attributes.scram_iterations =
+                        Some(scx.catalog.system_vars().scram_iterations())
                 } else {
                     planned_attributes.nopassword = Some(true);
                 }

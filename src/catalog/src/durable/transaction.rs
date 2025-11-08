@@ -359,7 +359,9 @@ impl<'a> Transaction<'a> {
         if let Some(ref password) = attributes.password {
             let hash = mz_auth::hash::scram256_hash(
                 password,
-                &attributes.non_default_password_hash_iterations,
+                &attributes
+                    .scram_iterations
+                    .expect("If there's a password there must be hash iterations"),
             )
             .expect("password hash should be valid");
             match self.role_auth.insert(
@@ -1494,7 +1496,7 @@ impl<'a> Transaction<'a> {
                 PasswordAction::Set(new_password) => {
                     let hash = mz_auth::hash::scram256_hash(
                         &new_password.password,
-                        &new_password.non_default_password_hash_iterations,
+                        &new_password.scram_iterations,
                     )
                     .expect("password hash should be valid");
                     let value = RoleAuthValue {
