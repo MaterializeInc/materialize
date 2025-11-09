@@ -388,7 +388,14 @@ case "$cmd" in
             args+=(--volume "$GIT_ROOT_DIR:$GIT_ROOT_DIR")
         fi
         rm -f "$cid_file"
-        docker run "${args[@]}" "$image_registry/ci-builder:$tag" eatmydata "${docker_command[@]}"
+        image="$image_registry/ci-builder:$tag"
+        # Try downloading the image a few times in case of registry flakiness
+        if [[ "${CI:-}" ]]; then
+            if ! docker inspect "$image" > /dev/null 2>&1; then
+                docker pull "$image" || (sleep 3 && docker pull "$image") || (sleep 3 && docker pull "$image") || sleep 3
+            fi
+        fi
+        docker run "${args[@]}" "$image" eatmydata "${docker_command[@]}"
         ;;
     root-shell)
         docker exec --interactive --tty --user 0:0 "$(<"$cid_file")" eatmydata ci/builder/root-shell.sh

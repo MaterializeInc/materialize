@@ -45,9 +45,6 @@ mkdir -m 777 "$cores"
 # Ignore SIGABRT
 sudo sysctl -w kernel.core_pattern="|/usr/bin/ci-filter-core.sh %s $cores/core.%E.%t"
 
-# 3 attempts to download the ci-builder
-bin/ci-builder run "$builder" echo || bin/ci-builder run "$builder" echo || bin/ci-builder run "$builder" echo
-
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
 # do its own dependency management.
