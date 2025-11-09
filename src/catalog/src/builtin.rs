@@ -61,7 +61,6 @@ use mz_storage_client::healthcheck::{
     REPLICA_STATUS_HISTORY_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
-use rand::Rng;
 use serde::Serialize;
 
 use crate::durable::objects::SystemObjectDescription;
@@ -382,8 +381,7 @@ impl Fingerprint for &BuiltinTable {
                 format!("{}{}", self.desc.fingerprint(), whitespace)
             }
             Some((UnsafeBuiltinTableFingerprintWhitespace::Half, whitespace)) => {
-                let mut rng = rand::thread_rng();
-                let migrate: bool = rng.r#gen();
+                let migrate: bool = rand::random();
                 if migrate {
                     format!("{}{}", self.desc.fingerprint(), whitespace)
                 } else {

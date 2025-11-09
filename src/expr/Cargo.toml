@@ -77,7 +77,7 @@ insta = "1.43"
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
-rand = "0.8.5"
+rand = "0.9.2"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

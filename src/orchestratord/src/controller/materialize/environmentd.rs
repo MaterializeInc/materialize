@@ -37,7 +37,6 @@ use mz_server_core::listeners::{
     AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
     ListenersConfig, SqlListenerConfig,
 };
-use rand::{Rng, thread_rng};
 use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
@@ -222,7 +221,7 @@ impl Resources {
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
 
-        let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
+        let retry_action = Action::requeue(Duration::from_secs(rand::random_range(5..10)));
 
         let statefulset = get_resource(
             &statefulset_api,
@@ -365,7 +364,7 @@ impl Resources {
         namespace: &str,
     ) -> Result<Option<Action>, Error> {
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
-        let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
+        let retry_action = Action::requeue(Duration::from_secs(rand::random_range(5..10)));
 
         let promote_url = reqwest::Url::parse(&format!(
             "{}/api/leader/promote",
