@@ -80,7 +80,7 @@ mz-storage-types = { path = "../storage-types" }
 mz-tracing = { path = "../tracing", optional = true }
 nix = { version = "0.30.1", features = ["signal"] }
 num_cpus = "1.17.0"
-openssl = { version = "0.10.74", features = ["vendored"] }
+openssl = { version = "0.10.75", features = ["vendored"] }
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.24.0", features = ["trace"] }
 opentelemetry_sdk = { version = "0.24.1", features = ["rt-tokio"] }

@@ -31,7 +31,7 @@ mz-pgwire-common = { path = "../pgwire-common" }
 mz-repr = { path = "../repr" }
 mz-server-core = { path = "../server-core" }
 mz-sql = { path = "../sql" }
-openssl = { version = "0.10.74", features = ["vendored"] }
+openssl = { version = "0.10.75", features = ["vendored"] }
 postgres = { version = "0.19.5" }
 tokio = "1.44.1"
 tokio-stream = "0.1.17"

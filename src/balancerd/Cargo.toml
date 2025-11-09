@@ -39,7 +39,7 @@ mz-server-core = { path = "../server-core" }
 mz-tracing = { path = "../tracing" }
 mz-pgwire-common = { path = "../pgwire-common" }
 num_cpus = "1.17.0"
-openssl = { version = "0.10.74", features = ["vendored"] }
+openssl = { version = "0.10.75", features = ["vendored"] }
 prometheus = { version = "0.14.0", default-features = false }
 proxy-header = "0.1.2"
 semver = "1.0.27"
