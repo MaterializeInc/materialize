@@ -1677,16 +1677,57 @@ class Composition:
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
 
-    def cloud_hostname(self, quiet: bool = False) -> str:
-        """Uses the mz command line tool to get the hostname of the cloud instance"""
+    def cloud_hostname(
+        self, quiet: bool = False, timeout_secs: int = 180, poll_interval: float = 2.0
+    ) -> str:
+        """Uses the mz command line tool to get the hostname of the cloud instance, waiting until the region is ready."""
         if not quiet:
             print("Obtaining hostname of cloud instance ...")
-        region_status = self.run("mz", "region", "show", capture=True, rm=True)
-        sql_line = region_status.stdout.split("\n")[2]
-        cloud_url = sql_line.split("\t")[1].strip()
-        # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
-        cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
-        return str(cloud_hostname)
+
+        deadline = time.time() + timeout_secs
+        last_msg = ""
+
+        while time.time() < deadline:
+            proc = self.run(
+                "mz",
+                "region",
+                "show",
+                capture=True,
+                capture_stderr=True,
+                rm=True,
+                check=False,
+                silent=True,
+            )
+            out = proc.stdout or ""
+            err = proc.stderr or ""
+
+            if proc.returncode == 0:
+                lines = out.splitlines()
+                if len(lines) >= 3:
+                    line = lines[2]
+                    parts = line.split("\t")
+                    if len(parts) >= 2:
+                        cloud_url = parts[1].strip()
+                        # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
+                        hostname = urllib.parse.urlparse(
+                            "https://" + cloud_url
+                        ).hostname
+                        if hostname:
+                            return str(hostname)
+                        else:
+                            last_msg = f"failed to parse hostname from URL: {cloud_url}"
+                    else:
+                        last_msg = f"unexpected region show output (no tab in line 3): {line!r}"
+                else:
+                    last_msg = f"unexpected region show output (too few lines): {out!r}"
+            else:
+                last_msg = (out + "\n" + err).strip()
+
+            time.sleep(poll_interval)
+
+        raise UIError(
+            f"failed to obtain cloud hostname within {timeout_secs}s: {last_msg}"
+        )
 
     T = TypeVar("T")
 
