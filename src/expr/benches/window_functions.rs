@@ -14,7 +14,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use mz_expr::ColumnOrder;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, RowArena};
-use rand::distributions::{Distribution, Uniform};
+use rand::distr::{Distribution, Uniform};
 
 /// Microbenchmark to test an important part of window function evaluation.
 ///
@@ -53,7 +53,7 @@ fn order_aggregate_datums_benchmark(c: &mut Criterion) {
     let scale = 1000000;
 
     group.bench_function("order_aggregate_datums", |b| {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let temp_storage = RowArena::new();
 
         let order_by = vec![ColumnOrder {
@@ -70,7 +70,7 @@ fn order_aggregate_datums_benchmark(c: &mut Criterion) {
         //   ),
         //   <order_by_col_1>,
         // )
-        let distr = Uniform::new(0, 1000000000);
+        let distr = Uniform::new(0, 1000000000).expect("valid range");
         let mut datums = Vec::with_capacity(scale);
         for _i in 0..scale {
             datums.push(temp_storage.make_datum(|packer| {

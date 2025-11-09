@@ -537,7 +537,7 @@ mod turmoil_tests {
 
         let mut sim = turmoil::Builder::new()
             .enable_random_order()
-            .rng_seed(rng.r#gen())
+            .rng_seed(rng.random())
             .build();
 
         let processes: Vec<_> = (0..NUM_PROCESSES).map(|i| format!("process-{i}")).collect();
@@ -618,12 +618,12 @@ mod turmoil_tests {
 
         // Let random processes crash at random times.
         for _ in 0..NUM_CRASHES {
-            let steps = rng.gen_range(1..100);
+            let steps = rng.random_range(1..100);
             for _ in 0..steps {
                 sim.step().unwrap();
             }
 
-            let i = rng.gen_range(0..NUM_PROCESSES);
+            let i = rng.random_range(0..NUM_PROCESSES);
             info!("bouncing process {i}");
             sim.bounce(format!("process-{i}"));
         }

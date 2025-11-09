@@ -27,9 +27,9 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_ore::url::SensitiveUrl;
 use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
+use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
 #[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use tracing::info;
@@ -508,7 +508,7 @@ async fn main() {
     }
 
     if args.shuffle_tests {
-        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
+        let seed = args.seed.unwrap_or_else(rand::random);
         let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }

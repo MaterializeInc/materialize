@@ -22,8 +22,8 @@ use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGener
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
-use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
+use rand_8::rngs::StdRng;
+use rand_8::{RngCore, SeedableRng};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::operators::core::Partition;

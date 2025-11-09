@@ -64,7 +64,9 @@ pin-project = "1.1.10"
 postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-rand = "0.8.5"
+# Loadgen sources need reproducible randomness, so we need to continue using
+# the old version of `rand`.
+rand-8 = { package = "rand", version = "0.8.5" }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",

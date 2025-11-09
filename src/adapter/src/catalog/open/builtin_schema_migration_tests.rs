@@ -48,7 +48,7 @@ fn test_builtin_schema_migration() {
 
     let mut sim = turmoil::Builder::new()
         .enable_random_order()
-        .rng_seed(rng.r#gen())
+        .rng_seed(rng.random())
         .build();
 
     // Keep a list of all hosts, so we can randomly crash them.
@@ -60,7 +60,7 @@ fn test_builtin_schema_migration() {
     // Generate system objects at version 0.
     let mut system_objects = BTreeMap::new();
     for i in 0..NUM_BUILTINS {
-        let (object, builtin) = match rng.r#gen::<bool>() {
+        let (object, builtin) = match rng.random::<bool>() {
             true => make_builtin_table(format!("table{i}")),
             false => make_builtin_source(format!("source{i}")),
         };
@@ -90,12 +90,12 @@ fn test_builtin_schema_migration() {
     for generation in 1..=NUM_VERSIONS {
         let version = Version::new(0, generation, 0);
 
-        for _ in 0..rng.gen_range(0..=MAX_MIGRATIONS_PER_VERSION) {
+        for _ in 0..rng.random_range(0..=MAX_MIGRATIONS_PER_VERSION) {
             let (object, info) = system_objects.iter_mut().choose(&mut rng).unwrap();
 
             info.builtin = evolve_builtin_desc(info.builtin);
 
-            let mechanism = match rng.r#gen::<bool>() {
+            let mechanism = match rng.random::<bool>() {
                 true => Mechanism::Evolution,
                 false => Mechanism::Replacement,
             };
@@ -111,7 +111,7 @@ fn test_builtin_schema_migration() {
             migrations.push(step);
         }
 
-        for i in 0..rng.gen_range(0..=MAX_PROCESSES_PER_VERSION) {
+        for i in 0..rng.random_range(0..=MAX_PROCESSES_PER_VERSION) {
             let version = version.clone();
             let system_objects = system_objects.clone();
             let migrations = migrations.clone();
@@ -197,7 +197,7 @@ fn test_builtin_schema_migration() {
             sim.step().unwrap();
 
             // Randomly crash running processes.
-            if rng.gen_bool(CRASH_PROBABILITY) {
+            if rng.random_bool(CRASH_PROBABILITY) {
                 let victim = all_hosts.iter().choose(&mut rng).unwrap().clone();
                 if sim.is_host_running(victim.clone()) {
                     sim.bounce(victim);
