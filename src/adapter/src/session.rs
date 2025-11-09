@@ -47,7 +47,6 @@ use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
-use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -346,7 +345,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
-            secret_key: rand::thread_rng().r#gen(),
+            secret_key: rand::random(),
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
