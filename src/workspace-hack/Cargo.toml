@@ -22,8 +22,8 @@ aho-corasick = { version = "1.1.4" }
 arrayvec = { version = "0.7.6" }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.8", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.13", default-features = false, features = ["event-stream", "http-02x"] }
+aws-credential-types = { version = "1.2.9", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.5.14", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.6", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.6", default-features = false, features = ["rt-tokio"] }
@@ -166,8 +166,8 @@ aho-corasick = { version = "1.1.4" }
 arrayvec = { version = "0.7.6" }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.2.1", default-features = false, features = ["sso"] }
-aws-credential-types = { version = "1.2.8", default-features = false, features = ["hardcoded-credentials", "test-util"] }
-aws-runtime = { version = "1.5.13", default-features = false, features = ["event-stream", "http-02x"] }
+aws-credential-types = { version = "1.2.9", default-features = false, features = ["hardcoded-credentials", "test-util"] }
+aws-runtime = { version = "1.5.14", default-features = false, features = ["event-stream", "http-02x"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-sigv4 = { version = "1.3.6", features = ["http0-compat", "sign-eventstream"] }
 aws-smithy-async = { version = "1.2.6", default-features = false, features = ["rt-tokio"] }
@@ -185,7 +185,7 @@ brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
 bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
-cc = { version = "1.2.44", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.45", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clang-sys = { version = "1.3.0", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
