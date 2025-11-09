@@ -131,7 +131,7 @@ uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-assert_cmd = "2.0.17"
+assert_cmd = "2.1.1"
 bytes = "1.10.1"
 datadriven = "0.8.0"
 fallible-iterator = "0.2.0"
