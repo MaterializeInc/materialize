@@ -60,8 +60,10 @@ EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_unique_o
 > SELECT key FROM (SHOW INDEXES ON unique_not_null);
 {f1,f2}
 
+# in SQL Server NULLS are not distinct
+# see https://learn.microsoft.com/en-us/sql/relational-databases/tables/unique-constraints-and-check-constraints?view=sql-server-ver17#unique-constraints
 > SELECT key FROM (SHOW INDEXES ON unique_nullable);
-{f1,f2,f3}
+{f1,f2}
 
 > SELECT key FROM (SHOW INDEXES ON pk_unique_overlap);
 {f1,f2}
@@ -102,7 +104,6 @@ Used Indexes:
 Target cluster: quickstart
 
 
-#
 # Unique converted to keys
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_not_null
 Explained Query (fast path):
@@ -117,10 +118,9 @@ Target cluster: quickstart
 
 # Unique NOT converted to keys because values are nullable
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_nullable
-Explained Query:
-  Distinct project=[#0, #1]
-    Project (#0, #1)
-      ReadIndex on=unique_nullable unique_nullable_primary_idx=[*** full scan ***]
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.unique_nullable unique_nullable_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.unique_nullable_primary_idx (*** full scan ***)
