@@ -259,6 +259,7 @@ case "$cmd" in
             --env PYPI_TOKEN
             --env RUST_MIN_STACK
             --env MZ_DEV_BUILD_SHA
+            --env MZ_GHCR
             # For Miri with nightly Rust
             --env ZOOKEEPER_ADDR
             --env KAFKA_ADDRS
