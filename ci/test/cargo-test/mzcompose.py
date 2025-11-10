@@ -110,6 +110,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     extra_env = {}
     clusterd_thread: PropagatingThread | None = None
 
+    # Don't upload an out of date junit xml when the build fails
+    junit_path = (
+        os.getenv("CARGO_TARGET_DIR", "target") + "/nextest/ci/junit_cargo-test.xml"
+    )
+    if os.path.exists(junit_path):
+        os.remove(junit_path)
+
     if coverage:
         # TODO(def-): For coverage inside of clusterd called from unit tests need
         # to set LLVM_PROFILE_FILE in test code invoking clusterd and later
