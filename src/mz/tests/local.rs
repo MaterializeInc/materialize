@@ -11,7 +11,7 @@
 mod tests {
     use std::{fs, path::PathBuf, time::Duration};
 
-    use assert_cmd::{Command, assert::Assert};
+    use assert_cmd::{Command, assert::Assert, cargo_bin};
     use mz::ui::OptionalStr;
     use mz_frontegg_auth::AppPassword;
     use serde::{Deserialize, Serialize};
@@ -48,7 +48,7 @@ mod tests {
 
     /// Returns a command to execute mz.
     fn cmd() -> Command {
-        let mut cmd = Command::cargo_bin("mz").unwrap();
+        let mut cmd = Command::new(cargo_bin!("mz"));
         cmd.timeout(Duration::from_secs(30));
         cmd
     }

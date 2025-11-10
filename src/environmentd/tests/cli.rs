@@ -9,10 +9,10 @@
 
 use std::time::Duration;
 
-use assert_cmd::Command;
+use assert_cmd::{Command, cargo_bin};
 
 fn cmd() -> Command {
-    let mut cmd = Command::cargo_bin("environmentd").unwrap();
+    let mut cmd = Command::new(cargo_bin!("environmentd"));
     cmd.env_clear().timeout(Duration::from_secs(10));
     cmd
 }
