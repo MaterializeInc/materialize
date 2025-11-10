@@ -955,7 +955,6 @@ impl CompactionStepTimings {
 pub struct CompactionSchemaSelection {
     pub(crate) recent_schema: Counter,
     pub(crate) no_schema: Counter,
-    pub(crate) disabled: Counter,
 }
 
 impl CompactionSchemaSelection {
@@ -963,7 +962,6 @@ impl CompactionSchemaSelection {
         CompactionSchemaSelection {
             recent_schema: schema_selection.with_label_values(&["recent"]),
             no_schema: schema_selection.with_label_values(&["none"]),
-            disabled: schema_selection.with_label_values(&["disabled"]),
         }
     }
 }

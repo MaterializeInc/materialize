@@ -1423,7 +1423,6 @@ class FlipFlagsAction(Action):
             "persist_gc_min_versions",
             "persist_gc_max_versions",
             "persist_compaction_minimum_timeout",
-            "persist_compaction_use_most_recent_schema",
             "persist_compaction_check_process_flag",
             "balancerd_sigterm_connection_wait",
             "balancerd_sigterm_listen_wait",
