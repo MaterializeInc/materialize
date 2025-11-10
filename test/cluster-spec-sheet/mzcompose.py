@@ -299,8 +299,9 @@ class ScenarioRunner:
         quoted_flags = " ".join(shlex.quote(x) for x in flags)
         script = (
             "set -euo pipefail; "
-            "cat > /tmp/run.ini; "
-            f"exec dbbench {quoted_flags} -intermediate-stats=false /tmp/run.ini"
+            'tmp="$(mktemp -t dbbench.XXXXXX)"; '
+            'cat > "$tmp"; '
+            f'exec dbbench {quoted_flags} -intermediate-stats=false "$tmp"'
         )
 
         print(f"--- Running dbbench step '{name}' for {self.envd_cpus} ...")
