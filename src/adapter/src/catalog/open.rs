@@ -589,7 +589,7 @@ impl Catalog {
                 );
             }
 
-            catalog.storage().await.mark_bootstrap_complete();
+            catalog.storage().await.mark_bootstrap_complete().await;
 
             Ok(OpenCatalogResult {
                 catalog,

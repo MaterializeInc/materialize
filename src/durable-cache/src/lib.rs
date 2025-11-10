@@ -390,6 +390,15 @@ impl<C: DurableCacheCodec> DurableCache<C> {
         )
         .await
     }
+
+    /// Upgrade the version associated with the backing shard. This should only be done once
+    /// we've durably upgraded to the new version.
+    pub async fn upgrade_version(&self) {
+        self.since_handle
+            .upgrade_version()
+            .await
+            .expect("invalid usage")
+    }
 }
 
 #[cfg(test)]
