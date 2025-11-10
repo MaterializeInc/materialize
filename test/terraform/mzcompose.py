@@ -678,7 +678,7 @@ class AWS(State):
 
         vars = [
             "-var",
-            "operator_version=v25.3.0-beta.1",
+            "operator_version=v26.0.0-beta.1",
         ]
         vars += [
             "-var",
@@ -1149,7 +1149,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         vars = [
             "-var",
-            "operator_version=v25.3.0-beta.1",
+            "operator_version=v26.0.0-beta.1",
         ]
         vars += [
             "-var",
@@ -1260,7 +1260,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
 
         vars = [
             "-var",
-            "operator_version=v25.3.0-beta.1",
+            "operator_version=v26.0.0-beta.1",
         ]
         vars += [
             "-var",

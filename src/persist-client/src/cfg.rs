@@ -37,7 +37,7 @@ use crate::operators::STORAGE_SOURCE_DECODE_FUEL;
 use crate::read::READER_LEASE_DURATION;
 
 // Ignores the patch version
-const SELF_MANAGED_VERSIONS: &[Version] = &[
+const SELF_MANAGED_VERSIONS: &[Version; 2] = &[
     // 25.1
     Version::new(0, 130, 0),
     // 25.2
@@ -99,7 +99,8 @@ const SELF_MANAGED_VERSIONS: &[Version] = &[
 pub struct PersistConfig {
     /// Info about which version of the code is running.
     pub build_version: Version,
-    /// Hostname of this persist user. Stored in state and used for debugging.
+    /// An opaque string describing the host of this persist client.
+    /// Stored in state and used for debugging.
     pub hostname: String,
     /// Whether this persist instance is running in a "cc" sized cluster.
     pub is_cc_active: bool,
@@ -181,7 +182,13 @@ impl PersistConfig {
             // separate --log-prefix into --service-name and --enable-log-prefix
             // options, where the first is always provided and the second is
             // conditionally enabled by the process orchestrator.
-            hostname: std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned()),
+            hostname: {
+                use std::fmt::Write;
+                let mut name = std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".to_owned());
+                write!(&mut name, " {}", build_info.version)
+                    .expect("writing to string should not fail");
+                name
+            },
         }
     }
 
@@ -634,87 +641,57 @@ impl BlobKnobs for PersistConfig {
     }
 }
 
-pub fn check_data_version(code_version: &Version, data_version: &Version) -> Result<(), String> {
-    check_data_version_with_self_managed_versions(code_version, data_version, SELF_MANAGED_VERSIONS)
+/// If persist gets some encoded ProtoState from the future (e.g. two versions of
+/// code are running simultaneously against the same shard), it might have a
+/// field that the current code doesn't know about. This would be silently
+/// discarded at proto decode time: our Proto library can't handle unknown fields,
+/// and old versions of code might not be able to respect the semantics of the new
+/// fields even if they did.
+///
+/// [1]: https://developers.google.com/protocol-buffers/docs/proto3#unknowns
+///
+/// To detect the bad situation and disallow it, we tag every version of state
+/// written to consensus with the version of code it's compatible with. Then at
+/// decode time, we're able to compare the current version against any we receive
+/// and assert as necessary. The current version is typically the version of code
+/// used to write the state, but it may be lower when code is intentionally emulating
+/// an older version during eg. a graceful upgrade process.
+///
+/// We could do the same for blob data, but it shouldn't be necessary. Any blob
+/// data we read is going to be because we fetched it using a pointer stored in
+/// some persist state. If we can handle the state, we can handle the blobs it
+/// references, too.
+pub fn code_can_read_data(code_version: &Version, data_version: &Version) -> bool {
+    // For now, Persist can read arbitrarily old state data.
+    // We expect to add a floor to this in future versions.
+    code_version.cmp_precedence(data_version).is_ge()
 }
 
-// If persist gets some encoded ProtoState from the future (e.g. two versions of
-// code are running simultaneously against the same shard), it might have a
-// field that the current code doesn't know about. This would be silently
-// discarded at proto decode time. Unknown Fields [1] are a tool we can use in
-// the future to help deal with this, but in the short-term, it's best to keep
-// the persist read-modify-CaS loop simple for as long as we can get away with
-// it (i.e. until we have to offer the ability to do rollbacks).
-//
-// [1]: https://developers.google.com/protocol-buffers/docs/proto3#unknowns
-//
-// To detect the bad situation and disallow it, we tag every version of state
-// written to consensus with the version of code used to encode it. Then at
-// decode time, we're able to compare the current version against any we receive
-// and assert as necessary.
-//
-// Initially we allow any from the past (permanent backward compatibility) and
-// one minor version into the future (forward compatibility). This allows us to
-// run two versions concurrently for rolling upgrades. We'll have to revisit
-// this logic if/when we start using major versions other than 0.
-//
-// We could do the same for blob data, but it shouldn't be necessary. Any blob
-// data we read is going to be because we fetched it using a pointer stored in
-// some persist state. If we can handle the state, we can handle the blobs it
-// references, too.
-pub(crate) fn check_data_version_with_self_managed_versions(
-    code_version: &Version,
-    data_version: &Version,
-    self_managed_versions: &[Version],
-) -> Result<(), String> {
-    // Allow upgrades specifically between consecutive Self-Managed releases.
-    let base_code_version = Version {
-        patch: 0,
-        ..code_version.clone()
-    };
-    let base_data_version = Version {
-        patch: 0,
-        ..data_version.clone()
-    };
-    if data_version >= code_version {
-        for window in self_managed_versions.windows(2) {
-            if base_code_version == window[0] && base_data_version <= window[1] {
-                return Ok(());
-            }
-        }
-
-        if let Some(last) = self_managed_versions.last() {
-            if base_code_version == *last
-                // kind of arbitrary, but just ensure we don't accidentally
-                // upgrade too far (the previous check should ensure that a
-                // new version won't take over from a too-old previous
-                // version, but we want to make sure the other side also
-                // doesn't get confused)
-                && base_data_version
-                    .minor
-                    .saturating_sub(base_code_version.minor)
-                    < 40
-            {
-                return Ok(());
-            }
-        }
+/// Can the given version of the code generate data that older versions can understand?
+/// Imagine the case of eg. garbage collection after a version upgrade... we may need to read old
+/// diffs to be able to find blobs to delete, even if we no longer have code to generate data in
+/// that format.
+pub fn code_can_write_data(code_version: &Version, data_version: &Version) -> bool {
+    if !code_can_read_data(code_version, data_version) {
+        return false;
     }
 
-    // Allow one minor version of forward compatibility. We could avoid the
-    // clone with some nested comparisons of the semver fields, but this code
-    // isn't particularly performance sensitive and I find this impl easier to
-    // reason about.
-    let max_allowed_data_version = Version::new(
-        code_version.major,
-        code_version.minor.saturating_add(1),
-        u64::MAX,
-    );
-
-    if &max_allowed_data_version < data_version {
-        Err(format!(
-            "{code_version} received persist state from the future {data_version}",
-        ))
+    if code_version.major == 0 && code_version.minor <= SELF_MANAGED_VERSIONS[1].minor {
+        // This code was added well after the last ad-hoc version was released,
+        // so we don't strictly model compatibility with earlier releases.
+        true
+    } else if code_version.major == 0 {
+        // Self-managed versions 25.2+ must be upgradeable from 25.1+.
+        SELF_MANAGED_VERSIONS[0]
+            .cmp_precedence(data_version)
+            .is_le()
+    } else if code_version.major <= 26 {
+        // Versions 26.x must be upgradeable from the last pre-1.0 release.
+        SELF_MANAGED_VERSIONS[1]
+            .cmp_precedence(data_version)
+            .is_le()
     } else {
-        Ok(())
+        // Otherwise, the data must be from at earliest the _previous_ major version.
+        code_version.major - 1 <= data_version.major
     }
 }

@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 510
 expression: test_snapshot
 ---
 Snapshot {
@@ -1461,7 +1460,7 @@ Snapshot {
         SettingKey {
             name: "catalog_content_version",
         }: SettingValue {
-            value: "0.0.0",
+            value: "0.0.0+dummy",
         },
     },
     source_references: {},

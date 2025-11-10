@@ -83,7 +83,8 @@ def get_supported_self_managed_versions() -> list[MzVersion]:
         {
             v.version
             for v in self_managed_versions
-            if v.helm_version.major == 25 and v.helm_version.minor == 2
+            if v.helm_version.major == 25
+            and (v.helm_version.minor == 2 or v.helm_version.minor == 1)
         }
     )
 

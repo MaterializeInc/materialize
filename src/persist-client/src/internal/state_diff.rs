@@ -146,13 +146,13 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
         // Deconstruct from and to so we get a compile failure if new
         // fields are added.
         let State {
-            applier_version: _,
             shard_id: from_shard_id,
             seqno: from_seqno,
             hostname: from_hostname,
             walltime_ms: _, // Intentionally unused
             collections:
                 StateCollections {
+                    version: _,
                     last_gc_req: from_last_gc_req,
                     rollups: from_rollups,
                     active_rollup: from_active_rollup,
@@ -165,13 +165,13 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
                 },
         } = from;
         let State {
-            applier_version: to_applier_version,
             shard_id: to_shard_id,
             seqno: to_seqno,
             walltime_ms: to_walltime_ms,
             hostname: to_hostname,
             collections:
                 StateCollections {
+                    version: to_applier_version,
                     last_gc_req: to_last_gc_req,
                     rollups: to_rollups,
                     active_rollup: to_active_rollup,
@@ -319,10 +319,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
 
         use crate::internal::state::ProtoStateDiff;
 
-        let mut roundtrip_state = from_state.clone(
-            from_state.applier_version.clone(),
-            from_state.hostname.clone(),
-        );
+        let mut roundtrip_state = from_state.clone(from_state.hostname.clone());
         roundtrip_state.apply_diff(metrics, diff.clone())?;
 
         if &roundtrip_state != to_state {
@@ -397,7 +394,8 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                     // issues that may arise from diff application. We pass along the original
                     // Bytes it decoded from just so we can decode in this error path, while
                     // avoiding any extraneous clones in the expected Ok path.
-                    let diff = StateDiff::<T>::decode(&self.applier_version, data);
+                    // FIXME: this passes the state version but the method requires the build version.
+                    let diff = StateDiff::<T>::decode(&self.collections.version, data);
                     panic!(
                         "state diff should apply cleanly: {} diff {:?} state {:?}",
                         err, diff, self
@@ -446,7 +444,6 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             ));
         }
         self.seqno = diff_seqno_to;
-        self.applier_version = diff_applier_version;
         self.walltime_ms = diff_walltime_ms;
         force_apply_diffs_single(
             &self.shard_id,
@@ -460,6 +457,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
         // Deconstruct collections so we get a compile failure if new fields are
         // added.
         let StateCollections {
+            version,
             last_gc_req,
             rollups,
             active_rollup,
@@ -471,6 +469,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
             trace,
         } = &mut self.collections;
 
+        *version = diff_applier_version;
         apply_diffs_map("rollups", diff_rollups, rollups)?;
         apply_diffs_single("last_gc_req", diff_last_gc_req, last_gc_req)?;
         apply_diffs_single_option("active_rollup", diff_active_rollup, active_rollup)?;

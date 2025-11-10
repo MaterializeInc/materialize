@@ -3407,12 +3407,13 @@ where
 mod tests {
     use super::*;
     use mz_ore::{assert_none, assert_ok};
-
-    use mz_ore::now::SYSTEM_TIME;
-    use mz_persist_client::PersistClient;
+    use semver::Version;
 
     use crate::durable::{TestCatalogStateBuilder, test_bootstrap_args};
     use crate::memory;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_types::PersistLocation;
 
     #[mz_ore::test]
     fn test_table_transaction_simple() {
@@ -3942,9 +3943,16 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_savepoint() {
-        let persist_client = PersistClient::new_for_tests().await;
-        let state_builder =
-            TestCatalogStateBuilder::new(persist_client).with_default_deploy_generation();
+        const VERSION: Version = Version::new(26, 0, 0);
+        let mut persist_cache = PersistClientCache::new_no_metrics();
+        persist_cache.cfg.build_version = VERSION;
+        let persist_client = persist_cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .unwrap();
+        let state_builder = TestCatalogStateBuilder::new(persist_client)
+            .with_default_deploy_generation()
+            .with_version(VERSION);
 
         // Initialize catalog.
         let _ = state_builder

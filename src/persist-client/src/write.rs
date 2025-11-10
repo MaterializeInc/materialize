@@ -44,7 +44,7 @@ use crate::fetch::{
     EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat, VALIDATE_PART_BOUNDS_ON_READ,
 };
 use crate::internal::compact::{CompactConfig, Compactor};
-use crate::internal::encoding::{Schemas, check_data_version};
+use crate::internal::encoding::{Schemas, assert_code_can_read_data};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
@@ -567,7 +567,7 @@ where
                     handle_shard: self.machine.shard_id(),
                 });
             }
-            check_data_version(&self.cfg.build_version, &batch.version);
+            assert_code_can_read_data(&self.cfg.build_version, &batch.version);
             if self.cfg.build_version > batch.version {
                 info!(
                     shard_id =? self.machine.shard_id(),

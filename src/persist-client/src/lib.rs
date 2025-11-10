@@ -791,6 +791,33 @@ impl PersistClient {
         Ok(())
     }
 
+    /// Upgrade the state to the latest version. This should only be called once we will no longer
+    /// need to interoperate with older versions, like after a successful upgrade.
+    pub async fn upgrade_version<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<(), InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+
+        match machine.upgrade_version().await {
+            Ok(maintenance) => {
+                let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+                let () = maintenance.perform(&machine, &gc).await;
+                Ok(())
+            }
+            Err(version) => Err(InvalidUsage::IncompatibleVersion { version }),
+        }
+    }
+
     /// Returns the internal state of the shard for debugging and QA.
     ///
     /// We'll be thoughtful about making unnecessary changes, but the **output

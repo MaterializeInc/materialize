@@ -15,15 +15,6 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::difference::Monoid;
-use differential_dataflow::lattice::Lattice;
-use mz_ore::cast::CastFrom;
-use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
-use mz_persist_types::schema::SchemaId;
-use mz_persist_types::{Codec, Codec64};
-use timely::progress::{Antichain, Timestamp};
-use tracing::debug;
-
 use crate::cache::{LockingTypedState, StateCache};
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::gc::GcReq;
@@ -43,7 +34,16 @@ use crate::internal::watch::StateWatch;
 use crate::read::LeasedReaderId;
 use crate::rpc::{PUBSUB_PUSH_DIFF_ENABLED, PubSubSender};
 use crate::schema::SchemaCache;
-use crate::{Diagnostics, PersistConfig, ShardId};
+use crate::{Diagnostics, PersistConfig, ShardId, cfg};
+use differential_dataflow::difference::Monoid;
+use differential_dataflow::lattice::Lattice;
+use mz_ore::cast::CastFrom;
+use mz_ore::soft_assert_or_log;
+use mz_persist::location::{CaSResult, Indeterminate, SeqNo, VersionedData};
+use mz_persist_types::schema::SchemaId;
+use mz_persist_types::{Codec, Codec64};
+use timely::progress::{Antichain, Timestamp};
+use tracing::debug;
 
 /// An applier of persist commands.
 ///
@@ -448,6 +448,15 @@ where
             write_rollup,
             work_ret,
         } = next_state;
+
+        {
+            let build_version = &cfg.build_version;
+            let state_version = &state.state.collections.version;
+            soft_assert_or_log!(
+                cfg::code_can_write_data(build_version, state_version),
+                "current version {build_version} does not support state format {state_version}"
+            );
+        }
 
         // SUBTLE! Unlike the other consensus and blob uses, we can't
         // automatically retry indeterminate ExternalErrors here. However,

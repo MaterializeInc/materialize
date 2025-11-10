@@ -590,9 +590,9 @@ where
         // code with this logic.
         let safe_version_change = match (commit, expected_version) {
             // We never actually write out state changes, so increasing the version is okay.
-            (false, _) => cfg.build_version >= state.applier_version,
+            (false, _) => cfg.build_version >= state.collections.version,
             // If the versions match that's okay because any commits won't change it.
-            (true, None) => cfg.build_version == state.applier_version,
+            (true, None) => cfg.build_version == state.collections.version,
             // !!DANGER ZONE!!
             (true, Some(expected)) => {
                 // If we're not _extremely_ careful, the persistcli could make shards unreadable by
@@ -602,7 +602,7 @@ where
                 // We only allow a mismatch in version if we provided the expected version to the
                 // command, and the expected version is less than the current build, which
                 // indicates this is an old shard.
-                state.applier_version == expected && expected <= cfg.build_version
+                state.collections.version == expected && expected <= cfg.build_version
             }
         };
         if !safe_version_change {
@@ -610,7 +610,7 @@ where
             return Err(anyhow!(
                 "version of this tool {} does not match version of state {} when --commit is {commit}. bailing so we don't corrupt anything",
                 cfg.build_version,
-                state.applier_version
+                state.collections.version
             ));
         }
         break;
