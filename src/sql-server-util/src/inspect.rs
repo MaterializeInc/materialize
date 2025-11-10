@@ -365,12 +365,10 @@ SELECT @mz_cleanup_status_bit;
 // - sys.columns: Column definitions including nullability
 // - sys.types: Data type information for each column
 // - cdc.change_tables: CDC configuration linking capture instances to source tables
-// - information_schema views: To identify primary key constraints
 //
 // For each column, it returns:
 // - Table identification (schema_name, table_name, capture_instance)
 // - Column metadata (name, type, nullable, max_length, precision, scale)
-// - Primary key information (constraint name if the column is part of a PK)
 static GET_COLUMNS_FOR_TABLES_WITH_CDC_QUERY: &str = "
 SELECT
     s.name as schema_name,
@@ -477,13 +475,30 @@ pub async fn get_cdc_table_columns(
     Ok(columns)
 }
 
-/// Retrieve primary key and unique constraints for the given table.
-pub async fn get_constraints_for_table(
+/// Retrieve primary key and unique constraints for the given tables.  Tables should be provided as
+/// an interator of tuples, where each tuple contains is `(schema_name, table_name)`.
+pub async fn get_constraints_for_tables(
     client: &mut Client,
-    schema_name: &str,
-    table_name: &str,
-) -> Result<Vec<SqlServerTableConstraintRaw>, SqlServerError> {
-    static GET_COLUMN_CONSTRAINTS_FOR_TABLE: &str = "SELECT \
+    schema_table_list: impl Iterator<Item = &(Arc<str>, Arc<str>)>,
+) -> Result<BTreeMap<(Arc<str>, Arc<str>), Vec<SqlServerTableConstraintRaw>>, SqlServerError> {
+    let qualified_table_names: Vec<_> = schema_table_list
+        .map(|(schema, table)| format!("{schema}.{table}"))
+        .collect();
+    let params = (1..qualified_table_names.len() + 1)
+        .map(|idx| format!("@P{}", idx))
+        .join(", ");
+
+    // Because we don't have an object idenfifier for the table(s), this query concatenates the
+    // schema and table name to create a single identifier for the query rather than compose a
+    // complex set of OR conditions for each schema + set of tables in the schema.
+    //
+    // This query may perform poorly due to the condition relying concatenated value. We may get
+    // better performance by adding a constraint table names, but it isn't clear at this time if
+    // that is needed.
+    let query = format!(
+        "SELECT \
+        tc.table_schema, \
+        tc.table_name, \
         ccu.column_name,  \
         tc.constraint_name, \
         tc.constraint_type \
@@ -491,37 +506,55 @@ pub async fn get_constraints_for_table(
     JOIN information_schema.constraint_column_usage ccu \
         ON ccu.constraint_schema = tc.constraint_schema \
         AND ccu.constraint_name = tc.constraint_name \
-    WHERE tc.table_schema = @P1 \
-        AND tc.table_name = @P2 \
-        AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')";
+    WHERE
+        tc.table_schema + '.' + tc.table_name IN ({params})
+        AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')"
+    );
 
-    let result = client
-        .query(
-            GET_COLUMN_CONSTRAINTS_FOR_TABLE,
-            &[&schema_name, &table_name],
-        )
-        .await?;
+    let query_params: Vec<_> = qualified_table_names
+        .iter()
+        .map(|qualified_name| {
+            let name: &dyn tiberius::ToSql = qualified_name;
+            name
+        })
+        .collect();
+    let result = client.query(query, &query_params).await?;
 
-    let mut constraints: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    let mut contraints_by_table: BTreeMap<_, BTreeMap<_, Vec<_>>> = BTreeMap::new();
     for row in result {
+        let schema_name: Arc<str> = get_value::<&str>(&row, "table_schema")?.into();
+        let table_name: Arc<str> = get_value::<&str>(&row, "table_name")?.into();
         let column_name = get_value::<&str>(&row, "column_name")?.into();
         let constraint_name = get_value::<&str>(&row, "constraint_name")?.into();
         let constraint_type = get_value::<&str>(&row, "constraint_type")?.into();
-        constraints
+
+        contraints_by_table
+            .entry((Arc::clone(&schema_name), Arc::clone(&table_name)))
+            .or_default()
             .entry((constraint_name, constraint_type))
             .or_default()
             .push(column_name);
     }
-    tracing::debug!("table {schema_name}.{table_name} constraints: {constraints:?}");
-    Ok(constraints
+    Ok(contraints_by_table
         .into_iter()
-        .map(
-            |((constraint_name, constraint_type), columns)| SqlServerTableConstraintRaw {
-                constraint_name,
-                constraint_type,
-                columns,
-            },
-        )
+        .inspect(|((schema_name, table_name), constraints)| {
+            tracing::debug!("table {schema_name}.{table_name} constraints: {constraints:?}")
+        })
+        .map(|(qualified_name, constraints)| {
+            (
+                qualified_name,
+                constraints
+                    .into_iter()
+                    .map(|((constraint_name, constraint_type), columns)| {
+                        SqlServerTableConstraintRaw {
+                            constraint_name,
+                            constraint_type,
+                            columns,
+                        }
+                    })
+                    .collect(),
+            )
+        })
         .collect())
 }
 
