@@ -2403,7 +2403,6 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"
 
       - id: orchestratord-upgrade-combine
         label: "Orchestratord test (upgrade, combine props)"
@@ -2416,7 +2415,6 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"
 
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
@@ -2429,7 +2427,6 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"
 
       - id: orchestratord-upgrade-chain-combine
         label: "Orchestratord test (upgrade chain, combine props)"
@@ -2442,4 +2439,3 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"
