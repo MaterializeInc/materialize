@@ -1,6 +1,5 @@
 ---
 source: src/catalog/tests/open.rs
-assertion_line: 510
 expression: test_snapshot
 ---
 Snapshot {
