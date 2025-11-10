@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password};Database=test
 
 > CREATE SECRET IF NOT EXISTS sql_server_pass AS '${arg.default-sql-server-password}'
@@ -40,9 +39,14 @@ CREATE TABLE pk_unique_overlap (f1 INT, f2 INT NOT NULL UNIQUE, PRIMARY KEY (f1,
 INSERT INTO pk_unique_overlap VALUES (1,1), (1,2), (2,3);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_unique_overlap', @role_name = 'SA', @supports_net_changes = 0;
 
-> CREATE SOURCE mz_source
-  FROM SQL SERVER CONNECTION sql_server_test_connection
-  FOR ALL TABLES;
+> BEGIN;
+> CREATE SOURCE mz_source FROM SQL SERVER CONNECTION sql_server_test_connection;
+> CREATE TABLE pk FROM SOURCE mz_source (REFERENCE pk);
+> CREATE TABLE unique_not_null FROM SOURCE mz_source (REFERENCE unique_not_null);
+> CREATE TABLE unique_nullable FROM SOURCE mz_source (REFERENCE unique_nullable);
+> CREATE TABLE pk_unique_overlap FROM SOURCE mz_source (REFERENCE pk_unique_overlap);
+> COMMIT;
+
 
 > CREATE DEFAULT INDEX ON pk;
 > CREATE DEFAULT INDEX ON unique_not_null;
