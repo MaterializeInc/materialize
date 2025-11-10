@@ -1082,6 +1082,18 @@ steps:
               composition: platform-checks
               args: [--scenario=ZeroDowntimeUpgradeEntireMzFourVersions, "--seed=$BUILDKITE_JOB_ID"]
 
+      - id: checks-0dt-upgrade-for-previous-versions-to-current
+        label: "Checks 0dt upgrade for previous versions to current"
+        depends_on: build-x86_64
+        timeout_in_minutes: 240
+        parallelism: 2
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: platform-checks
+              args: [--scenario=MultiVersionZeroDowntimeBasic, "--seed=$BUILDKITE_JOB_ID", "--teardown=True", "--execution-mode=oneatatime"]
+
       - id: checks-0dt-bump-version
         label: "Checks 0dt upgrade to a bumped version"
         depends_on: build-x86_64

@@ -104,7 +104,9 @@ class StartMz(MzcomposeAction):
         # Don't fail since we are careful to explicitly kill and collect logs
         # of the services thus started
         with c.override(mz, fail_on_new_service=False):
-            c.up("materialized" if self.mz_service is None else self.mz_service)
+            c.up(
+                "materialized" if self.mz_service is None else self.mz_service,
+            )
 
             # If we start up Materialize with a deploy-generation , then it
             # stays in a stuck state when the preflight-check is completed. So
