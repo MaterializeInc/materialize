@@ -74,7 +74,9 @@ operator:
         scale: 1
         cpu_exclusive: false
         cpu_limit: 0.1
-        credits_per_hour: "0.00"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "0.75"
         disk_limit: "1552MiB"
         memory_limit: "776MiB"
       25cc:
@@ -82,7 +84,9 @@ operator:
         scale: 1
         cpu_exclusive: false
         cpu_limit: 0.5
-        credits_per_hour: "0.25"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "3.75"
         disk_limit: "7762MiB"
         memory_limit: "3881MiB"
       50cc:
@@ -90,7 +94,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 1
-        credits_per_hour: "0.5"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "7.5"
         disk_limit: "15525MiB"
         memory_limit: "7762MiB"
       100cc:
@@ -98,7 +104,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 2
-        credits_per_hour: "1"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "15.25"
         disk_limit: "31050MiB"
         memory_limit: "15525MiB"
       200cc:
@@ -106,7 +114,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 4
-        credits_per_hour: "2"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "30.25"
         disk_limit: "62100MiB"
         memory_limit: "31050MiB"
       300cc:
@@ -114,7 +124,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 6
-        credits_per_hour: "3"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "45.5"
         disk_limit: "93150MiB"
         memory_limit: "46575MiB"
       400cc:
@@ -122,7 +134,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 8
-        credits_per_hour: "4"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "60.75"
         disk_limit: "124201MiB"
         memory_limit: "62100MiB"
       600cc:
@@ -130,7 +144,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 12
-        credits_per_hour: "6"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "91"
         disk_limit: "186301MiB"
         memory_limit: "93150MiB"
       800cc:
@@ -138,7 +154,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 16
-        credits_per_hour: "8"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "121.25"
         disk_limit: "248402MiB"
         memory_limit: "124201MiB"
       1200cc:
@@ -146,7 +164,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 24
-        credits_per_hour: "12"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "182"
         disk_limit: "372603MiB"
         memory_limit: "186301MiB"
       1600cc:
@@ -154,7 +174,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 31
-        credits_per_hour: "16"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "235"
         disk_limit: "481280MiB"
         memory_limit: "240640MiB"
       3200cc:
@@ -162,7 +184,9 @@ operator:
         scale: 1
         cpu_exclusive: true
         cpu_limit: 62
-        credits_per_hour: "32"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "470"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
       6400cc:
@@ -170,9 +194,192 @@ operator:
         scale: 2
         cpu_exclusive: true
         cpu_limit: 62
-        credits_per_hour: "64"
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "940"
         disk_limit: "962560MiB"
         memory_limit: "481280MiB"
+      M.1-16xlarge:
+        cpu_limit: 62
+        memory_limit: 481280MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 2887680MiB
+        scale: 2
+        workers: 62
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "940"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-8xlarge:
+        cpu_limit: 62
+        memory_limit: 481280MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 2887680MiB
+        scale: 1
+        workers: 62
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "470"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-4xlarge:
+        cpu_limit: 31
+        memory_limit: 240640MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 1443840MiB
+        scale: 1
+        workers: 31
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "235"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-3xlarge:
+        cpu_limit: 24
+        memory_limit: 186301MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 1117806MiB
+        scale: 1
+        workers: 24
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "182"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-2xlarge:
+        cpu_limit: 16
+        memory_limit: 124201MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 745206MiB
+        scale: 1
+        workers: 16
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "121.25"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-1.5xlarge:
+        cpu_limit: 12
+        memory_limit: 93150MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 558900MiB
+        scale: 1
+        workers: 12
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "91"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-large:
+        cpu_limit: 8
+        memory_limit: 62100MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 372600MiB
+        scale: 1
+        workers: 8
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "60.75"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-medium:
+        cpu_limit: 6
+        memory_limit: 46575MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 279450MiB
+        scale: 1
+        workers: 6
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "45.5"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-small:
+        cpu_limit: 4
+        memory_limit: 31050MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 186300MiB
+        scale: 1
+        workers: 4
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "30.25"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-xsmall:
+        cpu_limit: 2
+        memory_limit: 15525MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 93150MiB
+        scale: 1
+        workers: 2
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "15.25"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-micro:
+        cpu_limit: 1
+        memory_limit: 7762MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 46572MiB
+        scale: 1
+        workers: 1
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "7.5"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+      M.1-nano:
+        cpu_limit: 0.5
+        memory_limit: 3881MiB
+        # The recomended disk size is ~ 1:6 ratio of mem:disk.
+        # This will be determined by the node configuration, but
+        # can be forced with the disk_limit setting:
+        # disk_limit: 23286MiB
+        scale: 1
+        workers: 1
+        # For self-managed credits_per_hour simply reflects the memory limits in GiB.
+        # License Keys, may restrict the deployment of clusters based on memory, disk, and scale.
+        credits_per_hour: "3.75"
+        cpu_exclusive: false
+        is_cc: true
+        swap_enabled: true
+
     defaultSizes:
       default: 25cc
       system: 25cc
