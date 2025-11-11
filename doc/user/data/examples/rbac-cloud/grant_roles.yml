@@ -92,7 +92,7 @@
 
     {{< note >}}
     If a query directly references a view or materialized view:
-    {{< include-md file="shared-content/rbac/select-views-privileges.md" >}}
+    {{< include-md file="shared-content/rbac-cloud/select-views-privileges.md" >}}
     {{</ note >}}
 
     However, with the current privileges, `"blue.berry@example.com"` cannot

@@ -69,5 +69,5 @@
     - The default cluster for `sales_report_app` is not affected.
 
     {{< tip >}}
-    {{< include-md file="shared-content/rbac/alter-role-tip.md" >}}
+    {{< include-md file="shared-content/rbac-sm/alter-role-tip.md" >}}
     {{</ tip >}}
