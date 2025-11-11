@@ -144,6 +144,12 @@ def add_arguments_temporary_test(parser: WorkflowArgumentParser) -> None:
         help="Run mz-debug",
     )
     parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    parser.add_argument(
         "--tag",
         type=str,
         help="Custom version tag to use",
@@ -661,6 +667,7 @@ class AWS(State):
         setup: bool,
         tag: str,
         orchestratord_tag: str | None = None,
+        orchestratord_override: bool = True,
     ) -> None:
         if not setup:
             spawn.runv(
@@ -680,10 +687,11 @@ class AWS(State):
             "-var",
             "operator_version=v26.0.0-beta.1",
         ]
-        vars += [
-            "-var",
-            f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
-        ]
+        if orchestratord_override:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
+            ]
 
         print("--- Setup")
         spawn.runv(
@@ -922,7 +930,12 @@ def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        aws.setup("aws-test", args.setup, tag)
+        aws.setup(
+            "aws-test",
+            args.setup,
+            tag,
+            orchestratord_override=args.orchestratord_override,
+        )
         if args.test:
             aws.test(c, tag, args.run_testdrive_files, args.files)
     finally:
@@ -950,7 +963,13 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        aws.setup("aws-upgrade", args.setup, str(previous_tags[0]), str(tag))
+        aws.setup(
+            "aws-upgrade",
+            args.setup,
+            str(previous_tags[0]),
+            str(tag),
+            orchestratord_override=args.orchestratord_override,
+        )
         for previous_tag in previous_tags[1:]:
             aws.upgrade(str(previous_tag))
         aws.upgrade(tag)
@@ -1151,10 +1170,11 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             "-var",
             "operator_version=v26.0.0-beta.1",
         ]
-        vars += [
-            "-var",
-            f"orchestratord_version={get_tag(tag)}",
-        ]
+        if args.orchestratord_override:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
 
         if args.setup:
             print("--- Setup")
@@ -1262,10 +1282,11 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
             "-var",
             "operator_version=v26.0.0-beta.1",
         ]
-        vars += [
-            "-var",
-            f"orchestratord_version={get_tag(tag)}",
-        ]
+        if args.orchestratord_override:
+            vars += [
+                "-var",
+                f"orchestratord_version={get_tag(tag)}",
+            ]
 
         if args.setup:
             spawn.runv(
