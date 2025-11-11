@@ -20,7 +20,7 @@ rows:
   - "authenticatorKind Value": "**Sasl**"
     "Description": |
       Enables [SASL/SCRAM-SHA-256 authentication](#configuring-saslscram-authentication) for
-      PostgreSQL wire protocol connections. This is a challenge-response authentication
+      **PostgreSQL wire protocol connections**. This is a challenge-response authentication
       mechanism that provides enhanced security compared to simple password authentication.
 
       {{< tip >}}

@@ -85,11 +85,11 @@ and maintenance tasks.
 ## Configuring SASL/SCRAM authentication
 
 {{< note >}}
-SASL/SCRAM-SHA-256 authentication requires Materialize v0.147.16 or later.
+SASL/SCRAM-SHA-256 authentication requires Materialize `v26.0.0` or later.
 {{</ note >}}
 
 SASL/SCRAM-SHA-256 authentication is a challenge-response authentication mechanism
-that provides security for PostgreSQL wire protocol connections. It is
+that provides security for **PostgreSQL wire protocol connections**. It is
 compatible with PostgreSQL clients that support SCRAM-SHA-256.
 
 To configure Self-Managed Materialize for SASL/SCRAM authentication:
@@ -101,7 +101,7 @@ To configure Self-Managed Materialize for SASL/SCRAM authentication:
 
 For example, if using Kind, in the `sample-materialize.yaml` file:
 
-```
+```hc {hl_lines="14 24"}
 apiVersion: v1
 kind: Namespace
 metadata:
