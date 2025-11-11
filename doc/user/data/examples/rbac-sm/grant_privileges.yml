@@ -13,7 +13,8 @@
       on other views).
 
     {{< note >}}
-    {{< include-md file="shared-content/rbac/select-views-privileges.md" >}}
+    If a query directly references a view or materialized view:
+    {{< include-md file="shared-content/rbac-sm/select-views-privileges.md" >}}
     {{</ note >}}
 
   code: |
@@ -156,7 +157,8 @@
       views/views/sources in the `mydb.sales` schema on the `serving_cluster`.
 
     {{< note >}}
-    {{< include-md file="shared-content/rbac/select-views-privileges.md" >}}
+    If a query directly references a view or materialized view:
+    {{< include-md file="shared-content/rbac-sm/select-views-privileges.md" >}}
     {{</ note >}}
 
   code: |

@@ -16,7 +16,7 @@
     the `PUBLIC` role.
 
     {{< include-md
-    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+    file="shared-content/rbac-sm/show-default-privileges-new-roles.md" >}}
 
 - name: "for-service-account"
   description: |
@@ -34,7 +34,7 @@
     are the default privileges it has as a member of the `PUBLIC` role.
 
     {{< include-md
-    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+    file="shared-content/rbac-sm/show-default-privileges-new-roles.md" >}}
 
 - name: "for-view-manager"
   description: |
@@ -51,7 +51,7 @@
     the default privileges it has as a member of the `PUBLIC` role.
 
     {{< include-md
-    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+    file="shared-content/rbac-sm/show-default-privileges-new-roles.md" >}}
 
 - name: "for-serving-index-manager"
   description: |
@@ -69,7 +69,7 @@
     the `PUBLIC` role.
 
     {{< include-md
-    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+    file="shared-content/rbac-sm/show-default-privileges-new-roles.md" >}}
 
 - name: "for-data-reader"
   description: |
@@ -86,4 +86,4 @@
     the default privileges it has as a member of the `PUBLIC` role.
 
     {{< include-md
-    file="shared-content/rbac/show-default-privileges-new-roles.md" >}}
+    file="shared-content/rbac-sm/show-default-privileges-new-roles.md" >}}

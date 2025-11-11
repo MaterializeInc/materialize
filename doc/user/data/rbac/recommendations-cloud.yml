@@ -12,12 +12,12 @@
 - recommendation: "Restrict the granting of `CREATEROLE` privilege"
   description: |
 
-    {{< include-md file="shared-content/rbac/createrole-consideration.md" >}}
+    {{< include-md file="shared-content/rbac-cloud/createrole-consideration.md" >}}
 
 - recommendation: "Use Reusable Roles for Privilege Assignment"
   description: |
 
-    {{< include-md file="shared-content/rbac/use-resusable-roles.md" >}}
+    {{< include-md file="shared-content/rbac-cloud/use-resusable-roles.md" >}}
 
     See also [Manage database roles](/security/access-control/manage-roles/).
 
@@ -25,7 +25,7 @@
 
   description: |
 
-    {{< include-md file="shared-content/rbac/audit-remove-roles.md" >}}
+    {{< include-md file="shared-content/rbac-cloud/audit-remove-roles.md" >}}
 
     See also [Show roles in
     system](/security/cloud/access-control/manage-roles/#show-roles-in-system) and [Drop
