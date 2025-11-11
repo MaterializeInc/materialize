@@ -83,7 +83,7 @@ const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
 // mapping collection stored on disk.
 pub const RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL: &str = "<RUNTIME-ALTERABLE>";
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
@@ -158,7 +158,7 @@ pub struct BuiltinLog {
     pub access: Vec<MzAclItem>,
 }
 
-#[derive(Hash, Debug, PartialEq, Eq)]
+#[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
@@ -224,7 +224,7 @@ pub struct BuiltinType<T: TypeReference> {
     pub details: CatalogTypeDetails<T>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BuiltinFunc {
     pub schema: &'static str,
     pub name: &'static str,

@@ -103,6 +103,9 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["async_tokio"] }
 datadriven = "0.8.0"
+mz-persist = { path = "../persist", features = ["turmoil"] }
+mz-persist-client = { path = "../persist-client", features = ["turmoil"] }
+turmoil = "0.7.0"
 
 [[bench]]
 name = "catalog"
