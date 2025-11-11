@@ -36,7 +36,7 @@ use futures::FutureExt;
 use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
-    BUILTINS_STATIC, Builtin, Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
+    BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
     RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
@@ -187,8 +187,8 @@ impl Default for MigrationResult {
 /// Run builtin schema migrations.
 ///
 /// This is the entry point used by adapter when opening the catalog. It uses the hardcoded
-/// `BUILTINS_STATIC` and `MIGRATIONS` lists to initialize the lists of available builtins and
-/// required migrations, respectively.
+/// `BUILTINS` and `MIGRATIONS` lists to initialize the lists of available builtins and required
+/// migrations, respectively.
 pub(super) async fn run(
     build_info: &BuildInfo,
     deploy_generation: u64,
@@ -210,26 +210,36 @@ pub(super) async fn run(
     };
     let build_version = build_info.semver_version();
 
-    let builtins = BUILTINS_STATIC
-        .iter()
-        .map(|builtin| {
-            let object = SystemObjectDescription {
-                schema_name: builtin.schema().to_string(),
-                object_type: builtin.catalog_item_type(),
-                object_name: builtin.name().to_string(),
+    let collection_metadata = txn.get_collection_metadata();
+    let system_objects = txn
+        .get_system_object_mappings()
+        .map(|m| {
+            let object = m.description;
+            let global_id = m.unique_identifier.global_id;
+            let shard_id = collection_metadata.get(&global_id).copied();
+            let Some((_, builtin)) = BUILTIN_LOOKUP.get(&object) else {
+                panic!("missing builtin {object:?}");
             };
-            (object, builtin)
+            let info = ObjectInfo {
+                global_id,
+                shard_id,
+                builtin,
+                fingerprint: m.unique_identifier.fingerprint,
+            };
+            (object, info)
         })
         .collect();
 
-    let migration = Migration::new(
-        durable_version.clone(),
-        build_version.clone(),
+    let migration_shard = txn.get_builtin_migration_shard().expect("must exist");
+
+    let migration = Migration {
+        source_version: durable_version.clone(),
+        target_version: build_version.clone(),
         deploy_generation,
-        txn,
-        builtins,
+        system_objects,
+        migration_shard,
         config,
-    );
+    };
 
     let result = migration.run(MIGRATIONS).await.map_err(|e| {
         Error::new(ErrorKind::FailedBuiltinSchemaMigration {
@@ -239,11 +249,86 @@ pub(super) async fn run(
         })
     })?;
 
-    Ok(result)
+    result.apply(txn);
+
+    let replaced_items = txn
+        .get_system_object_mappings()
+        .map(|m| m.unique_identifier)
+        .filter(|ids| result.new_shards.contains_key(&ids.global_id))
+        .map(|ids| ids.catalog_id)
+        .collect();
+
+    Ok(MigrationResult {
+        replaced_items,
+        cleanup_action: result.cleanup_action,
+    })
+}
+
+/// Result produced by `Migration::run`.
+struct MigrationRunResult {
+    new_shards: BTreeMap<GlobalId, ShardId>,
+    new_fingerprints: BTreeMap<SystemObjectDescription, String>,
+    shards_to_finalize: BTreeSet<ShardId>,
+    cleanup_action: BoxFuture<'static, ()>,
+}
+
+impl Default for MigrationRunResult {
+    fn default() -> Self {
+        Self {
+            new_shards: BTreeMap::new(),
+            new_fingerprints: BTreeMap::new(),
+            shards_to_finalize: BTreeSet::new(),
+            cleanup_action: async {}.boxed(),
+        }
+    }
+}
+
+impl MigrationRunResult {
+    /// Apply this migration result to the given transaction.
+    fn apply(&self, txn: &mut Transaction<'_>) {
+        // Update collection metadata.
+        let replaced_ids = self.new_shards.keys().copied().collect();
+        let old_metadata = txn.delete_collection_metadata(replaced_ids);
+        txn.insert_collection_metadata(self.new_shards.clone())
+            .expect("inserting unique shards IDs after deleting existing entries");
+
+        // Register shards for finalization.
+        let mut unfinalized_shards: BTreeSet<_> =
+            old_metadata.into_iter().map(|(_, sid)| sid).collect();
+        unfinalized_shards.extend(self.shards_to_finalize.iter().copied());
+        txn.insert_unfinalized_shards(unfinalized_shards)
+            .expect("cannot fail");
+
+        // Update fingerprints.
+        let mappings = txn
+            .get_system_object_mappings()
+            .filter_map(|m| {
+                let fingerprint = self.new_fingerprints.get(&m.description)?;
+                Some(SystemObjectMapping {
+                    description: m.description,
+                    unique_identifier: SystemObjectUniqueIdentifier {
+                        catalog_id: m.unique_identifier.catalog_id,
+                        global_id: m.unique_identifier.global_id,
+                        fingerprint: fingerprint.clone(),
+                    },
+                })
+            })
+            .collect();
+        txn.set_system_object_mappings(mappings)
+            .expect("filtered existing mappings remain unique");
+    }
+}
+
+/// Information about a system object required to run a `Migration`.
+struct ObjectInfo {
+    global_id: GlobalId,
+    shard_id: Option<ShardId>,
+    builtin: &'static Builtin<NameReference>,
+    fingerprint: String,
 }
 
 /// Context of a builtin schema migration.
-struct Migration<'a, 'b> {
+struct Migration {
     /// The version we are migrating from.
     ///
     /// Same as the build version of the most recent leader process that successfully performed
@@ -253,39 +338,18 @@ struct Migration<'a, 'b> {
     ///
     /// Same as the build version of this process.
     target_version: Version,
+    /// The deploy generation of this process.
     deploy_generation: u64,
-    txn: &'a mut Transaction<'b>,
-    builtins: BTreeMap<SystemObjectDescription, &'static Builtin<NameReference>>,
-    object_ids: BTreeMap<SystemObjectDescription, SystemObjectUniqueIdentifier>,
+    /// Information about all objects in the system.
+    system_objects: BTreeMap<SystemObjectDescription, ObjectInfo>,
+    /// The ID of the migration shard.
+    migration_shard: ShardId,
+    /// Additional configuration.
     config: BuiltinItemMigrationConfig,
 }
 
-impl<'a, 'b> Migration<'a, 'b> {
-    fn new(
-        source_version: Version,
-        target_version: Version,
-        deploy_generation: u64,
-        txn: &'a mut Transaction<'b>,
-        builtins: BTreeMap<SystemObjectDescription, &'static Builtin<NameReference>>,
-        config: BuiltinItemMigrationConfig,
-    ) -> Self {
-        let object_ids = txn
-            .get_system_object_mappings()
-            .map(|m| (m.description, m.unique_identifier))
-            .collect();
-
-        Self {
-            source_version,
-            target_version,
-            deploy_generation,
-            txn,
-            builtins,
-            object_ids,
-            config,
-        }
-    }
-
-    async fn run(mut self, steps: &[MigrationStep]) -> anyhow::Result<MigrationResult> {
+impl Migration {
+    async fn run(self, steps: &[MigrationStep]) -> anyhow::Result<MigrationRunResult> {
         info!(
             deploy_generation = %self.deploy_generation,
             "running builtin schema migration: {} -> {}",
@@ -303,7 +367,7 @@ impl<'a, 'b> Migration<'a, 'b> {
 
         if self.source_version == self.target_version && !force {
             info!("skipping migration: already at target version");
-            return Ok(Default::default());
+            return Ok(MigrationRunResult::default());
         } else if self.source_version > self.target_version {
             bail!("downgrade not supported");
         }
@@ -317,26 +381,20 @@ impl<'a, 'b> Migration<'a, 'b> {
         info!("executing migration plan: {plan:?}");
 
         self.migrate_evolve(&plan.evolve).await?;
-        self.migrate_replace(&plan.replace).await?;
+        let new_shards = self.migrate_replace(&plan.replace).await?;
 
-        let mut migrated_items = BTreeSet::new();
-        let mut replaced_items = BTreeSet::new();
-        for object in &plan.evolve {
-            let id = self.object_ids[object].catalog_id;
-            migrated_items.insert(id);
-        }
-        for object in &plan.replace {
-            let id = self.object_ids[object].catalog_id;
-            migrated_items.insert(id);
-            replaced_items.insert(id);
-        }
+        let mut migrated_objects = BTreeSet::new();
+        migrated_objects.extend(plan.evolve);
+        migrated_objects.extend(plan.replace);
 
-        self.update_fingerprints(&migrated_items)?;
+        let new_fingerprints = self.update_fingerprints(&migrated_objects)?;
 
-        let cleanup_action = self.cleanup().await?;
+        let (shards_to_finalize, cleanup_action) = self.cleanup().await?;
 
-        Ok(MigrationResult {
-            replaced_items,
+        Ok(MigrationRunResult {
+            new_shards,
+            new_fingerprints,
+            shards_to_finalize,
             cleanup_action,
         })
     }
@@ -367,10 +425,11 @@ impl<'a, 'b> Migration<'a, 'b> {
                 "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
             );
 
-            let Some(builtin) = self.builtins.get(&object) else {
+            let Some(object_info) = self.system_objects.get(&object) else {
                 panic!("migration step for non-existent builtin: {object:?}");
             };
 
+            let builtin = object_info.builtin;
             use Builtin::*;
             assert!(
                 matches!(builtin, Table(..) | Source(..) | ContinualTask(..)),
@@ -415,9 +474,9 @@ impl<'a, 'b> Migration<'a, 'b> {
     /// Plan a forced migration of all objects using the given mechanism.
     fn plan_forced_migration(&self, mechanism: Mechanism) -> Plan {
         let objects = self
-            .builtins
+            .system_objects
             .iter()
-            .filter(|(_, builtin)| matches!(builtin, Builtin::Table(..) | Builtin::Source(..)))
+            .filter(|(_, info)| matches!(info.builtin, Builtin::Table(..) | Builtin::Source(..)))
             .map(|(object, _)| object.clone())
             .collect();
 
@@ -433,7 +492,6 @@ impl<'a, 'b> Migration<'a, 'b> {
     /// Upgrade the migration shard to the target version.
     async fn upgrade_migration_shard_version(&self) {
         let persist = &self.config.persist_client;
-        let shard_id = self.txn.get_builtin_migration_shard().expect("must exist");
         let diagnostics = Diagnostics {
             shard_name: "builtin_migration".to_string(),
             handle_purpose: format!("migration shard upgrade @ {}", self.target_version),
@@ -441,7 +499,7 @@ impl<'a, 'b> Migration<'a, 'b> {
 
         persist
             .upgrade_version::<migration_shard::Key, ShardId, Timestamp, StorageDiff>(
-                shard_id,
+                self.migration_shard,
                 diagnostics,
             )
             .await
@@ -457,32 +515,30 @@ impl<'a, 'b> Migration<'a, 'b> {
     }
 
     async fn migrate_evolve_one(&self, object: &SystemObjectDescription) -> anyhow::Result<()> {
-        let collection_metadata = self.txn.get_collection_metadata();
         let persist = &self.config.persist_client;
 
-        let Some(builtin) = self.builtins.get(object) else {
+        let Some(object_info) = self.system_objects.get(object) else {
             bail!("missing builtin {object:?}");
         };
-        let Some(id) = self.object_ids.get(object).map(|i| i.global_id) else {
-            bail!("missing id for builtin {object:?}");
-        };
-        let Some(&shard_id) = collection_metadata.get(&id) else {
+        let id = object_info.global_id;
+
+        let Some(shard_id) = object_info.shard_id else {
             // No shard is registered for this builtin. In leader mode, this is fine, we'll
             // register the shard during bootstrap. In read-only mode, we might be racing with the
             // leader to register the shard and it's unclear what sort of confusion can arise from
             // that -- better to bail out in this case.
             if self.config.read_only {
-                bail!("missing collection metadata for builtin {object:?} ({id})");
+                bail!("missing shard ID for builtin {object:?} ({id})");
             } else {
                 return Ok(());
             }
         };
 
-        let target_desc = match builtin {
+        let target_desc = match object_info.builtin {
             Builtin::Table(table) => &table.desc,
             Builtin::Source(source) => &source.desc,
             Builtin::ContinualTask(ct) => &ct.desc,
-            _ => bail!("not a storage collection: {builtin:?}"),
+            _ => bail!("not a storage collection: {object:?}"),
         };
 
         let diagnostics = Diagnostics {
@@ -589,7 +645,10 @@ impl<'a, 'b> Migration<'a, 'b> {
     }
 
     /// Migrate the given objects using the `Replacement` mechanism.
-    async fn migrate_replace(&mut self, objects: &[SystemObjectDescription]) -> anyhow::Result<()> {
+    async fn migrate_replace(
+        &self,
+        objects: &[SystemObjectDescription],
+    ) -> anyhow::Result<BTreeMap<GlobalId, ShardId>> {
         if objects.is_empty() {
             return Ok(Default::default());
         }
@@ -603,8 +662,8 @@ impl<'a, 'b> Migration<'a, 'b> {
 
         let mut ids_to_replace = BTreeSet::new();
         for object in objects {
-            if let Some(ids) = self.object_ids.get(object) {
-                ids_to_replace.insert(ids.global_id);
+            if let Some(info) = self.system_objects.get(object) {
+                ids_to_replace.insert(info.global_id);
             } else {
                 bail!("missing id for builtin {object:?}");
             }
@@ -627,14 +686,7 @@ impl<'a, 'b> Migration<'a, 'b> {
             }
         };
 
-        // Update the collection metadata in the transaction and enqueue old shards for
-        // finalization.
-        let old = self.txn.delete_collection_metadata(ids_to_replace);
-        let old_shards = old.into_iter().map(|(_, shard_id)| shard_id).collect();
-        self.txn.insert_unfinalized_shards(old_shards)?;
-        self.txn.insert_collection_metadata(replaced_shards)?;
-
-        Ok(())
+        Ok(replaced_shards)
     }
 
     /// Try to get or insert replacement shards for the given IDs into the migration shard, at
@@ -737,11 +789,10 @@ impl<'a, 'b> Migration<'a, 'b> {
         ReadHandle<migration_shard::Key, ShardId, Timestamp, StorageDiff>,
     ) {
         let persist = &self.config.persist_client;
-        let shard_id = self.txn.get_builtin_migration_shard().expect("must exist");
 
         persist
             .open(
-                shard_id,
+                self.migration_shard,
                 Arc::new(migration_shard::KeySchema),
                 Arc::new(ShardIdSchema),
                 diagnostics,
@@ -756,12 +807,10 @@ impl<'a, 'b> Migration<'a, 'b> {
         &self,
         diagnostics: Diagnostics,
     ) -> SinceHandle<migration_shard::Key, ShardId, Timestamp, StorageDiff, i64> {
-        let persist = &self.config.persist_client;
-        let shard_id = self.txn.get_builtin_migration_shard().expect("must exist");
-
-        persist
+        self.config
+            .persist_client
             .open_critical_since(
-                shard_id,
+                self.migration_shard,
                 // TODO: We may need to use a different critical reader
                 // id for this if we want to be able to introspect it via SQL.
                 PersistClient::CONTROLLER_CRITICAL_SINCE,
@@ -771,28 +820,26 @@ impl<'a, 'b> Migration<'a, 'b> {
             .expect("valid usage")
     }
 
-    /// Update the fingerprints stored for `migrated_items` in the catalog.
+    /// Update the fingerprints for `migrated_items`.
     ///
-    /// Also asserts that the stored fingerprints of all other system items match their builtin
-    /// definitions.
+    /// Returns the new fingerprints. Also asserts that the current fingerprints of all other
+    /// system items match their builtin definitions.
     fn update_fingerprints(
-        &mut self,
-        migrated_items: &BTreeSet<CatalogItemId>,
-    ) -> anyhow::Result<()> {
-        let mut updates = BTreeMap::new();
-        for (object, ids) in &self.object_ids {
-            let Some(builtin) = self.builtins.get(object) else {
-                bail!("missing builtin {object:?}");
-            };
+        &self,
+        migrated_items: &BTreeSet<SystemObjectDescription>,
+    ) -> anyhow::Result<BTreeMap<SystemObjectDescription, String>> {
+        let mut new_fingerprints = BTreeMap::new();
+        for (object, object_info) in &self.system_objects {
+            let id = object_info.global_id;
+            let builtin = object_info.builtin;
 
-            let id = ids.catalog_id;
             let fingerprint = builtin.fingerprint();
-            if fingerprint == ids.fingerprint {
+            if fingerprint == object_info.fingerprint {
                 continue; // fingerprint unchanged, nothing to do
             }
 
             // Fingerprint mismatch is expected for a migrated item.
-            let migrated = migrated_items.contains(&id);
+            let migrated = migrated_items.contains(object);
             // Some builtin types have schemas but no durable state. No migration needed for those.
             let ephemeral = matches!(
                 builtin,
@@ -800,41 +847,31 @@ impl<'a, 'b> Migration<'a, 'b> {
             );
 
             if migrated || ephemeral {
-                let new_mapping = SystemObjectMapping {
-                    description: object.clone(),
-                    unique_identifier: SystemObjectUniqueIdentifier {
-                        catalog_id: ids.catalog_id,
-                        global_id: ids.global_id,
-                        fingerprint,
-                    },
-                };
-                updates.insert(id, new_mapping);
+                new_fingerprints.insert(object.clone(), fingerprint);
             } else if builtin.runtime_alterable() {
                 // Runtime alterable builtins have no meaningful builtin fingerprint, and a
                 // sentinel value stored in the catalog.
                 assert_eq!(
-                    ids.fingerprint, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
-                    "fingerprint mismatch for runtime-alterable builtin {builtin:?} ({id})",
+                    object_info.fingerprint, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+                    "fingerprint mismatch for runtime-alterable builtin {object:?} ({id})",
                 );
             } else {
                 panic!(
                     "fingerprint mismatch for builtin {builtin:?} ({id}): {} != {}",
-                    fingerprint, ids.fingerprint,
+                    fingerprint, object_info.fingerprint,
                 );
             }
         }
 
-        self.txn.update_system_object_mappings(updates)?;
-
-        Ok(())
+        Ok(new_fingerprints)
     }
 
     /// Perform cleanup of migration state, i.e. the migration shard.
     ///
-    /// Returns a `Future` that must be run after the `txn` has been successfully committed to
-    /// durable state. This is used to remove entries from the migration shard only after we know
-    /// the respective shards will be finalized. Removing entries immediately would risk leaking
-    /// the shards.
+    /// Returns a list of shards to finalize, and a `Future` that must be run after the shard
+    /// finalization has been durably enqueued. The `Future` is used to remove entries from the
+    /// migration shard only after we know the respective shards will be finalized. Removing
+    /// entries immediately would risk leaking the shards.
     ///
     /// We only perform cleanup in leader mode, to keep the durable state changes made by read-only
     /// processes a minimal as possible. Given that Materialize doesn't support version downgrades,
@@ -845,14 +882,14 @@ impl<'a, 'b> Migration<'a, 'b> {
     /// shard should always be pretty small, so keeping migration state around for longer isn't a
     /// concern. As a result, we can keep the logic simple here and skip doing cleanup in response
     /// to transient failures, instead of retrying.
-    async fn cleanup(&mut self) -> anyhow::Result<BoxFuture<'static, ()>> {
+    async fn cleanup(&self) -> anyhow::Result<(BTreeSet<ShardId>, BoxFuture<'static, ()>)> {
         let noop_action = async {}.boxed();
+        let noop_result = (BTreeSet::new(), noop_action);
 
         if self.config.read_only {
-            return Ok(noop_action);
+            return Ok(noop_result);
         }
 
-        let collection_metadata = self.txn.get_collection_metadata();
         let diagnostics = Diagnostics {
             shard_name: "builtin_migration".to_string(),
             handle_purpose: "builtin schema migration cleanup".into(),
@@ -864,14 +901,14 @@ impl<'a, 'b> Migration<'a, 'b> {
         let upper = persist_write.fetch_recent_upper().await.clone();
         let write_ts = *upper.as_option().expect("migration shard not sealed");
         let Some(read_ts) = write_ts.step_back() else {
-            return Ok(noop_action);
+            return Ok(noop_result);
         };
 
         // Collect old entries to remove.
         let pred = |key: &migration_shard::Key| key.build_version < self.target_version;
         let Some(stale_entries) = read_migration_shard(&mut persist_read, read_ts, pred).await
         else {
-            return Ok(noop_action);
+            return Ok(noop_result);
         };
 
         debug!(
@@ -879,22 +916,26 @@ impl<'a, 'b> Migration<'a, 'b> {
             "cleaning migration shard up to version {}", self.target_version,
         );
 
-        let mut unfinalized_shards = BTreeSet::new();
+        let current_shards: BTreeMap<_, _> = self
+            .system_objects
+            .values()
+            .filter_map(|o| o.shard_id.map(|shard_id| (o.global_id, shard_id)))
+            .collect();
+
+        let mut shards_to_finalize = BTreeSet::new();
         let mut retractions = Vec::new();
         for (key, shard_id) in stale_entries {
             // The migration shard contains both shards created during aborted upgrades and shards
             // created during successful upgrades. The latter may still be in use, so we have to
             // check and only finalize those that aren't anymore.
             let gid = GlobalId::System(key.global_id);
-            if collection_metadata.get(&gid) != Some(&shard_id) {
-                unfinalized_shards.insert(shard_id);
+            if current_shards.get(&gid) != Some(&shard_id) {
+                shards_to_finalize.insert(shard_id);
             }
 
             retractions.push(((key, shard_id), write_ts, -1));
         }
 
-        // Arrange for shard finalization and subsequent removal of the migration shard entries.
-        self.txn.insert_unfinalized_shards(unfinalized_shards)?;
         let cleanup_action = async move {
             if !retractions.is_empty() {
                 let new_upper = Antichain::from_elem(write_ts.step_forward());
@@ -918,7 +959,7 @@ impl<'a, 'b> Migration<'a, 'b> {
             .await;
         soft_assert_or_log!(result.is_none_or(|r| r.is_ok()), "opaque mismatch");
 
-        Ok(cleanup_action)
+        Ok((shards_to_finalize, cleanup_action))
     }
 }
 
