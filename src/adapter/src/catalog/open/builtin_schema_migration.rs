@@ -287,6 +287,7 @@ impl<'a, 'b> Migration<'a, 'b> {
 
     async fn run(mut self, steps: &[MigrationStep]) -> anyhow::Result<MigrationResult> {
         info!(
+            deploy_generation = %self.deploy_generation,
             "running builtin schema migration: {} -> {}",
             self.source_version, self.target_version
         );
@@ -654,29 +655,36 @@ impl<'a, 'b> Migration<'a, 'b> {
         let upper = persist_write.fetch_recent_upper().await;
         let write_ts = *upper.as_option().expect("migration shard not sealed");
 
+        let mut ids_to_replace = ids_to_replace.clone();
+        let mut replaced_shards = BTreeMap::new();
+
         // Another process might already have done a shard replacement at our version and
         // generation, in which case we can directly reuse the replacement shards.
+        //
+        // Note that we can't assume that the previous process had the same `ids_to_replace` as we
+        // do. The set of migrations to run depends on both the source and the target version, and
+        // the migration shard is not keyed by source version. The previous writer might have seen
+        // a different source version, if there was a concurrent migration by a leader process.
         if let Some(read_ts) = write_ts.step_back() {
             let pred = |key: &migration_shard::Key| {
                 key.build_version == self.target_version
                     && key.deploy_generation == Some(self.deploy_generation)
             };
             if let Some(entries) = read_migration_shard(persist_read, read_ts, pred).await {
-                let replaced_shards: BTreeMap<_, _> = entries
-                    .into_iter()
-                    .map(|(key, shard_id)| (GlobalId::System(key.global_id), shard_id))
-                    .collect();
-
-                // Processes at the same build version are expected to migrate the same collections.
-                let replaced_ids: BTreeSet<_> = replaced_shards.keys().copied().collect();
-                if replaced_ids != *ids_to_replace {
-                    bail!("replaced ids mismatch: {replaced_ids:?} != {ids_to_replace:?}");
+                for (key, shard_id) in entries {
+                    let id = GlobalId::System(key.global_id);
+                    if ids_to_replace.remove(&id) {
+                        replaced_shards.insert(id, shard_id);
+                    }
                 }
 
                 debug!(
-                    %read_ts, ?replaced_shards,
+                    %read_ts, ?replaced_shards, ?ids_to_replace,
                     "found existing entries in migration shard",
                 );
+            }
+
+            if ids_to_replace.is_empty() {
                 return Ok(Some(replaced_shards));
             }
         }
@@ -684,9 +692,8 @@ impl<'a, 'b> Migration<'a, 'b> {
         // Generate new shard IDs and attempt to insert them into the migration shard. If we get a
         // CaA failure at `write_ts` that means a concurrent process has inserted in the meantime
         // and we need to re-check the migration shard contents.
-        let mut replaced_shards = BTreeMap::new();
         let mut updates = Vec::new();
-        for &id in ids_to_replace {
+        for id in ids_to_replace {
             let shard_id = ShardId::new();
             replaced_shards.insert(id, shard_id);
 
