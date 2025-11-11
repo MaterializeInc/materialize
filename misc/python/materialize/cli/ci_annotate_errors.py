@@ -170,12 +170,12 @@ IGNORE_RE = re.compile(
     | (txn-wal-fencing-mz_first-|platform-checks-mz_|parallel-workload-|data-ingest-|zippy-|legacy-upgrade-).* \| .*fenced\ by\ envd
     | internal\ error:\ no\ AWS\ external\ ID\ prefix\ configured
     # For platform-checks upgrade tests
-    | platform-checks-.* \| .* received\ persist\ state\ from\ the\ future
+    | received\ persist\ state\ from\ the\ future
     | cannot\ load\ unknown\ system\ parameter\ from\ catalog\ storage(\ to\ set\ (default|configured)\ parameter)?
     # For tests we purposely trigger this error
     | skip-version-upgrade-materialized.* \| .* incompatible\ persist\ version\ \d+\.\d+\.\d+(-dev)?,\ current:\ \d+\.\d+\.\d+(-dev\.\d+)?,\ make\ sure\ to\ upgrade\ the\ catalog\ one\ version\ forward\ at\ a\ time
     # For 0dt upgrades
-    | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty)
+    | halting\ process:\ (unable\ to\ confirm\ leadership|fenced\ out\ old\ deployment;\ rebooting\ as\ leader|this\ deployment\ has\ been\ fenced\ out|dependency\ since\ frontier\ is\ empty\ while\ dependent\ upper\ is\ not\ empty|code\ at\ version\ .*\ cannot\ read\ data\ with\ version)
     | zippy-materialized.* \| .* halting\ process:\ Server\ started\ with\ requested\ generation
     | there\ have\ been\ DDL\ that\ we\ need\ to\ react\ to;\ rebooting\ in\ read-only\ mode
     # Don't care for ssh problems
