@@ -290,6 +290,9 @@ pub struct SqlServerColumnDesc {
     /// Note: This type might differ from the `decode_type`, e.g. a user can
     /// specify `TEXT COLUMNS` to decode columns as text.
     pub column_type: Option<SqlColumnType>,
+    /// This field is deprecated and will be removed in a future version.  This exists only for the
+    /// purpose of migrating from old representations.
+    pub primary_key_constraint: Option<Arc<str>>,
     /// Rust type we should parse the data from a [`tiberius::Row`] as.
     pub decode_type: SqlServerColumnDecodeType,
     /// Raw type of the column as we read it from upstream.
@@ -322,6 +325,7 @@ impl SqlServerColumnDesc {
         };
         SqlServerColumnDesc {
             name: Arc::clone(&raw.name),
+            primary_key_constraint: None,
             column_type,
             decode_type,
             raw_type: Arc::clone(&raw.data_type),
@@ -352,6 +356,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
         ProtoSqlServerColumnDesc {
             name: self.name.to_string(),
             column_type: self.column_type.into_proto(),
+            primary_key_constraint: self.primary_key_constraint.as_ref().map(|v| v.to_string()),
             decode_type: Some(self.decode_type.into_proto()),
             raw_type: self.raw_type.to_string(),
         }
@@ -361,6 +366,7 @@ impl RustType<ProtoSqlServerColumnDesc> for SqlServerColumnDesc {
         Ok(SqlServerColumnDesc {
             name: proto.name.into(),
             column_type: proto.column_type.into_rust()?,
+            primary_key_constraint: proto.primary_key_constraint.map(|v| v.into()),
             decode_type: proto
                 .decode_type
                 .into_rust_if_some("ProtoSqlServerColumnDesc::decode_type")?,

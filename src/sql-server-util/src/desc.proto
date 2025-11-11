@@ -33,11 +33,10 @@ message ProtoSqlServerTableConstraint {
 }
 
 message ProtoSqlServerColumnDesc {
-  reserved 22;
-
   string name = 1;
   mz_repr.relation_and_scalar.ProtoColumnType column_type = 2;
   string raw_type = 21;
+  optional string primary_key_constraint = 22;
 
   oneof decode_type {
     google.protobuf.Empty bool = 4;
