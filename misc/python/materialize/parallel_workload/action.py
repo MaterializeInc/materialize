@@ -1513,6 +1513,10 @@ class FlipFlagsAction(Action):
             "enable_paused_cluster_readhold_downgrade",
             "enable_with_ordinality_legacy_fallback",
             "enable_builtin_migration_schema_evolution",
+            "kafka_retry_backoff",
+            "kafka_retry_backoff_max",
+            "kafka_reconnect_backoff",
+            "kafka_reconnect_backoff_max",
         ]
 
     def run(self, exe: Executor) -> bool:

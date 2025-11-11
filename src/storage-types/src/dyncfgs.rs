@@ -129,6 +129,40 @@ pub const KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS: Config<usize> = Config
         most this number of elements.",
 );
 
+/// Sets retry.backoff.ms in librdkafka for sources and sinks.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RETRY_BACKOFF: Config<Duration> = Config::new(
+    "kafka_retry_backoff",
+    Duration::from_millis(100),
+    "Sets retry.backoff.ms in librdkafka for sources and sinks.",
+);
+
+/// Sets retry.backoff.max.ms in librdkafka for sources and sinks.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RETRY_BACKOFF_MAX: Config<Duration> = Config::new(
+    "kafka_retry_backoff_max",
+    Duration::from_secs(1),
+    "Sets retry.backoff.max.ms in librdkafka for sources and sinks.",
+);
+
+/// Sets reconnect.backoff.ms in librdkafka for sources and sinks.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RECONNECT_BACKOFF: Config<Duration> = Config::new(
+    "kafka_reconnect_backoff",
+    Duration::from_millis(100),
+    "Sets reconnect.backoff.ms in librdkafka for sources and sinks.",
+);
+
+/// Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.
+/// We default to 30s instead of 10s to avoid constant reconnection attempts in the event of
+/// auth changes or unavailability.
+/// See <https://docs.confluent.io/platform/current/clients/librdkafka/html/md_CONFIGURATION.html>
+pub const KAFKA_RECONNECT_BACKOFF_MAX: Config<Duration> = Config::new(
+    "kafka_reconnect_backoff_max",
+    Duration::from_secs(30),
+    "Sets reconnect.backoff.max.ms in librdkafka for sources and sinks.",
+);
+
 // MySQL
 
 /// Replication heartbeat interval requested from the MySQL server.
@@ -301,6 +335,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM)
         .add(&KAFKA_METADATA_FETCH_INTERVAL)
         .add(&KAFKA_POLL_MAX_WAIT)
+        .add(&KAFKA_RETRY_BACKOFF)
+        .add(&KAFKA_RETRY_BACKOFF_MAX)
+        .add(&KAFKA_RECONNECT_BACKOFF)
+        .add(&KAFKA_RECONNECT_BACKOFF_MAX)
         .add(&MYSQL_OFFSET_KNOWN_INTERVAL)
         .add(&MYSQL_REPLICATION_HEARTBEAT_INTERVAL)
         .add(&ORE_OVERFLOWING_BEHAVIOR)
