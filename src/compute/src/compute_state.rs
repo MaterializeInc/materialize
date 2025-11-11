@@ -498,10 +498,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             .chain(dataflow.copy_to_ids())
             .collect();
 
-        // We always initialize as read_only=true. Only when we're explicitly
-        // allowed to we switch to read-write.
-        let (read_only_tx, read_only_rx) = watch::channel(true);
-
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
@@ -511,8 +507,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 is_subscribe_or_copy,
                 as_of.clone(),
                 metrics,
-                read_only_tx.clone(),
-                read_only_rx.clone(),
             );
 
             if let Some(logger) = self.compute_state.compute_logger.clone() {
@@ -611,11 +605,9 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
     }
 
     fn handle_allow_writes(&mut self, id: GlobalId) {
-        // TODO: We're turning on persist compaction on the first allow-writes command
-        //   as we don't have a better signal. If any collection is in write mode,
-        //   persist compaction is enabled for all collections, unless disabled for specific
-        //   collections. This should be fine as persist only compacts after making
-        //   durable changes, such as appending a batch or advancing the upper.
+        // Enable persist compaction on any allow-writes command. We
+        // assume persist only compacts after making durable changes,
+        // such as appending a batch or advancing the upper.
         self.compute_state.persist_clients.cfg().enable_compaction();
 
         if let Some(collection) = self.compute_state.collections.get_mut(&id) {
@@ -676,9 +668,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
             compute_logger: logger,
         } = logging::initialize(self.timely_worker, &config);
 
-        // Log collections are always read-write.
-        let (read_only_tx, read_only_rx) = watch::channel(true);
-
         let dataflow_index = Rc::new(dataflow_index);
         let mut log_index_ids = config.index_logs;
         for (log, trace) in traces {
@@ -697,8 +686,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 is_subscribe_or_copy,
                 as_of,
                 metrics,
-                read_only_tx.clone(),
-                read_only_rx.clone(),
             );
 
             let logging =
@@ -1694,9 +1681,11 @@ impl CollectionState {
         is_subscribe_or_copy: bool,
         as_of: Antichain<Timestamp>,
         metrics: CollectionMetrics,
-        read_only_tx: watch::Sender<bool>,
-        read_only_rx: watch::Receiver<bool>,
     ) -> Self {
+        // We always initialize as read_only=true. Only when we're explicitly
+        // allowed to we switch to read-write.
+        let (read_only_tx, read_only_rx) = watch::channel(true);
+
         Self {
             reported_frontiers: ReportedFrontiers::new(),
             dataflow_index,

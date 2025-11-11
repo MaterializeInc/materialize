@@ -166,6 +166,7 @@ where
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
+        read_only: bool,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -195,6 +196,7 @@ where
                 response_tx,
                 Arc::clone(&read_hold_tx),
                 introspection_tx,
+                read_only,
             )
             .run(),
         );
@@ -222,7 +224,7 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     ///
     /// When in read-only mode, this instance will not update persistent state, such as
     /// wallclock lag introspection.
-    read_only_introspection: bool,
+    read_only: bool,
     /// The workload class of this instance.
     ///
     /// This is currently only used to annotate metrics.
@@ -653,7 +655,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
     /// the same approach, ensuring that both controllers commit their lags at roughly the same
     /// time, avoiding confusion caused by inconsistencies.
     fn maybe_record_wallclock_lag(&mut self) {
-        if self.read_only_introspection {
+        if self.read_only {
             return;
         }
 
@@ -903,7 +905,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             storage_collections: _,
             peek_stash_persist_location: _,
             initialized,
-            read_only_introspection,
+            read_only: read_only_introspection,
             workload_class,
             replicas,
             collections,
@@ -984,6 +986,7 @@ where
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         read_hold_tx: read_holds::ChangeTx<T>,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
+        read_only: bool,
     ) -> Self {
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
@@ -1011,7 +1014,7 @@ where
             storage_collections: storage,
             peek_stash_persist_location,
             initialized: false,
-            read_only_introspection: true,
+            read_only,
             workload_class: None,
             replicas: Default::default(),
             collections,
@@ -1087,12 +1090,6 @@ where
             self.send(ComputeCommand::InitializationComplete);
             self.initialized = true;
         }
-    }
-
-    /// Allow writes to introspection collections.
-    #[mz_ore::instrument(level = "debug")]
-    pub fn allow_introspection_writes(&mut self) {
-        self.read_only_introspection = false;
     }
 
     /// Allows collections to affect writes to external systems (persist).
@@ -2382,7 +2379,7 @@ struct CollectionState<T: ComputeControllerTimestamp> {
 
     /// Whether this collection is in read-only mode.
     ///
-    /// When in read-only mode, the dataflow is allowed to affect external state (largely persist).
+    /// When in read-only mode, the dataflow is not allowed to affect external state (largely persist).
     read_only: bool,
 
     /// State shared with the `ComputeController`.

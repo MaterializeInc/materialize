@@ -541,6 +541,7 @@ where
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
+            self.read_only,
         );
 
         let instance = InstanceState::new(client, collections);
@@ -554,10 +555,6 @@ where
         let instance = self.instances.get_mut(&id).expect("instance just added");
         if self.initialized {
             instance.call(Instance::initialization_complete);
-        }
-
-        if !self.read_only {
-            instance.call(Instance::allow_introspection_writes);
         }
 
         let mut config_params = self.config.clone();
