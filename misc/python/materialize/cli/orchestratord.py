@@ -31,7 +31,11 @@ DEFAULT_POSTGRES = (
 )
 DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
 
-IMAGE_REGISTRY = "ghcr.io/materializeinc" if ui.env_is_truthy("CI") else "materialize"
+IMAGE_REGISTRY = (
+    "ghcr.io/materializeinc/materialize"
+    if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
+    else "materialize"
+)
 
 
 def main():
@@ -115,6 +119,7 @@ def run(args: argparse.Namespace):
         "misc/helm-charts/operator",
         "--atomic",
         f"--set=operator.image.tag={DEV_IMAGE_TAG}",
+        f"--set=operator.image.repository={IMAGE_REGISTRY}/orchestratord",
         "--create-namespace",
         f"--namespace={args.namespace}",
     ]
