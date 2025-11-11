@@ -2401,9 +2401,11 @@ steps:
               composition: orchestratord
               args: [--action=upgrade, --properties=individual, --runtime=3600, --recreate-cluster]
               ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"
 
       - id: orchestratord-upgrade-combine
         label: "Orchestratord test (upgrade, combine props)"
@@ -2414,9 +2416,11 @@ steps:
               composition: orchestratord
               args: [--action=upgrade, --properties=combine, --runtime=3600, --recreate-cluster]
               ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"
 
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
@@ -2427,9 +2431,11 @@ steps:
               composition: orchestratord
               args: [--action=upgrade-chain, --properties=individual, --runtime=3600, --recreate-cluster]
               ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"
 
       - id: orchestratord-upgrade-chain-combine
         label: "Orchestratord test (upgrade chain, combine props)"
@@ -2440,6 +2446,8 @@ steps:
               composition: orchestratord
               args: [--action=upgrade-chain, --properties=combine, --runtime=3600, --recreate-cluster]
               ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-16cpu-32gb
-        skip: "https://github.com/MaterializeInc/database-issues/issues/9891"

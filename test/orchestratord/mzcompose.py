@@ -30,7 +30,7 @@ import requests
 import yaml
 from semver.version import Version
 
-from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize import MZ_ROOT, ci_util, git, spawn, ui
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -1517,6 +1517,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             for mods in mods_it:
                 run_scenario([mods], definition)
         elif action == Action.Upgrade:
+            assert not ui.env_is_truthy(
+                "MZ_GHCR", "1"
+            ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
                 datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
@@ -1535,6 +1538,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ]
                 run_scenario(scenario, definition)
         elif action == Action.UpgradeChain:
+            assert not ui.env_is_truthy(
+                "MZ_GHCR", "1"
+            ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
                 datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
