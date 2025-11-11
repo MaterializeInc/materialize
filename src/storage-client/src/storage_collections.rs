@@ -632,6 +632,19 @@ where
                 .await;
             SinceHandleWrapper::Leased(read_handle)
         } else {
+            // We're managing the data for this shard in read-write mode, which would fence out other
+            // processes in read-only mode; it's safe to upgrade the metadata version.
+            persist_client
+                .upgrade_version::<SourceData, (), T, StorageDiff>(
+                    shard,
+                    Diagnostics {
+                        shard_name: id.to_string(),
+                        handle_purpose: format!("controller data for {}", id),
+                    },
+                )
+                .await
+                .expect("invalid persist usage");
+
             let since_handle = self
                 .open_critical_handle(id, shard, since, persist_client)
                 .await;

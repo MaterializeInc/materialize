@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
+use crate::error::InvalidUsage;
 use crate::internal::machine::Machine;
 use crate::internal::state::Since;
 use crate::stats::SnapshotStats;
@@ -321,6 +322,19 @@ where
                 shard_id: machine.shard_id(),
                 num_updates,
             })
+        }
+    }
+
+    /// Upgrade the version associated with this shard, applying any state migrations. This
+    /// is irrevocable and will fence out old versions: it should only be run only once Materialize
+    /// has fully committed to the new version.
+    pub async fn upgrade_version(&self) -> Result<(), InvalidUsage<T>> {
+        match self.machine.upgrade_version().await {
+            Ok(maintenance) => {
+                let () = maintenance.perform(&self.machine, &self.gc).await;
+                Ok(())
+            }
+            Err(version) => Err(InvalidUsage::IncompatibleVersion { version }),
         }
     }
 

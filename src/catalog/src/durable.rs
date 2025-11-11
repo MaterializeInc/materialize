@@ -290,7 +290,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     fn is_savepoint(&self) -> bool;
 
     /// Marks the bootstrap process as complete.
-    fn mark_bootstrap_complete(&mut self);
+    async fn mark_bootstrap_complete(&mut self);
 
     /// Creates a new durable catalog state transaction.
     async fn transaction(&mut self) -> Result<Transaction, CatalogError>;

@@ -2694,7 +2694,7 @@ where
                 .expect("txns schema shouldn't change");
             persist_handles::PersistTableWriteWorker::new_read_only_mode(txns_write)
         } else {
-            let txns = TxnsHandle::open(
+            let mut txns = TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
                 txns_client.dyncfgs().clone(),
@@ -2702,6 +2702,7 @@ where
                 txns_id,
             )
             .await;
+            txns.upgrade_version().await;
             persist_handles::PersistTableWriteWorker::new_txns(txns)
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;

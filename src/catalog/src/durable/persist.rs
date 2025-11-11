@@ -1299,6 +1299,7 @@ impl UnopenedPersistCatalogState {
             catalog
                 .increment_catalog_upgrade_shard_version(self.update_applier.organization_id)
                 .await;
+
             let write_handle = catalog
                 .persist_client
                 .open_writer::<SourceData, (), Timestamp, i64>(
@@ -1711,8 +1712,14 @@ impl DurableCatalogState for PersistCatalogState {
         matches!(self.mode, Mode::Savepoint)
     }
 
-    fn mark_bootstrap_complete(&mut self) {
+    async fn mark_bootstrap_complete(&mut self) {
         self.bootstrap_complete = true;
+        if matches!(self.mode, Mode::Writable) {
+            self.since_handle
+                .upgrade_version()
+                .await
+                .expect("invalid usage")
+        }
     }
 
     #[mz_ore::instrument(level = "debug")]

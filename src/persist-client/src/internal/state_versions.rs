@@ -335,6 +335,19 @@ impl StateVersions {
                 shard_metrics
                     .inline_part_bytes
                     .set(u64::cast_from(size_metrics.inline_part_bytes));
+                shard_metrics.stale_version.set(
+                    if new_state
+                        .state
+                        .collections
+                        .version
+                        .cmp_precedence(&self.cfg.build_version)
+                        .is_lt()
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                );
 
                 let spine_metrics = new_state.collections.trace.spine_metrics();
                 shard_metrics

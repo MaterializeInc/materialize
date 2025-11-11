@@ -702,6 +702,17 @@ where
         .await
     }
 
+    /// Upgrade the version on the backing shard.
+    ///
+    /// In practice, this will likely only be called from the singleton
+    /// controller process.
+    pub async fn upgrade_version(&mut self) {
+        self.txns_since
+            .upgrade_version()
+            .await
+            .expect("invalid usage")
+    }
+
     /// Returns the [ShardId] of the txns shard.
     pub fn txns_id(&self) -> ShardId {
         self.txns_write.shard_id()

@@ -357,7 +357,7 @@ async fn migrate_builtin_collections_incompatible(
             shard_id,
             Arc::new(TableKeySchema),
             Arc::new(ShardIdSchema),
-            diagnostics,
+            diagnostics.clone(),
             USE_CRITICAL_SINCE_CATALOG.get(persist_client.dyncfgs()),
         )
         .await
@@ -550,6 +550,10 @@ async fn migrate_builtin_collections_incompatible(
                     error!("Unable to remove old entries from migration shard: {e:?}");
                 }
             }
+            persist_client
+                .upgrade_version::<TableKey, ShardId, Timestamp, StorageDiff>(shard_id, diagnostics)
+                .await
+                .expect("valid usage");
         }
     }
     .boxed();
