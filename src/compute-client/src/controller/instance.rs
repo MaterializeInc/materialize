@@ -1101,10 +1101,24 @@ where
     #[mz_ore::instrument(level = "debug")]
     pub fn allow_writes(&mut self, collection_id: GlobalId) -> Result<(), CollectionMissing> {
         let collection = self.collection_mut(collection_id)?;
-        if collection.read_only {
-            collection.read_only = false;
-            self.send(ComputeCommand::AllowWrites(collection_id));
+
+        // Do not send redundant allow-writes commands.
+        if !collection.read_only {
+            return Ok(());
         }
+
+        // Don't send allow-writes for collections that are not installed.
+        let as_of = collection.read_frontier();
+
+        // If the collection has an empty `as_of`, it was either never installed on the replica or
+        // has since been dropped. In either case the replica does not expect any commands for it.
+        if as_of.is_empty() {
+            return Ok(());
+        }
+
+        collection.read_only = false;
+        self.send(ComputeCommand::AllowWrites(collection_id));
+
         Ok(())
     }
 
