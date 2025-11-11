@@ -136,7 +136,9 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 args.tracing,
                 namespace,
                 Arc::clone(&metrics),
-            ),
+                client.clone(),
+            )
+            .await,
             watcher::Config::default().timeout(29),
         )
         .run(),
