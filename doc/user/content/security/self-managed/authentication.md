@@ -84,8 +84,6 @@ and maintenance tasks.
 
 ## Configuring SASL/SCRAM authentication
 
-{{< public-preview >}}This feature{{</ public-preview >}}
-
 {{< note >}}
 SASL/SCRAM-SHA-256 authentication requires Materialize v0.147.16 or later.
 {{</ note >}}
