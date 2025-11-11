@@ -33,6 +33,10 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM cluster_spec_sheet_result
     WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
     UNION
+    SELECT 'cluster_spec_sheet_environmentd_result', build_job_id, build_job_id, 'cluster spec sheet environmentd result references missing build job'
+    FROM cluster_spec_sheet_environmentd_result
+    WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
+    UNION
     SELECT 'build_annotation', build_job_id, build_job_id, 'build annotation references missing build job'
     FROM build_annotation
     WHERE build_job_id NOT IN (SELECT build_job_id FROM build_job)
