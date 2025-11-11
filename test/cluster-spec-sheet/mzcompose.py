@@ -49,10 +49,17 @@ from materialize.ui import CommandFailureCausedUIError, UIError
 
 CLUSTER_SPEC_SHEET_VERSION = "1.0.0"  # Used for uploading test analytics results
 
-REGION = os.getenv("REGION", "aws/us-east-1")
-ENVIRONMENT = os.getenv("ENVIRONMENT", "production")
-USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
-APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
+PRODUCTION_REGION = "aws/us-east-1"
+PRODUCTION_ENVIRONMENT = "production"
+PRODUCTION_USERNAME = os.getenv("NIGHTLY_MZ_USERNAME", "infra+bot@materialize.com")
+PRODUCTION_APP_PASSWORD = os.getenv("MZ_CLI_APP_PASSWORD")
+
+STAGING_REGION = "aws/eu-west-1"
+STAGING_ENVIRONMENT = "staging"
+STAGING_USERNAME = os.getenv(
+    "NIGHTLY_CANARY_USERNAME", "infra+nightly-canary@materialize.com"
+)
+STAGING_APP_PASSWORD = os.getenv("NIGHTLY_CANARY_APP_PASSWORD")
 
 MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     "memory_limiter_interval": "0s",
@@ -60,11 +67,8 @@ MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
 }
 
 SERVICES = [
-    Mz(
-        region=REGION,
-        environment=ENVIRONMENT,
-        app_password=APP_PASSWORD or "",
-    ),
+    # Overridden below
+    Mz(app_password=""),
     Materialized(
         propagate_crashes=True,
         additional_system_parameter_defaults=MATERIALIZED_ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS,
@@ -85,15 +89,25 @@ SCENARIO_TPCH_QUERIES_STRONG = "tpch_queries_strong"
 SCENARIO_TPCH_QUERIES_WEAK = "tpch_queries_weak"
 SCENARIO_TPCH_STRONG = "tpch_strong"
 SCENARIO_QPS_ENVD_STRONG_SCALING = "qps_envd_strong_scaling"
-ALL_SCENARIOS = [
+
+SCENARIOS_CLUSTERD = [
     SCENARIO_AUCTION_STRONG,
     SCENARIO_AUCTION_WEAK,
     SCENARIO_TPCH_MV_STRONG,
     SCENARIO_TPCH_QUERIES_STRONG,
     SCENARIO_TPCH_QUERIES_WEAK,
     SCENARIO_TPCH_STRONG,
+]
+SCENARIOS_ENVIRONMENTD = [
     SCENARIO_QPS_ENVD_STRONG_SCALING,
 ]
+ALL_SCENARIOS = SCENARIOS_CLUSTERD + SCENARIOS_ENVIRONMENTD
+
+SCENARIO_GROUPS = {
+    "cluster": SCENARIOS_CLUSTERD,
+    "environmentd": SCENARIOS_ENVIRONMENTD,
+    "all": ALL_SCENARIOS,
+}
 
 
 class ConnectionHandler:
@@ -1898,7 +1912,7 @@ class QpsEnvdStrongScalingScenario(Scenario):
 
 
 def disable_region(c: Composition, hard: bool) -> None:
-    print(f"Shutting down region {REGION} ...")
+    print("Shutting down region ...")
 
     try:
         if hard:
@@ -2008,9 +2022,9 @@ def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
     """
     if isinstance(target, CloudTarget):
         host = target.c.cloud_hostname()
-        user = USERNAME
+        user = target.username
         # Prefer the newly created app password when present; fall back to the CLI password.
-        password = target.new_app_password or APP_PASSWORD or ""
+        password = target.new_app_password or target.app_password or ""
         sslmode = "require"
         print(
             f"Waiting for cloud environmentd at {host}:6875 to come up with username {user} ..."
@@ -2068,9 +2082,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     parser.add_argument(
         "--target",
-        default="cloud",
-        choices=["cloud", "docker"],
-        help="Target to deploy to (default: cloud).",
+        default="cloud-production",
+        choices=["cloud-production", "cloud-staging", "docker"],
+        help="Target to deploy to (default: cloud-production).",
     )
     parser.add_argument(
         "--max-scale",
@@ -2090,192 +2104,223 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "scenarios",
         nargs="*",
-        default=ALL_SCENARIOS,
-        help="Scenarios to run.",
+        default=["all"],
+        choices=ALL_SCENARIOS + list(SCENARIO_GROUPS.keys()),
+        help="Scenarios to run, supports individual scenario names as well as 'all', 'cluster', 'environmentd'.",
     )
 
     args = parser.parse_args()
-    scenarios = set(args.scenarios)
+
+    scenarios: set[str] = set()
+    for s in args.scenarios:
+        if s in SCENARIO_GROUPS:
+            scenarios.update(SCENARIO_GROUPS[s])
+        else:
+            scenarios.add(s)
+
     unknown = scenarios - set(ALL_SCENARIOS)
     if unknown:
         raise ValueError(f"Unknown scenarios: {unknown}")
     print(f"--- Running scenarios: {', '.join(scenarios)}")
 
-    if args.target == "cloud":
-        target: BenchTarget = CloudTarget(c)
+    if args.target == "cloud-production":
+        target: BenchTarget = CloudTarget(
+            c, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
+        )
+        mz = Mz(
+            region=PRODUCTION_REGION,
+            environment=PRODUCTION_ENVIRONMENT,
+            app_password=PRODUCTION_APP_PASSWORD or "",
+        )
+    elif args.target == "cloud-staging":
+        target: BenchTarget = CloudTarget(
+            c, STAGING_USERNAME, STAGING_APP_PASSWORD or ""
+        )
+        mz = Mz(
+            region=STAGING_REGION,
+            environment=STAGING_ENVIRONMENT,
+            app_password=STAGING_APP_PASSWORD or "",
+        )
     elif args.target == "docker":
         target = DockerTarget(c)
+        mz = Mz(app_password="")
     else:
         raise ValueError(f"Unknown target: {args.target}")
 
-    max_scale = args.max_scale
-    if target.max_scale() is not None:
-        max_scale = min(max_scale, target.max_scale())
+    with c.override(mz):
+        max_scale = args.max_scale
+        if target.max_scale() is not None:
+            max_scale = min(max_scale, target.max_scale())
 
-    if args.cleanup:
-        target.cleanup()
-
-    target.initialize()
-
-    # Derive two result files (cluster and envd-focused) from the provided --record path
-    base_name = os.path.splitext(args.record)[0]
-    cluster_path = f"{base_name}.cluster.csv"
-    envd_path = f"{base_name}.envd.csv"
-
-    cluster_file = open(cluster_path, "w", newline="")
-    envd_file = open(envd_path, "w", newline="")
-
-    # Traditional scenarios: cluster-focused schema
-    cluster_writer = csv.DictWriter(
-        cluster_file,
-        fieldnames=[
-            "scenario",
-            "scenario_version",
-            "scale",
-            "mode",
-            "category",
-            "test_name",
-            "cluster_size",
-            "repetition",
-            "size_bytes",
-            "time_ms",
-        ],
-        extrasaction="ignore",
-    )
-    cluster_writer.writeheader()
-
-    # Envd-focused scenarios: QPS schema
-    envd_writer = csv.DictWriter(
-        envd_file,
-        fieldnames=[
-            "scenario",
-            "scenario_version",
-            "scale",
-            "mode",
-            "category",
-            "test_name",
-            "envd_cpus",
-            "repetition",
-            "qps",
-        ],
-        extrasaction="ignore",
-    )
-    envd_writer.writeheader()
-
-    def process(scenario: str) -> None:
-        with c.test_case(scenario):
-            conn = ConnectionHandler(target.new_connection)
-
-            # This cluster is just for misc setup queries.
-            size = "50cc" if isinstance(target, CloudTarget) else "scale=1,workers=1"
-            with conn as cur:
-                cur.execute("DROP CLUSTER IF EXISTS quickstart;")
-                cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
-
-            if scenario == SCENARIO_TPCH_STRONG:
-                print("--- SCENARIO: Running TPC-H Index strong scaling")
-                run_scenario_strong(
-                    scenario=TpchScenario(
-                        args.scale_tpch, target.replica_size_for_scale(1)
-                    ),
-                    results_writer=cluster_writer,
-                    connection=conn,
-                    target=target,
-                    max_scale=max_scale,
-                )
-            if scenario == SCENARIO_TPCH_MV_STRONG:
-                print("--- SCENARIO: Running TPC-H Materialized view strong scaling")
-                run_scenario_strong(
-                    scenario=TpchScenarioMV(
-                        args.scale_tpch, target.replica_size_for_scale(1)
-                    ),
-                    results_writer=cluster_writer,
-                    connection=conn,
-                    target=target,
-                    max_scale=max_scale,
-                )
-            if scenario == SCENARIO_TPCH_QUERIES_STRONG:
-                print("--- SCENARIO: Running TPC-H Queries strong scaling")
-                run_scenario_strong(
-                    scenario=TpchScenarioQueriesIndexedInputs(
-                        args.scale_tpch_queries, target.replica_size_for_scale(1)
-                    ),
-                    results_writer=cluster_writer,
-                    connection=conn,
-                    target=target,
-                    max_scale=max_scale,
-                )
-            if scenario == SCENARIO_TPCH_QUERIES_WEAK:
-                print("--- SCENARIO: Running TPC-H Queries weak scaling")
-                run_scenario_weak(
-                    scenario=TpchScenarioQueriesIndexedInputs(
-                        args.scale_tpch_queries, None
-                    ),
-                    results_writer=cluster_writer,
-                    connection=conn,
-                    target=target,
-                    max_scale=max_scale,
-                )
-            if scenario == SCENARIO_AUCTION_STRONG:
-                print("--- SCENARIO: Running Auction strong scaling")
-                run_scenario_strong(
-                    scenario=AuctionScenario(
-                        args.scale_auction, target.replica_size_for_scale(1)
-                    ),
-                    results_writer=cluster_writer,
-                    connection=conn,
-                    target=target,
-                    max_scale=max_scale,
-                )
-            if scenario == SCENARIO_AUCTION_WEAK:
-                print("--- SCENARIO: Running Auction weak scaling")
-                run_scenario_weak(
-                    scenario=AuctionScenario(args.scale_auction, None),
-                    results_writer=cluster_writer,
-                    connection=conn,
-                    target=target,
-                    max_scale=max_scale,
-                )
-            if scenario == SCENARIO_QPS_ENVD_STRONG_SCALING:
-                print("--- SCENARIO: Running QPS envd strong scaling")
-                run_scenario_envd_strong_scaling(
-                    scenario=QpsEnvdStrongScalingScenario(
-                        1, target.replica_size_for_scale(1)
-                    ),
-                    results_writer=envd_writer,
-                    connection=conn,
-                    target=target,
-                    max_scale=max_scale,
-                )
-
-    test_failed = True
-    try:
-        scenarios = buildkite.shard_list(sorted(args.scenarios), lambda s: s)
-        c.test_parts(scenarios, process)
-        test_failed = False
-    finally:
-        cluster_file.close()
-        envd_file.close()
-        # Clean up
         if args.cleanup:
             target.cleanup()
 
-    # Upload only cluster scaling results to Test Analytics for now, until the Test Analytics schema is extended.
-    # TODO: See slack discussion:
-    # https://materializeinc.slack.com/archives/C01LKF361MZ/p1762351652336819?thread_ts=1762348361.164759&cid=C01LKF361MZ
-    upload_results_to_test_analytics(c, cluster_path, not test_failed)
+        target.initialize()
 
-    assert not test_failed
+        # Derive two result files (cluster and envd-focused) from the provided --record path
+        base_name = os.path.splitext(args.record)[0]
+        cluster_path = f"{base_name}.cluster.csv"
+        envd_path = f"{base_name}.envd.csv"
 
-    if buildkite.is_in_buildkite():
-        # Upload both CSVs as artifacts
-        buildkite.upload_artifact(cluster_path, cwd=MZ_ROOT, quiet=True)
-        buildkite.upload_artifact(envd_path, cwd=MZ_ROOT, quiet=True)
+        cluster_file = open(cluster_path, "w", newline="")
+        envd_file = open(envd_path, "w", newline="")
 
-    if args.analyze:
-        # Analyze both files separately (each has its own schema)
-        analyze_results_file(cluster_path)
-        analyze_results_file(envd_path)
+        # Traditional scenarios: cluster-focused schema
+        cluster_writer = csv.DictWriter(
+            cluster_file,
+            fieldnames=[
+                "scenario",
+                "scenario_version",
+                "scale",
+                "mode",
+                "category",
+                "test_name",
+                "cluster_size",
+                "repetition",
+                "size_bytes",
+                "time_ms",
+            ],
+            extrasaction="ignore",
+        )
+        cluster_writer.writeheader()
+
+        # Envd-focused scenarios: QPS schema
+        envd_writer = csv.DictWriter(
+            envd_file,
+            fieldnames=[
+                "scenario",
+                "scenario_version",
+                "scale",
+                "mode",
+                "category",
+                "test_name",
+                "envd_cpus",
+                "repetition",
+                "qps",
+            ],
+            extrasaction="ignore",
+        )
+        envd_writer.writeheader()
+
+        def process(scenario: str) -> None:
+            with c.test_case(scenario):
+                conn = ConnectionHandler(target.new_connection)
+
+                # This cluster is just for misc setup queries.
+                size = (
+                    "50cc" if isinstance(target, CloudTarget) else "scale=1,workers=1"
+                )
+                with conn as cur:
+                    cur.execute("DROP CLUSTER IF EXISTS quickstart;")
+                    cur.execute(f"CREATE CLUSTER quickstart SIZE '{size}';".encode())
+
+                if scenario == SCENARIO_TPCH_STRONG:
+                    print("--- SCENARIO: Running TPC-H Index strong scaling")
+                    run_scenario_strong(
+                        scenario=TpchScenario(
+                            args.scale_tpch, target.replica_size_for_scale(1)
+                        ),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_TPCH_MV_STRONG:
+                    print(
+                        "--- SCENARIO: Running TPC-H Materialized view strong scaling"
+                    )
+                    run_scenario_strong(
+                        scenario=TpchScenarioMV(
+                            args.scale_tpch, target.replica_size_for_scale(1)
+                        ),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_TPCH_QUERIES_STRONG:
+                    print("--- SCENARIO: Running TPC-H Queries strong scaling")
+                    run_scenario_strong(
+                        scenario=TpchScenarioQueriesIndexedInputs(
+                            args.scale_tpch_queries, target.replica_size_for_scale(1)
+                        ),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_TPCH_QUERIES_WEAK:
+                    print("--- SCENARIO: Running TPC-H Queries weak scaling")
+                    run_scenario_weak(
+                        scenario=TpchScenarioQueriesIndexedInputs(
+                            args.scale_tpch_queries, None
+                        ),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_AUCTION_STRONG:
+                    print("--- SCENARIO: Running Auction strong scaling")
+                    run_scenario_strong(
+                        scenario=AuctionScenario(
+                            args.scale_auction, target.replica_size_for_scale(1)
+                        ),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_AUCTION_WEAK:
+                    print("--- SCENARIO: Running Auction weak scaling")
+                    run_scenario_weak(
+                        scenario=AuctionScenario(args.scale_auction, None),
+                        results_writer=cluster_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+                if scenario == SCENARIO_QPS_ENVD_STRONG_SCALING:
+                    print("--- SCENARIO: Running QPS envd strong scaling")
+                    run_scenario_envd_strong_scaling(
+                        scenario=QpsEnvdStrongScalingScenario(
+                            1, target.replica_size_for_scale(1)
+                        ),
+                        results_writer=envd_writer,
+                        connection=conn,
+                        target=target,
+                        max_scale=max_scale,
+                    )
+
+        test_failed = True
+        try:
+            scenarios_list = buildkite.shard_list(sorted(list(scenarios)), lambda s: s)
+            c.test_parts(scenarios_list, process)
+            test_failed = False
+        finally:
+            cluster_file.close()
+            envd_file.close()
+            # Clean up
+            if args.cleanup:
+                target.cleanup()
+
+        # Upload only cluster scaling results to Test Analytics for now, until the Test Analytics schema is extended.
+        # TODO: See slack discussion:
+        # https://materializeinc.slack.com/archives/C01LKF361MZ/p1762351652336819?thread_ts=1762348361.164759&cid=C01LKF361MZ
+        upload_cluster_results_to_test_analytics(c, cluster_path, not test_failed)
+        upload_environmentd_results_to_test_analytics(c, envd_path, not test_failed)
+
+        assert not test_failed
+
+        if buildkite.is_in_buildkite():
+            # Upload both CSVs as artifacts
+            buildkite.upload_artifact(cluster_path, cwd=MZ_ROOT, quiet=True)
+            buildkite.upload_artifact(envd_path, cwd=MZ_ROOT, quiet=True)
+
+        if args.analyze:
+            # Analyze both files separately (each has its own schema)
+            analyze_results_file(cluster_path)
+            analyze_results_file(envd_path)
 
 
 class BenchTarget:
@@ -2311,8 +2356,10 @@ class BenchTarget:
 
 
 class CloudTarget(BenchTarget):
-    def __init__(self, c: Composition) -> None:
+    def __init__(self, c: Composition, username: str, app_password: str) -> None:
         self.c = c
+        self.username = username
+        self.app_password = app_password
         self.new_app_password: str | None = None
 
     def dbbench_connection_flags(self) -> list[str]:
@@ -2325,7 +2372,7 @@ class CloudTarget(BenchTarget):
             "-port",
             "6875",
             "-username",
-            USERNAME,
+            self.username,
             "-password",
             self.new_app_password,
             "-database",
@@ -2356,7 +2403,7 @@ class CloudTarget(BenchTarget):
         conn = psycopg.connect(
             host=self.c.cloud_hostname(),
             port=6875,
-            user=USERNAME,
+            user=self.username,
             password=self.new_app_password,
             dbname="materialize",
             sslmode="require",
@@ -2858,7 +2905,7 @@ def labels_to_drop(
     return unique, dropped
 
 
-def upload_results_to_test_analytics(
+def upload_cluster_results_to_test_analytics(
     c: Composition,
     file: str,
     was_successful: bool,
@@ -2890,6 +2937,49 @@ def upload_results_to_test_analytics(
             )
 
     test_analytics.cluster_spec_sheet_results.add_result(
+        framework_version=CLUSTER_SPEC_SHEET_VERSION,
+        results=result_entries,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
+
+
+def upload_environmentd_results_to_test_analytics(
+    c: Composition,
+    file: str,
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
+
+    result_entries = []
+
+    with open(file) as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            result_entries.append(
+                cluster_spec_sheet_result_storage.ClusterSpecSheetEnvironmentdResultEntry(
+                    scenario=row["scenario"],
+                    scenario_version=row["scenario_version"],
+                    scale=int(row["scale"]),
+                    mode=row["mode"],
+                    category=row["category"],
+                    test_name=row["test_name"],
+                    envd_cpus=int(row["envd_cpus"]),
+                    repetition=int(row["repetition"]),
+                    qps=float(row["qps"]) if row["qps"] else None,
+                )
+            )
+
+    test_analytics.cluster_spec_sheet_environmentd_results.add_result(
         framework_version=CLUSTER_SPEC_SHEET_VERSION,
         results=result_entries,
     )
