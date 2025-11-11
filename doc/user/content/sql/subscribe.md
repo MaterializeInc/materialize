@@ -235,6 +235,12 @@ in non-decreasing order. The receipt of the explicit progress message at
 timestamp `4` implies that there are no more updates for either timestamp
 `2` or `3`—but that there may be more data arriving at timestamp `4`.
 
+### Connection pooling
+
+Because Materialize is wire-compatible with PostgreSQL, you can use any
+PostgreSQL connection pooler with Materialize. For example in using PgBouncer,
+see [Connection Pooling](/integrations/connection-pooling).
+
 ## Examples
 
 `SUBSCRIBE` produces rows similar to a `SELECT` statement, except that `SUBSCRIBE` may never complete.

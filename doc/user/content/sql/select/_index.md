@@ -149,6 +149,12 @@ the ordinal number of an output column, or an arbitrary expression of only input
 columns. If an unqualified name refers to both an input and output column,
 `GROUP BY` chooses the input column.
 
+### Connection pooling
+
+Because Materialize is wire-compatible with PostgreSQL, you can use any
+PostgreSQL connection pooler with Materialize. For example in using PgBouncer,
+see [Connection Pooling](/integrations/connection-pooling).
+
 ## Examples
 
 ### Creating an indexed view
