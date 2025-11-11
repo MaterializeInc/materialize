@@ -26,7 +26,6 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::progress::Antichain;
 use timely::progress::timestamp::Timestamp as TimelyTimestamp;
-use tokio::sync::watch;
 
 use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
@@ -46,7 +45,6 @@ where
         err_collection: VecCollection<G, DataflowError, Diff>,
         _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
-        _read_only_rx: watch::Receiver<bool>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.
         // Used to send rows and progress messages,

@@ -27,7 +27,6 @@ use timely::dataflow::Scope;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::Operator;
 use timely::progress::Antichain;
-use tokio::sync::watch;
 
 use crate::render::StartSignal;
 use crate::render::sinks::SinkRender;
@@ -48,7 +47,6 @@ where
         err_collection: VecCollection<G, DataflowError, Diff>,
         _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
-        _read_only_rx: watch::Receiver<bool>,
     ) -> Option<Rc<dyn Any>> {
         // Set up a callback to communicate the result of the copy-to operation to the controller.
         let mut response_protocol = ResponseProtocol {

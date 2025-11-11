@@ -158,12 +158,11 @@ where
         writer_id: WriterId,
         purpose: &str,
         write_schemas: Schemas<K, V>,
-        read_only_rx: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> Self {
         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
         let compact = cfg
             .compaction_enabled
-            .then(|| Compactor::new(cfg.clone(), Arc::clone(&metrics), gc.clone(), read_only_rx));
+            .then(|| Compactor::new(cfg.clone(), Arc::clone(&metrics), gc.clone()));
         let debug_state = HandleDebugState {
             hostname: cfg.hostname.to_owned(),
             purpose: purpose.to_owned(),
@@ -198,7 +197,6 @@ where
             WriterId::new(),
             purpose,
             read.read_schemas.clone(),
-            None,
         )
     }
 

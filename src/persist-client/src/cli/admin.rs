@@ -256,7 +256,6 @@ pub async fn run(command: AdminArgs) -> Result<(), anyhow::Error> {
                         Arc::new(TodoSchema::<crate::cli::inspect::K>::default()),
                         Arc::new(TodoSchema::<crate::cli::inspect::V>::default()),
                         diagnostics,
-                        None,
                     )
                     .await?;
                 write_handle.advance_upper(&Antichain::new()).await;

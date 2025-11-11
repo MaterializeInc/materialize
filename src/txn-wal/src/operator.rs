@@ -198,7 +198,6 @@ where
                 Arc::clone(&data_key_schema),
                 Arc::clone(&data_val_schema),
                 Diagnostics::from_purpose("data read physical upper"),
-                None,
             )
             .await
             .expect("schema shouldn't change");

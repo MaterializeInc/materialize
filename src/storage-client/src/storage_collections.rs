@@ -538,7 +538,6 @@ where
                     shard_name: "txns".to_owned(),
                     handle_purpose: "commit txns".to_owned(),
                 },
-                None,
             )
             .await
             .expect("txns schema shouldn't change");
@@ -691,7 +690,6 @@ where
                 Arc::new(relation_desc),
                 Arc::new(UnitSchema),
                 diagnostics.clone(),
-                None,
             )
             .await
             .expect("invalid persist usage");
@@ -1042,7 +1040,6 @@ where
                 Arc::new(metadata.relation_desc.clone()),
                 Arc::new(UnitSchema),
                 diagnostics.clone(),
-                None,
             )
             .await
             .expect("invalid persist usage");
@@ -1738,7 +1735,6 @@ where
                         shard_name: id.to_string(),
                         handle_purpose: format!("create write batch {}", id),
                     },
-                    None,
                 )
                 .await
                 .expect("invalid persist usage");
@@ -3278,7 +3274,6 @@ async fn finalize_shards_task<T>(
                                     Arc::new(RelationDesc::empty()),
                                     Arc::new(UnitSchema),
                                     diagnostics,
-                                    None,
                                 )
                                 .await
                                 .expect("invalid persist usage");
@@ -3451,7 +3446,6 @@ mod tests {
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
-                None,
             )
             .await
             .unwrap();
@@ -3471,7 +3465,6 @@ mod tests {
                 Arc::new(RelationDesc::empty()),
                 Arc::new(UnitSchema),
                 Diagnostics::for_tests(),
-                None,
             )
             .await
             .unwrap();

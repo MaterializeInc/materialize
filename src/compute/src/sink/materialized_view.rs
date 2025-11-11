@@ -171,7 +171,6 @@ where
         mut err_collection: VecCollection<G, DataflowError, Diff>,
         _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
-        read_only_rx: watch::Receiver<bool>,
     ) -> Option<Rc<dyn Any>> {
         // Attach probes reporting the compute frontier.
         // The `apply_refresh` operator can round up frontiers, making it impossible to accurately
@@ -196,6 +195,8 @@ where
                 "UP TO is not supported for persist sinks yet, and shouldn't have been accepted during parsing/planning"
             )
         }
+
+        let read_only_rx = collection_state.read_only_rx.clone();
 
         let token = persist_sink(
             sink_id,
@@ -259,7 +260,6 @@ where
         collection: target.clone(),
         shard_name: sink_id.to_string(),
         purpose: format!("MV sink {sink_id}"),
-        read_only_rx: read_only_rx.clone(),
     };
 
     let (desired, descs, sink_frontier, mint_token) = mint::render(
@@ -339,7 +339,6 @@ struct PersistApi {
     collection: CollectionMetadata,
     shard_name: String,
     purpose: String,
-    read_only_rx: watch::Receiver<bool>,
 }
 
 impl PersistApi {
@@ -361,7 +360,6 @@ impl PersistApi {
                     shard_name: self.shard_name.clone(),
                     handle_purpose: self.purpose.clone(),
                 },
-                Some(self.read_only_rx.clone()),
             )
             .await
             .unwrap_or_else(|error| panic!("error opening persist writer: {error}"))

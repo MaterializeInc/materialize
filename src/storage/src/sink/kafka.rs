@@ -176,7 +176,6 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for KafkaSinkConnection {
                         Arc::new(shard_meta.relation_desc),
                         Arc::new(UnitSchema),
                         Diagnostics::from_purpose("sink handle"),
-                        None,
                     )
                     .await?;
                 Ok(handle)

@@ -150,7 +150,6 @@ use timely::progress::timestamp::Refines;
 use timely::progress::{Antichain, Timestamp};
 use timely::scheduling::ActivateOnDrop;
 use timely::worker::{AsWorker, Worker as TimelyWorker};
-use tokio::sync::watch;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::ComputeState;
@@ -190,7 +189,6 @@ pub fn build_compute_dataflow<A: Allocate>(
     start_signal: StartSignal,
     until: Antichain<mz_repr::Timestamp>,
     dataflow_expiration: Antichain<mz_repr::Timestamp>,
-    read_only_rx: watch::Receiver<bool>,
 ) {
     // Mutually recursive view definitions require special handling.
     let recursive = dataflow
@@ -438,7 +436,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
                         &output_probe,
-                        read_only_rx.clone(),
                     );
                 }
             });
@@ -533,7 +530,6 @@ pub fn build_compute_dataflow<A: Allocate>(
                         start_signal.clone(),
                         ct_ctx.input_times(&context.scope.parent),
                         &output_probe,
-                        read_only_rx.clone(),
                     );
                 }
             });

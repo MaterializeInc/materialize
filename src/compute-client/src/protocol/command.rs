@@ -73,28 +73,6 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// [Initialization Stage]: super#initialization-stage
     InitializationComplete,
 
-    /// `AllowWrites` informs the replica that it can transition a collection out of the
-    /// read-only computation stage and into the read-write computation stage.
-    /// It is now allowed to affect changes to external systems (writes).
-    ///
-    /// After initialization is complete, collections start in the
-    /// read-only computation stage. Only when receiving this command they will transition
-    /// to running write operations.
-    ///
-    /// A collection that has once been told that it can go into read-write mode
-    /// can never go out of that mode again. It is okay for a read-only
-    /// controller to re-connect to an instance with read-write collections:
-    /// _someone_ has already told the instance that it is okay to write
-    /// and there is no way in the protocol to transition an instance back to
-    /// read-only mode.
-    ///
-    /// NOTE: We don't have a protocol in place that allows writes only after a
-    /// certain, controller-determined, timestamp. Such a protocol would allow
-    /// tighter control and could allow the instance to avoid work. However, it
-    /// is more work to put in place the logic for that so we leave it as future
-    /// work for now.
-    AllowWrites(GlobalId),
-
     /// `UpdateConfiguration` instructs the replica to update its configuration, according to the
     /// given [`ComputeParameters`].
     ///
@@ -147,6 +125,10 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// the replica must produce [`CopyToResponse`]s that report the results and completion of the
     /// copy-to sinks.
     ///
+    /// After receiving a `CreateDataflow` command, if the created dataflow exports a persist sink
+    /// (materialized view), the dataflow must not write any data to the sink until the replica
+    /// receives an `AllowWrites` command for the corresponding collection.
+    ///
     /// The replica may create the dataflow in a suspended state and defer starting the computation
     /// until it receives a corresponding `Schedule` command. Thus, to ensure dataflow execution,
     /// the compute controller should eventually send a `Schedule` command for each sent
@@ -170,6 +152,28 @@ pub enum ComputeCommand<T = mz_repr::Timestamp> {
     /// It is also invalid to send a `Schedule` command that references a collection that has,
     /// through an `AllowCompaction` command, been allowed to compact to the empty frontier before.
     Schedule(GlobalId),
+
+    /// `AllowWrites` allows the replica to start writing external state for a compute collection.
+    ///
+    /// It is invalid to send an `AllowWrites` command that references a compute collection
+    /// that was not created by a corresponding `CreateDataflow` command before. Doing so may cause
+    /// the replica to exhibit undefined behavior.
+    ///
+    /// It is also invalid to send an `AllowWrites` command for a compute collection that has
+    /// been allowed to compact to the empty frontier through an `AllowCompaction` command before.
+    ///
+    /// NOTE: This command only allows writes to persist. Other external state, such as copy-to
+    /// sinks, do not need an explicit permission to write.
+    ///
+    /// NOTE: We don't have a protocol in place that allows writes only after a
+    /// certain, controller-determined, timestamp. Such a protocol would allow
+    /// tighter control and could allow the instance to avoid work. However, it
+    /// is more work to put in place the logic for that so we leave it as future
+    /// work for now.
+    ///
+    /// Note: The `AllowWrites` command is per collection, but a dataflow could host multiple
+    /// collections. We're accepting this impedance mismatch for now.
+    AllowWrites(GlobalId),
 
     /// `AllowCompaction` informs the replica about the relaxation of external read capabilities on
     /// a compute collection exported by one of the replica's dataflows.

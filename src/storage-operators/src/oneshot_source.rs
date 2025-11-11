@@ -549,7 +549,6 @@ where
                 Arc::new(collection_desc),
                 Arc::new(UnitSchema),
                 persist_diagnostics,
-                None,
             )
             .await
             .expect("could not open Persist shard");

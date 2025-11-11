@@ -556,6 +556,10 @@ where
             instance.call(Instance::initialization_complete);
         }
 
+        if !self.read_only {
+            instance.call(Instance::allow_introspection_writes);
+        }
+
         let mut config_params = self.config.clone();
         config_params.workload_class = Some(workload_class);
         instance.call(|i| i.update_configuration(config_params));
@@ -1048,21 +1052,19 @@ where
     pub fn allow_writes(
         &mut self,
         instance_id: ComputeInstanceId,
-        collection_ids: Vec<GlobalId>,
+        collection_id: GlobalId,
     ) -> Result<(), CollectionUpdateError> {
         if self.read_only {
-            tracing::info!("Skipping allow_writes in read-only mode");
+            tracing::debug!("Skipping allow_writes in read-only mode");
             return Ok(());
         }
 
         let instance = self.instance_mut(instance_id)?;
 
         // Validation
-        for id in &collection_ids {
-            instance.collection(*id)?;
-        }
+        instance.collection(collection_id)?;
 
-        instance.call(|i| i.allow_writes(collection_ids).expect("validated"));
+        instance.call(move |i| i.allow_writes(collection_id).expect("validated"));
 
         Ok(())
     }

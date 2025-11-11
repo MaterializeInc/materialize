@@ -249,7 +249,6 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                         shard_name: id.to_string(),
                                         handle_purpose: format!("resumption data {}", id),
                                     },
-                                    None,
                                 )
                                 .await
                                 .unwrap();
@@ -426,7 +425,6 @@ impl<T: Timestamp + TimestampManipulation + Lattice + Codec64 + Display + Sync>
                                     shard_name: id.to_string(),
                                     handle_purpose: format!("resumption data {}", id),
                                 },
-                                None,
                             )
                             .await
                             .unwrap();

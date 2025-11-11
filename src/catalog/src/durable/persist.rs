@@ -1310,7 +1310,6 @@ impl UnopenedPersistCatalogState {
                         shard_name: CATALOG_SHARD_NAME.to_string(),
                         handle_purpose: "compact catalog".to_string(),
                     },
-                    None,
                 )
                 .await
                 .expect("invalid usage");

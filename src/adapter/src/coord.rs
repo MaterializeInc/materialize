@@ -2100,7 +2100,7 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, mview.cluster_id, None).await;
-                    self.allow_writes(mview.cluster_id, vec![mview.global_id()]);
+                    self.allow_writes(mview.cluster_id, mview.global_id());
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
@@ -2152,7 +2152,7 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, ct.cluster_id, None).await;
-                    self.allow_writes(ct.cluster_id, vec![ct.global_id()]);
+                    self.allow_writes(ct.cluster_id, ct.global_id());
                 }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
@@ -3700,10 +3700,10 @@ impl Coordinator {
     /// Call into the compute controller to allow writes to the specified IDs
     /// from the specified instance. Calling this function multiple times and
     /// calling it on a read-only instance has no effect.
-    pub(crate) fn allow_writes(&mut self, instance: ComputeInstanceId, ids: Vec<GlobalId>) {
+    pub(crate) fn allow_writes(&mut self, instance: ComputeInstanceId, id: GlobalId) {
         self.controller
             .compute
-            .allow_writes(instance, ids)
+            .allow_writes(instance, id)
             .unwrap_or_terminate("allow_writes cannot fail");
     }
 

@@ -172,13 +172,6 @@ where
                 }
             }
 
-            // Remove any redundant `AllowWrites` command for dataflows that can't write anymore.
-            if as_of.is_empty() {
-                for id in dataflow.export_ids() {
-                    allow_writes.remove(&id);
-                }
-            }
-
             dataflow.as_of = Some(as_of);
         }
 
@@ -189,6 +182,8 @@ where
             .flat_map(|d| d.export_ids())
             .collect();
         scheduled_collections.retain(|id| retained_collections.contains(id));
+        // Retain any `AllowWrites` command for dataflows that still exist.
+        allow_writes.retain(|id| retained_collections.contains(id));
 
         // Reconstitute the commands as a compact history.
 
@@ -246,14 +241,16 @@ where
                 .push(ComputeCommand::AllowCompaction { id, frontier });
         }
 
+        let count = u64::cast_from(allow_writes.len());
+        command_counts.allow_writes.borrow().set(count);
+        for id in allow_writes {
+            self.commands.push(ComputeCommand::AllowWrites(id));
+        }
+
         let count = u64::from(initialization_complete);
         command_counts.initialization_complete.borrow().set(count);
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
-        }
-
-        for id in allow_writes {
-            self.commands.push(ComputeCommand::AllowWrites(id));
         }
 
         self.reduced_count = self.commands.len();
