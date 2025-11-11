@@ -307,6 +307,12 @@ impl<'a, 'b> Migration<'a, 'b> {
             bail!("downgrade not supported");
         }
 
+        // In leader mode, upgrade the version of the migration shard to the target version.
+        // This fences out any readers at lower versions.
+        if !self.config.read_only {
+            self.upgrade_migration_shard_version().await;
+        }
+
         info!("executing migration plan: {plan:?}");
 
         self.migrate_evolve(&plan.evolve).await?;
@@ -421,6 +427,24 @@ impl<'a, 'b> Migration<'a, 'b> {
         }
 
         plan
+    }
+
+    /// Upgrade the migration shard to the target version.
+    async fn upgrade_migration_shard_version(&self) {
+        let persist = &self.config.persist_client;
+        let shard_id = self.txn.get_builtin_migration_shard().expect("must exist");
+        let diagnostics = Diagnostics {
+            shard_name: "builtin_migration".to_string(),
+            handle_purpose: format!("migration shard upgrade @ {}", self.target_version),
+        };
+
+        persist
+            .upgrade_version::<migration_shard::Key, ShardId, Timestamp, StorageDiff>(
+                shard_id,
+                diagnostics,
+            )
+            .await
+            .expect("valid usage");
     }
 
     /// Migrate the given objects using the `Evolution` mechanism.
