@@ -1,10 +1,4 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
-alter_cluster_set ::=
-  'ALTER' 'CLUSTER' name 'SET' '(' (cluster_option '=' value)* ')'
-  ('WITH' with_options)?
-alter_cluster_set_with_options ::= 'WITH' '(' 'WAIT' ( ( 'UNTIL' 'READY' '(' (wait_until_ready_option '='? value)* ')' ) | ( 'FOR' '='? duration ) ) ')'
-alter_cluster_reset ::=
-  'ALTER' 'CLUSTER' name 'RESET' '(' (cluster_option_name)* ')'
 alter_connection ::=
   'ALTER' 'CONNECTION' 'IF EXISTS'? name
     (
