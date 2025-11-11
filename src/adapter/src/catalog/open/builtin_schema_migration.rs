@@ -320,6 +320,7 @@ impl MigrationRunResult {
 }
 
 /// Information about a system object required to run a `Migration`.
+#[derive(Clone, Debug)]
 struct ObjectInfo {
     global_id: GlobalId,
     shard_id: Option<ShardId>,
@@ -1152,3 +1153,7 @@ mod migration_shard {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "builtin_schema_migration_tests.rs"]
+mod tests;
