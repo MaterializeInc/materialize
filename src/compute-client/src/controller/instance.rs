@@ -905,7 +905,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             storage_collections: _,
             peek_stash_persist_location: _,
             initialized,
-            read_only: read_only_introspection,
+            read_only,
             workload_class,
             replicas,
             collections,
@@ -956,7 +956,7 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
 
         let map = serde_json::Map::from_iter([
             field("initialized", initialized)?,
-            field("read_only_introspection", read_only_introspection)?,
+            field("read_only", read_only)?,
             field("workload_class", workload_class)?,
             field("replicas", replicas)?,
             field("collections", collections)?,
