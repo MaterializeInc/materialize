@@ -11,6 +11,7 @@
 Test that skipping versions when upgrading will fail.
 """
 
+from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.cockroach import Cockroach
@@ -68,7 +69,7 @@ def workflow_test_version_skips(c: Composition) -> None:
 
     with c.override(
         Materialized(
-            image=f"materialize/materialized:{two_minor_releases_before}",
+            image=f"{image_registry()}/materialized:{two_minor_releases_before}",
             external_metadata_store=True,
             options=[
                 opt

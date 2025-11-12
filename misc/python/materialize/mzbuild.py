@@ -44,6 +44,7 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -1181,11 +1182,7 @@ class Repository:
         ),
         coverage: bool = False,
         sanitizer: Sanitizer = Sanitizer.none,
-        image_registry: str = (
-            "ghcr.io/materializeinc/materialize"
-            if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
-            else "materialize"
-        ),
+        image_registry: str = image_registry(),
         image_prefix: str = "",
     ):
         self.rd = RepositoryDetails(
@@ -1287,11 +1284,7 @@ class Repository:
         )
         parser.add_argument(
             "--image-registry",
-            default=(
-                "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
-                else "materialize"
-            ),
+            default=image_registry(),
             help="the Docker image registry to pull images from and push images to",
         )
         parser.add_argument(

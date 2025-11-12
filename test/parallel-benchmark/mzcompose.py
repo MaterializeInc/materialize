@@ -22,6 +22,7 @@ import numpy
 from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
+from materialize.docker import image_registry
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
@@ -440,7 +441,7 @@ def run_once(
     else:
         overrides = [
             Materialized(
-                image=f"materialize/materialized:{tag}" if tag else None,
+                image=f"{image_registry()}/materialized:{tag}" if tag else None,
                 default_size=args.size,
                 soft_assertions=False,
                 external_metadata_store=True,
