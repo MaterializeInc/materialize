@@ -498,14 +498,14 @@ pub fn describe_explain_analyze_cluster(
                     );
             }
             ExplainAnalyzeComputationProperty::Cpu if skew => {
-                    relation_desc = relation_desc
-                        .with_column(
-                            "max_operator_cpu_ratio",
-                            SqlScalarType::Numeric { max_scale: None }.nullable(true),
-                        )
-                        .with_column("worker_elapsed", SqlScalarType::Interval.nullable(true))
-                        .with_column("avg_elapsed", SqlScalarType::Interval.nullable(true))
-                        .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
+                relation_desc = relation_desc
+                    .with_column(
+                        "max_operator_cpu_ratio",
+                        SqlScalarType::Numeric { max_scale: None }.nullable(true),
+                    )
+                    .with_column("worker_elapsed", SqlScalarType::Interval.nullable(true))
+                    .with_column("avg_elapsed", SqlScalarType::Interval.nullable(true))
+                    .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
             }
             ExplainAnalyzeComputationProperty::Cpu => {
                 relation_desc = relation_desc
