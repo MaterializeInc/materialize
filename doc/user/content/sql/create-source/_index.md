@@ -43,7 +43,7 @@ The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.co
 
 ##### Schema evolution
 
-As long as the writer schema changes in a [compatible way](https://avro.apache.org/docs/current/spec.html#Schema+Resolution), Materialize will continue using the original reader schema definition by mapping values from the new to the old schema version. To use the new version of the writer schema in Materialize, you need to **drop and recreate** the source.
+As long as the writer schema changes in a [compatible way](https://avro.apache.org/docs/++version++/specification/#schema-resolution), Materialize will continue using the original reader schema definition by mapping values from the new to the old schema version. To use the new version of the writer schema in Materialize, you need to **drop and recreate** the source.
 
 ##### Name collision
 
@@ -51,7 +51,7 @@ To avoid [case-sensitivity](/sql/identifiers/#case-sensitivity) conflicts with M
 
 ##### Supported types
 
-Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.html), _except for_ recursive types and union types in arrays.
+Materialize supports all [Avro types](https://avro.apache.org/docs/++version++/specification/), _except for_ recursive types and union types in arrays.
 
 ### JSON
 

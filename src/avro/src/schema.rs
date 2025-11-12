@@ -112,7 +112,7 @@ impl std::error::Error for ParseSchemaError {}
 
 /// Represents an Avro schema fingerprint
 /// More information about Avro schema fingerprints can be found in the
-/// [Avro Schema Fingerprint documentation](https://avro.apache.org/docs/current/spec.html#schema_fingerprints)
+/// [Avro Schema Resolution documentation](https://avro.apache.org/docs/++version++/specification/#schema-resolution)
 #[derive(Debug)]
 pub struct SchemaFingerprint {
     pub bytes: Vec<u8>,
@@ -186,11 +186,11 @@ pub enum SchemaPiece {
     Date,
     /// An `Int64` Avro schema with a semantic type being milliseconds since the unix epoch.
     ///
-    /// <https://avro.apache.org/docs/current/spec.html#Timestamp+%28millisecond+precision%29>
+    /// <https://avro.apache.org/docs/++version++/specification/#time_ms>
     TimestampMilli,
     /// An `Int64` Avro schema with a semantic type being microseconds since the unix epoch.
     ///
-    /// <https://avro.apache.org/docs/current/spec.html#Timestamp+%28microsecond+precision%29>
+    /// <https://avro.apache.org/docs/++version++/specification/#time-microsecond-precision>
     TimestampMicro,
     /// A `bytes` or `fixed` Avro schema with a logical type of `decimal` and
     /// the specified precision and scale.
@@ -350,7 +350,7 @@ impl SchemaPiece {
 
 /// Represents any valid Avro schema
 /// More information about Avro schemas can be found in the
-/// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
+/// [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration)
 #[derive(Clone, PartialEq)]
 pub struct Schema {
     pub(crate) named: Vec<NamedSchemaPiece>,
@@ -527,7 +527,7 @@ impl<'a> From<&'a Schema> for SchemaKind {
 /// `aliases` can also be defined, to facilitate schema evolution.
 ///
 /// More information about schema names can be found in the
-/// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
+/// [Avro specification](https://avro.apache.org/docs/++version++/specification/#names)
 #[derive(Clone, Debug, PartialEq)]
 pub struct Name {
     pub name: String,
@@ -598,7 +598,7 @@ pub type Documentation = Option<String>;
 impl Name {
     /// Reports whether the given string is a valid Avro name.
     ///
-    /// See: <https://avro.apache.org/docs/1.11.1/specification/#names>
+    /// See: <https://avro.apache.org/docs/++version++/specification/#names>
     pub fn is_valid(name: &str) -> bool {
         static MATCHER: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"(^[A-Za-z_][A-Za-z0-9_]*)$").unwrap());
@@ -708,7 +708,7 @@ impl Name {
     /// Return the `fullname` of this `Name`
     ///
     /// More information about fullnames can be found in the
-    /// [Avro specification](https://avro.apache.org/docs/current/spec.html#names)
+    /// [Avro specification](https://avro.apache.org/docs/++version++/specification/#names)
     pub fn fullname(&self, default_namespace: &str) -> FullName {
         FullName::from_parts(&self.name, self.namespace.as_deref(), default_namespace)
     }
@@ -1263,7 +1263,7 @@ impl SchemaParser {
     /// avro ones are documented at [Avro][2].
     ///
     /// [1]: https://debezium.io/docs/connectors/mysql/#temporal-values
-    /// [2]: https://avro.apache.org/docs/1.9.0/spec.html
+    /// [2]: https://avro.apache.org/docs/++version++/specification/
     fn parse_long(complex: &Map<String, Value>) -> Result<SchemaPiece, AvroError> {
         const AVRO_MILLI_TS: &str = "timestamp-millis";
         const AVRO_MICRO_TS: &str = "timestamp-micros";
@@ -1380,18 +1380,16 @@ impl Schema {
     /// Converts `self` into its [Parsing Canonical Form].
     ///
     /// [Parsing Canonical Form]:
-    /// https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas
+    /// https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas
     pub fn canonical_form(&self) -> String {
         let json = serde_json::to_value(self).unwrap();
         parsing_canonical_form(&json)
     }
 
-    /// Generate [fingerprint] of Schema's [Parsing Canonical Form].
+    /// Generate fingerprint of Schema's [Parsing Canonical Form].
     ///
     /// [Parsing Canonical Form]:
-    /// https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas
-    /// [fingerprint]:
-    /// https://avro.apache.org/docs/current/spec.html#schema_fingerprints
+    /// https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas
     pub fn fingerprint<D: Digest>(&self) -> SchemaFingerprint {
         let mut d = D::new();
         d.update(self.canonical_form());
@@ -2153,7 +2151,7 @@ impl<'a> Serialize for RecordFieldSerContext<'a> {
 }
 
 /// Parses a **valid** avro schema into the Parsing Canonical Form.
-/// <https://avro.apache.org/docs/1.8.2/spec.html#Parsing+Canonical+Form+for+Schemas>
+/// <https://avro.apache.org/docs/++version++/specification#parsing-canonical-form-for-schemas>
 fn parsing_canonical_form(schema: &serde_json::Value) -> String {
     pcf(schema, "", false)
 }

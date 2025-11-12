@@ -78,7 +78,7 @@ mod tests {
     ///
     /// Complete list of primitive types in test, also found in this
     /// documentation:
-    /// https://avro.apache.org/docs/current/spec.html#schemas
+    /// https://avro.apache.org/docs/++version++/specification/#primitive-types
     fn test_diff_pair_to_avro_primitive_types() -> anyhow::Result<()> {
         use numeric::Numeric;
         // Data to be used later in assertions.

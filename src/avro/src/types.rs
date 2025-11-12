@@ -92,7 +92,7 @@ impl From<Scalar> for Value {
 
 /// Represents any valid Avro value
 /// More information about Avro values can be found in the
-/// [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas)
+/// [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration)
 #[derive(Clone, Debug, PartialEq)]
 pub enum Value {
     // Fixed-length types
@@ -353,7 +353,7 @@ impl ToAvro for JsonValue {
 impl Value {
     /// Validate the value against the given [Schema](../schema/enum.Schema.html).
     ///
-    /// See the [Avro specification](https://avro.apache.org/docs/current/spec.html)
+    /// See the [Avro specification](https://avro.apache.org/docs/++version++/specification/)
     /// for the full set of rules of schema validation.
     pub fn validate(&self, schema: SchemaNode) -> bool {
         match (self, schema.inner) {
