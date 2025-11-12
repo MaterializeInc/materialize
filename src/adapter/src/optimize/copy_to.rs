@@ -28,6 +28,9 @@ use mz_storage_types::connections::Connection;
 use mz_storage_types::sinks::S3UploadInfo;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
+use mz_transform::reprtypecheck::{
+    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
+};
 use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
 use mz_transform::{StatisticsOracle, TransformCtx};
 use timely::progress::Antichain;
@@ -48,6 +51,8 @@ use crate::optimize::{
 pub struct Optimizer {
     /// A typechecking context to use throughout the optimizer pipeline.
     typecheck_ctx: TypecheckContext,
+    /// A representation typechecking context to use throughout the optimizer pipeline.
+    repr_typecheck_ctx: ReprTypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<Catalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -75,6 +80,7 @@ impl Optimizer {
     ) -> Self {
         Self {
             typecheck_ctx: empty_context(),
+            repr_typecheck_ctx: empty_repr_context(),
             catalog,
             compute_instance,
             select_id,
@@ -167,6 +173,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         let mut transform_ctx = TransformCtx::local(
             &self.config.features,
             &self.typecheck_ctx,
+            &self.repr_typecheck_ctx,
             &mut df_meta,
             Some(&self.metrics),
             Some(self.select_id),
@@ -344,6 +351,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &*stats,
             &self.config.features,
             &self.typecheck_ctx,
+            &self.repr_typecheck_ctx,
             &mut df_meta,
             Some(&self.metrics),
         );

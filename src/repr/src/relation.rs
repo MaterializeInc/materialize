@@ -89,6 +89,13 @@ impl SqlColumnType {
                     );
                 };
 
+                if fields.len() != other_fields.len() {
+                    bail!(
+                        "Can't union types: {:?} and {:?}",
+                        self.scalar_type,
+                        other.scalar_type
+                    );
+                }
                 let mut union_fields = Vec::with_capacity(fields.len());
                 for ((name, typ), (other_name, other_typ)) in
                     fields.iter().zip_eq(other_fields.iter())
@@ -256,6 +263,94 @@ impl RustType<ProtoKey> for Vec<usize> {
 
     fn from_proto(proto: ProtoKey) -> Result<Self, TryFromProtoError> {
         proto.keys.into_rust()
+    }
+}
+
+/// The type of a relation.
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize, Hash)]
+pub struct ReprRelationType {
+    /// The type for each column, in order.
+    pub column_types: Vec<ReprColumnType>,
+    /// Sets of indices that are "keys" for the collection.
+    ///
+    /// Each element in this list is a set of column indices, each with the
+    /// property that the collection contains at most one record with each
+    /// distinct set of values for each column. Alternately, for a specific set
+    /// of values assigned to the these columns there is at most one record.
+    ///
+    /// A collection can contain multiple sets of keys, although it is common to
+    /// have either zero or one sets of key indices.
+    #[serde(default)]
+    pub keys: Vec<Vec<usize>>,
+}
+
+impl ReprRelationType {
+    /// Constructs a `ReprRelationType` representing the relation with no columns and
+    /// no keys.
+    pub fn empty() -> Self {
+        ReprRelationType::new(vec![])
+    }
+
+    /// Constructs a new `ReprRelationType` from specified column types.
+    ///
+    /// The `ReprRelationType` will have no keys.
+    pub fn new(column_types: Vec<ReprColumnType>) -> Self {
+        ReprRelationType {
+            column_types,
+            keys: Vec::new(),
+        }
+    }
+
+    /// Adds a new key for the relation.
+    pub fn with_key(mut self, mut indices: Vec<usize>) -> Self {
+        indices.sort_unstable();
+        if !self.keys.contains(&indices) {
+            self.keys.push(indices);
+        }
+        self
+    }
+
+    pub fn with_keys(mut self, keys: Vec<Vec<usize>>) -> Self {
+        for key in keys {
+            self = self.with_key(key)
+        }
+        self
+    }
+
+    /// Computes the number of columns in the relation.
+    pub fn arity(&self) -> usize {
+        self.column_types.len()
+    }
+
+    /// Gets the index of the columns used when creating a default index.
+    pub fn default_key(&self) -> Vec<usize> {
+        if let Some(key) = self.keys.first() {
+            if key.is_empty() {
+                (0..self.column_types.len()).collect()
+            } else {
+                key.clone()
+            }
+        } else {
+            (0..self.column_types.len()).collect()
+        }
+    }
+
+    /// Returns all the column types in order, for this relation.
+    pub fn columns(&self) -> &[ReprColumnType] {
+        &self.column_types
+    }
+}
+
+impl From<&SqlRelationType> for ReprRelationType {
+    fn from(sql_relation_type: &SqlRelationType) -> Self {
+        ReprRelationType {
+            column_types: sql_relation_type
+                .column_types
+                .iter()
+                .map(ReprColumnType::from)
+                .collect(),
+            keys: sql_relation_type.keys.clone(),
+        }
     }
 }
 
