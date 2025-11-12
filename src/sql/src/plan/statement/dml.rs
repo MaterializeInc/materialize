@@ -497,16 +497,17 @@ pub fn describe_explain_analyze_cluster(
                         SqlScalarType::Numeric { max_scale: None }.nullable(true),
                     );
             }
-            ExplainAnalyzeComputationProperty::Cpu => {
-                if skew {
+            ExplainAnalyzeComputationProperty::Cpu if skew => {
                     relation_desc = relation_desc
                         .with_column(
                             "max_operator_cpu_ratio",
                             SqlScalarType::Numeric { max_scale: None }.nullable(true),
                         )
                         .with_column("worker_elapsed", SqlScalarType::Interval.nullable(true))
-                        .with_column("avg_elapsed", SqlScalarType::Interval.nullable(true));
-                }
+                        .with_column("avg_elapsed", SqlScalarType::Interval.nullable(true))
+                        .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
+            }
+            ExplainAnalyzeComputationProperty::Cpu => {
                 relation_desc = relation_desc
                     .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
             }
@@ -1262,7 +1263,7 @@ GROUP BY om.global_id"#));
                     ));
 
                     ctes.push((
-                        "object_totals",
+                        "object_memory_totals",
                         r#"
 SELECT pomt.global_id AS global_id,
        SUM(pomt.total_memory) AS total_memory,
@@ -1272,15 +1273,141 @@ GROUP BY pomt.global_id
 "#,
                     ));
 
-                    from.push("LEFT JOIN object_totals ot USING (global_id)");
+                    from.push("LEFT JOIN object_memory_totals omt USING (global_id)");
                     columns.extend([
-                        "pg_size_pretty(ot.total_memory) AS total_memory",
-                        "ot.total_records AS total_records",
+                        "pg_size_pretty(omt.total_memory) AS total_memory",
+                        "omt.total_records AS total_records",
                     ]);
                     order_by.extend(["total_memory DESC", "total_records DESC"]);
                 }
             }
-            ExplainAnalyzeComputationProperty::Cpu => unimplemented!("!!! TODO mgree"),
+            ExplainAnalyzeComputationProperty::Cpu => {
+                if skew {
+                    let mut set_worker_id = false;
+                    if let Some(worker_id) = worker_id {
+                        // join condition if we're showing skew for more than one property
+                        predicates.push(format!("oc.worker_id = {worker_id}"));
+                    } else {
+                        worker_id = Some("oc.worker_id");
+                        columns.push("oc.worker_id AS worker_id");
+                        set_worker_id = true; // we'll add ourselves to `order_by` later
+                    };
+
+                    // computes the average memory per LIR operator (for per operator ratios)
+                    ctes.push((
+    "per_operator_cpu_summary",
+    r#"
+SELECT mlm.global_id AS global_id,
+       mlm.lir_id AS lir_id,
+       SUM(mse.elapsed_ns) AS total_ns,
+       CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
+FROM       mz_introspection.mz_lir_mapping mlm
+CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+        ON (mse.id = valid_id)
+GROUP BY mlm.global_id, mlm.lir_id"#,
+));
+
+                    // computes the CPU per worker in a per operator way
+                    ctes.push((
+                        "per_operator_cpu_per_worker",
+                        r#"
+SELECT mlm.global_id AS global_id,
+       mlm.lir_id AS lir_id,
+       mse.worker_id AS worker_id,
+       SUM(mse.elapsed_ns) AS worker_ns
+FROM       mz_introspection.mz_lir_mapping mlm
+CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+        ON (mse.id = valid_id)
+GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
+                    ));
+
+                    // computes CPU ratios per worker per operator
+                    ctes.push((
+                        "per_operator_cpu_ratios",
+                        r#"
+SELECT pocpw.global_id AS global_id,
+       pocpw.lir_id AS lir_id,
+       pocpw.worker_id AS worker_id,
+       CASE WHEN pocpw.worker_id IS NOT NULL AND pocs.avg_ns <> 0 THEN ROUND(pocpw.worker_ns / pocs.avg_ns, 2) ELSE NULL END AS cpu_ratio
+FROM      per_operator_cpu_per_worker pocpw
+     JOIN per_operator_cpu_summary pocs
+     USING (global_id, lir_id)
+"#,
+                    ));
+
+                    // summarizes each object, per worker
+                    ctes.push((
+                        "object_cpu",
+                        r#"
+SELECT pocpw.global_id AS global_id,
+       pocpw.worker_id AS worker_id,
+       MAX(pomr.cpu_ratio) AS max_operator_cpu_ratio,
+       SUM(pocpw.worker_ns) AS worker_ns
+FROM      per_operator_cpu_per_worker pocpw
+     JOIN per_operator_cpu_ratios pomr
+     USING (global_id, worker_id, lir_id)
+GROUP BY pocpw.global_id, pocpw.worker_id
+"#,
+                    ));
+
+                    // summarizes each worker
+                    ctes.push((
+                        "object_average_cpu",
+                        r#"
+SELECT oc.global_id AS global_id,
+       SUM(oc.worker_ns) AS total_ns,
+       CASE WHEN COUNT(DISTINCT oc.worker_id) <> 0 THEN SUM(oc.worker_ns) / COUNT(DISTINCT oc.worker_id) ELSE NULL END AS avg_ns
+  FROM object_cpu oc
+GROUP BY oc.global_id"#,));
+
+                    from.push("LEFT JOIN object_cpu oc USING (global_id)");
+                    from.push("LEFT JOIN object_average_cpu oac USING (global_id)");
+
+                    columns.extend([
+                        "oc.max_operator_cpu_ratio AS max_operator_cpu_ratio",
+                        "oc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed",
+                        "oac.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed",
+                        "oac.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed",
+                    ]);
+
+                    order_by.extend(["max_operator_cpu_ratio DESC", "worker_elapsed DESC"]);
+
+                    if set_worker_id {
+                        order_by.push("worker_id");
+                    }
+                } else {
+                    // no skew, so just compute totals
+                    ctes.push((
+                        "per_operator_cpu_totals",
+                        r#"
+    SELECT mlm.global_id AS global_id,
+           mlm.lir_id AS lir_id,
+           SUM(mse.elapsed_ns) AS total_ns
+    FROM        mz_introspection.mz_lir_mapping mlm
+     CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+           JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+             ON (mse.id = valid_id)
+    GROUP BY mlm.global_id, mlm.lir_id"#,
+                    ));
+
+                    ctes.push((
+                        "object_cpu_totals",
+                        r#"
+SELECT poct.global_id AS global_id,
+       SUM(poct.total_ns) AS total_ns
+FROM per_operator_cpu_totals poct
+GROUP BY poct.global_id
+"#,
+                    ));
+
+                    from.push("LEFT JOIN object_cpu_totals oct USING (global_id)");
+                    columns
+                        .push("oct.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed");
+                    order_by.extend(["total_elapsed DESC"]);
+                }
+            }
         }
     }
 
