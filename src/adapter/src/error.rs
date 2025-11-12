@@ -16,6 +16,7 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
+use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing, PeekError};
 use mz_expr::EvalError;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
@@ -29,6 +30,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::errors::CollectionMissing;
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -51,7 +53,10 @@ pub enum AdapterError {
     AmbiguousSystemColumnReference,
     /// An error occurred in a catalog operation.
     Catalog(mz_catalog::memory::error::Error),
-    /// The cached plan or descriptor changed.
+    /// 1. The cached plan or descriptor changed,
+    /// 2. or some dependency of a statement disappeared during sequencing.
+    /// TODO(ggevay): we should refactor 2. usages to use `ConcurrentDependencyDrop` instead
+    /// (e.g., in MV sequencing)
     ChangedPlan(String),
     /// The cursor already exists.
     DuplicateCursor(String),
@@ -97,6 +102,11 @@ pub enum AdapterError {
     ConstraintViolation(NotNullViolation),
     /// Transaction cluster was dropped in the middle of a transaction.
     ConcurrentClusterDrop,
+    /// A dependency was dropped while sequencing a statement.
+    ConcurrentDependencyDrop {
+        dependency_kind: &'static str,
+        dependency_id: String,
+    },
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable {
         name: String,
@@ -492,6 +502,7 @@ impl AdapterError {
             AdapterError::InvalidTableMutationSelection => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
+            AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -604,6 +615,61 @@ impl AdapterError {
     pub fn internal<E: std::fmt::Display>(context: &str, e: E) -> AdapterError {
         AdapterError::Internal(format!("{context}: {e}"))
     }
+
+    // We don't want the following error conversions to `ConcurrentDependencyDrop` to happen
+    // automatically, because it might depend on the context whether `ConcurrentDependencyDrop`
+    // is appropriate, so we want to make the conversion target explicit at the call site.
+    // For example, maybe we get an `InstanceMissing` if the user specifies a non-existing cluster,
+    // in which case `ConcurrentDependencyDrop` would not be appropriate.
+    pub fn concurrent_dependency_drop_from_instance_missing(e: InstanceMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "cluster",
+            dependency_id: e.0.to_string(),
+        }
+    }
+    pub fn concurrent_dependency_drop_from_collection_missing(e: CollectionMissing) -> Self {
+        AdapterError::ConcurrentDependencyDrop {
+            dependency_kind: "collection",
+            dependency_id: e.0.to_string(),
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_collection_lookup_error(
+        e: CollectionLookupError,
+    ) -> Self {
+        match e {
+            CollectionLookupError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+        }
+    }
+
+    pub fn concurrent_dependency_drop_from_peek_error(e: PeekError) -> AdapterError {
+        match e {
+            PeekError::InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            PeekError::CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            PeekError::ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            e @ PeekError::SinceViolation(_) => AdapterError::internal("peek error", e),
+            e @ PeekError::ReadHoldIdMismatch(_) => AdapterError::internal("peek error", e),
+            e @ PeekError::ReadHoldInsufficient(_) => AdapterError::internal("peek error", e),
+        }
+    }
 }
 
 impl fmt::Display for AdapterError {
@@ -664,6 +730,15 @@ impl fmt::Display for AdapterError {
             }
             AdapterError::ConcurrentClusterDrop => {
                 write!(f, "the transaction's active cluster has been dropped")
+            }
+            AdapterError::ConcurrentDependencyDrop {
+                dependency_kind,
+                dependency_id,
+            } => {
+                write!(
+                    f,
+                    "{dependency_kind} '{dependency_id}' was dropped while executing a statement"
+                )
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
