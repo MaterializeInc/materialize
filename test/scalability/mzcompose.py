@@ -20,6 +20,7 @@ from jupyter_core.command import main as jupyter_core_command_main
 from matplotlib import pyplot as plt
 
 from materialize import buildkite, git
+from materialize.docker import image_registry
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.balancerd import Balancerd
@@ -80,7 +81,7 @@ from materialize.version_list import (
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
     Materialized(
-        image="materialize/materialized:latest",
+        image="{image_registry()}/materialized:latest",
         sanity_restart=False,
         additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
         external_metadata_store=True,
@@ -336,8 +337,8 @@ def get_baseline_and_other_endpoints(
                 specified_target=specified_target,
                 resolved_target=resolved_target,
                 use_balancerd=use_balancerd,
-                image=f"materialize/materialized:{resolved_target}",
-                alternative_image="materialize/materialized:latest",
+                image=f"{image_registry()}/materialized:{resolved_target}",
+                alternative_image="{image_registry()}/materialized:latest",
             )
         assert endpoint is not None
 
