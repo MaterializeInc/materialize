@@ -347,6 +347,10 @@ cleanup() {
       exit 1
   fi
 
+  if [[ $CI_ANNOTATE_ERRORS_RESULT -ne 0 ]]; then
+    bin/clear-corrupted-cargo-target-dir run.log
+  fi
+
   # Don't run the cleanup function twice
   trap - EXIT SIGTERM SIGINT
   exit "$CI_ANNOTATE_ERRORS_RESULT"

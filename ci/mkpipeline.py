@@ -544,6 +544,10 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
                     "exit_status": 128,  # Temporary Github connection issue
                     "limit": 2,
                 },
+                {
+                    "exit_status": 199,  # Rust ICE https://github.com/rust-lang/rust/issues/148581
+                    "limit": 2,
+                },
             ]
         )
 

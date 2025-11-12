@@ -10,6 +10,9 @@
 # by the Apache License, Version 2.0.
 
 import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from materialize import mzbuild, spawn, ui
@@ -42,6 +45,18 @@ def main() -> None:
         deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
         set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)
+    except subprocess.CalledProcessError as e:
+        set_build_status("failed")
+        if e.returncode == 101:  # panic in Rust
+            print(
+                "--- Detected Rust ICE (https://github.com/rust-lang/rust/issues/148581), clearing cargo target directories"
+            )
+            for dir in ["target", "target-xcompile"]:
+                if os.path.exists(dir):
+                    shutil.rmtree(dir, ignore_errors=True)
+            set_build_status("failed")
+            sys.exit(199)
+        raise
     except:
         set_build_status("failed")
         raise
