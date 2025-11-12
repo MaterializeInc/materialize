@@ -96,7 +96,7 @@
 //!
 //! For more information about schemas and what kind of information you can encapsulate in them,
 //! please refer to the appropriate section of the
-//! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
+//! [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration).
 //!
 //! # Writing data
 //!
@@ -271,7 +271,7 @@
 //! The library will also automatically perform schema resolution while reading the data.
 //!
 //! For more information about schema compatibility and resolution, please refer to the
-//! [Avro Specification](https://avro.apache.org/docs/current/spec.html#schemas).
+//! [Avro Specification](https://avro.apache.org/docs/++version++/specification/#schema-declaration).
 //!
 //! There are two ways to handle deserializing Avro data in Rust, as you can see below.
 //!

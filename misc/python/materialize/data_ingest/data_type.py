@@ -36,7 +36,7 @@ class Backend(Enum):
 
 
 class DataType:
-    """As supported by Avro: https://avro.apache.org/docs/1.11.1/specification/_print/"""
+    """As supported by Avro: https://avro.apache.org/docs/++version++/specification/_print/"""
 
     @staticmethod
     def random_value(
