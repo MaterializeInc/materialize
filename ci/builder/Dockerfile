@@ -275,12 +275,12 @@ RUN arch_gcloud=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm/" -e "s/amd64/x86_64/
 # See: https://discourse.gohugo.io/t/how-to-install-hugo-extended-on-linux-arm/28098/4
 
 RUN if [ $ARCH_GCC = x86_64 ]; then \
-    curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.12.1/htmltest_0.12.1_linux_amd64.tar.gz > htmltest.tar.gz \
-    && echo '04d4be5097b98cd28de469f8856b3fbe82669f57b482a4cf3092a55e9e8e9e0d  htmltest.tar.gz' | sha256sum --check \
+    curl -fsSL https://github.com/wjdp/htmltest/releases/download/v0.17.0/htmltest_0.17.0_linux_amd64.tar.gz > htmltest.tar.gz \
+    && echo '775c597ee74899d6002cd2d93076f897f4ba68686bceabe2e5d72e84c57bc0fb htmltest.tar.gz' | sha256sum --check \
     && tar -xzf htmltest.tar.gz -C /usr/local/bin htmltest \
     && rm htmltest.tar.gz \
-    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.128.0/hugo_extended_0.128.0_Linux-64bit.tar.gz > hugo.tar.gz \
-    && echo 'a39cd72eff188f8596f09f3a7db9195477c4ce21072d286832f9fde15ba5d336 hugo.tar.gz' | sha256sum --check \
+    && curl -fsSL https://github.com/gohugoio/hugo/releases/download/v0.152.2/hugo_extended_withdeploy_0.152.2_Linux-64bit.tar.gz > hugo.tar.gz \
+    && echo '08200e4d82f086c94c301e8ba08102f9e23f38774ad949bb3251cac76283684a hugo.tar.gz' | sha256sum --check \
     && tar -xzf hugo.tar.gz -C /usr/local/bin hugo \
     && rm hugo.tar.gz; \
     fi
