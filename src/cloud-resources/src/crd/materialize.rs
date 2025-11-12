@@ -17,6 +17,7 @@ use k8s_openapi::{
     },
 };
 use kube::{CustomResource, Resource, ResourceExt, api::ObjectMeta};
+
 use rand::Rng;
 use rand::distributions::Uniform;
 use schemars::JsonSchema;
@@ -95,6 +96,7 @@ pub mod v1alpha1 {
         printcolumn = r#"{"name": "ImageRef", "type": "string", "description": "Reference to the Docker image.", "jsonPath": ".spec.environmentdImageRef", "priority": 1}"#,
         printcolumn = r#"{"name": "UpToDate", "type": "string", "description": "Whether the spec has been applied", "jsonPath": ".status.conditions[?(@.type==\"UpToDate\")].status", "priority": 1}"#
     )]
+    #[kube(validation = Rule::new("!has(self.spec.resource_id) || (self.spec.resource_id.matches('^[a-z0-9-]+$') && self.spec.resource_id.size() >= 3 && self.spec.resource_id.size() <= 10)").message("resource_id must be URL-safe and lowercase (only lowercase letters, numbers, and hyphens) and between 3-10 characters"))]
     pub struct MaterializeSpec {
         // The environmentd image to run
         pub environmentd_image_ref: String,
@@ -207,6 +209,12 @@ pub mod v1alpha1 {
         // The issuer_ref field is required.
         // This currently is only used for environmentd, but will eventually support clusterd.
         pub internal_certificate_spec: Option<MaterializeCertSpec>,
+
+        // An optional value to manually specify the resource identifier for the materterialize resource.
+        // This will be used as the prefix of k8s resources such as pods and in service definitions.
+        // This value *MUST* be urlsafe and lowercase (only lowercase letters, numbers, and hyphens)
+        // and between 3-10 characters in length. Changes in the value after initial resource creation are ignored.
+        pub resource_id: Option<String>,
     }
 
     impl Materialize {
@@ -489,12 +497,19 @@ pub mod v1alpha1 {
                 // so we define our own character set, rather than use the
                 // built-in Alphanumeric distribution from rand, which
                 // includes both upper and lowercase letters.
-                const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-                status.resource_id = rand::thread_rng()
-                    .sample_iter(Uniform::new(0, CHARSET.len()))
-                    .take(10)
-                    .map(|i| char::from(CHARSET[i]))
-                    .collect();
+                status.resource_id = self
+                    .spec
+                    .resource_id
+                    .as_ref()
+                    .map(|r| r.to_owned())
+                    .unwrap_or_else(|| {
+                        const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
+                        rand::thread_rng()
+                            .sample_iter(Uniform::new(0, CHARSET.len()))
+                            .take(10)
+                            .map(|i| char::from(CHARSET[i]))
+                            .collect()
+                    });
 
                 // If we're creating the initial status on an un-soft-deleted
                 // Environment we need to ensure that the last active generation
@@ -615,5 +630,149 @@ mod tests {
         assert!(!mz.meets_minimum_version(&Version::parse("1.0.0").unwrap()));
         mz.spec.environmentd_image_ref = "my.private.registry:5000:v0.33.3".to_owned();
         assert!(!mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
+    }
+
+    #[mz_ore::test]
+    fn resource_id_validation_in_crd() {
+        use kube::CustomResourceExt;
+
+        // Generate the CRD
+        let crd = Materialize::crd();
+        let crd_json = serde_json::to_value(&crd).unwrap();
+
+        // Check that validation rule exists in the generated CRD
+        // CEL validations are at the root openAPIV3Schema level
+        let validation = &crd_json["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["x-kubernetes-validations"];
+
+        assert!(
+            validation.is_array(),
+            "CRD should have x-kubernetes-validations array at the schema root"
+        );
+
+        let validations = validation.as_array().unwrap();
+        let resource_id_validation = validations.iter().find(|v| {
+            v["rule"]
+                .as_str()
+                .map(|r| r.contains("resource_id"))
+                .unwrap_or(false)
+        });
+
+        assert!(
+            resource_id_validation.is_some(),
+            "CRD should contain resource_id validation rule"
+        );
+    }
+
+    #[mz_ore::test]
+    fn resource_id_is_used_in_status() {
+        // Test that when resource_id is provided in spec, it's used in status
+        let mz = Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v0.34.0".to_owned(),
+                resource_id: Some("my-custom-id".to_owned()),
+                backend_secret_name: "test-secret".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta {
+                name: Some("test-mz".to_owned()),
+                namespace: Some("default".to_owned()),
+                ..Default::default()
+            },
+            status: None,
+        };
+
+        let status = mz.status();
+        assert_eq!(status.resource_id, "my-custom-id");
+    }
+
+    #[mz_ore::test]
+    fn resource_id_is_generated_when_not_provided() {
+        // Test that when resource_id is not provided, a random one is generated
+        let mz = Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v0.34.0".to_owned(),
+                backend_secret_name: "test-secret".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta {
+                name: Some("test-mz".to_owned()),
+                namespace: Some("default".to_owned()),
+                ..Default::default()
+            },
+            status: None,
+        };
+
+        let status = mz.status();
+        // Should be 10 characters long (within the 3-10 range)
+        assert_eq!(status.resource_id.len(), 10);
+        // Should only contain lowercase alphanumeric characters (matches validation rule)
+        assert!(
+            status
+                .resource_id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        );
+    }
+
+    #[mz_ore::test]
+    fn resource_id_length_constraints() {
+        // Test that various length resource_ids are handled correctly
+
+        // Valid: exactly 3 characters (minimum)
+        let mz = Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v0.34.0".to_owned(),
+                resource_id: Some("abc".to_owned()),
+                backend_secret_name: "test-secret".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta {
+                name: Some("test-mz".to_owned()),
+                namespace: Some("default".to_owned()),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let status = mz.status();
+        assert_eq!(status.resource_id, "abc");
+
+        // Valid: exactly 10 characters (maximum)
+        let mz = Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v0.34.0".to_owned(),
+                resource_id: Some("abcdefgh12".to_owned()),
+                backend_secret_name: "test-secret".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta {
+                name: Some("test-mz".to_owned()),
+                namespace: Some("default".to_owned()),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let status = mz.status();
+        assert_eq!(status.resource_id, "abcdefgh12");
+
+        // Valid: 5 characters (middle of range)
+        let mz = Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v0.34.0".to_owned(),
+                resource_id: Some("test5".to_owned()),
+                backend_secret_name: "test-secret".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta {
+                name: Some("test-mz".to_owned()),
+                namespace: Some("default".to_owned()),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let status = mz.status();
+        assert_eq!(status.resource_id, "test5");
+
+        // Note: Invalid lengths (like "ab" with 2 chars or "abcdefgh123" with 11 chars)
+        // would be rejected by the Kubernetes API server validation before reaching our code
     }
 }
