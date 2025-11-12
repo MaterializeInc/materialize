@@ -34,7 +34,7 @@ use mz_ore::netio::SocketAddr;
 use mz_ore::tracing::TokioConsoleConfig;
 use mz_ore::tracing::{
     OpenTelemetryConfig, SentryConfig, StderrLogConfig, StderrLogFormat, TracingConfig,
-    TracingGuard, TracingHandle,
+    TracingHandle,
 };
 use mz_tracing::CloneableEnvFilter;
 use opentelemetry::KeyValue;
@@ -268,7 +268,7 @@ impl TracingCliArgs {
             build_info,
         }: StaticTracingConfig,
         registry: MetricsRegistry,
-    ) -> Result<(TracingHandle, TracingGuard), anyhow::Error> {
+    ) -> Result<TracingHandle, anyhow::Error> {
         mz_ore::tracing::configure(TracingConfig {
             service_name,
             stderr_log: StderrLogConfig {

@@ -277,7 +277,7 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
-    let _ = runtime
+    runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "upsert-open-loop",

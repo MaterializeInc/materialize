@@ -240,26 +240,6 @@ impl std::fmt::Debug for TracingHandle {
     }
 }
 
-/// A guard for the tracing infrastructure configured with [`configure`].
-///
-/// This guard should be kept alive for the lifetime of the program.
-#[must_use = "Must hold for the lifetime of the program, otherwise tracing will be shutdown"]
-pub struct TracingGuard {
-    _sentry_guard: Option<sentry::ClientInitGuard>,
-}
-
-impl Drop for TracingGuard {
-    fn drop(&mut self) {
-        opentelemetry::global::shutdown_tracer_provider();
-    }
-}
-
-impl std::fmt::Debug for TracingGuard {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.debug_struct("TracingGuard").finish_non_exhaustive()
-    }
-}
-
 // Note that the following defaults are used on startup, regardless of the
 // parameters in LaunchDarkly. If we need to, we can add cli flags to control
 // then going forward.
@@ -331,9 +311,7 @@ pub static GLOBAL_SUBSCRIBER: OnceLock<GlobalSubscriber> = OnceLock::new();
 // Setting up OpenTelemetry in the background requires we are in a Tokio runtime
 // context, hence the `async`.
 #[allow(clippy::unused_async)]
-pub async fn configure<F>(
-    config: TracingConfig<F>,
-) -> Result<(TracingHandle, TracingGuard), anyhow::Error>
+pub async fn configure<F>(config: TracingConfig<F>) -> Result<TracingHandle, anyhow::Error>
 where
     F: Fn(&tracing::Metadata<'_>) -> sentry_tracing::EventFilter + Send + Sync + 'static,
 {
@@ -525,7 +503,7 @@ where
         None
     };
 
-    let (sentry_guard, sentry_layer, sentry_reloader): (_, _, DirectiveReloader) =
+    let (sentry_layer, sentry_reloader): (_, DirectiveReloader) =
         if let Some(sentry_config) = config.sentry {
             let guard = sentry::init((
                 sentry_config.dsn,
@@ -536,6 +514,10 @@ where
                     ..Default::default()
                 },
             ));
+
+            // Forgetting the guard ensures that the Sentry transport won't shut down for the
+            // lifetime of the process.
+            std::mem::forget(guard);
 
             sentry::configure_scope(|scope| {
                 scope.set_tag("service_name", config.service_name);
@@ -589,10 +571,10 @@ where
                 }
                 Ok(filter_handle.reload(filter)?)
             });
-            (Some(guard), Some(layer), reloader)
+            (Some(layer), reloader)
         } else {
             let reloader = Arc::new(|_| Ok(()));
-            (None, None, reloader)
+            (None, reloader)
         };
 
     #[cfg(feature = "capture")]
@@ -627,11 +609,8 @@ where
         opentelemetry: otel_reloader,
         sentry: sentry_reloader,
     };
-    let guard = TracingGuard {
-        _sentry_guard: sentry_guard,
-    };
 
-    Ok((handle, guard))
+    Ok(handle)
 }
 
 /// Returns the [`Level`] of a crate from an [`EnvFilter`] by performing an

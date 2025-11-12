@@ -715,7 +715,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = runtime.block_on(args.tracing.configure_tracing(
+    let tracing_handle = runtime.block_on(args.tracing.configure_tracing(
         StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,

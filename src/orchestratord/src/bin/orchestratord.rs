@@ -74,8 +74,7 @@ async fn main() {
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
     let metrics_registry = MetricsRegistry::new();
-    let (_, _tracing_guard) = args
-        .tracing
+    args.tracing
         .configure_tracing(
             StaticTracingConfig {
                 service_name: "orchestratord",
