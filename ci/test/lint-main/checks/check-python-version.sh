@@ -27,7 +27,7 @@ if [[ ! "${MZDEV_NO_PYTHON:-}" ]]; then
     try uv venv --python 3.10
     try uv pip compile --python-version 3.10 ci/builder/requirements.txt
     try uv pip install --python 3.10 --requirement ci/builder/requirements.txt
-    try git ls-files '*.py' | xargs uv run --python 3.10 -- python -m compileall -q
+    try git ls-files '*.py' | xargs uv run --no-project --python 3.10 -- python -m compileall -q
 fi
 
 try_status_report
