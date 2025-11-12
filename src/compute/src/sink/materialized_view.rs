@@ -196,6 +196,8 @@ where
             )
         }
 
+        let read_only_rx = collection_state.read_only_rx.clone();
+
         let token = persist_sink(
             sink_id,
             &self.storage_metadata,
@@ -204,6 +206,7 @@ where
             as_of,
             compute_state,
             start_signal,
+            read_only_rx,
         );
         Some(token)
     }
@@ -235,6 +238,7 @@ pub(super) fn persist_sink<S>(
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
+    read_only_rx: watch::Receiver<bool>,
 ) -> Rc<dyn Any>
 where
     S: Scope<Timestamp = Timestamp>,
@@ -262,7 +266,7 @@ where
         sink_id,
         persist_api.clone(),
         as_of.clone(),
-        compute_state.read_only_rx.clone(),
+        read_only_rx,
         &desired,
     );
 

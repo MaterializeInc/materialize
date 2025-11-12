@@ -404,22 +404,22 @@ def workflow_test_github_4443(c: Composition) -> None:
         ) = find_command_history_metrics(c)
         assert (
             controller_command_count < 100
-        ), "controller history grew more than expected after peeks"
+        ), f"controller history grew more than expected after peeks, got {controller_command_count}"
         assert (
             controller_dataflow_count > 0
-        ), "at least one dataflow expected in controller history"
+        ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
             controller_dataflow_count < 5
-        ), "more dataflows than expected in controller history"
+        ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count < 100
-        ), "replica history grew more than expected after peeks"
+        ), f"replica history grew more than expected after peeks, got {replica_command_count}"
         assert (
             replica_dataflow_count > 0
-        ), "at least one dataflow expected in replica history"
+        ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
             replica_dataflow_count < 5
-        ), "more dataflows than expected in replica history"
+        ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
 def workflow_test_github_4444(c: Composition) -> None:
@@ -2661,7 +2661,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_compute_commands_total("schedule")
     assert count > 0, f"got {count}"
     count = metrics.get_compute_commands_total("allow_writes")
-    assert count == 1, f"got {count}"
+    assert count >= 1, f"got {count}"
 
     # mz_compute_responses_total
     count = metrics.get_compute_responses_total("frontiers")
@@ -2717,7 +2717,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_compute_controller_history_command_count("update_configuration")
     assert count == 1, f"got {count}"
     count = metrics.get_compute_controller_history_command_count("allow_writes")
-    assert count == 1, f"got {count}"
+    assert count > 0, f"got {count}"
 
     count = metrics.get_value("mz_compute_controller_history_dataflow_count")
     assert count >= 2, f"got {count}"

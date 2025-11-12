@@ -719,6 +719,7 @@ impl Coordinator {
                             notice_builtin_updates_fut,
                         )
                         .await;
+                    coord.allow_writes(cluster_id, global_id);
                 })
             })
             .await;

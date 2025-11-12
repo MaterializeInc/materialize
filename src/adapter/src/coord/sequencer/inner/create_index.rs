@@ -494,6 +494,7 @@ impl Coordinator {
                             notice_builtin_updates_fut,
                         )
                         .await;
+                    // No `allow_writes` here because indexes do not modify external state.
 
                     // Drop read holds after the dataflow has been shipped, at which
                     // point compute will have put in its own read holds.

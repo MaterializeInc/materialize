@@ -166,6 +166,7 @@ where
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
+        read_only: bool,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -195,6 +196,7 @@ where
                 response_tx,
                 Arc::clone(&read_hold_tx),
                 introspection_tx,
+                read_only,
             )
             .run(),
         );
@@ -218,11 +220,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     storage_collections: StorageCollections<T>,
     /// Whether instance initialization has been completed.
     initialized: bool,
-    /// Whether or not this instance is in read-only mode.
+    /// Whether this instance is in read-only mode.
     ///
-    /// When in read-only mode, neither the controller nor the instances
-    /// controlled by it are allowed to affect changes to external systems
-    /// (largely persist).
+    /// When in read-only mode, this instance will not update persistent state, such as
+    /// wallclock lag introspection.
     read_only: bool,
     /// The workload class of this instance.
     ///
@@ -985,6 +986,7 @@ where
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         read_hold_tx: read_holds::ChangeTx<T>,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
+        read_only: bool,
     ) -> Self {
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
@@ -1012,7 +1014,7 @@ where
             storage_collections: storage,
             peek_stash_persist_location,
             initialized: false,
-            read_only: true,
+            read_only,
             workload_class: None,
             replicas: Default::default(),
             collections,
@@ -1090,15 +1092,31 @@ where
         }
     }
 
-    /// Allows this instance to affect writes to external systems (persist).
+    /// Allows collections to affect writes to external systems (persist).
     ///
     /// Calling this method repeatedly has no effect.
     #[mz_ore::instrument(level = "debug")]
-    pub fn allow_writes(&mut self) {
-        if self.read_only {
-            self.read_only = false;
-            self.send(ComputeCommand::AllowWrites);
+    pub fn allow_writes(&mut self, collection_id: GlobalId) -> Result<(), CollectionMissing> {
+        let collection = self.collection_mut(collection_id)?;
+
+        // Do not send redundant allow-writes commands.
+        if !collection.read_only {
+            return Ok(());
         }
+
+        // Don't send allow-writes for collections that are not installed.
+        let as_of = collection.read_frontier();
+
+        // If the collection has an empty `as_of`, it was either never installed on the replica or
+        // has since been dropped. In either case the replica does not expect any commands for it.
+        if as_of.is_empty() {
+            return Ok(());
+        }
+
+        collection.read_only = false;
+        self.send(ComputeCommand::AllowWrites(collection_id));
+
+        Ok(())
     }
 
     /// Shut down this instance.
@@ -2359,6 +2377,11 @@ struct CollectionState<T: ComputeControllerTimestamp> {
     /// command for it.
     scheduled: bool,
 
+    /// Whether this collection is in read-only mode.
+    ///
+    /// When in read-only mode, the dataflow is not allowed to affect external state (largely persist).
+    read_only: bool,
+
     /// State shared with the `ComputeController`.
     shared: SharedCollectionState<T>,
 
@@ -2456,6 +2479,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             log_collection: false,
             dropped: false,
             scheduled: false,
+            read_only: true,
             shared,
             implied_read_hold,
             warmup_read_hold,

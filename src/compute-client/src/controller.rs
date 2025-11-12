@@ -23,6 +23,10 @@
 //! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
 //! collection is dropped with `drop_collections()`.
 //!
+//! A dataflow can be in read-only or read-write mode. In read-only mode, the dataflow does not
+//! modify any persistent state. Sending a `allow_write` message to the compute instance will
+//! transition the dataflow to read-write mode, allowing it to write to persistent sinks.
+//!
 //! Created dataflows will prevent the compaction of their inputs, including other compute
 //! collections but also collections managed by the storage layer. Each dataflow input is prevented
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
@@ -537,6 +541,7 @@ where
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
+            self.read_only,
         );
 
         let instance = InstanceState::new(client, collections);
@@ -550,10 +555,6 @@ where
         let instance = self.instances.get_mut(&id).expect("instance just added");
         if self.initialized {
             instance.call(Instance::initialization_complete);
-        }
-
-        if !self.read_only {
-            instance.call(Instance::allow_writes);
         }
 
         let mut config_params = self.config.clone();
@@ -1040,6 +1041,29 @@ where
         for instance in self.instances.values_mut() {
             instance.call(Instance::maintain);
         }
+    }
+
+    /// Allow writes for the specified collections on `instance_id`.
+    ///
+    /// If this controller is in read-only mode, this is a no-op.
+    pub fn allow_writes(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
+        if self.read_only {
+            tracing::debug!("Skipping allow_writes in read-only mode");
+            return Ok(());
+        }
+
+        let instance = self.instance_mut(instance_id)?;
+
+        // Validation
+        instance.collection(collection_id)?;
+
+        instance.call(move |i| i.allow_writes(collection_id).expect("validated"));
+
+        Ok(())
     }
 }
 
