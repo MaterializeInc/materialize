@@ -59,3 +59,7 @@ log_cli = true
 log_cli_level = "INFO"
 # do not include the timestamp which is already provided by Buildkite
 log_cli_format = "[%(levelname)8s] %(message)s (%(filename)s:%(lineno)s)"
+
+[project]
+name = "materialize"
+version = "0.0.0"

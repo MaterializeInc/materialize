@@ -2154,7 +2154,7 @@ def analyze_file(file: str):
             & (df_all["mode"] == mode)
         )
         df = df_all[indexes]
-        title = f"{str(benchmark).replace("_", " ")} - {str(category).replace('_', ' ')} ({mode})"
+        title = f"{str(benchmark).replace('_', ' ')} - {str(category).replace('_', ' ')} ({mode})"
         slug = f"{benchmark}_{category}_{mode}".replace(" ", "_")
 
         plot(

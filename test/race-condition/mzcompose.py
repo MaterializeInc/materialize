@@ -609,7 +609,12 @@ class KafkaSink(Object):
 
 class View(Object):
     def create(self) -> str:
-        return f'> CREATE VIEW {self.name} AS SELECT {"* FROM " + self.references.name if self.references else "'foo' AS a, 'bar' AS b"}'
+        select = (
+            "* FROM " + self.references.name
+            if self.references
+            else "'foo' AS a, 'bar' AS b"
+        )
+        return f"> CREATE VIEW {self.name} AS SELECT {select}"
 
     def destroy(self) -> str:
         return f"> DROP VIEW {self.name} CASCADE"
@@ -633,7 +638,12 @@ class View(Object):
 
 class MaterializedView(Object):
     def create(self) -> str:
-        return f'> CREATE MATERIALIZED VIEW {self.name} AS SELECT {"* FROM " + self.references.name if self.references else "'foo' AS a, 'bar' AS b"}'
+        select = (
+            "* FROM " + self.references.name
+            if self.references
+            else "'foo' AS a, 'bar' AS b"
+        )
+        return f"> CREATE MATERIALIZED VIEW {self.name} AS SELECT {select}"
 
     def destroy(self) -> str:
         return f"> DROP MATERIALIZED VIEW {self.name} CASCADE"
