@@ -15,6 +15,66 @@
 dag: true
 
 steps:
+  - group: "Orchestratord tests"
+    key: orchestratord-test
+    steps:
+      - id: orchestratord-defaults
+        label: "Orchestratord test (defaults from documentation)"
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: defaults
+              args: ["--tag=$CI_MZ_VERSION"]
+              ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-default-properties
+        label: "Orchestratord test (defaults for properties)"
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: ["--tag=$CI_MZ_VERSION", --action=noop, --properties=defaults, --recreate-cluster, --no-orchestratord-override]
+              ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-individual
+        label: "Orchestratord test (individual properties)"
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: ["--tag=$CI_MZ_VERSION", --action=noop, --properties=individual, --recreate-cluster, --no-orchestratord-override]
+              ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-combine
+        label: "Orchestratord test (combine properties)"
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              args: ["--tag=$CI_MZ_VERSION", --action=noop, --properties=combine, --runtime=3600, --recreate-cluster, --no-orchestratord-override]
+              ci-builder: stable
+        env:
+          # Old versions are not on GHCR yet
+          MZ_GHCR: 0
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
   - id: terraform-aws-tag
     label: "Terraform + Helm Chart E2E on AWS (tagged)"
     artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz-debug/**/*"]

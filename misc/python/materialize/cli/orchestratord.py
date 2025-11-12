@@ -33,7 +33,7 @@ DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio
 
 IMAGE_REGISTRY = (
     "ghcr.io/materializeinc/materialize"
-    if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
+    if ui.env_is_truthy("MZ_GHCR", "1")
     else "materialize"
 )
 

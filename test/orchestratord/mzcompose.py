@@ -453,7 +453,12 @@ class EnvironmentdImageRef(Modification):
         def check() -> None:
             environmentd = get_environmentd_data()
             image = environmentd["items"][0]["spec"]["containers"][0]["image"]
-            expected = f"materialize/environmentd:{self.value}"
+            image_registry = (
+                "ghcr.io/materializeinc/materialize"
+                if ui.env_is_truthy("MZ_GHCR", "1")
+                else "materialize"
+            )
+            expected = f"{image_registry}/environmentd:{self.value}"
             assert (
                 image == expected
             ), f"Expected environmentd image {expected}, but found {image}"
@@ -1376,6 +1381,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         type=str,
         help="Custom version tag to use",
     )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
     parser.add_argument("--seed", type=str, default=random.randrange(1000000))
     parser.add_argument("--scenario", type=str)
     parser.add_argument(
@@ -1441,7 +1452,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         definition["secret"] = materialize_setup[1]
         definition["materialize"] = materialize_setup[2]
 
-    definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
+    if args.orchestratord_override:
+        definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
     # TODO: database-issues#9696, makes environmentd -> clusterd connections fail
     # definition["operator"]["networkPolicies"]["enabled"] = True
     # definition["operator"]["networkPolicies"]["internal"]["enabled"] = True
@@ -1515,6 +1527,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     try:
         if action == Action.Noop:
             for mods in mods_it:
+                if args.tag:
+                    mods.append(EnvironmentdImageRef(str(args.tag)))
                 run_scenario([mods], definition)
         elif action == Action.Upgrade:
             assert not ui.env_is_truthy(
