@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=((\d+)\sbytes|u(\d+)) replacement=<XXX>
+$ set-regex match=((\d+)\sbytes|u(\d+)|(\d+:\d+:\d+.\d+)) replacement=<XXX>
 
 # In case the environment has other replicas
 > SET cluster_replica = r1
@@ -37,6 +37,12 @@ operator                      total_memory   total_records
 "Arrange (#0{x})"             <XXX>          <null>
 "  Stream <XXX>"              <null>         <null>
 
+> EXPLAIN ANALYZE CLUSTER CPU;
+             object         global_id    total_elapsed
+------------------------------------------------------
+materialize.green.t_idx     <XXX>        <XXX>
+materialize.blue.t_idx      <XXX>        <XXX>
+
 > ALTER SCHEMA blue SWAP WITH green;
 
 > DROP SCHEMA green CASCADE;
@@ -47,3 +53,9 @@ operator                      total_memory   total_records
 ----------------------------------------------------------
 "Arrange (#0{x})"             <XXX>          4
 "  Stream <XXX>"              <null>         <null>
+
+> EXPLAIN ANALYZE CLUSTER CPU;
+             object         global_id    total_elapsed
+------------------------------------------------------
+materialize.green.t_idx     <XXX>        <XXX>
+materialize.blue.t_idx      <XXX>        <XXX>
