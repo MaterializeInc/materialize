@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use itertools::Itertools;
@@ -454,6 +455,7 @@ impl Catalog {
         drop(storage);
         if let Some(new_state) = new_state {
             self.transient_revision += 1;
+            self.latest_transient_revision.fetch_add(1, Ordering::SeqCst); ////////// todo: Is the ordering ok?
             self.state = new_state;
         }
 

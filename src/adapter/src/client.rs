@@ -39,12 +39,14 @@ use mz_sql::catalog::{EnvironmentId, SessionCatalog};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
-use mz_sql::session::vars::{CLUSTER, OwnedVarInput, SystemVars, Var};
+use mz_sql::session::vars::{
+    CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
+};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
-use tracing::error;
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -63,7 +65,7 @@ use crate::session::{
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::telemetry::{self, EventDetails, SegmentClientExt, StatementFailureType};
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, PeekResponseUnary, StartupResponse};
+use crate::{AdapterNotice, AppendWebhookError, PeekClient, PeekResponseUnary, StartupResponse};
 
 /// A handle to a running coordinator.
 ///
@@ -252,20 +254,36 @@ impl Client {
 
         // Create the client as soon as startup succeeds (before any await points) so its `Drop` can
         // handle termination.
+        // Build the PeekClient with controller handles returned from startup.
+        let StartupResponse {
+            role_id,
+            write_notify,
+            session_defaults,
+            catalog,
+            storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            persist_client,
+        } = response;
+
+        let peek_client = PeekClient::new(
+            self.clone(),
+            storage_collections,
+            transient_id_gen,
+            optimizer_metrics,
+            persist_client,
+        );
+
         let mut client = SessionClient {
             inner: Some(self.clone()),
             session: Some(session),
             timeouts: Timeout::new(),
             environment_id: self.environment_id.clone(),
             segment_client: self.segment_client.clone(),
+            peek_client,
+            enable_frontend_peek_sequencing: false, // initialized below, once we have a ConnCatalog
+            catalog: Arc::clone(&catalog),
         };
-
-        let StartupResponse {
-            role_id,
-            write_notify,
-            session_defaults,
-            catalog,
-        } = response;
 
         let session = client.session();
         session.initialize_role_metadata(role_id);
@@ -396,6 +414,10 @@ Issue a SQL query to get started. Need help?
             }
         }
 
+        client.enable_frontend_peek_sequencing = ENABLE_FRONTEND_PEEK_SEQUENCING
+            .require(catalog.system_vars())
+            .is_ok();
+
         Ok(client)
     }
 
@@ -412,7 +434,7 @@ Issue a SQL query to get started. Need help?
     pub async fn support_execute_one(
         &self,
         sql: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send + Sync>>, anyhow::Error> {
+    ) -> Result<Pin<Box<dyn Stream<Item = PeekResponseUnary> + Send>>, anyhow::Error> {
         // Connect to the coordinator.
         let conn_id = self.new_conn_id()?;
         let session = self.new_session(SessionConfig {
@@ -503,7 +525,7 @@ Issue a SQL query to get started. Need help?
     }
 
     #[instrument(level = "debug")]
-    fn send(&self, cmd: Command) {
+    pub(crate) fn send(&self, cmd: Command) {
         self.inner_cmd_tx
             .send((OpenTelemetryContext::obtain(), cmd))
             .expect("coordinator unexpectedly gone");
@@ -524,6 +546,14 @@ pub struct SessionClient {
     timeouts: Timeout,
     segment_client: Option<mz_segment::Client>,
     environment_id: EnvironmentId,
+    /// Client for frontend peek sequencing; populated at connection startup.
+    peek_client: PeekClient,
+    /// Whether frontend peek sequencing is enabled; initialized at connection startup.
+    // TODO(peek-seq): Currently, this is initialized only at session startup. We'll be able to
+    // check the actual feature flag value at every peek (without a Coordinator call) once we'll
+    // always have a catalog snapshot at hand.
+    pub enable_frontend_peek_sequencing: bool,
+    catalog: Arc<Catalog>,
 }
 
 impl SessionClient {
@@ -672,6 +702,17 @@ impl SessionClient {
         outer_ctx_extra: Option<ExecuteContextExtra>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
+
+        // Attempt peek sequencing in the session task.
+        // If unsupported, fall back to the Coordinator path.
+        // TODO(peek-seq): wire up cancel_future
+        if let Some(resp) = self.try_frontend_peek(&portal_name).await? {
+            debug!("frontend peek succeeded");
+            return Ok((resp, execute_started));
+        } else {
+            debug!("frontend peek did not happen");
+        }
+
         let response = self
             .send_with_cancel(
                 |tx, session| Command::Execute {
@@ -742,24 +783,30 @@ impl SessionClient {
 
     /// Fetches the catalog.
     #[instrument(level = "debug")]
-    pub async fn catalog_snapshot(&self, context: &str) -> Arc<Catalog> {
-        let start = std::time::Instant::now();
-        let CatalogSnapshot { catalog } = self
-            .send_without_session(|tx| Command::CatalogSnapshot { tx })
-            .await;
-        self.inner()
-            .metrics()
-            .catalog_snapshot_seconds
-            .with_label_values(&[context])
-            .observe(start.elapsed().as_secs_f64());
-        catalog
+    pub async fn catalog_snapshot(&mut self, context: &str) -> Arc<Catalog> {
+        if self.catalog.transient_revision() == self.catalog.latest_transient_revision() {
+            Arc::clone(&self.catalog)
+        } else {
+            let start = std::time::Instant::now();
+            let CatalogSnapshot { catalog } = self
+                .send_without_session(|tx| Command::CatalogSnapshot { tx })
+                .await;
+            self.inner()
+                .metrics()
+                .catalog_snapshot_seconds
+                .with_label_values(&[context])
+                .observe(start.elapsed().as_secs_f64());
+            self.catalog = Arc::clone(&catalog);
+            assert_eq!(self.catalog.transient_revision(), self.catalog.latest_transient_revision());
+            catalog
+        }
     }
 
     /// Dumps the catalog to a JSON string.
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn dump_catalog(&self) -> Result<CatalogDump, AdapterError> {
+    pub async fn dump_catalog(&mut self) -> Result<CatalogDump, AdapterError> {
         let catalog = self.catalog_snapshot("dump_catalog").await;
         catalog.dump().map_err(AdapterError::from)
     }
@@ -769,7 +816,7 @@ impl SessionClient {
     ///
     /// No authorization is performed, so access to this function must be limited to internal
     /// servers or superusers.
-    pub async fn check_catalog(&self) -> Result<(), serde_json::Value> {
+    pub async fn check_catalog(&mut self) -> Result<(), serde_json::Value> {
         let catalog = self.catalog_snapshot("check_catalog").await;
         catalog.check_consistency()
     }
@@ -973,7 +1020,9 @@ impl SessionClient {
                 | Command::Terminate { .. }
                 | Command::RetireExecute { .. }
                 | Command::CheckConsistency { .. }
-                | Command::Dump { .. } => {}
+                | Command::Dump { .. }
+                | Command::GetComputeInstanceClient { .. }
+                | Command::GetOracle { .. } => {}
             };
             cmd
         });
@@ -1044,6 +1093,41 @@ impl SessionClient {
     /// channel.
     pub async fn recv_timeout(&mut self) -> Option<TimeoutType> {
         self.timeouts.recv().await
+    }
+
+    /// Returns a reference to the PeekClient used for frontend peek sequencing.
+    pub fn peek_client(&self) -> &PeekClient {
+        &self.peek_client
+    }
+
+    /// Returns a reference to the PeekClient used for frontend peek sequencing.
+    pub fn peek_client_mut(&mut self) -> &mut PeekClient {
+        &mut self.peek_client
+    }
+
+    /// Attempt to sequence a peek from the session task.
+    ///
+    /// Returns Some(response) if we handled the peek, or None to fall back to the Coordinator's
+    /// peek sequencing.
+    pub(crate) async fn try_frontend_peek(
+        &mut self,
+        portal_name: &str,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
+        if self.enable_frontend_peek_sequencing {
+            // TODO(peek-seq): This snapshot is wasted when we end up bailing out from the frontend peek
+            // sequencing. We could solve this is with that optimization where we
+            // continuously keep a catalog snapshot in the session, and only get a new one when the
+            // catalog revision has changed, which we could see with an atomic read.
+            // But anyhow, this problem will just go away when we reach the point that we never fall
+            // back to the old sequencing.
+            let catalog = self.catalog_snapshot("try_frontend_peek_inner").await;
+            let session = self.session.as_mut().expect("SessionClient invariant");
+            self.peek_client
+                .try_frontend_peek_inner(portal_name, session, catalog)
+                .await
+        } else {
+            Ok(None)
+        }
     }
 }
 

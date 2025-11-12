@@ -157,7 +157,7 @@ pub struct Resolved<'s> {
 /// 4. optimizing the resulting `DataflowDescription` with `MIR` plans.
 /// 5. MIR ⇒ LIR lowering, and
 /// 6. optimizing the resulting `DataflowDescription` with `LIR` plans.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct GlobalLirPlan {
     peek_plan: PeekPlan,
     df_meta: DataflowMetainfo,
@@ -182,7 +182,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
             Some(self.select_id),
         );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
@@ -337,7 +337,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.config.features,
             &self.typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
 
         // Let's already try creating a fast path plan. If successful, we don't need to run the

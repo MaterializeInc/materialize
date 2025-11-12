@@ -200,6 +200,16 @@ def grant_all_admin_user(c: Composition):
     )
 
 
+def disable_frontend_peek_sequencing(c: Composition):
+    # This should be called if a test uses mz_sessions.
+    # TODO(peek-seq): This won't be needed once `waiting_on_startup_appends` is fixed in the new peek sequencing.
+    sql_cursor(c)
+    mz_system_cursor = c.sql_cursor(service="materialized", port=6877, user="mz_system")
+    mz_system_cursor.execute(
+        "ALTER SYSTEM SET enable_frontend_peek_sequencing = false;"
+    )
+
+
 # Assert that contains is present in balancer metrics.
 def assert_metrics(c: Composition, contains: str):
     result = c.exec(
@@ -357,6 +367,8 @@ def workflow_ip_forwarding(c: Composition) -> None:
         ).stdout.split("\n")
         if ip != "127.0.0.1"
     ][0]
+
+    disable_frontend_peek_sequencing(c)
 
     r = requests.post(
         f"https://localhost:{balancer_port}/api/sql",
