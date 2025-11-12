@@ -792,6 +792,7 @@ impl Listeners {
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
+                force_builtin_schema_migration: None,
             })
             .await?;
 

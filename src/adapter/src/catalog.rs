@@ -684,6 +684,7 @@ impl Catalog {
                 unsafe_mode: true,
                 all_features: false,
                 build_info,
+                deploy_generation: 0,
                 environment_id: environment_id.unwrap_or_else(EnvironmentId::for_tests),
                 read_only,
                 now,
@@ -721,6 +722,7 @@ impl Catalog {
                 builtin_item_migration_config: BuiltinItemMigrationConfig {
                     persist_client: persist_client.clone(),
                     read_only,
+                    force_migration: None,
                 },
                 persist_client,
                 enable_expression_cache_override,

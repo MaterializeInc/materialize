@@ -1512,7 +1512,6 @@ class FlipFlagsAction(Action):
             "storage_statistics_retention_duration",
             "enable_paused_cluster_readhold_downgrade",
             "enable_with_ordinality_legacy_fallback",
-            "enable_builtin_migration_schema_evolution",
         ]
 
     def run(self, exe: Executor) -> bool:

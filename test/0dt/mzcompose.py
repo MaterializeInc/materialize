@@ -1801,10 +1801,9 @@ def fetch_reconciliation_metrics(c: Composition, process: str) -> tuple[int, int
     return reused, replaced
 
 
-def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
+def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
     """
-    Verify builtin item migrations by shard replacement, with schema evolution
-    disabled.
+    Verify builtin schema migrations by shard replacement.
     """
 
     def get_persist_shard_id(item_id: str, service: str) -> str:
@@ -1825,10 +1824,7 @@ def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("mz_old")
     c.sql(
-        """
-        ALTER SYSTEM SET enable_builtin_migration_schema_evolution = false;
-        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
-        """,
+        "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -1854,7 +1850,7 @@ def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
-            force_migrations="all",
+            force_migrations="replacement",
             healthcheck=LEADER_STATUS_HEALTHCHECK,
             default_replication_factor=2,
         ),
@@ -1901,9 +1897,9 @@ def workflow_builtin_item_migrations_replacement(c: Composition) -> None:
         ), f"{replaced} dataflows have been replaced, expected all to be reused"
 
 
-def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
+def workflow_builtin_schema_migrations_evolution(c: Composition) -> None:
     """
-    Verify builtin item migrations by schema evolution.
+    Verify builtin schema migrations by schema evolution.
     """
 
     def get_persist_shard_id(item_id: str, service: str) -> str:
@@ -1924,10 +1920,7 @@ def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
     c.down(destroy_volumes=True)
     c.up("mz_old")
     c.sql(
-        """
-        ALTER SYSTEM SET enable_builtin_migration_schema_evolution = true;
-        CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables;
-        """,
+        "CREATE MATERIALIZED VIEW mv AS SELECT name FROM mz_tables",
         service="mz_old",
         port=6877,
         user="mz_system",
@@ -1953,7 +1946,7 @@ def workflow_builtin_item_migrations_schema_evolution(c: Composition) -> None:
             system_parameter_defaults=SYSTEM_PARAMETER_DEFAULTS,
             restart="on-failure",
             external_metadata_store=True,
-            force_migrations="all",
+            force_migrations="evolution",
             healthcheck=LEADER_STATUS_HEALTHCHECK,
             default_replication_factor=2,
         ),

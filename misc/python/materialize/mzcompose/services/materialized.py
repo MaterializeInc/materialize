@@ -220,7 +220,7 @@ class Materialized(Service):
 
         if force_migrations is not None and image is None:
             command += [
-                f"--unsafe-builtin-table-fingerprint-whitespace={force_migrations}",
+                f"--unsafe-force-builtin-schema-migration={force_migrations}",
             ]
             if not unsafe_mode:
                 command += ["--unsafe-mode"]
