@@ -484,6 +484,11 @@ pub async fn get_constraints_for_tables(
     let qualified_table_names: Vec<_> = schema_table_list
         .map(|(schema, table)| format!("{schema}.{table}"))
         .collect();
+
+    if qualified_table_names.is_empty() {
+        return Ok(Default::default());
+    }
+
     let params = (1..qualified_table_names.len() + 1)
         .map(|idx| format!("@P{}", idx))
         .join(", ");
@@ -492,9 +497,9 @@ pub async fn get_constraints_for_tables(
     // schema and table name to create a single identifier for the query rather than compose a
     // complex set of OR conditions for each schema + set of tables in the schema.
     //
-    // This query may perform poorly due to the condition relying concatenated value. We may get
-    // better performance by adding a constraint table names, but it isn't clear at this time if
-    // that is needed.
+    // This query may perform poorly due to the condition relying on a concatenated value. We may get
+    // better performance by adding a query constraint on the table names, but it isn't clear at
+    // this time if that is needed.
     let query = format!(
         "SELECT \
         tc.table_schema, \
@@ -518,6 +523,8 @@ pub async fn get_constraints_for_tables(
             name
         })
         .collect();
+
+    tracing::debug!("query = {query} params = {qualified_table_names:?}");
     let result = client.query(query, &query_params).await?;
 
     let mut contraints_by_table: BTreeMap<_, BTreeMap<_, Vec<_>>> = BTreeMap::new();
