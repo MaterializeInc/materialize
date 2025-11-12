@@ -1518,6 +1518,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             deprecated_schema_id: self.deprecated_schema.into_proto(),
             id: self.id.into_proto(),
             len: self.len.into_proto(),
+            meta: self.meta.into_proto(),
         }
     }
 
@@ -1534,6 +1535,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             deprecated_schema: proto.deprecated_schema_id.into_rust()?,
             id: proto.id.into_rust()?,
             len: proto.len.into_rust()?,
+            meta: proto.meta.into_rust()?,
         })
     }
 }

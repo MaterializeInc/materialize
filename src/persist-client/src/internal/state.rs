@@ -820,6 +820,10 @@ pub struct RunMeta {
 
     /// The number of updates in this run, or `None` if the number is unknown.
     pub(crate) len: Option<usize>,
+
+    /// Additional unstructured metadata.
+    #[serde(skip_serializing_if = "MetadataMap::is_empty")]
+    pub(crate) meta: MetadataMap,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.

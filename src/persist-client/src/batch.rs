@@ -717,6 +717,7 @@ where
                 } else {
                     None
                 },
+                meta: MetadataMap::default(),
             });
             run_parts.extend(parts);
         }
@@ -862,6 +863,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         } else {
                                             None
                                         },
+                                        meta: MetadataMap::default(),
                                     },
                                     completed_run.parts,
                                 )

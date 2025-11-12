@@ -95,6 +95,8 @@ message ProtoRunMeta {
   optional uint64 deprecated_schema_id = 2;
   optional string id = 4;
   optional uint64 len = 5;
+
+  map<string, bytes> meta = 6;
 }
 
 message ProtoHollowRun {
