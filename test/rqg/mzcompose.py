@@ -17,6 +17,7 @@ import argparse
 from dataclasses import dataclass
 from enum import Enum
 
+from materialize.docker import image_registry
 from materialize.mzcompose.composition import (
     Composition,
     MzComposeService,
@@ -241,7 +242,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def run_workload(c: Composition, args: argparse.Namespace, workload: Workload) -> None:
     def materialize_image(tag: str | None) -> str | None:
-        return f"materialize/materialized:{tag}" if tag else None
+        return f"{image_registry}/materialized:{tag}" if tag else None
 
     # A list of psql-compatible services participating in the test
     participants: list[MzComposeService] = [

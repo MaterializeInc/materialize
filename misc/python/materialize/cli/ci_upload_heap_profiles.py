@@ -69,14 +69,18 @@ def main() -> int:
         ).stdout
     )
     for service in services:
-        if service["Image"].startswith("materialize/clusterd:"):
+        image = service["Image"].rsplit(":", 1)[0]
+        ghcr_prefix = "ghcr.io/materializeinc/"
+        if image.startswith(ghcr_prefix):
+            image.removeprefix(ghcr_prefix)
+        if image == "materialize/clusterd":
             threads.append(
                 Thread(
                     target=run,
                     args=(service["Service"], ["http://127.0.0.1:6878/heap"]),
                 )
             )
-        elif service["Image"].startswith("materialize/materialized:"):
+        elif image == "materialize/materialized":
             threads.append(
                 Thread(
                     target=run,
