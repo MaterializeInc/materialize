@@ -28,7 +28,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: terraform
           run: aws-temporary
-          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files, --no-orchestratord-override]
           ci-builder: stable
 
   - id: terraform-gcp-tag
@@ -43,7 +43,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: terraform
           run: gcp-temporary
-          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files, --no-orchestratord-override]
           ci-builder: stable
 
   - id: terraform-azure-tag
@@ -58,7 +58,7 @@ steps:
       - ./ci/plugins/mzcompose:
           composition: terraform
           run: azure-temporary
-          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files]
+          args: ["--tag=$CI_MZ_VERSION", --no-run-testdrive-files, --no-orchestratord-override]
           ci-builder: stable
 
   - wait: ~
