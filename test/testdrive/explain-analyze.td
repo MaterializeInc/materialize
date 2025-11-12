@@ -57,5 +57,4 @@ operator                      total_memory   total_records
 > EXPLAIN ANALYZE CLUSTER CPU;
 object                      global_id    total_elapsed
 ------------------------------------------------------
-materialize.green.t_idx     <XXX>        <XXX>
 materialize.blue.t_idx      <XXX>        <XXX>
