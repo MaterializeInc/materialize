@@ -570,7 +570,7 @@ def version_to_string(version: MzVersion | None) -> str:
 
 def print_upgrade_path(versions: list[MzVersion | None]):
     print(
-        f"Upgrading through versions {str.join(" -> ", [version_to_string(version) for version in versions])}"
+        f"Upgrading through versions {str.join(' -> ', [version_to_string(version) for version in versions])}"
     )
 
 
