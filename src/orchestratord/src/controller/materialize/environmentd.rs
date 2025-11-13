@@ -1394,7 +1394,10 @@ fn create_environmentd_statefulset_object(
             ..Default::default()
         });
         args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
-        if mz.spec.authenticator_kind == AuthenticatorKind::Password {
+        if matches!(
+            mz.spec.authenticator_kind,
+            AuthenticatorKind::Password | AuthenticatorKind::Sasl
+        ) {
             args.push("--system-parameter-default=enable_password_auth=true".into());
             env.push(EnvVar {
                 name: "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM".to_string(),
@@ -1629,6 +1632,7 @@ fn create_connection_info(
         &mz.spec.internal_certificate_spec,
     );
     let authenticator_kind = mz.spec.authenticator_kind;
+
     let mut listeners_config = ListenersConfig {
         sql: btreemap! {
             "external".to_owned() => SqlListenerConfig{
@@ -1649,7 +1653,14 @@ fn create_connection_info(
             "external".to_owned() => HttpListenerConfig{
                 base: BaseListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
-                    authenticator_kind,
+                    // SASL authentication is only supported for SQL (PostgreSQL wire protocol).
+                    // HTTP listeners must use Password authentication when SASL is enabled.
+                    // This is validated at environmentd startup via ListenerConfig::validate().
+                    authenticator_kind: if authenticator_kind == AuthenticatorKind::Sasl {
+                        AuthenticatorKind::Password
+                    } else {
+                        authenticator_kind
+                    },
                     allowed_roles: AllowedRoles::Normal,
                     enable_tls: external_enable_tls,
                 },
@@ -1679,7 +1690,11 @@ fn create_connection_info(
             },
         },
     };
-    if authenticator_kind == AuthenticatorKind::Password {
+
+    if matches!(
+        authenticator_kind,
+        AuthenticatorKind::Password | AuthenticatorKind::Sasl
+    ) {
         listeners_config.sql.remove("internal");
         listeners_config.http.remove("internal");
 
@@ -1732,8 +1747,8 @@ fn create_connection_info(
         },
     };
 
-    let (scheme, leader_api_port, mz_system_secret_name) = match mz.spec.authenticator_kind {
-        AuthenticatorKind::Password => {
+    let (scheme, leader_api_port, mz_system_secret_name) = match authenticator_kind {
+        AuthenticatorKind::Password | AuthenticatorKind::Sasl => {
             let scheme = if external_enable_tls { "https" } else { "http" };
             (
                 scheme,
