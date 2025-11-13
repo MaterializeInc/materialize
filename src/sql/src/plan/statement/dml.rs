@@ -30,7 +30,8 @@ use mz_repr::explain::{ExplainConfig, ExplainFormat};
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::{CatalogItemId, Datum, RelationDesc, Row, SqlRelationType, SqlScalarType};
 use mz_sql_parser::ast::{
-    CteBlock, ExplainAnalyzeComputationProperty, ExplainAnalyzeProperty, ExplainAnalyzeStatement,
+    CteBlock, ExplainAnalyzeClusterStatement, ExplainAnalyzeComputationProperties,
+    ExplainAnalyzeComputationProperty, ExplainAnalyzeObjectStatement, ExplainAnalyzeProperty,
     ExplainPlanOption, ExplainPlanOptionName, ExplainPushdownStatement, ExplainSinkSchemaFor,
     ExplainSinkSchemaStatement, ExplainTimestampStatement, Expr, IfExistsBehavior, OrderByExpr,
     SetExpr, SubscribeOutput, UnresolvedItemName,
@@ -359,9 +360,9 @@ pub fn describe_explain_pushdown(
     )
 }
 
-pub fn describe_explain_analyze(
+pub fn describe_explain_analyze_object(
     _scx: &StatementContext,
-    statement: ExplainAnalyzeStatement<Aug>,
+    statement: ExplainAnalyzeObjectStatement<Aug>,
 ) -> Result<StatementDesc, PlanError> {
     if statement.as_sql {
         let relation_desc = RelationDesc::builder()
@@ -371,7 +372,10 @@ pub fn describe_explain_analyze(
     }
 
     match statement.properties {
-        ExplainAnalyzeProperty::Computation { properties, skew } => {
+        ExplainAnalyzeProperty::Computation(ExplainAnalyzeComputationProperties {
+            properties,
+            skew,
+        }) => {
             let mut relation_desc = RelationDesc::builder()
                 .with_column("operator", SqlScalarType::String.nullable(false));
 
@@ -441,6 +445,76 @@ pub fn describe_explain_analyze(
             Ok(StatementDesc::new(Some(relation_desc)))
         }
     }
+}
+
+pub fn describe_explain_analyze_cluster(
+    _scx: &StatementContext,
+    statement: ExplainAnalyzeClusterStatement,
+) -> Result<StatementDesc, PlanError> {
+    if statement.as_sql {
+        let relation_desc = RelationDesc::builder()
+            .with_column("SQL", SqlScalarType::String.nullable(false))
+            .finish();
+        return Ok(StatementDesc::new(Some(relation_desc)));
+    }
+
+    let ExplainAnalyzeComputationProperties { properties, skew } = statement.properties;
+
+    let mut relation_desc = RelationDesc::builder()
+        .with_column("object", SqlScalarType::String.nullable(false))
+        .with_column("global_id", SqlScalarType::String.nullable(false));
+
+    if skew {
+        relation_desc =
+            relation_desc.with_column("worker_id", SqlScalarType::UInt64.nullable(true));
+    }
+
+    let mut seen_properties = BTreeSet::new();
+    for property in properties {
+        // handle each property only once (belt and suspenders)
+        if !seen_properties.insert(property) {
+            continue;
+        }
+
+        match property {
+            ExplainAnalyzeComputationProperty::Memory if skew => {
+                let numeric = SqlScalarType::Numeric { max_scale: None }.nullable(true);
+                relation_desc = relation_desc
+                    .with_column("max_operator_memory_ratio", numeric.clone())
+                    .with_column("worker_memory", SqlScalarType::String.nullable(true))
+                    .with_column("avg_memory", SqlScalarType::String.nullable(true))
+                    .with_column("total_memory", SqlScalarType::String.nullable(true))
+                    .with_column("max_operator_records_ratio", numeric.clone())
+                    .with_column("worker_records", numeric.clone())
+                    .with_column("avg_records", numeric.clone())
+                    .with_column("total_records", numeric);
+            }
+            ExplainAnalyzeComputationProperty::Memory => {
+                relation_desc = relation_desc
+                    .with_column("total_memory", SqlScalarType::String.nullable(true))
+                    .with_column(
+                        "total_records",
+                        SqlScalarType::Numeric { max_scale: None }.nullable(true),
+                    );
+            }
+            ExplainAnalyzeComputationProperty::Cpu if skew => {
+                relation_desc = relation_desc
+                    .with_column(
+                        "max_operator_cpu_ratio",
+                        SqlScalarType::Numeric { max_scale: None }.nullable(true),
+                    )
+                    .with_column("worker_elapsed", SqlScalarType::Interval.nullable(true))
+                    .with_column("avg_elapsed", SqlScalarType::Interval.nullable(true))
+                    .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
+            }
+            ExplainAnalyzeComputationProperty::Cpu => {
+                relation_desc = relation_desc
+                    .with_column("total_elapsed", SqlScalarType::Interval.nullable(true));
+            }
+        }
+    }
+
+    Ok(StatementDesc::new(Some(relation_desc.finish())))
 }
 
 pub fn describe_explain_timestamp(
@@ -797,9 +871,9 @@ pub fn plan_explain_pushdown(
     Ok(Plan::ExplainPushdown(ExplainPushdownPlan { explainee }))
 }
 
-pub fn plan_explain_analyze(
+pub fn plan_explain_analyze_object(
     scx: &StatementContext,
-    statement: ExplainAnalyzeStatement<Aug>,
+    statement: ExplainAnalyzeObjectStatement<Aug>,
     params: &Params,
 ) -> Result<Plan, PlanError> {
     let explainee_name = statement
@@ -837,7 +911,10 @@ pub fn plan_explain_analyze(
     let mut order_by = vec!["mlm.lir_id DESC"];
 
     match statement.properties {
-        ExplainAnalyzeProperty::Computation { properties, skew } => {
+        ExplainAnalyzeProperty::Computation(ExplainAnalyzeComputationProperties {
+            properties,
+            skew,
+        }) => {
             let mut worker_id = None;
             let mut seen_properties = BTreeSet::new();
             for property in properties {
@@ -996,6 +1073,372 @@ GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
 SELECT {columns}
 FROM {from}
 WHERE {predicates}
+ORDER BY {order_by}"#
+    );
+
+    if statement.as_sql {
+        let rows = vec![Row::pack_slice(&[Datum::String(
+            &mz_sql_pretty::pretty_str_simple(&query, 80).map_err(|e| {
+                PlanError::Unstructured(format!("internal error parsing our own SQL: {e}"))
+            })?,
+        )])];
+        let typ = SqlRelationType::new(vec![SqlScalarType::String.nullable(false)]);
+
+        Ok(Plan::Select(SelectPlan::immediate(rows, typ)))
+    } else {
+        let (show_select, _resolved_ids) = ShowSelect::new_from_bare_query(scx, query)?;
+        show_select.plan()
+    }
+}
+
+pub fn plan_explain_analyze_cluster(
+    scx: &StatementContext,
+    statement: ExplainAnalyzeClusterStatement,
+    _params: &Params,
+) -> Result<Plan, PlanError> {
+    // object string
+    // worker_id uint64        (if           skew)
+    // memory_ratio numeric    (if memory && skew)
+    // worker_memory string    (if memory && skew)
+    // avg_memory string       (if memory && skew)
+    // total_memory string     (if memory)
+    // records_ratio numeric   (if memory && skew)
+    // worker_records          (if memory && skew)
+    // avg_records numeric     (if memory && skew)
+    // total_records numeric   (if memory)
+    // cpu_ratio numeric       (if cpu    && skew)
+    // worker_elapsed interval (if cpu    && skew)
+    // avg_elapsed interval    (if cpu    && skew)
+    // total_elapsed interval  (if cpu)
+
+    /* WITH {CTEs}
+       SELECT mo.name AS object
+             {columns}
+        FROM mz_introspection.mz_mappable_objects mo
+             {from}
+       WHERE {predicates}
+       ORDER BY {order_by}, mo.name DESC
+    */
+    let mut ctes = Vec::with_capacity(4); // max 2 per ExplainAnalyzeComputationProperty
+    let mut columns = vec!["mo.name AS object", "mo.global_id AS global_id"];
+    let mut from = vec!["mz_introspection.mz_mappable_objects mo"];
+    let mut predicates = vec![];
+    let mut order_by = vec![];
+
+    let ExplainAnalyzeComputationProperties { properties, skew } = statement.properties;
+    let mut worker_id = None;
+    let mut seen_properties = BTreeSet::new();
+    for property in properties {
+        // handle each property only once (belt and suspenders)
+        if !seen_properties.insert(property) {
+            continue;
+        }
+
+        match property {
+            ExplainAnalyzeComputationProperty::Memory => {
+                if skew {
+                    let mut set_worker_id = false;
+                    if let Some(worker_id) = worker_id {
+                        // join condition if we're showing skew for more than one property
+                        predicates.push(format!("om.worker_id = {worker_id}"));
+                    } else {
+                        worker_id = Some("om.worker_id");
+                        columns.push("om.worker_id AS worker_id");
+                        set_worker_id = true; // we'll add ourselves to `order_by` later
+                    };
+
+                    // computes the average memory per LIR operator (for per operator ratios)
+                    ctes.push((
+                    "per_operator_memory_summary",
+                    r#"
+SELECT mlm.global_id AS global_id,
+       mlm.lir_id AS lir_id,
+       SUM(mas.size) AS total_memory,
+       SUM(mas.records) AS total_records,
+       CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.size) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_memory,
+       CASE WHEN COUNT(DISTINCT mas.worker_id) <> 0 THEN SUM(mas.records) / COUNT(DISTINCT mas.worker_id) ELSE NULL END AS avg_records
+FROM        mz_introspection.mz_lir_mapping mlm
+ CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+       JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+         ON (mas.operator_id = valid_id)
+GROUP BY mlm.global_id, mlm.lir_id"#,
+                ));
+
+                    // computes the memory per worker in a per operator way
+                    ctes.push((
+                    "per_operator_memory_per_worker",
+                    r#"
+SELECT mlm.global_id AS global_id,
+       mlm.lir_id AS lir_id,
+       mas.worker_id AS worker_id,
+       SUM(mas.size) AS worker_memory,
+       SUM(mas.records) AS worker_records
+FROM        mz_introspection.mz_lir_mapping mlm
+ CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+       JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+         ON (mas.operator_id = valid_id)
+GROUP BY mlm.global_id, mlm.lir_id, mas.worker_id"#,
+                    ));
+
+                    // computes memory ratios per worker per operator
+                    ctes.push((
+                    "per_operator_memory_ratios",
+                    r#"
+SELECT pompw.global_id AS global_id,
+       pompw.lir_id AS lir_id,
+       pompw.worker_id AS worker_id,
+       CASE WHEN pompw.worker_id IS NOT NULL AND poms.avg_memory <> 0 THEN ROUND(pompw.worker_memory / poms.avg_memory, 2) ELSE NULL END AS memory_ratio,
+       CASE WHEN pompw.worker_id IS NOT NULL AND poms.avg_records <> 0 THEN ROUND(pompw.worker_records / poms.avg_records, 2) ELSE NULL END AS records_ratio
+  FROM      per_operator_memory_per_worker pompw
+       JOIN per_operator_memory_summary poms
+         USING (global_id, lir_id)
+"#,
+                    ));
+
+                    // summarizes each object, per worker
+                    ctes.push((
+                        "object_memory",
+                        r#"
+SELECT pompw.global_id AS global_id,
+       pompw.worker_id AS worker_id,
+       MAX(pomr.memory_ratio) AS max_operator_memory_ratio,
+       MAX(pomr.records_ratio) AS max_operator_records_ratio,
+       SUM(pompw.worker_memory) AS worker_memory,
+       SUM(pompw.worker_records) AS worker_records
+FROM        per_operator_memory_per_worker pompw
+     JOIN   per_operator_memory_ratios pomr
+     USING (global_id, worker_id, lir_id)
+GROUP BY pompw.global_id, pompw.worker_id
+"#,
+                    ));
+
+                    // summarizes each worker
+                    ctes.push(("object_average_memory", r#"
+SELECT om.global_id AS global_id,
+       SUM(om.worker_memory) AS total_memory,
+       CASE WHEN COUNT(DISTINCT om.worker_id) <> 0 THEN SUM(om.worker_memory) / COUNT(DISTINCT om.worker_id) ELSE NULL END AS avg_memory,
+       SUM(om.worker_records) AS total_records,
+       CASE WHEN COUNT(DISTINCT om.worker_id) <> 0 THEN SUM(om.worker_records) / COUNT(DISTINCT om.worker_id) ELSE NULL END AS avg_records
+  FROM object_memory om
+GROUP BY om.global_id"#));
+
+                    from.push("LEFT JOIN object_memory om USING (global_id)");
+                    from.push("LEFT JOIN object_average_memory oam USING (global_id)");
+
+                    columns.extend([
+                        "om.max_operator_memory_ratio AS max_operator_memory_ratio",
+                        "pg_size_pretty(om.worker_memory) AS worker_memory",
+                        "pg_size_pretty(oam.avg_memory) AS avg_memory",
+                        "pg_size_pretty(oam.total_memory) AS total_memory",
+                        "om.max_operator_records_ratio AS max_operator_records_ratio",
+                        "om.worker_records AS worker_records",
+                        "oam.avg_records AS avg_records",
+                        "oam.total_records AS total_records",
+                    ]);
+
+                    order_by.extend([
+                        "max_operator_memory_ratio DESC",
+                        "max_operator_records_ratio DESC",
+                        "worker_memory DESC",
+                        "worker_records DESC",
+                    ]);
+
+                    if set_worker_id {
+                        order_by.push("worker_id");
+                    }
+                } else {
+                    // no skew, so just compute totals
+                    ctes.push((
+                        "per_operator_memory_totals",
+                        r#"
+    SELECT mlm.global_id AS global_id,
+           mlm.lir_id AS lir_id,
+           SUM(mas.size) AS total_memory,
+           SUM(mas.records) AS total_records
+    FROM        mz_introspection.mz_lir_mapping mlm
+     CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+           JOIN mz_introspection.mz_arrangement_sizes_per_worker mas
+             ON (mas.operator_id = valid_id)
+    GROUP BY mlm.global_id, mlm.lir_id"#,
+                    ));
+
+                    ctes.push((
+                        "object_memory_totals",
+                        r#"
+SELECT pomt.global_id AS global_id,
+       SUM(pomt.total_memory) AS total_memory,
+       SUM(pomt.total_records) AS total_records
+FROM per_operator_memory_totals pomt
+GROUP BY pomt.global_id
+"#,
+                    ));
+
+                    from.push("LEFT JOIN object_memory_totals omt USING (global_id)");
+                    columns.extend([
+                        "pg_size_pretty(omt.total_memory) AS total_memory",
+                        "omt.total_records AS total_records",
+                    ]);
+                    order_by.extend(["total_memory DESC", "total_records DESC"]);
+                }
+            }
+            ExplainAnalyzeComputationProperty::Cpu => {
+                if skew {
+                    let mut set_worker_id = false;
+                    if let Some(worker_id) = worker_id {
+                        // join condition if we're showing skew for more than one property
+                        predicates.push(format!("oc.worker_id = {worker_id}"));
+                    } else {
+                        worker_id = Some("oc.worker_id");
+                        columns.push("oc.worker_id AS worker_id");
+                        set_worker_id = true; // we'll add ourselves to `order_by` later
+                    };
+
+                    // computes the average memory per LIR operator (for per operator ratios)
+                    ctes.push((
+    "per_operator_cpu_summary",
+    r#"
+SELECT mlm.global_id AS global_id,
+       mlm.lir_id AS lir_id,
+       SUM(mse.elapsed_ns) AS total_ns,
+       CASE WHEN COUNT(DISTINCT mse.worker_id) <> 0 THEN SUM(mse.elapsed_ns) / COUNT(DISTINCT mse.worker_id) ELSE NULL END AS avg_ns
+FROM       mz_introspection.mz_lir_mapping mlm
+CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+        ON (mse.id = valid_id)
+GROUP BY mlm.global_id, mlm.lir_id"#,
+));
+
+                    // computes the CPU per worker in a per operator way
+                    ctes.push((
+                        "per_operator_cpu_per_worker",
+                        r#"
+SELECT mlm.global_id AS global_id,
+       mlm.lir_id AS lir_id,
+       mse.worker_id AS worker_id,
+       SUM(mse.elapsed_ns) AS worker_ns
+FROM       mz_introspection.mz_lir_mapping mlm
+CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+      JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+        ON (mse.id = valid_id)
+GROUP BY mlm.global_id, mlm.lir_id, mse.worker_id"#,
+                    ));
+
+                    // computes CPU ratios per worker per operator
+                    ctes.push((
+                        "per_operator_cpu_ratios",
+                        r#"
+SELECT pocpw.global_id AS global_id,
+       pocpw.lir_id AS lir_id,
+       pocpw.worker_id AS worker_id,
+       CASE WHEN pocpw.worker_id IS NOT NULL AND pocs.avg_ns <> 0 THEN ROUND(pocpw.worker_ns / pocs.avg_ns, 2) ELSE NULL END AS cpu_ratio
+FROM      per_operator_cpu_per_worker pocpw
+     JOIN per_operator_cpu_summary pocs
+     USING (global_id, lir_id)
+"#,
+                    ));
+
+                    // summarizes each object, per worker
+                    ctes.push((
+                        "object_cpu",
+                        r#"
+SELECT pocpw.global_id AS global_id,
+       pocpw.worker_id AS worker_id,
+       MAX(pomr.cpu_ratio) AS max_operator_cpu_ratio,
+       SUM(pocpw.worker_ns) AS worker_ns
+FROM      per_operator_cpu_per_worker pocpw
+     JOIN per_operator_cpu_ratios pomr
+     USING (global_id, worker_id, lir_id)
+GROUP BY pocpw.global_id, pocpw.worker_id
+"#,
+                    ));
+
+                    // summarizes each worker
+                    ctes.push((
+                        "object_average_cpu",
+                        r#"
+SELECT oc.global_id AS global_id,
+       SUM(oc.worker_ns) AS total_ns,
+       CASE WHEN COUNT(DISTINCT oc.worker_id) <> 0 THEN SUM(oc.worker_ns) / COUNT(DISTINCT oc.worker_id) ELSE NULL END AS avg_ns
+  FROM object_cpu oc
+GROUP BY oc.global_id"#,));
+
+                    from.push("LEFT JOIN object_cpu oc USING (global_id)");
+                    from.push("LEFT JOIN object_average_cpu oac USING (global_id)");
+
+                    columns.extend([
+                        "oc.max_operator_cpu_ratio AS max_operator_cpu_ratio",
+                        "oc.worker_ns / 1000 * '1 microsecond'::interval AS worker_elapsed",
+                        "oac.avg_ns / 1000 * '1 microsecond'::interval AS avg_elapsed",
+                        "oac.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed",
+                    ]);
+
+                    order_by.extend(["max_operator_cpu_ratio DESC", "worker_elapsed DESC"]);
+
+                    if set_worker_id {
+                        order_by.push("worker_id");
+                    }
+                } else {
+                    // no skew, so just compute totals
+                    ctes.push((
+                        "per_operator_cpu_totals",
+                        r#"
+    SELECT mlm.global_id AS global_id,
+           mlm.lir_id AS lir_id,
+           SUM(mse.elapsed_ns) AS total_ns
+    FROM        mz_introspection.mz_lir_mapping mlm
+     CROSS JOIN generate_series((mlm.operator_id_start) :: int8, (mlm.operator_id_end - 1) :: int8) AS valid_id
+           JOIN mz_introspection.mz_scheduling_elapsed_per_worker mse
+             ON (mse.id = valid_id)
+    GROUP BY mlm.global_id, mlm.lir_id"#,
+                    ));
+
+                    ctes.push((
+                        "object_cpu_totals",
+                        r#"
+SELECT poct.global_id AS global_id,
+       SUM(poct.total_ns) AS total_ns
+FROM per_operator_cpu_totals poct
+GROUP BY poct.global_id
+"#,
+                    ));
+
+                    from.push("LEFT JOIN object_cpu_totals oct USING (global_id)");
+                    columns
+                        .push("oct.total_ns / 1000 * '1 microsecond'::interval AS total_elapsed");
+                    order_by.extend(["total_elapsed DESC"]);
+                }
+            }
+        }
+    }
+
+    // generate SQL query text
+    let ctes = if !ctes.is_empty() {
+        format!(
+            "WITH {}",
+            separated(
+                ",\n",
+                ctes.iter()
+                    .map(|(name, defn)| format!("{name} AS ({defn})"))
+            )
+        )
+    } else {
+        String::new()
+    };
+    let columns = separated(", ", columns);
+    let from = separated(" ", from);
+    let predicates = if !predicates.is_empty() {
+        format!("WHERE {}", separated(" AND ", predicates))
+    } else {
+        String::new()
+    };
+    // add mo.name last, to break ties only
+    order_by.push("mo.name DESC");
+    let order_by = separated(", ", order_by);
+    let query = format!(
+        r#"{ctes}
+SELECT {columns}
+FROM {from}
+{predicates}
 ORDER BY {order_by}"#
     );
 

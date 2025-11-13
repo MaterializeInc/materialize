@@ -325,28 +325,28 @@ EXPLAIN ANALYZE MEMORY FOR INDEX i AS SQL
 ----
 EXPLAIN ANALYZE MEMORY FOR INDEX i AS SQL
 =>
-ExplainAnalyze(ExplainAnalyzeStatement { properties: Computation { properties: [Memory], skew: false }, explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Computation(ExplainAnalyzeComputationProperties { properties: [Memory], skew: false }), explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
 
 parse-statement
 EXPLAIN ANALYZE HINTS FOR INDEX i AS SQL
 ----
 EXPLAIN ANALYZE HINTS FOR INDEX i AS SQL
 =>
-ExplainAnalyze(ExplainAnalyzeStatement { properties: Hints, explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Hints, explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
 
 parse-statement
 EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR INDEX i AS SQL
 ----
 EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR INDEX i AS SQL
 =>
-ExplainAnalyze(ExplainAnalyzeStatement { properties: Computation { properties: [Memory, Cpu], skew: true }, explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Computation(ExplainAnalyzeComputationProperties { properties: [Memory, Cpu], skew: true }), explainee: Index(Name(UnresolvedItemName([Ident("i")]))), as_sql: true })
 
 parse-statement
 EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w
 ----
 EXPLAIN ANALYZE MEMORY, CPU WITH SKEW FOR MATERIALIZED VIEW w
 =>
-ExplainAnalyze(ExplainAnalyzeStatement { properties: Computation { properties: [Memory, Cpu], skew: true }, explainee: MaterializedView(Name(UnresolvedItemName([Ident("w")]))), as_sql: false })
+ExplainAnalyzeObject(ExplainAnalyzeObjectStatement { properties: Computation(ExplainAnalyzeComputationProperties { properties: [Memory, Cpu], skew: true }), explainee: MaterializedView(Name(UnresolvedItemName([Ident("w")]))), as_sql: false })
 
 parse-statement
 EXPLAIN ANALYZE MEMORY, CPU, CPU WITH SKEW FOR MATERIALIZED VIEW w
