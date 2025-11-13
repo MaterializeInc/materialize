@@ -7,9 +7,7 @@ menu:
     weight: 69
 ---
 
-Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency.
-
-Upgrades to v26 and later have swap enabled by default. Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency.
+Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency. Upgrades to v26 and later have swap enabled by default. 
 
 In order to provide an upgrade path without disruption to existing installations, we have introduced additional labels into the node selectors for clusterd pods.
 Due to these new selector labels, your existing nodes will intentionally not be selected.
