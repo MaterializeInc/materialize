@@ -84,6 +84,20 @@ if [ "$(helm-docs --version)" != "helm-docs version $helm_docs_version" ]; then
     exit 1
 fi
 helm-docs misc/helm-charts
+(
+cat <<'EOF'
+---
+description: "Reference page on the Materialize Operator Helm Chart"
+menu:
+  main:
+    parent: "installation"
+    identifier: "appendix-materialize-operator-helm-chart"
+    weight: 98
+---
+
+EOF
+cat misc/helm-charts/operator/README.md
+) > doc/user/content/installation/appendix-materialize-operator-helm-chart.md
 
 if $sbom; then
     if ! inspector-sbomgen --version > /dev/null; then
