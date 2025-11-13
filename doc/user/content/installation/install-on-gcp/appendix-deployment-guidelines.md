@@ -75,19 +75,21 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
+### Swap support
+
 Starting in v0.6.1 of Materialize on Google Cloud PRovider (GCP) Terraform,
-disk support (using swap on NVMe instance storage) may be enabled for Materialize.
-With this change, the Terraform:
+disk support (using swap on NVMe instance storage) may be enabled for
+Materialize. With this change, the Terraform:
 
 - Creates a node group for Materialize.
 - Configures NVMe instance store volumes as swap using a daemonset.
 - Enables swap at the Kubelet.
 
-- The following configuration options are available:
+For swap support, the following configuration options are available:
 
-  - [`swap_enabled`]
+- [`swap_enabled`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_swap_enabled)
 
-See [Upgrade Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061)
+See [Upgrade Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061).
 
 ## CPU affinity
 
