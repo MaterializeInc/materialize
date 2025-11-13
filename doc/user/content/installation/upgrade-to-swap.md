@@ -1,5 +1,5 @@
 ---
-title: "Guide: Upgrading to v26 and enabling swap"
+title: "Guide: Node preparation for swap and upgrading to v26"
 description: "Upgrade procedure when upgrading to v26 which has swap enabled by default."
 menu:
   main:
@@ -10,7 +10,7 @@ menu:
 Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency. Upgrades to v26 and later have swap enabled by default.
 
 ## Upgrading to v26 with swap requires node preparation
-We've added new labels to the node selectors for clusterd pods to enable smooth upgrades. As a result, your existing nodes will not match these selectors and won't be selected to run the pods. Before upgrading to v26, you must prepare your nodes by adding the required labels.
+We've added new labels to the node selectors for clusterd pods to enable smooth upgrades. As a result, if you are running v25.2.12 or earlier, your existing nodes will not match these selectors and won't be selected to run the pods. Before upgrading to v26, you must prepare your nodes by adding the required labels.
 
 ## Preparing for the upgrade using terraform
 v0.6.1 of the Materialize terraform modules can handle much of the preparation work for you. If using our terraform modules, please follow the instructions provided in the respective upgrade notes:
