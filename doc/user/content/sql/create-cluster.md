@@ -78,6 +78,9 @@ cluster.
 
 {{< tabs >}}
 {{< tab "M.1 Clusters" >}}
+
+{{< include-md file="shared-content/cluster-size-disclaimer.md" >}}
+
 {{< yaml-table data="m1_cluster_sizing" >}}
 
 {{< /tab >}}
