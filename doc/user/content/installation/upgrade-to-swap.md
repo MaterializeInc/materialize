@@ -13,7 +13,10 @@ Swap allows for infrequently accessed data to be moved from memory to disk. Enab
 We've added new labels to the node selectors for clusterd pods to enable smooth upgrades. As a result, your existing nodes will not match these selectors and won't be selected to run the pods. Before upgrading to v26, you must prepare your nodes by adding the required labels.
 
 ## Preparing for the upgrade using terraform
-If using our terraform modules, please follow the instructions in their upgrade notes in their README.md files. The terraform handles most of the below steps for you.
+v0.6.1 of the Materialize terraform modules can handle much of the preparation work for you. If using our terraform modules, please follow the instructions provided in their respctive upgrade notes:
+- AWS
+- GCP
+- Azure
 
 ## Preparing for the upgrade without terraform
 
