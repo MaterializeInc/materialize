@@ -17,6 +17,10 @@ You will need to take additional actions in preparation for upgrading to v26.
 If you wish to opt out of swap and retain the old behavior, you may set `operator.clusters.swap_enabled: false` in your helm values.
 Otherwise, continue below.
 
+If using our terraform modules, please follow the instructions in their upgrade notes in their README.md files. The terraform handles most of the below steps for you.
+
+If not using our terraform modules, read on.
+
 ## Upgrade preparation steps
 
 1. Label existing scratchfs/lgalloc node groups
