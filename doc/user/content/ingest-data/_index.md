@@ -78,6 +78,11 @@ operation completes. Once the initial snapshot has been ingested, you can start
 querying your (sub)sources and Materialize will continue ingesting any new data
 as it arrives, in real time.
 
+### Modifying an existing source
+
+{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+>}}
+
 ## Running/steady-state
 
 Once snapshotting completes, Materialize transitions to Running state. During

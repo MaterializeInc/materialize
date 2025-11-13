@@ -20,3 +20,8 @@ truncating, you can use an unqualified `DELETE` to remove all rows from the tabl
 ```mzsql
 DELETE FROM t;
 ```
+
+### Modifying an existing source
+
+{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+>}}

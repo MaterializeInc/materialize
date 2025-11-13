@@ -10,3 +10,8 @@ replication slots:
 
 {{< include-md file="shared-content/postgres-remove-unused-replication-slots.md"
 >}}
+
+### Modifying an existing source
+
+{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+>}}
