@@ -6,21 +6,14 @@ menu:
     parent: "install-on-local-minikube"
 ---
 
-To upgrade your Materialize instances, upgrade the Materialize operator first
-and then the Materialize instances. The following tutorial upgrades your
+To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running locally on a
 [`minikube`](https://minikube.sigs.k8s.io/docs/start/) cluster.
 
 The tutorial assumes you have installed Materialize on `minikube` using the
 instructions on [Install locally on minikube](/installation/install-on-local-minikube/).
 
-## Version compatibility
-
-When updating, you need to specify the Materialize Operator version,
-`orchestratord` version, and the `environmentd` versions. The following table
-presents the versions compatibility for the operator and the applications:
-
-{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
+{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
 
 ## Prerequisites
 

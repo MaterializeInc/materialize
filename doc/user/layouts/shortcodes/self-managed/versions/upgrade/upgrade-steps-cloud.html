@@ -79,7 +79,7 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    | Variable          | Description |
    |--------------------|-------------|
    | `create_database`  | Set to `false`. |
-   | `environmentd_version`  | New Materialize instance version.|
+   | `environmentd_version`  | New Materialize instance version. This should be the same as the operator version: `{{ $operator_version }}`.|
    | `request_rollout`  or `force_rollout` | A new UUID string.  Can be generated with `uuidgen`.<br> <ul><li>`request_rollout` triggers a rollout only if changes exist. </li><li>`force_rollout`  triggers a rollout even if no changes exist.</li></ul> |
    | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
    | `license_key` | Set to the value of your license key. |
