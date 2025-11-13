@@ -15,8 +15,16 @@ anyhow = "1.0.100"
 backtrace = "0.3.76"
 flate2 = "1.1.5"
 itertools = "0.14.0"
+<<<<<<< Updated upstream
 jemalloc_pprof = { version = "0.8.1", optional = true }
 pprof_util = "0.8"
+||||||| Stash base
+jemalloc_pprof = { version = "0.8", optional = true }
+pprof_util = "0.8"
+=======
+jemalloc_pprof = { version = "0.8", optional = true }
+pprof_util = "0.8.1"
+>>>>>>> Stashed changes
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof = "0.15.0"
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
