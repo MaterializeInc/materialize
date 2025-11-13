@@ -8,6 +8,12 @@ menu:
     identifier: "release-notes"
 ---
 
+## v25.2.15
+
+### Bug fixes
+- Fixes potential issue with where environmentd crash during an upgrade can fence out environmentd.
+- **It is strongly recommended to upgrade at to least version 25.2.15 (environmentd 0.147.20) prior to upgrading to the next major version.**
+
 ## v25.2.12
 
 ### Bug fixes
