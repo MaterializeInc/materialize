@@ -4,17 +4,22 @@ columns:
 
 rows:
 - "Terraform version": |
-    [v0.5.5](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
+    [v0.6.1](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.6.1)
+  "Notable changes": |
+    - Initial swap support. See upgrade notes for details.
+
+- "Terraform version": |
+    [v0.5.5](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.5.5)
   "Notable changes": |
     - Uses `terraform-helm-materialize` v0.1.26.
 
 - "Terraform version": |
-    [v0.5.4](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
+    [v0.5.4](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.5.4)
   "Notable changes": |
     - Uses `terraform-helm-materialize` v0.1.25.
 
 - "Terraform version": |
-    [v0.4.6](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
+    [v0.4.6](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.4.6)
   "Notable changes": |
 
     - Uses `terraform-helm-materialize` v0.1.19.
@@ -22,7 +27,7 @@ rows:
     - Adds support for password authentication and enabling RBAC
 
 - "Terraform version": |
-    [v0.4.3](https://github.com/MaterializeInc/terraform-google-materialize/releases/)
+    [v0.4.3](https://github.com/MaterializeInc/terraform-google-materialize/releases/tag/v0.4.3)
   "Notable changes": |
 
     - Adds support for passing in additional Materialize instance configuration

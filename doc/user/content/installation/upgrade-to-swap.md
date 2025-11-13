@@ -1,11 +1,13 @@
 ---
-title: "Upgrading to swap"
-description: "Upgrade procedure when upgrading to versions with swap enabled by default."
+title: "Guide: Upgrading to v26 and enabling swap"
+description: "Upgrade procedure when upgrading to v26 which has swap enabled by default."
 menu:
   main:
     parent: "installation"
     weight: 69
 ---
+
+Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency.
 
 Upgrades to v26 and later have swap enabled by default.
 In order to provide an upgrade path without disruption to existing installations, we have introduced additional labels into the node selectors for clusterd pods.
