@@ -7,20 +7,15 @@ menu:
     weight: 69
 ---
 
-Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency. Upgrades to v26 and later have swap enabled by default. 
+Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency. Upgrades to v26 and later have swap enabled by default.
 
-In order to provide an upgrade path without disruption to existing installations, we have introduced additional labels into the node selectors for clusterd pods.
-Due to these new selector labels, your existing nodes will intentionally not be selected.
-You will need to take additional actions in preparation for upgrading to v26.
+## Upgrading to v26 with swap requires node preparation
+We've added new labels to the node selectors for clusterd pods to enable smooth upgrades. As a result, your existing nodes will not match these selectors and won't be selected to run the pods. Before upgrading to v26, you must prepare your nodes by adding the required labels.
 
-If you wish to opt out of swap and retain the old behavior, you may set `operator.clusters.swap_enabled: false` in your helm values.
-Otherwise, continue below.
-
+## Preparing for the upgrade using terraform
 If using our terraform modules, please follow the instructions in their upgrade notes in their README.md files. The terraform handles most of the below steps for you.
 
-If not using our terraform modules, read on.
-
-## Upgrade preparation steps
+## Preparing for the upgrade without terraform
 
 1. Label existing scratchfs/lgalloc node groups
 
@@ -111,6 +106,9 @@ If not using our terraform modules, read on.
     The new v26 pods should go to the new swap nodes.
 
     You can verify that swap is enabled and working by `exec`ing into a clusterd pod and running `cat /sys/fs/cgroup/memory.swap.max`. If you get a number greater than 0, swap is enabled and the pod is allowed to use it.
+
+## How to disable swap
+If you wish to opt out of swap and retain the old behavior, you may set `operator.clusters.swap_enabled: false` in your helm values.
 
 1. (Optional) Delete old scratchfs/lgalloc node groups and disk-setup-scratchfs daemonset
 
