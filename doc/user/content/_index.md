@@ -1,6 +1,6 @@
 ---
 title: "Self-managed Materialize"
-description: ""
+description: "Documentation for Self-Managed Materialize v25.2"
 aliases:
   - /self-hosted/
   - /cloud_releases/

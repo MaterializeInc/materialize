@@ -61,8 +61,9 @@
   href="{{ .Site.BaseURL }}images/materialize_logo.svg"
   color="#4d7cfe"
 />
-<link rel="canonical" href="{{ .Permalink }}" />
 
+{{ $canonical := replace .Permalink "self-managed/v25.2/" "" }}
+<link rel="canonical" href="{{ $canonical }}" />
 
 {{/* Include all JavaScript files here */}}
 <script src="https://cmp.osano.com/Azz7yeT5NmUe93yp/01cb9c3f-e1eb-4e74-9255-1280e80cdc28/osano.js"></script>
