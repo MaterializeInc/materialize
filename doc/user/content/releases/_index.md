@@ -11,11 +11,11 @@ menu:
 
 ## Releases
 
-### v26.0
+### Self-Managed v26.0.0
 
-A license key is required to use Materialize v26.0 in a self-managed
-Kubernetes cluster. To request a license key for Materialize Community
-Edition, visit https://materialize.com/get-started/.
+#### License Key
+
+{{< include-md file="shared-content/license-key-required.md" >}}
 
 The license key should be configured in the Kubernetes Secret resource
 created during the installation process. To configure a license key in an

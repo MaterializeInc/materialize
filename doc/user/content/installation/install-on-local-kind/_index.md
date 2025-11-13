@@ -59,6 +59,8 @@ documentationq](https://kubernetes.io/docs/tasks/tools/).
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
+### License key
+
 {{< include-md file="shared-content/license-key-required.md" >}}
 
 ## Installation

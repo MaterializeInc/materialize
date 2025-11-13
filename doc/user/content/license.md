@@ -22,9 +22,7 @@ agreement.
 
 A license key is required to use Self-Managed Materialize.
 
-- To request a license key for Materialize Community Edition, visit https://materialize.com/get-started/.
-- To purchase a Materialize Self-Managed Enterprise License, contact us
-[here](https://materialize.com/self-managed).
+{{< include-md file="shared-content/license-key-required.md" >}}
 
 ### Self-Managed Community Edition Privacy Policy
 
