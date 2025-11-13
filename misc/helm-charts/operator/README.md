@@ -156,7 +156,7 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.defaultSizes.probe` |  | ``"mz_probe"`` |
 | `operator.clusters.defaultSizes.support` |  | ``"25cc"`` |
 | `operator.clusters.defaultSizes.system` |  | ``"25cc"`` |
-| `operator.clusters.swap_enabled` |  | ``true`` |
+| `operator.clusters.swap_enabled` | Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled. | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.0.0-dev.0--pr.gfa8ba620176a7d0f9abcc64f89f5d21db80c6d94"`` |

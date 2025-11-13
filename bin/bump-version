@@ -83,7 +83,11 @@ if [ "$(helm-docs --version)" != "helm-docs version $helm_docs_version" ]; then
     echo "Install helm-docs $helm_docs_version from https://github.com/norwoodj/helm-docs/releases/tag/v$helm_docs_version"
     exit 1
 fi
+# update README.md
 helm-docs misc/helm-charts
+# update values yaml descriptions
+helm-docs misc/helm-charts -t misc/helm-charts/operator/value_descriptions.yml.gotmpl -o value_descriptions.yml
+mv misc/helm-charts/operator/value_descriptions.yml doc/user/data/self_managed/materialize_operator_chart_parameter.yml
 
 if $sbom; then
     if ! inspector-sbomgen --version > /dev/null; then
