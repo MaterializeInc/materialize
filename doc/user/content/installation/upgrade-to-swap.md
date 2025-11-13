@@ -14,9 +14,9 @@ We've added new labels to the node selectors for clusterd pods to enable smooth 
 
 ## Preparing for the upgrade using terraform
 v0.6.1 of the Materialize terraform modules can handle much of the preparation work for you. If using our terraform modules, please follow the instructions provided in their respctive upgrade notes:
-- AWS
-- GCP
-- Azure
+- [AWS](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061)
+- [GCP](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061)
+- [Azure](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061)
 
 ## Preparing for the upgrade without terraform
 
