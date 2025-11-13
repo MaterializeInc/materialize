@@ -62,7 +62,7 @@
 
    | Field | Description |
    |-------|-------------|
-   | `environmentdImageRef` | Update the version to the new version. |
+   | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
    | `requestRollout` or `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`requestRollout` triggers a rollout only if changes exist. </li><li>`forceRollout` triggers a rollout even if no changes exist.</li></ul> |
    | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
 

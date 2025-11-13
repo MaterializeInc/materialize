@@ -8,8 +8,7 @@ menu:
     weight: 10
 ---
 
-To upgrade your Materialize instances, upgrade the Materialize operator first
-and then the Materialize instances. The following tutorial upgrades your
+To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on  AWS Elastic Kubernetes Service (EKS).
 
 The tutorial assumes you have installed Materialize on AWS Elastic Kubernetes
@@ -19,17 +18,10 @@ or the root).
 
 ## Version compatibility
 
+{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+
 
 {{< tabs >}}
-
-{{< tab "Helm chart releases" >}}
-
-The following table presents the versions compatibility for the operator and the
-applications:
-
-{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
-
-{{</ tab >}}
 
 {{< tab "Materialize on AWS Terraform Releases" >}}
 
