@@ -49,7 +49,25 @@ We provide introspection commands:
 * The `mz_replacement_materialized_views` catalog relation, which contains metadata about all replacements for materialized views.
 * The `mz_show_replacements` view and index for serving the show replacements commands.
 
-### Schema evolution
+## Formalism
+
+Replacing a materialized view with a new version means that at some point in time, we need to switch the contents of the materialized view from the old definition to the new definition.
+
+Let `mv = [mv-updates, since, upper]` be a correct view of the updates in `mv`.
+Now consider switching over to a new definition `mv' = [mv'-updates, since', upper']` by applying a replacement `r = [r-updates, since_r, upper_r]`.
+It must be true that:
+* `since_r <= upper` (the replacement can start at or before the current upper frontier of the materialized view),
+* `upper < r_upper` (the replacement must be able to catch up to the current upper frontier of the materialized view).
+
+When applying the replacement at time `upper'`, we need to ensure that:
+
+```
+mv'_updates = append(mv-updates, upper', diff(upper', mv-updates, r-updates))
+```
+
+From this moment, onwards, the materialized view `mv` will reflect the updates from `mv'`.
+
+### Schema evolution and multiple version
 
 When applying a replacement, we need to ensure that the new schema is compatible with the existing schema.
 We define compatibility as follows:
@@ -59,6 +77,10 @@ We define compatibility as follows:
 Schema evolution is tied to what persist considers a safe schema change.
 At the moment, this is new nullable columns, but nothing else.
 If persist would support more schema changes in the future, we could consider allowing them here as well.
+
+Even if we do not change the schema, we need to register a new version of the materialized view.
+A version is defined as a global ID, and a relation description.
+All versions map to the same persist shard.
 
 ## Timestamp selection
 
