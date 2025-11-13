@@ -13,6 +13,12 @@ menu:
 
 ### Self-Managed v26.0.0
 
+#### SASL/SCRAM-SHA-256 support
+
+Starting in v26.0.0, Self-Managed Materialize supports SASL/SCRAM-SHA-256
+authentication for PostgreSQL wire protocol connections. For more information,
+see [Authentication](/security/self-managed/authentication/).
+
 #### License Key
 
 {{< include-md file="shared-content/license-key-required.md" >}}
