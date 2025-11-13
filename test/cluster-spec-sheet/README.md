@@ -44,3 +44,21 @@ bin/mzcompose --find cluster-spec-sheet run default --target=docker
 There are two kinds of scenarios:
 - cluster scaling: These measure run times and arrangement sizes.
 - envd scaling: These measure QPS.
+
+Currently, the envd scaling scenarios can't be run in Production, because changing envd's CPU cores using `mz` is not allowed there. Therefore, these scenarios need to be run with `--target=cloud-staging`.
+
+You can invoke only one kind of scenarios by using the group name from `SCENARIO_GROUPS`. For example:
+```
+bin/mzcompose --find cluster-spec-sheet run default environmentd  --target=cloud-staging
+```
+or
+```
+bin/mzcompose --find cluster-spec-sheet run default cluster
+```
+
+You can also specify a specific scenario by name.
+
+For testing just the scaffolding of the cluster spec sheet itself, you can make the run much faster by using the various scaling options, e.g.:
+```
+--scale-tpch=0.01 --scale-tpch-queries=0.01 --scale-auction=1 --max-scale=4
+```

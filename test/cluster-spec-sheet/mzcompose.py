@@ -320,7 +320,7 @@ class ScenarioRunner:
 
         print(f"--- Running dbbench step '{name}' for {self.envd_cpus} ...")
         # Execute the command in the 'dbbench' service container and capture output
-        result = self.target.c.run(
+        result = self.target.composition.run(
             "dbbench",
             "-lc",  # sh arg to make it run `script`
             script,
@@ -375,8 +375,9 @@ class ScenarioRunner:
         self.add_result(
             category,
             name,
-            # we have `duration` instead of `repetitions` in QPS benchmarks currently (but maybe it's good to keep
-            # `repetition` in the schema in case we ever want also multiple repetitions for QPS)
+            # For QPS measurements, we have only one repetition (i.e., repetition 0). We have `duration` instead of
+            # `repetitions` in QPS benchmarks currently (but maybe it's good to keep `repetition` in the schema in case
+            # we ever want also multiple repetitions for QPS).
             0,
             None,
             None,
@@ -1911,14 +1912,17 @@ class QpsEnvdStrongScalingScenario(Scenario):
         # We'll also want to measure latency, including tail latency.
 
 
-def disable_region(c: Composition, hard: bool) -> None:
+# TODO: We should factor out the below
+# `disable_region`, `cloud_disable_enable_and_wait`, `reconfigure_envd_cpus`, `wait_for_envd`
+# functions into a separate module. (Similar `disable_region` functions also occur in other tests.)
+def disable_region(composition: Composition, hard: bool) -> None:
     print("Shutting down region ...")
 
     try:
         if hard:
-            c.run("mz", "region", "disable", "--hard", rm=True)
+            composition.run("mz", "region", "disable", "--hard", rm=True)
         else:
-            c.run("mz", "region", "disable", rm=True)
+            composition.run("mz", "region", "disable", rm=True)
     except UIError:
         # Can return: status 404 Not Found
         pass
@@ -1939,12 +1943,12 @@ def cloud_disable_enable_and_wait(
     When `environmentd_cpu_allocation` is provided, it is passed to `mz region enable` via
     `--environmentd-cpu-allocation` to reconfigure environmentd's CPU allocation.
     """
-    disable_region(target.c, hard=False)
+    disable_region(target.composition, hard=False)
 
     if environmentd_cpu_allocation is None:
-        target.c.run("mz", "region", "enable", rm=True)
+        target.composition.run("mz", "region", "enable", rm=True)
     else:
-        target.c.run(
+        target.composition.run(
             "mz",
             "region",
             "enable",
@@ -1955,7 +1959,7 @@ def cloud_disable_enable_and_wait(
 
     time.sleep(10)
 
-    assert "materialize.cloud" in target.c.cloud_hostname()
+    assert "materialize.cloud" in target.composition.cloud_hostname()
     wait_for_envd(target)
 
 
@@ -1983,15 +1987,17 @@ def reconfigure_envd_cpus(
                 cpu=str(envd_cpus),
             )
             print(f"--- Reconfiguring local environmentd CPUs to {envd_cpus}")
-            with target.c.override(overridden):
+            with target.composition.override(overridden):
                 # Recreate the container to apply new limits, but preserve volumes.
                 try:
-                    target.c.rm("materialized", stop=True, destroy_volumes=False)
+                    target.composition.rm(
+                        "materialized", stop=True, destroy_volumes=False
+                    )
                 except CommandFailureCausedUIError as e:
                     # Ignore only the benign case where the container does not yet exist.
                     if not (e.stderr and "No such container" in e.stderr):
                         raise
-                target.c.up("materialized")
+                target.composition.up("materialized")
                 wait_for_envd(target, timeout_secs=60)
         except Exception as e:
             raise UIError(f"failed to apply Docker CPU override for environmentd: {e}")
@@ -2021,7 +2027,7 @@ def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
     - Docker: probes SQL readiness via Composition.sql_query
     """
     if isinstance(target, CloudTarget):
-        host = target.c.cloud_hostname()
+        host = target.composition.cloud_hostname()
         user = target.username
         # Prefer the newly created app password when present; fall back to the CLI password.
         password = target.new_app_password or target.app_password or ""
@@ -2049,7 +2055,7 @@ def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
         last_err: Exception | None = None
         while time.time() < deadline:
             try:
-                target.c.sql_query("SELECT 1", service="materialized")
+                target.composition.sql_query("SELECT 1", service="materialized")
                 return
             except Exception as e:
                 last_err = e
@@ -2059,7 +2065,7 @@ def wait_for_envd(target: "BenchTarget", timeout_secs: int = 300) -> None:
         )
 
 
-def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """
     Run the bench workflow by default
     """
@@ -2125,7 +2131,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if args.target == "cloud-production":
         target: BenchTarget = CloudTarget(
-            c, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
+            composition, PRODUCTION_USERNAME, PRODUCTION_APP_PASSWORD or ""
         )
         mz = Mz(
             region=PRODUCTION_REGION,
@@ -2134,7 +2140,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         )
     elif args.target == "cloud-staging":
         target: BenchTarget = CloudTarget(
-            c, STAGING_USERNAME, STAGING_APP_PASSWORD or ""
+            composition, STAGING_USERNAME, STAGING_APP_PASSWORD or ""
         )
         mz = Mz(
             region=STAGING_REGION,
@@ -2142,12 +2148,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             app_password=STAGING_APP_PASSWORD or "",
         )
     elif args.target == "docker":
-        target = DockerTarget(c)
+        target = DockerTarget(composition)
         mz = Mz(app_password="")
     else:
         raise ValueError(f"Unknown target: {args.target}")
 
-    with c.override(mz):
+    with composition.override(mz):
         max_scale = args.max_scale
         if target.max_scale() is not None:
             max_scale = min(max_scale, target.max_scale())
@@ -2203,7 +2209,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         envd_writer.writeheader()
 
         def process(scenario: str) -> None:
-            with c.test_case(scenario):
+            with composition.test_case(scenario):
                 conn = ConnectionHandler(target.new_connection)
 
                 # This cluster is just for misc setup queries.
@@ -2295,7 +2301,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         test_failed = True
         try:
             scenarios_list = buildkite.shard_list(sorted(list(scenarios)), lambda s: s)
-            c.test_parts(scenarios_list, process)
+            composition.test_parts(scenarios_list, process)
             test_failed = False
         finally:
             cluster_file.close()
@@ -2304,11 +2310,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             if args.cleanup:
                 target.cleanup()
 
-        # Upload only cluster scaling results to Test Analytics for now, until the Test Analytics schema is extended.
-        # TODO: See slack discussion:
-        # https://materializeinc.slack.com/archives/C01LKF361MZ/p1762351652336819?thread_ts=1762348361.164759&cid=C01LKF361MZ
-        upload_cluster_results_to_test_analytics(c, cluster_path, not test_failed)
-        upload_environmentd_results_to_test_analytics(c, envd_path, not test_failed)
+        upload_cluster_results_to_test_analytics(
+            composition, cluster_path, not test_failed
+        )
+        upload_environmentd_results_to_test_analytics(
+            composition, envd_path, not test_failed
+        )
 
         assert not test_failed
 
@@ -2324,7 +2331,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 
 class BenchTarget:
-    c: Composition
+    composition: Composition
 
     @abstractmethod
     def initialize(self) -> None: ...
@@ -2356,8 +2363,10 @@ class BenchTarget:
 
 
 class CloudTarget(BenchTarget):
-    def __init__(self, c: Composition, username: str, app_password: str) -> None:
-        self.c = c
+    def __init__(
+        self, composition: Composition, username: str, app_password: str
+    ) -> None:
+        self.composition = composition
         self.username = username
         self.app_password = app_password
         self.new_app_password: str | None = None
@@ -2368,7 +2377,7 @@ class CloudTarget(BenchTarget):
             "-driver",
             "postgres",
             "-host",
-            self.c.cloud_hostname(),
+            self.composition.cloud_hostname(),
             "-port",
             "6875",
             "-username",
@@ -2387,7 +2396,7 @@ class CloudTarget(BenchTarget):
 
         # Create new app password.
         new_app_password_name = "Materialize CLI (mz) - Cluster Spec Sheet"
-        output = self.c.run(
+        output = self.composition.run(
             "mz",
             "app-password",
             "create",
@@ -2401,7 +2410,7 @@ class CloudTarget(BenchTarget):
     def new_connection(self) -> psycopg.Connection:
         assert self.new_app_password is not None
         conn = psycopg.connect(
-            host=self.c.cloud_hostname(),
+            host=self.composition.cloud_hostname(),
             port=6875,
             user=self.username,
             password=self.new_app_password,
@@ -2412,7 +2421,7 @@ class CloudTarget(BenchTarget):
         return conn
 
     def cleanup(self) -> None:
-        disable_region(self.c, hard=True)
+        disable_region(self.composition, hard=True)
 
     def replica_size_for_scale(self, scale: int) -> str:
         """
@@ -2422,8 +2431,8 @@ class CloudTarget(BenchTarget):
 
 
 class DockerTarget(BenchTarget):
-    def __init__(self, c: Composition) -> None:
-        self.c = c
+    def __init__(self, composition: Composition) -> None:
+        self.composition = composition
 
     def dbbench_connection_flags(self) -> list[str]:
         return [
@@ -2443,14 +2452,14 @@ class DockerTarget(BenchTarget):
 
     def initialize(self) -> None:
         print("Starting local Materialize instance ...")
-        self.c.up("materialized")
+        self.composition.up("materialized")
 
     def new_connection(self) -> psycopg.Connection:
-        return self.c.sql_connection()
+        return self.composition.sql_connection()
 
     def cleanup(self) -> None:
         print("Stopping local Materialize instance ...")
-        self.c.stop("materialized")
+        self.composition.stop("materialized")
 
     def replica_size_for_scale(self, scale: int) -> str:
         # 100cc == 2 workers
@@ -2590,7 +2599,7 @@ def run_scenario_envd_strong_scaling(
         if isinstance(target, CloudTarget):
             # We reset the cloud envd's core count in any case, to avoid accidentally burning a lot of money.
             print("--- Resetting Cloud environmentd CPUs to the default")
-            target.c.run(
+            target.composition.run(
                 "mz",
                 "region",
                 "enable",
@@ -2657,7 +2666,7 @@ def run_scenario_weak(
         scenario.run(runner)
 
 
-def workflow_plot(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """Analyze the results of the workflow."""
 
     parser.add_argument(
@@ -2783,6 +2792,7 @@ def analyze_envd_results_file(file: str) -> None:
     plot_dir = os.path.join("test", "cluster-spec-sheet", "plots", base_name)
     os.makedirs(plot_dir, exist_ok=True)
 
+    # TODO: this might be need to be modified if we have more than one repetitions in an envd results file.
     for (benchmark, category, mode), sub in df.groupby(
         ["scenario", "category", "mode"]
     ):
@@ -2906,14 +2916,14 @@ def labels_to_drop(
 
 
 def upload_cluster_results_to_test_analytics(
-    c: Composition,
+    composition: Composition,
     file: str,
     was_successful: bool,
 ) -> None:
     if not buildkite.is_in_buildkite():
         return
 
-    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(composition))
     test_analytics.builds.add_build_job(was_successful=was_successful)
 
     result_entries = []
@@ -2950,14 +2960,14 @@ def upload_cluster_results_to_test_analytics(
 
 
 def upload_environmentd_results_to_test_analytics(
-    c: Composition,
+    composition: Composition,
     file: str,
     was_successful: bool,
 ) -> None:
     if not buildkite.is_in_buildkite():
         return
 
-    test_analytics = TestAnalyticsDb(create_test_analytics_config(c))
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(composition))
     test_analytics.builds.add_build_job(was_successful=was_successful)
 
     result_entries = []
