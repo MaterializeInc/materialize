@@ -19,8 +19,8 @@ use k8s_openapi::{
         apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
         core::v1::{
             Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
-            EnvVarSource, HTTPGetAction, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec,
-            Probe, SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
+            EnvVarSource, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
+            SeccompProfile, Secret, SecretKeySelector, SecretVolumeSource, SecurityContext,
             Service, ServiceAccount, ServicePort, ServiceSpec, TCPSocketAction, Toleration, Volume,
             VolumeMount,
         },
@@ -1313,31 +1313,14 @@ fn create_environmentd_statefulset_object(
         args.extend(extra_args.iter().cloned());
     }
 
-    let probe = if mz.meets_minimum_version(&V147_DEV0) {
-        Probe {
-            initial_delay_seconds: Some(1),
-            failure_threshold: Some(12),
-            http_get: Some(HTTPGetAction {
-                path: Some("/api/readyz".to_string()),
-                port: IntOrString::Int(config.environmentd_internal_http_port.into()),
-                host: None,
-                scheme: None,
-                http_headers: None,
-            }),
-            ..Default::default()
-        }
-    } else {
-        // Older versions, despite having the /api/readyz endpoint,
-        // would sometimes never return an HTTP 200 response.
-        Probe {
-            initial_delay_seconds: Some(1),
-            failure_threshold: Some(12),
-            tcp_socket: Some(TCPSocketAction {
-                host: None,
-                port: IntOrString::Int(config.environmentd_sql_port.into()),
-            }),
-            ..Default::default()
-        }
+    let probe = Probe {
+        initial_delay_seconds: Some(1),
+        failure_threshold: Some(12),
+        tcp_socket: Some(TCPSocketAction {
+            host: None,
+            port: IntOrString::Int(config.environmentd_sql_port.into()),
+        }),
+        ..Default::default()
     };
 
     let security_context = if config.enable_security_context {
