@@ -10,12 +10,10 @@ workspace = true
 
 [dependencies]
 mz-audit-log = { path = "../audit-log" }
-mz-compute-types = { path = "../compute-types" }
-mz-controller-types = { path = "../controller-types" }
+mz-catalog-types = { path = "../catalog-types" }
 mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
-mz-storage-types = { path = "../storage-types" }
 paste = "1.0.11"
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1", features = ["boxed_union"] }

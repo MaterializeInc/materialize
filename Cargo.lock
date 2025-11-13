@@ -5638,13 +5638,11 @@ dependencies = [
  "md-5",
  "mz-audit-log",
  "mz-build-tools",
- "mz-compute-types",
- "mz-controller-types",
+ "mz-catalog-types",
  "mz-ore",
  "mz-proto",
  "mz-repr",
  "mz-sql",
- "mz-storage-types",
  "paste",
  "proptest",
  "proptest-derive",
@@ -5653,6 +5651,15 @@ dependencies = [
  "serde",
  "serde_json",
  "similar-asserts",
+ "workspace-hack",
+]
+
+[[package]]
+name = "mz-catalog-types"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "tracing",
  "workspace-hack",
 ]
 
@@ -5754,7 +5761,7 @@ dependencies = [
 name = "mz-cluster-client"
 version = "0.0.0"
 dependencies = [
- "anyhow",
+ "mz-catalog-types",
  "mz-ore",
  "mz-repr",
  "prometheus",
@@ -5893,6 +5900,7 @@ dependencies = [
  "columnation",
  "differential-dataflow",
  "itertools 0.14.0",
+ "mz-catalog-types",
  "mz-dyncfg",
  "mz-expr",
  "mz-ore",
@@ -7542,6 +7550,7 @@ dependencies = [
  "mz-audit-log",
  "mz-auth",
  "mz-build-info",
+ "mz-catalog-types",
  "mz-ccsr",
  "mz-cloud-provider",
  "mz-cloud-resources",
@@ -8002,6 +8011,7 @@ dependencies = [
  "mysql_async",
  "mz-aws-util",
  "mz-build-tools",
+ "mz-catalog-types",
  "mz-ccsr",
  "mz-cloud-resources",
  "mz-dyncfg",
