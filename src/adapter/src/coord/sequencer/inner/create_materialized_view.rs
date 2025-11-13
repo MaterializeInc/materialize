@@ -13,6 +13,7 @@ use maplit::btreemap;
 use maplit::btreeset;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{CatalogItem, MaterializedView};
+use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::collections::CollectionExt;
 use mz_ore::instrument;
@@ -21,11 +22,14 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
+use mz_repr::{
+    CatalogItemId, ColumnName, Datum, GlobalId, RelationVersion, Row, VersionedRelationDesc,
+};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
-use mz_sql::names::ResolvedIds;
+use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::plan;
+use mz_sql::plan::HirRelationExpr;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
@@ -47,6 +51,7 @@ use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
+use crate::optimize::materialized_view::{GlobalLirPlan, GlobalMirPlan, LocalMirPlan, Optimizer};
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
 use crate::util::ResultExt;
@@ -335,6 +340,41 @@ impl Coordinator {
             ..
         } = &plan;
 
+        let validity = self.create_materialized_view_validate_inner(
+            session,
+            &resolved_ids,
+            expr,
+            cluster_id,
+            refresh_schedule,
+            ambiguous_columns,
+            &explain_ctx,
+        )?;
+
+        Ok(CreateMaterializedViewStage::Optimize(
+            CreateMaterializedViewOptimize {
+                validity,
+                plan,
+                resolved_ids,
+                explain_ctx,
+            },
+        ))
+    }
+
+    /// Validates that the given materialized view can be created.
+    ///
+    /// Shared with replacement materialized views.
+    pub(super) fn create_materialized_view_validate_inner(
+        &self,
+        session: &Session,
+        resolved_ids: &ResolvedIds,
+        expr: &HirRelationExpr,
+        cluster_id: &ClusterId,
+        refresh_schedule: &Option<RefreshSchedule>,
+        ambiguous_columns: &bool,
+        // An optional context set iff the state machine is initiated from
+        // sequencing an EXPLAIN for this statement.
+        explain_ctx: &ExplainContext,
+    ) -> Result<PlanValidity, AdapterError> {
         // Validate any references in the materialized view's expression. We do
         // this on the unoptimized plan to better reflect what the user typed.
         // We want to reject queries that depend on log sources, for example,
@@ -393,15 +433,7 @@ impl Coordinator {
                 }
             }
         }
-
-        Ok(CreateMaterializedViewStage::Optimize(
-            CreateMaterializedViewOptimize {
-                validity,
-                plan,
-                resolved_ids,
-                explain_ctx,
-            },
-        ))
+        Ok(validity)
     }
 
     #[instrument]
@@ -427,63 +459,29 @@ impl Coordinator {
             ..
         } = &plan;
 
-        // Collect optimizer parameters.
-        let compute_instance = self
-            .instance_snapshot(*cluster_id)
-            .expect("compute instance does not exist");
-        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
-            let id_ts = self.get_catalog_write_ts().await;
-            self.catalog().allocate_user_id(id_ts).await?
-        } else {
-            self.allocate_transient_id()
-        };
-
-        let (_, view_id) = self.allocate_transient_id();
-        let debug_name = self.catalog().resolve_full_name(name, None).to_string();
-        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
-            .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
-            .override_from(&explain_ctx);
-        let force_non_monotonic = Default::default();
-
-        // Build an optimizer for this MATERIALIZED VIEW.
-        let mut optimizer = optimize::materialized_view::Optimizer::new(
-            self.owned_catalog().as_optimizer_catalog(),
-            compute_instance,
-            global_id,
-            view_id,
-            column_names.clone(),
-            non_null_assertions.clone(),
-            refresh_schedule.clone(),
-            debug_name,
-            optimizer_config,
-            self.optimizer_metrics(),
-            force_non_monotonic,
-        );
+        let (item_id, global_id, optimizer) = self
+            .create_materialized_view_optimize_common(
+                name,
+                column_names.clone(),
+                cluster_id,
+                non_null_assertions.clone(),
+                refresh_schedule.clone(),
+                &explain_ctx,
+            )
+            .await?;
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
             || "optimize create materialized view",
             move || {
                 span.in_scope(|| {
-                    let mut pipeline = || -> Result<(
-                        optimize::materialized_view::LocalMirPlan,
-                        optimize::materialized_view::GlobalMirPlan,
-                        optimize::materialized_view::GlobalLirPlan,
-                    ), AdapterError> {
-                        let _dispatch_guard = explain_ctx.dispatch_guard();
+                    let raw_expr = plan.materialized_view.expr.clone();
 
-                        let raw_expr = plan.materialized_view.expr.clone();
-
-                        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
-                        let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
-                        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
-                        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
-                        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
-
-                        Ok((local_mir_plan, global_mir_plan, global_lir_plan))
-                    };
-
-                    let stage = match pipeline() {
+                    let stage = match Self::create_materialized_view_call_optimizer(
+                        optimizer,
+                        raw_expr,
+                        &explain_ctx,
+                    ) {
                         Ok((local_mir_plan, global_mir_plan, global_lir_plan)) => {
                             if let ExplainContext::Plan(explain_ctx) = explain_ctx {
                                 let (_, df_meta) = global_lir_plan.unapply();
@@ -542,6 +540,70 @@ impl Coordinator {
                 })
             },
         )))
+    }
+
+    /// Create an optimizer to transform the materialized view.
+    ///
+    /// Shared with replacement materialized views.
+    pub(super) async fn create_materialized_view_optimize_common(
+        &mut self,
+        name: &QualifiedItemName,
+        column_names: Vec<ColumnName>,
+        cluster_id: &ClusterId,
+        non_null_assertions: Vec<usize>,
+        refresh_schedule: Option<RefreshSchedule>,
+        explain_ctx: &ExplainContext,
+    ) -> Result<(CatalogItemId, GlobalId, Optimizer), AdapterError> {
+        // Collect optimizer parameters.
+        let compute_instance = self
+            .instance_snapshot(*cluster_id)
+            .expect("compute instance does not exist");
+        let (item_id, global_id) = if let ExplainContext::None = explain_ctx {
+            let id_ts = self.get_catalog_write_ts().await;
+            self.catalog().allocate_user_id(id_ts).await?
+        } else {
+            self.allocate_transient_id()
+        };
+
+        let (_, view_id) = self.allocate_transient_id();
+        let debug_name = self.catalog().resolve_full_name(name, None).to_string();
+        let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
+            .override_from(&self.catalog.get_cluster(*cluster_id).config.features())
+            .override_from(explain_ctx);
+        let force_non_monotonic = Default::default();
+
+        // Build an optimizer for this MATERIALIZED VIEW.
+        let optimizer = Optimizer::new(
+            self.owned_catalog().as_optimizer_catalog(),
+            compute_instance,
+            global_id,
+            view_id,
+            column_names,
+            non_null_assertions,
+            refresh_schedule,
+            debug_name,
+            optimizer_config,
+            self.optimizer_metrics(),
+            force_non_monotonic,
+        );
+        Ok((item_id, global_id, optimizer))
+    }
+
+    /// Call an optimizer to optimize a materialized view.
+    pub(super) fn create_materialized_view_call_optimizer(
+        mut optimizer: Optimizer,
+        raw_expr: HirRelationExpr,
+        explain_ctx: &ExplainContext,
+    ) -> Result<(LocalMirPlan, GlobalMirPlan, GlobalLirPlan), AdapterError> {
+        let _dispatch_guard = explain_ctx.dispatch_guard();
+
+        // HIR ⇒ MIR lowering and MIR ⇒ MIR optimization (local and global)
+        let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr)?;
+        let global_mir_plan = optimizer.catch_unwind_optimize(local_mir_plan.clone())?;
+        // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
+        let global_lir_plan = optimizer.catch_unwind_optimize(global_mir_plan.clone())?;
+
+        Ok((local_mir_plan, global_mir_plan, global_lir_plan))
     }
 
     #[instrument]
