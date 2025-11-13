@@ -3,7 +3,8 @@ If RBAC is not enabled, all users have <red>**superuser**</red> privileges.
 {{</ warning >}}
 
 By default, role-based access control (RBAC) checks are not enabled (i.e.,
-enforced) when using [authentication](/security/self-managed/authentication/#configuring-authentication-type). To
+enforced) when turning on [password
+authentication](/security/self-managed/authentication/#configuring-password-authentication). To
 enable RBAC, set the system parameter `enable_rbac_checks` to `'on'` or `True`.
 You can enable the parameter in one of the following ways:
 
