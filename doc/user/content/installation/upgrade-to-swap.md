@@ -110,9 +110,9 @@ v0.6.1 of the Materialize terraform modules can handle much of the preparation w
 
     You can verify that swap is enabled and working by `exec`ing into a clusterd pod and running `cat /sys/fs/cgroup/memory.swap.max`. If you get a number greater than 0, swap is enabled and the pod is allowed to use it.
 
-## How to disable swap
-If you wish to opt out of swap and retain the old behavior, you may set `operator.clusters.swap_enabled: false` in your helm values.
-
 1. (Optional) Delete old scratchfs/lgalloc node groups and disk-setup-scratchfs daemonset
 
     If you no longer have anything running on the old scratchfs/lgalloc nodes, you may delete their node group and the disk-setup-scratchfs daemonset.
+
+## How to disable swap
+If you wish to opt out of swap and retain the old behavior, you may set `operator.clusters.swap_enabled: false` in your helm values.
