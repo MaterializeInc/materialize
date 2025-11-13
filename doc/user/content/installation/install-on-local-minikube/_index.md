@@ -63,6 +63,8 @@ This tutorial uses `kubectl`. To install, refer to the [`kubectl` documentationq
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
+### License key
+
 {{< include-md file="shared-content/license-key-required.md" >}}
 
 ## Installation

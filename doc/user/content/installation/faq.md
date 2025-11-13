@@ -14,14 +14,9 @@ menu:
 Community edition license keys are valid for one year. Enterprise license
 keys will vary based on the terms of your contract.
 
-## How do I get a community license key?
+## How do I get a  license key?
 
-To request a license key for Materialize Community Edition, visit https://materialize.com/get-started/.
-
-## How do I get an enterprise license key?
-
-To purchase a Materialize Self-Managed Enterprise License, contact us
-[here](https://materialize.com/self-managed).
+{{< include-md file="shared-content/license-key-required.md" >}}
 
 ## How do I add a license key to an existing installation?
 
