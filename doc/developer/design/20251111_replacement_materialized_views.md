@@ -41,12 +41,36 @@ We add the following SQL commands:
 
 When a replacement is created, we validate that the new definition is compatible with the existing materialized view.
 
+We provide introspection commands:
+* `SHOW REPLACEMENTS`
+    Lists all replacements in the system.
+* `SHOW [REDACTED] CREATE REPLACEMENT <replacement_name>`
+    Shows the SQL command that would recreate the specified replacement.
+* The `mz_replacement_materialized_views` catalog relation, which contains metadata about all replacements for materialized views.
+* The `mz_show_replacements` view and index for serving the show replacements commands.
+
 ### Schema evolution
 
 When applying a replacement, we need to ensure that the new schema is compatible with the existing schema.
 We define compatibility as follows:
 1. The schema must be the same as the original schema,
 2. Or, the schema must be a superset of the original schema (i.e., it can add new columns but cannot remove existing ones).
+
+Schema evolution is tied to what persist considers a safe schema change.
+At the moment, this is new nullable columns, but nothing else.
+If persist would support more schema changes in the future, we could consider allowing them here as well.
+
+## Timestamp selection
+
+Replacing a materialized view should result in a well-defined history that has definite data at each readable timestamp.
+This means that we need to start the replacement materialized view at the write frontier of the existing materialized view.
+The implementation needs to ensure this, and must warn or refuse to apply a replacement if this is not possible.
+
+It can pick a later timestamp than the old write frontier, but then needs to wait for the old materialized view to reach that timestamp before the replacement can be applied.
+
+Optionally, we could allow users to let the new materialized view start at a later timestamp and let the time jump forward as needed.
+This is highly risky as it introduces gaps in the history, and we should only consider it if there is a strong use case.
+The behavior should be guarded with an explicit clause, such as `WITH (FORWARD TIME)`.
 
 ## Minimal Viable Prototype
 
@@ -57,6 +81,11 @@ We define compatibility as follows:
 * Treat a replacement as a first-class object in the catalog.
 * Record replacements and state transitions in the audit log.
 * Do not support schema evolution in the MVP.
+* Implement "correct" timestamp selection for replacements, starting at the write frontier of the existing materialized view.
+* Provide better introspection data for replacements, such as the ability to see the differences between the current and replacement definitions.
+    * Surface metadata about the amount of staged changes (records, bytes) between the current and replacement definitions.
+    * Document how users can observe hydration progress, or implement new ways to do so.
+      Specifically, users should be able to monitor progress through the `mz_frontiers` and `mz_arrangement_sizes` introspection views.
 
 The syntax allows users to create multiple replacements for the same target.
 This has some interesting implications:
@@ -69,11 +98,12 @@ This has some interesting implications:
 
 ## Future work
 
-* Provide better introspection data for replacements, such as the ability to see the differences between the current and replacement definitions.
-  * Surface metadata about the amount of staged changes (records, bytes) between the current and replacement definitions.
-  * Introspect the actual changes.
-    For example, which rows would be added or removed.
+* Provide insights into the impact of applying a replacement beyond metadata:
+    * Introspect the actual changes.
+      For example, which rows would be added or removed.
 * Automate applying a replacement once the new definition is hydrated.
+* Allow replacements to jump forward in time.
+* Support replacements for other maintained objects, such as upsert sources.
 
 ## Alternatives
 
