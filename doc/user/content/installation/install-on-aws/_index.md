@@ -1,5 +1,5 @@
 ---
-title: "Install on AWS"
+title: "Install on AWS (via Terraform)"
 description: ""
 aliases:
   - /self-hosted/install-on-aws/

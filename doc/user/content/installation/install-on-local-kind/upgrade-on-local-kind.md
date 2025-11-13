@@ -5,6 +5,8 @@ menu:
   main:
     parent: "install-on-local-kind"
     identifier: "upgrade-on-local-kind"
+aliases:
+  - /installation/install-on-local-minikube/upgrade-on-local-minikube/
 ---
 
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your Materialize deployment running locally on a [`kind`](https://kind.sigs.k8s.io/)

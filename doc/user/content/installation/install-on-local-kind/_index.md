@@ -1,8 +1,9 @@
 ---
-title: "Install locally on kind"
+title: "Install locally on kind (via Helm)"
 description: "Deploy Self-managed Materialize to a local kind cluster."
 aliases:
   - /self-hosted/install-on-local-kind/
+  - /installation/install-on-local-minikube/
 menu:
   main:
     parent: "installation"

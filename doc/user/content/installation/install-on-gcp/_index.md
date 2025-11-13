@@ -1,5 +1,5 @@
 ---
-title: "Install on GCP"
+title: "Install on GCP (via Terraform)"
 description: ""
 aliases:
   - /self-hosted/install-on-gcp/

@@ -1,5 +1,5 @@
 ---
-title: "Install on Azure"
+title: "Install on Azure (via Terraform)"
 description: "Install Materialize on Azure Kubernetes Service (AKS) using Terraform"
 disable_list: true
 menu:
