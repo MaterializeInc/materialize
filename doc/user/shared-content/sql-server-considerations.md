@@ -54,3 +54,8 @@ system table. For each table, Materialize picks the capture instance with the
 most recent `create_date`.
 
 If two capture instances for a table share the same timestamp (unlikely given the millisecond resolution), Materialize selects the `capture_instance` with the lexicographically larger name.
+
+### Modifying an existing source
+
+{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+>}}
