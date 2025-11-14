@@ -3071,7 +3071,8 @@ pub fn plan_create_continual_task(
         | CatalogItemType::Type
         | CatalogItemType::Func
         | CatalogItemType::Secret
-        | CatalogItemType::Connection => {
+        | CatalogItemType::Connection
+        | CatalogItemType::ReplacementMaterializedView => {
             sql_bail!(
                 "CONTINUAL TASK cannot use {} as an input",
                 input.item_type()
@@ -5615,7 +5616,8 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::Type
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => true,
+            | CatalogItemType::ContinualTask
+            | CatalogItemType::ReplacementMaterializedView => true,
             CatalogItemType::Index => false,
         },
     }

@@ -366,6 +366,7 @@ impl Plan {
                 ObjectType::Func => "drop function",
                 ObjectType::ContinualTask => "drop continual task",
                 ObjectType::NetworkPolicy => "drop network policy",
+                ObjectType::ReplacementMaterializedView => "drop replacement materialized view",
             },
             Plan::DropOwned(_) => "drop owned",
             Plan::EmptyQuery => "do nothing",
@@ -407,6 +408,7 @@ impl Plan {
                 ObjectType::Func => "alter function",
                 ObjectType::ContinualTask => "alter continual task",
                 ObjectType::NetworkPolicy => "alter network policy",
+                ObjectType::ReplacementMaterializedView => "alter replacement materialized view",
             },
             Plan::AlterCluster(_) => "alter cluster",
             Plan::AlterClusterRename(_) => "alter cluster rename",
@@ -443,6 +445,9 @@ impl Plan {
                 ObjectType::Func => "alter function owner",
                 ObjectType::ContinualTask => "alter continual task owner",
                 ObjectType::NetworkPolicy => "alter network policy owner",
+                ObjectType::ReplacementMaterializedView => {
+                    "alter replacement materialized view owner"
+                }
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
             Plan::Declare(_) => "declare",

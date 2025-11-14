@@ -1786,7 +1786,8 @@ impl CatalogState {
             | CatalogItemType::Index
             | CatalogItemType::Secret
             | CatalogItemType::Connection
-            | CatalogItemType::ContinualTask => schema.items[builtin.name()],
+            | CatalogItemType::ContinualTask
+            | CatalogItemType::ReplacementMaterializedView => schema.items[builtin.name()],
         }
     }
 
@@ -2195,6 +2196,9 @@ impl CatalogState {
                     CatalogItemType::Type => CommentObjectId::Type(item_id),
                     CatalogItemType::Secret => CommentObjectId::Secret(item_id),
                     CatalogItemType::ContinualTask => CommentObjectId::ContinualTask(item_id),
+                    CatalogItemType::ReplacementMaterializedView => {
+                        CommentObjectId::ReplacementMaterializedView(item_id)
+                    }
                 }
             }
             ObjectId::Role(role_id) => CommentObjectId::Role(role_id),
@@ -2607,7 +2611,8 @@ impl CatalogState {
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => Some(*id),
+            | CommentObjectId::ContinualTask(id)
+            | CommentObjectId::ReplacementMaterializedView(id) => Some(*id),
             CommentObjectId::Role(_)
             | CommentObjectId::Database(_)
             | CommentObjectId::Schema(_)
@@ -2637,7 +2642,8 @@ impl CatalogState {
             | CommentObjectId::Connection(id)
             | CommentObjectId::Type(id)
             | CommentObjectId::Secret(id)
-            | CommentObjectId::ContinualTask(id) => {
+            | CommentObjectId::ContinualTask(id)
+            | CommentObjectId::ReplacementMaterializedView(id) => {
                 let item = self.get_entry(&id);
                 let name = self.resolve_full_name(item.name(), Some(conn_id));
                 name.to_string()

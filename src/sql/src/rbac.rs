@@ -1671,6 +1671,8 @@ fn generate_read_privileges_inner(
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
                 CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                // TODO(alter-mv): Revisit if we want to read from replacement MVs.
+                CatalogItemType::ReplacementMaterializedView => {}
             }
         }
     }
@@ -1792,6 +1794,8 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
+        // TODO(alter-mv): Check if this is correct for replacement MVs.
+        SystemObjectType::Object(ObjectType::ReplacementMaterializedView) => EMPTY_ACL_MODE,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1821,7 +1825,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => AclMode::empty(),
+        | ObjectType::NetworkPolicy
+        | ObjectType::ReplacementMaterializedView => AclMode::empty(),
     }
 }
 

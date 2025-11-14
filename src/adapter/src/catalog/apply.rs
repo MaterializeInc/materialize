@@ -1925,7 +1925,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
             | CatalogItemType::Type
             | CatalogItemType::Func
             | CatalogItemType::Secret
-            | CatalogItemType::Connection => push_update(
+            | CatalogItemType::Connection
+            | CatalogItemType::ReplacementMaterializedView => push_update(
                 StateUpdate {
                     kind: StateUpdateKind::SystemObjectMapping(builtin_item_update),
                     ts,
@@ -2046,7 +2047,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::ReplacementMaterializedView => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
                 CatalogItemType::ContinualTask => continual_tasks.push(update),
             }
@@ -2116,7 +2118,8 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::ReplacementMaterializedView => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
                 CatalogItemType::ContinualTask => continual_tasks.push(update),
             }

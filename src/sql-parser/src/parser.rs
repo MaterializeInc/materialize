@@ -4892,7 +4892,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Type
             | ObjectType::Secret
             | ObjectType::Connection
-            | ObjectType::ContinualTask => {
+            | ObjectType::ContinualTask
+            | ObjectType::Replacement => {
                 let names = self.parse_comma_separated(|parser| {
                     Ok(UnresolvedObjectName::Item(parser.parse_item_name()?))
                 })?;
@@ -5608,7 +5609,8 @@ impl<'a> Parser<'a> {
             ObjectType::View
             | ObjectType::MaterializedView
             | ObjectType::Table
-            | ObjectType::ContinualTask => self.parse_alter_views(object_type),
+            | ObjectType::ContinualTask
+            | ObjectType::Replacement => self.parse_alter_views(object_type),
             ObjectType::Type => {
                 let if_exists = self
                     .parse_if_exists()
@@ -7240,7 +7242,8 @@ impl<'a> Parser<'a> {
             | ObjectType::Secret
             | ObjectType::Connection
             | ObjectType::Func
-            | ObjectType::ContinualTask => UnresolvedObjectName::Item(self.parse_item_name()?),
+            | ObjectType::ContinualTask
+            | ObjectType::Replacement => UnresolvedObjectName::Item(self.parse_item_name()?),
             ObjectType::Role => UnresolvedObjectName::Role(self.parse_identifier()?),
             ObjectType::Cluster => UnresolvedObjectName::Cluster(self.parse_identifier()?),
             ObjectType::ClusterReplica => {
@@ -8070,6 +8073,10 @@ impl<'a> Parser<'a> {
                         self.peek_prev_pos(),
                         format!("Unsupported SHOW on {object_type}")
                     );
+                }
+                ObjectType::Replacement => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::Replacement { in_cluster }
                 }
             };
             Ok(ShowStatement::ShowObjects(ShowObjectsStatement {
@@ -9516,7 +9523,8 @@ impl<'a> Parser<'a> {
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::Func
-            | ObjectType::Subsource => {
+            | ObjectType::Subsource
+            | ObjectType::Replacement => {
                 parser_err!(
                     self,
                     self.peek_prev_pos(),

@@ -1188,7 +1188,8 @@ impl From<CommentObjectId> for ObjectId {
             | CommentObjectId::Connection(item_id)
             | CommentObjectId::Type(item_id)
             | CommentObjectId::Secret(item_id)
-            | CommentObjectId::ContinualTask(item_id) => ObjectId::Item(item_id),
+            | CommentObjectId::ContinualTask(item_id)
+            | CommentObjectId::ReplacementMaterializedView(item_id) => ObjectId::Item(item_id),
             CommentObjectId::Role(id) => ObjectId::Role(id),
             CommentObjectId::Database(id) => ObjectId::Database(id),
             CommentObjectId::Schema(id) => ObjectId::Schema(id),
@@ -1250,6 +1251,7 @@ pub enum CommentObjectId {
     Cluster(ClusterId),
     ClusterReplica((ClusterId, ReplicaId)),
     NetworkPolicy(NetworkPolicyId),
+    ReplacementMaterializedView(CatalogItemId),
 }
 
 /// Whether to resolve an name in the types namespace, the functions namespace,
