@@ -20,6 +20,15 @@ Backwards-incompatible changes to these objects may be made at any time.
 reference these objects is not allowed.
 {{< /warning >}}
 
+## `mz_object_global_ids`
+
+The `mz_object_global_ids` table maps Materialize catalog item IDs to global IDs.
+
+<!-- RELATION_SPEC mz_internal.mz_object_global_ids -->
+| Field        | Type     | Meaning                                                                                             |
+|--------------|----------|-----------------------------------------------------------------------------------------------------|
+| `id`         | [`text`] | The ID of the object. Corresponds to [`mz_objects.id`](/sql/system-catalog/mz_catalog/#mz_objects). |
+| `global_id`  | [`text`] | The global ID of the object.                                                                        |
 
 ## `mz_recent_activity_log`
 
