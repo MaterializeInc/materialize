@@ -40,6 +40,20 @@ The global ID associates compute and storage: it needs to be registered with per
 
 When a materialized view is dropped, Materialize tears down the dataflow and reclaims the shard.
 
+## Principles
+
+While not specific to this project, I want to outline some principles that helped me to come up with the design.
+In user interfaces, it is a principle that all operations can be undone, for example by pressing Ctrl+z.
+This allows users to correct mistakes or just decide otherwise.
+
+Similarly, Materialize offers mechanisms with potentially disastrous outcomes that cannot be undone.
+For example, a cluster might become overloaded, or we seal a materialized view for all times.
+Extending the "undo" principle, we split operations into a _stage_ and _apply_ operation.
+The stage operation creates objects, but localizes their effect to a cluster.
+Only once the user applies a change, the effect becomes global.
+
+The following solution uses this principle to apply changes to materialized views.
+
 ## Solution proposal
 
 We introduce the notion of a "replacement" for maintained SQL objects, starting with materialized views.
