@@ -39,23 +39,3 @@ steps:
     concurrency_group: deploy/npm
     agents:
       queue: linux-x86_64-small
-
-  - label: ":bulb: Full SQL Logic Tests"
-    trigger: slt
-    async: true
-    branches: "v*.*rc*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
-
-  - label: ":nightmare: Full Nightly"
-    trigger: nightly
-    async: true
-    branches: "v*.*rc*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"

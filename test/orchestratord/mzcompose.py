@@ -1026,7 +1026,9 @@ class AuthenticatorKind(Modification):
     @classmethod
     def values(cls) -> list[Any]:
         # Test None, Password (v0.147.7+), and Sasl (v0.147.16+)
-        return ["None", "Password", "Sasl"]
+        return ["None"]
+        # TODO: Reenable when database-issues#9899 is fixed
+        # return ["None", "Password", "Sasl"]
 
     @classmethod
     def default(cls) -> Any:

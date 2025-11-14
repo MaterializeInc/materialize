@@ -66,6 +66,7 @@ def main():
 title: "Materialize {args.next_version}"
 date: {args.next_date}
 released: false
+rc: 1
 _build:
   render: never
 ---

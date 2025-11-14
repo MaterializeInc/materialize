@@ -587,13 +587,22 @@ class VersionsFromDocs:
                 continue
 
             current_patch = metadata.get("patch", 0)
+            current_rc = metadata.get("rc", 0)
 
-            for patch in range(current_patch + 1):
-                version = MzVersion.parse_mz(f"{base}.{patch}")
-                if not respect_released_tag and version >= current_version:
-                    continue
-                if version not in INVALID_VERSIONS:
-                    self.versions.append(version)
+            if current_rc > 0:
+                for rc in range(current_rc + 1):
+                    version = MzVersion.parse_mz(f"{base}.{current_patch}-rc.{rc}")
+                    if not respect_released_tag and version >= current_version:
+                        continue
+                    if version not in INVALID_VERSIONS:
+                        self.versions.append(version)
+            else:
+                for patch in range(current_patch + 1):
+                    version = MzVersion.parse_mz(f"{base}.{patch}")
+                    if not respect_released_tag and version >= current_version:
+                        continue
+                    if version not in INVALID_VERSIONS:
+                        self.versions.append(version)
 
         assert len(self.versions) > 0
         self.versions.sort()
