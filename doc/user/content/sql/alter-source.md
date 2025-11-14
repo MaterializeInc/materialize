@@ -31,7 +31,7 @@ menu:
 Field   | Use
 --------|-----
 _name_  | The identifier of the source you want to alter.
-**ADD SUBSOURCE** ... | Add the identified tables from the upstream database (`table_name`) to the named PostgreSQL or MySQL source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options). <br><br>{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+**ADD SUBSOURCE** ... | Add the identified tables from the upstream database (`table_name`) to the named PostgreSQL/MySQL/SQL Server source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options). <br><br>{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
 >}}
 _retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
 
@@ -46,7 +46,7 @@ Field                                | Value           | Description
 ### Adding subsources to a PostgreSQL/MySQL/SQL Server source
 
 Note that using a combination of dropping and adding subsources lets you change
-the schema of the PostgreSQL or MySQL tables that are ingested.
+the schema of the PostgreSQL/MySQL/SQL Server tables that are ingested.
 
 {{< important >}}
 {{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
