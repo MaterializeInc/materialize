@@ -14,6 +14,7 @@ import time
 
 import requests
 
+from materialize import ui
 from materialize.mz_version import MzVersion
 
 CACHED_IMAGE_NAME_BY_COMMIT_HASH: dict[str, str] = dict()
@@ -22,6 +23,7 @@ EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "--"
 LATEST_IMAGE_TAG = "latest"
 LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
+MZ_GHCR_DEFAULT = "1" if ui.env_is_truthy("CI") else "0"
 
 # Examples:
 # * v0.114.0
