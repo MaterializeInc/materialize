@@ -7,7 +7,7 @@ menu:
     parent: 'create-source'
     identifier: cs_sql-server
     name: SQL Server
-    weight: 20
+    weight: 23
 ---
 
 {{% create-source/intro %}}
