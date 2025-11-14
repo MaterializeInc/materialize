@@ -615,7 +615,7 @@ mod tests {
             .await
             .unwrap();
 
-        write0.ensure_schema_registered().await;
+        write0.try_register_schema().await;
         assert_eq!(write0.write_schemas.id.unwrap(), SchemaId(0));
 
         // Not backward compatible (yet... we don't support dropping a column at
