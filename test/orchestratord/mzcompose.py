@@ -64,6 +64,10 @@ def get_tag(tag: str | None = None) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
 
+def get_version(tag: str | None = None) -> MzVersion:
+    return MzVersion.parse_mz(get_tag(tag))
+
+
 def get_image(image: str, tag: str | None) -> str:
     return f'{image.rsplit(":", 1)[0]}:{get_tag(tag)}'
 
@@ -135,7 +139,9 @@ class Modification:
     pick_by_default: bool = True
 
     def __init__(self, value: Any):
-        assert value in self.values(), f"Expected {value} to be in {self.values()}"
+        assert value in self.values(
+            get_version()
+        ), f"Expected {value} to be in {self.values(get_version())}"
         self.value = value
 
     def to_dict(self) -> dict[str, Any]:
@@ -166,7 +172,7 @@ class Modification:
         return subclass(data["value"])
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         raise NotImplementedError
 
     @classmethod
@@ -174,8 +180,8 @@ class Modification:
         return cls.failed_reconciliation_values()
 
     @classmethod
-    def good_values(cls) -> list[Any]:
-        return [value for value in cls.values() if value not in cls.bad_values()]
+    def good_values(cls, version: MzVersion) -> list[Any]:
+        return [value for value in cls.values(version) if value not in cls.bad_values()]
 
     @classmethod
     def failed_reconciliation_values(cls) -> list[Any]:
@@ -198,7 +204,7 @@ def all_modifications() -> list[type[Modification]]:
 
 class LicenseKey(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return ["valid", "invalid", "del"]
 
     @classmethod
@@ -219,7 +225,9 @@ class LicenseKey(Modification):
         elif self.value == "del":
             del definition["secret"]["stringData"]["license_key"]
         else:
-            raise ValueError(f"Unknown value {self.value}, only know {self.values()}")
+            raise ValueError(
+                f"Unknown value {self.value}, only know {self.values(get_version())}"
+            )
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
@@ -250,7 +258,7 @@ class LicenseKey(Modification):
 
 class LicenseKeyCheck(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         # TODO: Reenable False when fixed
         return [None, True]
 
@@ -280,7 +288,7 @@ class LicenseKeyCheck(Modification):
 
 class BalancerdEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -321,7 +329,7 @@ class BalancerdEnabled(Modification):
 
 class BalancerdNodeSelector(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             {},
             # TODO: Reenable when we create nodes with these labels
@@ -361,7 +369,7 @@ class BalancerdNodeSelector(Modification):
 
 class ConsoleEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -403,7 +411,7 @@ class ConsoleEnabled(Modification):
 
 class EnableRBAC(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -432,7 +440,7 @@ class EnvironmentdImageRef(Modification):
     pick_by_default = False
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [str(version) for version in get_all_self_managed_versions()] + [
             get_tag()
         ]
@@ -471,7 +479,7 @@ class NumMaterializeEnvironments(Modification):
     pick_by_default = False
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [1, 2]
 
     @classmethod
@@ -538,7 +546,7 @@ class NumMaterializeEnvironments(Modification):
 
 class TelemetryEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -564,7 +572,7 @@ class TelemetryEnabled(Modification):
 
 class TelemetrySegmentClientSide(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -590,7 +598,7 @@ class TelemetrySegmentClientSide(Modification):
 
 class ObservabilityEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -606,7 +614,7 @@ class ObservabilityEnabled(Modification):
 
 class ObservabilityPodMetricsEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -634,7 +642,7 @@ class ObservabilityPodMetricsEnabled(Modification):
 
 class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -663,7 +671,7 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
 # TODO: Fix in upgrade tests
 # class BalancerdReplicas(Modification):
 #     @classmethod
-#     def values(cls) -> list[Any]:
+#     def values(cls, version: MzVersion) -> list[Any]:
 #         return [None, 1, 2]
 #
 #     @classmethod
@@ -691,7 +699,7 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
 
 class ConsoleReplicas(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [None, 1, 2]
 
     @classmethod
@@ -763,7 +771,7 @@ def validate_container_resources(
 
 class SwapEnabledGlobal(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -816,7 +824,7 @@ class SwapEnabledGlobal(Modification):
 
 class StorageClass(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -869,7 +877,7 @@ class StorageClass(Modification):
 
 class EnvironmentdResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -919,7 +927,7 @@ class EnvironmentdResources(Modification):
 
 class BalancerdResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -974,7 +982,7 @@ class BalancerdResources(Modification):
 
 class ConsoleResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -1024,11 +1032,14 @@ class ConsoleResources(Modification):
 
 class AuthenticatorKind(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         # Test None, Password (v0.147.7+), and Sasl (v0.147.16+)
-        return ["None"]
-        # TODO: Reenable when database-issues#9899 is fixed
-        # return ["None", "Password", "Sasl"]
+        result = ["None"]
+        if version >= MzVersion.parse_mz("v0.147.7"):
+            result.append("Password")
+        if version >= MzVersion.parse_mz("v0.147.16"):
+            result.append("Sasl")
+        return result
 
     @classmethod
     def default(cls) -> Any:
@@ -1525,6 +1536,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         definition["secret"] = materialize_setup[1]
         definition["materialize"] = materialize_setup[2]
 
+    current_version = get_version(args.tag)
     if args.orchestratord_override:
         definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
     # TODO: database-issues#9696, makes environmentd -> clusterd connections fail
@@ -1583,13 +1595,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             yield [NumMaterializeEnvironments(2)]
         elif properties == Properties.Individual:
             for mod_class in mod_classes:
-                for value in mod_class.values():
-                    yield [mod_class(value)]
+                for value in mod_class.values(current_version):
+                    if value in mod_class.values(current_version):
+                        yield [mod_class(value)]
         elif properties == Properties.Combine:
             assert args.runtime
             while time.time() < end_time:
                 yield [
-                    mod_class(rng.choice(mod_class.good_values()))
+                    mod_class(rng.choice(mod_class.good_values(current_version)))
                     for mod_class in mod_classes
                 ]
         else:
@@ -1614,6 +1627,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             versions = get_all_self_managed_versions()
             while time.time() < end_time:
                 selected_versions = sorted(list(rng.sample(versions, 2)))
+                current_version = selected_versions[0]
                 try:
                     mod = next(mods_it)
                 except StopIteration:
@@ -1636,6 +1650,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             while time.time() < end_time:
                 random.randint(2, len(versions))
                 selected_versions = sorted(list(rng.sample(versions, 2)))
+                current_version = selected_versions[0]
                 try:
                     mod = next(mods_it)
                 except StopIteration:
