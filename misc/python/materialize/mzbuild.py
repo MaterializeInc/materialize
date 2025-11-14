@@ -45,6 +45,7 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize.docker import MZ_GHCR_DEFAULT
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
@@ -67,6 +68,7 @@ def run_and_detect_rust_ice(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
+        env={**os.environ, "CARGO_TERM_COLOR": "always", "RUSTC_COLOR": "always"},
     )
 
     sel = selectors.DefaultSelector()
@@ -76,9 +78,11 @@ def run_and_detect_rust_ice(
     assert p.stderr is not None
     os.set_blocking(p.stdout.fileno(), False)
     os.set_blocking(p.stderr.fileno(), False)
-    while True:
+    running = True
+    while running:
         for key, val in sel.select():
             output = ""
+            running = False
             while True:
                 new_output = key.fileobj.read(1024)  # type: ignore
                 if not new_output:
@@ -86,6 +90,8 @@ def run_and_detect_rust_ice(
                 output += new_output
             if not output:
                 continue
+            # Keep running as long as stdout or stderr have any content
+            running = True
             if key.fileobj is p.stdout:
                 print(
                     output,
@@ -101,24 +107,18 @@ def run_and_detect_rust_ice(
                     flush=True,
                 )
                 stderr_result += output
-        p.wait()
-        retcode = p.poll()
-        assert retcode is not None
-        if retcode:
-            panic_msg = (
-                "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
-            )
-            if panic_msg in stdout_result or panic_msg in stderr_result:
-                raise RustICE()
+    p.wait()
+    retcode = p.poll()
+    assert retcode is not None
+    if retcode:
+        panic_msg = "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
+        if panic_msg in stdout_result or panic_msg in stderr_result:
+            raise RustICE()
 
-            raise subprocess.CalledProcessError(
-                retcode, p.args, output=stdout_result, stderr=stderr_result
-            )
-        return subprocess.CompletedProcess(
-            p.args, retcode, stdout_result, stderr_result
+        raise subprocess.CalledProcessError(
+            retcode, p.args, output=stdout_result, stderr=stderr_result
         )
-
-    assert False, "unreachable"
+    return subprocess.CompletedProcess(p.args, retcode, stdout_result, stderr_result)
 
 
 class Fingerprint(bytes):
@@ -1256,7 +1256,7 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = (
             "ghcr.io/materializeinc/materialize"
-            if ui.env_is_truthy("MZ_GHCR", "1")
+            if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
             else "materialize"
         ),
         image_prefix: str = "",
@@ -1362,7 +1362,8 @@ class Repository:
             "--image-registry",
             default=(
                 "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
+                if ui.env_is_truthy("CI")
+                or ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
                 else "materialize"
             ),
             help="the Docker image registry to pull images from and push images to",

@@ -31,6 +31,7 @@ import yaml
 from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, git, spawn, ui
+from materialize.docker import MZ_GHCR_DEFAULT
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -455,7 +456,7 @@ class EnvironmentdImageRef(Modification):
             image = environmentd["items"][0]["spec"]["containers"][0]["image"]
             image_registry = (
                 "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("MZ_GHCR", "1")
+                if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
                 else "materialize"
             )
             expected = f"{image_registry}/environmentd:{self.value}"
@@ -1605,7 +1606,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 run_scenario([mods], definition)
         elif action == Action.Upgrade:
             assert not ui.env_is_truthy(
-                "MZ_GHCR", "1"
+                "MZ_GHCR", MZ_GHCR_DEFAULT
             ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
@@ -1626,7 +1627,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 run_scenario(scenario, definition)
         elif action == Action.UpgradeChain:
             assert not ui.env_is_truthy(
-                "MZ_GHCR", "1"
+                "MZ_GHCR", MZ_GHCR_DEFAULT
             ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
