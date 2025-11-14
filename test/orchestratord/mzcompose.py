@@ -20,6 +20,7 @@ import random
 import shutil
 import signal
 import subprocess
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -48,6 +49,7 @@ from materialize.version_list import (
     get_all_self_managed_versions,
     get_self_managed_versions,
 )
+from materialize.xcompile import Arch
 
 SERVICES = [
     Testdrive(),
@@ -130,6 +132,70 @@ def retry(fn: Callable, timeout: int) -> None:
 
 # TODO: Cover src/cloud-resources/src/crd/materialize.rs
 # TODO: Cover https://materialize.com/docs/self-managed/v25.2/installation/configuration/
+
+
+class Fault:
+    def __init__(self, value: Any):
+        self.value = value
+
+    @classmethod
+    def values(cls) -> list[Any]:
+        raise NotImplementedError
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"fault": self.__class__.__name__, "value": self.value}
+
+    def __eq__(self, other: "Fault"):
+        if not isinstance(other, self.__class__):
+            return NotImplemented
+        return self.__class__ == other.__class__ and self.value == other.value
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "Fault":
+        name = data["fault"]
+        for subclass in all_subclasses(Fault):
+            if subclass.__name__ == name:
+                break
+        else:
+            raise ValueError(
+                f"No fault with name {name} found, only know {[subclass.__name__ for subclass in all_faults()]}"
+            )
+        return subclass(data["value"])
+
+    def inject(self) -> None:
+        raise NotImplementedError
+
+    def remediate(self) -> None:
+        raise NotImplementedError
+
+
+def all_faults() -> list[type[Fault]]:
+    return [fault_class for fault_class in all_subclasses(Fault)]
+
+
+class DeletePod(Fault):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return ["balancerd", "console", "environmentd", "clusterd"]
+
+    def inject(self) -> None:
+        spawn.runv(
+            [
+                "kubectl",
+                "delete",
+                "pod",
+                "-l",
+                f"app={self.value}",
+                "-n",
+                "materialize-environment",
+            ]
+        )
+
+    def remediate(self) -> None:
+        pass
 
 
 class Modification:
@@ -810,7 +876,7 @@ class SwapEnabledGlobal(Modification):
             validate_node_selector(node_selector, self.value, mods[StorageClass])
 
         # Clusterd can take a while to start up
-        retry(check_pods, 120)
+        retry(check_pods, 180)
 
         # TODO check that pods can actually use swap
 
@@ -1195,6 +1261,7 @@ class Action(Enum):
     Noop = "noop"
     Upgrade = "upgrade"
     UpgradeChain = "upgrade-chain"
+    Faults = "faults"
 
 
 def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1473,6 +1540,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         choices=[elem.value for elem in Properties],
     )
     parser.add_argument("--modification", action="append", type=str, default=[])
+    parser.add_argument("--fault", action="append", type=str, default=[])
     parser.add_argument("--runtime", type=int, help="Runtime in seconds")
     args = parser.parse_args()
 
@@ -1498,22 +1566,53 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             "balancerd",
         ]
         c.up(*[Service(service, idle=True) for service in services])
+
+        # Workaround for https://github.com/kubernetes-sigs/kind/issues/3795,
+        # we can switch back to the original code after it's fixed
         for service in services:
-            spawn.runv(
-                [
-                    "docker",
-                    "tag",
-                    c.compose["services"][service]["image"],
-                    get_image(c.compose["services"][service]["image"], None),
-                ]
-            )
-        spawn.runv(
-            ["kind", "load", "docker-image", "--name", cluster]
-            + [
-                get_image(c.compose["services"][service]["image"], None)
-                for service in services
-            ]
-        )
+            image = c.compose["services"][service]["image"]
+            tagged_image = get_image(image, None)
+            spawn.runv(["docker", "tag", image, tagged_image])
+            with tempfile.NamedTemporaryFile(suffix=".tar", delete=False) as tmp:
+                archive_path = tmp.name
+            try:
+                arch = Arch.host().go_str()
+                spawn.runv(
+                    [
+                        "docker",
+                        "save",
+                        "--platform",
+                        f"linux/{arch}",
+                        "-o",
+                        archive_path,
+                        tagged_image,
+                    ]
+                )
+                spawn.runv(
+                    ["kind", "load", "image-archive", "--name", cluster, archive_path]
+                )
+            finally:
+                try:
+                    os.remove(archive_path)
+                except FileNotFoundError:
+                    pass
+        # Original code:
+        # for service in services:
+        #     spawn.runv(
+        #         [
+        #             "docker",
+        #             "tag",
+        #             c.compose["services"][service]["image"],
+        #             get_image(c.compose["services"][service]["image"], None),
+        #         ]
+        #     )
+        # spawn.runv(
+        #     ["kind", "load", "docker-image", "--name", cluster]
+        #     + [
+        #         get_image(c.compose["services"][service]["image"], None)
+        #         for service in services
+        #     ]
+        # )
 
     definition: dict[str, Any] = {}
 
@@ -1556,6 +1655,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             mod_class
             for mod_class in mod_classes
             if mod_class.__name__ in args.modification
+        ]
+
+    fault_classes = sorted(all_faults(), key=repr)
+    if args.fault:
+        fault_classes = [
+            fault_class
+            for fault_class in fault_classes
+            if fault_class.__name__ in args.faults
         ]
 
     if args.scenario:
@@ -1604,6 +1711,17 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 if args.tag:
                     mods.append(EnvironmentdImageRef(str(args.tag)))
                 run_scenario([mods], definition)
+        elif action == Action.Faults:
+            if properties == Properties.Defaults:
+                for mod in mods_it:
+                    fault_class = rng.choice(fault_classes)
+                    fault = fault_class(rng.choice(fault_class.values()))
+                    run_scenario([mod, [fault], mod], definition)
+            else:
+                for mods1, mods2 in zip(mods_it, mods_it):
+                    fault_class = rng.choice(fault_classes)
+                    fault = fault_class(rng.choice(fault_class.values()))
+                    run_scenario([mods1, [fault], mods2], definition)
         elif action == Action.Upgrade:
             assert not ui.env_is_truthy(
                 "MZ_GHCR", MZ_GHCR_DEFAULT
@@ -1620,7 +1738,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 except StopIteration:
                     mods_it = get_mods()
                     mod = next(mods_it)
-                scenario = [
+                scenario: list[list[Modification] | list[Fault]] = [
                     [EnvironmentdImageRef(str(version))] + mod
                     for version in selected_versions
                 ]
@@ -1723,49 +1841,61 @@ DONE_SCENARIOS = set()
 
 
 def run_scenario(
-    scenario: list[list[Modification]],
+    scenario: list,  # list[list[Fault] | list[Modification]], but mypy is annoying
     original_definition: dict[str, Any],
     modify: bool = True,
 ) -> None:
     initialize = True
-    scenario_json = json.dumps([[mod.to_dict() for mod in mods] for mods in scenario])
+    scenario_json = json.dumps([[op.to_dict() for op in ops] for ops in scenario])
     if scenario_json in DONE_SCENARIOS:
         return
     DONE_SCENARIOS.add(scenario_json)
     print(f"--- Running with {scenario_json}")
-    for mods in scenario:
-        definition = copy.deepcopy(original_definition)
-        expect_fail = False
-        if modify:
-            for mod in mods:
-                mod.modify(definition)
-                if mod.value in mod.failed_reconciliation_values():
-                    expect_fail = True
-        if not initialize:
-            definition["materialize"]["spec"][
-                "rolloutStrategy"
-            ] = "ImmediatelyPromoteCausingDowntime"
-            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
-            run(definition, expect_fail)
-        if initialize:
-            init(definition)
-            run(definition, expect_fail)
-            initialize = False  # only initialize once
-        else:
-            upgrade(definition, expect_fail)
-        mod_dict = {mod.__class__: mod.value for mod in mods}
-        for subclass in all_subclasses(Modification):
-            if subclass not in mod_dict:
-                mod_dict[subclass] = subclass.default()
-        try:
-            if not expect_fail:
+    for ops in scenario:
+        if all(isinstance(op, Fault) for op in ops):
+            faults = ops
+            for fault in faults:
+                fault.inject()
+            time.sleep(10)
+            for fault in faults:
+                fault.remediate()
+            time.sleep(10)
+        elif all(isinstance(op, Modification) for op in ops):
+            mods = ops
+            definition = copy.deepcopy(original_definition)
+            expect_fail = False
+            if modify:
                 for mod in mods:
-                    mod.validate(mod_dict)
-        except:
-            print(
-                f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
-            )
-            raise
+                    mod.modify(definition)
+                    if mod.value in mod.failed_reconciliation_values():
+                        expect_fail = True
+            if not initialize:
+                definition["materialize"]["spec"][
+                    "rolloutStrategy"
+                ] = "ImmediatelyPromoteCausingDowntime"
+                definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+                run(definition, expect_fail)
+            if initialize:
+                init(definition)
+                run(definition, expect_fail)
+                initialize = False  # only initialize once
+            else:
+                upgrade(definition, expect_fail)
+            mod_dict = {mod.__class__: mod.value for mod in mods}
+            for subclass in all_subclasses(Modification):
+                if subclass not in mod_dict:
+                    mod_dict[subclass] = subclass.default()
+            try:
+                if not expect_fail:
+                    for mod in mods:
+                        mod.validate(mod_dict)
+            except:
+                print(
+                    f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
+                )
+                raise
+        else:
+            raise TypeError(f"Mixed or unknown types: {ops}")
 
 
 def init(definition: dict[str, Any]) -> None:
