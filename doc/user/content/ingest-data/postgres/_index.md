@@ -40,7 +40,9 @@ common PostgreSQL hosted services.
 
 ## Integration guides
 
-{{% ingest-data/postgres-native-support %}}
+The following integration guides are available:
+
+{{% include-md file="shared-content/postgresql-ingest-data-guides.md" %}}
 
 ## Considerations
 

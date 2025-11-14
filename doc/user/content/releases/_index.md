@@ -30,6 +30,22 @@ existing installation, run:
 kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
 ```
 
+### PostgreSQL: Source versioning
+
+Starting in v26.0.0, Materialize introduces new syntax for [`CREATE
+SOURCE`](/sql/create-source/postgres-v2/) and [`CREATE
+TABLE`](/sql/create-table/) to allow better handle DDL changes to the upstream
+PostgreSQL tables.
+
+{{% include-example file="examples/create_source/example_postgres_source"
+ example="syntax" %}}
+
+{{% include-example file="examples/create_table/example_postgres_table"
+ example="syntax" %}}
+
+For more information, see:
+- [`CREATE SOURCE`](/sql/create-source/postgres-v2/)
+- [`CREATE TABLE`](/sql/create-table/)
 
 ## See also
 

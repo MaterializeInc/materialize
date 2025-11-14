@@ -27,7 +27,7 @@
     {{< tab "New Syntax">}}
 
     Once you have created the connection, you can:
-    - use the connection in the [`CREATE SOURCE`](/sql/create-source/postgres/)
+    - use the connection in the [`CREATE SOURCE`](/sql/create-source/postgres-v2/)
     command to connect to your PostgreSQL instance and
     - use the source in the [`CREATE TABLE`](/sql/create-table/) to create the
     tables in Materialize and start ingesting data from the publication you
