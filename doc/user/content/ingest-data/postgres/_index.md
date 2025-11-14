@@ -38,15 +38,9 @@ Materialize gives you the following benefits:
 The PostgreSQL source requires **PostgreSQL 11+** and is compatible with most
 common PostgreSQL hosted services.
 
-| Integration guides                          |
-| ------------------------------------------- |
-| {{% ingest-data/postgres-native-support %}} |
+## Integration guides
 
-If there is a hosted service or PostgreSQL distribution that is not listed above
-but you would like to use with Materialize, please submit a [feature
-request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)
-or reach out in the Materialize [Community
-Slack](https://materialize.com/s/chat).
+{{% ingest-data/postgres-native-support %}}
 
 ## Considerations
 

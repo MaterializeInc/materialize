@@ -26,7 +26,7 @@ If you want to return results in a specific order, use an `ORDER BY` clause on y
 
 ## Syntax
 
-The option `PARTITION BY <column list>` declares that a [materialized view](/sql/create-materialized-view/#with_options) or [table](/sql/create-table/#with_options) should be partitioned by the listed columns.
+The option `PARTITION BY <column list>` declares that a [materialized view](/sql/create-materialized-view/#with_options) or [table](/sql/create-table/#syntax) should be partitioned by the listed columns.
 For example, a table that stores an append-only collection of events may want to partition the data by time:
 
 ```mzsql
