@@ -3045,6 +3045,8 @@ pub fn plan_create_replacement_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateReplacementMaterializedViewStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
+
     let target_item = scx.get_item_by_resolved_name(&stmt.target_name)?;
 
     if target_item.id().is_system() {
