@@ -24,6 +24,7 @@ from uuid import uuid4
 import yaml
 
 from materialize import MZ_ROOT, ui
+from materialize.docker import MZ_GHCR_DEFAULT
 
 DEV_IMAGE_TAG = "local-dev"
 DEFAULT_POSTGRES = (
@@ -33,7 +34,7 @@ DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio
 
 IMAGE_REGISTRY = (
     "ghcr.io/materializeinc/materialize"
-    if ui.env_is_truthy("MZ_GHCR", "1")
+    if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
     else "materialize"
 )
 
