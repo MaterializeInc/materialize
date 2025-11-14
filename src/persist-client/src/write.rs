@@ -218,26 +218,20 @@ where
 
     /// Registers the write schema, if it isn't already registered.
     ///
-    /// # Panics
-    ///
     /// This method expects that either the shard doesn't yet have any schema registered, or one of
     /// the registered schemas is the same as the write schema. If all registered schemas are
-    /// different from the write schema, it panics.
-    pub async fn ensure_schema_registered(&mut self) -> SchemaId {
+    /// different from the write schema, or the shard is a tombstone, it returns `None`.
+    pub async fn try_register_schema(&mut self) -> Option<SchemaId> {
         let Schemas { id, key, val } = &self.write_schemas;
 
         if let Some(id) = id {
-            return *id;
+            return Some(*id);
         }
 
         let (schema_id, maintenance) = self.machine.register_schema(key, val).await;
         maintenance.start_performing(&self.machine, &self.gc);
 
-        let Some(schema_id) = schema_id else {
-            panic!("unable to register schemas: {key:?} {val:?}");
-        };
-
-        self.write_schemas.id = Some(schema_id);
+        self.write_schemas.id = schema_id;
         schema_id
     }
 
@@ -553,7 +547,9 @@ where
         D: Send + Sync,
     {
         // Before we append any data, we require a registered write schema.
-        let schema_id = self.ensure_schema_registered().await;
+        // We expect the caller to ensure our schema is already present... unless this shard is a
+        // tombstone, in which case this write is either a noop or will fail gracefully.
+        let schema_id = self.try_register_schema().await;
 
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
@@ -711,10 +707,22 @@ where
 
             let mut combined_batch =
                 HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
+
             // The batch may have been written by a writer without a registered schema.
             // Ensure we have a schema ID in the batch metadata before we append, to avoid type
             // confusion later.
-            ensure_batch_schema(&mut combined_batch, self.shard_id(), schema_id);
+            match schema_id {
+                Some(schema_id) => {
+                    ensure_batch_schema(&mut combined_batch, self.shard_id(), schema_id);
+                }
+                None => {
+                    assert!(
+                        self.fetch_recent_upper().await.is_empty(),
+                        "fetching a schema id should only fail when the shard is tombstoned"
+                    )
+                }
+            }
+
             let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine

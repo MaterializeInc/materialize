@@ -220,7 +220,12 @@ where
             // schema registered. Importantly, we must register a data shard's
             // schema _before_ we publish it to the txns shard.
             for data_write in &mut data_writes {
-                data_write.ensure_schema_registered().await;
+                // Note that if this fails we'll bail out farther down in any case,
+                // so we might as well fail fast.
+                data_write
+                    .try_register_schema()
+                    .await
+                    .expect("schema should be registered");
             }
 
             let updates = data_writes
