@@ -822,6 +822,7 @@ where
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
             version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            schemas: (batch.key_schema, batch.val_schema),
             batch: batch
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")
