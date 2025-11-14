@@ -19,7 +19,7 @@ CREATE TABLE T (
     A INT
 );
 
-INSERT INTO T (A) VALUES 
+INSERT INTO T (A) VALUES
     (10);
 ```
 
@@ -60,7 +60,7 @@ In this example, we'll add a new column, `B`. Run the following command in your 
 ALTER TABLE T
     ADD COLUMN B BOOLEAN DEFAULT false
 
-INSERT INTO T (A, B) VALUES 
+INSERT INTO T (A, B) VALUES
     (20, true);
 ```
 
