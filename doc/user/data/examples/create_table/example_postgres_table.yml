@@ -1,7 +1,7 @@
 - name: "syntax"
   description: |
-    To create a table from a [source](/sql/create-source/) connected (via native
-    connector) to an external PostgreSQL:
+    To create a read-only table from a [source](/sql/create-source/) connected
+    (via native connector) to an external PostgreSQL:
 
   code: |
     CREATE TABLE [IF NOT EXISTS] <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)
@@ -13,19 +13,13 @@
     )]
     ;
 
+
 - name: "syntax-options"
   description: |
 
-    {{< note >}}
-
-    - {{< include-md file="shared-content/create-table-from-source-readonly.md"
-    >}}
-
-    - {{< include-md
+    {{< include-md
     file="shared-content/create-table-from-source-snapshotting.md"
-      >}}
-
-    {{< /note >}}
+    >}}
 
     {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_postgres" %}}
 
