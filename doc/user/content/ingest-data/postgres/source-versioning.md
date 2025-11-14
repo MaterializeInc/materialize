@@ -1,5 +1,5 @@
 ---
-title: "Guide: Handling upstreams schema changes with zero downtime"
+title: "Guide: Handling upstream schema changes with zero downtime"
 description: "How to add a column, or drop a column, from your source PostgreSQL database, without any downtime in Materialize"
 ---
 
