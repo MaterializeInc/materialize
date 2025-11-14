@@ -140,7 +140,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
-        # Fortify against intermittent DockerHub issues
+        # Fortify against intermittent DockerHub/GHCR issues
         retry:
           automatic:
             - exit_status: 1
