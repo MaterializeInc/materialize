@@ -51,6 +51,9 @@ pub enum BlobConfig {
     Mem(bool),
     /// Config for [AzureBlob].
     Azure(AzureBlobConfig),
+    #[cfg(feature = "turmoil")]
+    /// Config for [crate::turmoil::TurmoilBlob].
+    Turmoil(crate::turmoil::BlobConfig),
 }
 
 /// Configuration knobs for [Blob].
@@ -77,6 +80,8 @@ impl BlobConfig {
             BlobConfig::Mem(tombstone) => {
                 Ok(Arc::new(MemBlob::open(MemBlobConfig::new(tombstone))))
             }
+            #[cfg(feature = "turmoil")]
+            BlobConfig::Turmoil(config) => Ok(Arc::new(crate::turmoil::TurmoilBlob::open(config))),
         }
     }
 
@@ -186,6 +191,11 @@ impl BlobConfig {
                 }
                 _ => Err(anyhow!("unknown persist blob scheme: {}", url.as_str())),
             },
+            #[cfg(feature = "turmoil")]
+            "turmoil" => {
+                let cfg = crate::turmoil::BlobConfig::new(url);
+                Ok(BlobConfig::Turmoil(cfg))
+            }
             p => Err(anyhow!(
                 "unknown persist blob scheme {}: {}",
                 p,
@@ -216,6 +226,9 @@ pub enum ConsensusConfig {
     Postgres(PostgresConsensusConfig),
     /// Config for [MemConsensus], only available in testing.
     Mem,
+    #[cfg(feature = "turmoil")]
+    /// Config for [crate::turmoil::TurmoilConsensus].
+    Turmoil(crate::turmoil::ConsensusConfig),
 }
 
 impl ConsensusConfig {
@@ -226,6 +239,10 @@ impl ConsensusConfig {
                 Ok(Arc::new(PostgresConsensus::open(config).await?))
             }
             ConsensusConfig::Mem => Ok(Arc::new(MemConsensus::default())),
+            #[cfg(feature = "turmoil")]
+            ConsensusConfig::Turmoil(config) => {
+                Ok(Arc::new(crate::turmoil::TurmoilConsensus::open(config)))
+            }
         }
     }
 
@@ -245,6 +262,11 @@ impl ConsensusConfig {
                     warn!("persist unexpectedly using in-mem consensus in a release binary");
                 }
                 Ok(ConsensusConfig::Mem)
+            }
+            #[cfg(feature = "turmoil")]
+            "turmoil" => {
+                let cfg = crate::turmoil::ConsensusConfig::new(url);
+                Ok(ConsensusConfig::Turmoil(cfg))
             }
             p => Err(anyhow!(
                 "unknown persist consensus scheme {}: {}",

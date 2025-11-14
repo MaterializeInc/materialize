@@ -6952,6 +6952,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tracing",
+ "turmoil",
  "url",
  "urlencoding",
  "uuid",

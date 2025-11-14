@@ -334,7 +334,7 @@ impl From<tokio::task::JoinError> for ExternalError {
 
 /// An abstraction for a single arbitrarily-sized binary blob and an associated
 /// version number (sequence number).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VersionedData {
     /// The sequence number of the data.
     pub seqno: SeqNo,
@@ -352,7 +352,7 @@ pub const SCAN_ALL: usize = u64_to_usize(i64::MAX as u64);
 pub const CONSENSUS_HEAD_LIVENESS_KEY: &str = "LIVENESS";
 
 /// Return type to indicate whether [Consensus::compare_and_set] succeeded or failed.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
 pub enum CaSResult {
     /// The compare-and-set succeeded and committed new state.
     Committed,
