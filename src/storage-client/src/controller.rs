@@ -154,8 +154,8 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
-    /// Create a CollectionDescription for a materialized view.
-    pub fn for_materialized_view(desc: RelationDesc, since: Option<Antichain<T>>) -> Self {
+    /// Create a CollectionDescription for [`DataSource::Other`].
+    pub fn for_other(desc: RelationDesc, since: Option<Antichain<T>>) -> Self {
         Self {
             desc,
             data_source: DataSource::Other,

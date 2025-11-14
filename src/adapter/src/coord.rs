@@ -2799,10 +2799,8 @@ impl Coordinator {
                 }
                 CatalogItem::MaterializedView(mv) => {
                     let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
-                        let collection_desc = CollectionDescription::for_materialized_view(
-                            desc,
-                            mv.initial_as_of.clone(),
-                        );
+                        let collection_desc =
+                            CollectionDescription::for_other(desc, mv.initial_as_of.clone());
                         (gid, collection_desc)
                     });
 

@@ -689,35 +689,10 @@ impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
     }
 
     fn global_id(&self) -> GlobalId {
-        match self.entry.item() {
-            CatalogItem::Source(source) => source.global_id,
-            CatalogItem::Log(log) => log.global_id,
-            CatalogItem::View(view) => view.global_id,
-            CatalogItem::Sink(sink) => sink.global_id,
-            CatalogItem::Index(index) => index.global_id,
-            CatalogItem::Type(ty) => ty.global_id,
-            CatalogItem::Func(func) => func.global_id,
-            CatalogItem::Secret(secret) => secret.global_id,
-            CatalogItem::Connection(conn) => conn.global_id,
-            CatalogItem::ContinualTask(ct) => ct.global_id,
-            CatalogItem::MaterializedView(_) | CatalogItem::Table(_) => match self.version {
-                RelationVersionSelector::Latest => {
-                    let (_version, gid) = self
-                        .item
-                        .versions()
-                        .expect("materialized views and tables have versions")
-                        .last_key_value()
-                        .expect("at least one version");
-                    *gid
-                }
-                RelationVersionSelector::Specific(version) => *self
-                    .item
-                    .versions()
-                    .expect("materialized views and tables have versions")
-                    .get(&version)
-                    .expect("catalog corruption, missing version!"),
-            },
-        }
+        self.entry
+            .item()
+            .global_id_for_version(self.version)
+            .expect("catalog corruption, missing version!")
     }
 }
 
@@ -924,11 +899,11 @@ impl Table {
 
     /// Returns the latest [`GlobalId`] for this [`Table`] which should be used for writes.
     pub fn global_id_writes(&self) -> GlobalId {
-        self.collections
+        *self
+            .collections
             .last_key_value()
             .expect("at least one version of a table")
             .1
-            .clone()
     }
 
     /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
@@ -2415,22 +2390,26 @@ impl CatalogItem {
         }
     }
 
-    /// Returns an optional map of all versions to their global IDs. Returns `None` if the item does
-    /// not have versions.
-    pub fn versions(&self) -> Option<&BTreeMap<RelationVersion, GlobalId>> {
-        match self {
-            CatalogItem::MaterializedView(mv) => Some(&mv.collections),
-            CatalogItem::Table(table) => Some(&table.collections),
-            CatalogItem::Log(_)
-            | CatalogItem::Source(_)
-            | CatalogItem::View(_)
-            | CatalogItem::Index(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::Type(_)
-            | CatalogItem::Func(_)
-            | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+    /// Returns a global ID for a specific version selector. Returns `None` if the item does
+    /// not have versions or if the version does not exist.
+    pub fn global_id_for_version(&self, version: RelationVersionSelector) -> Option<GlobalId> {
+        let collections = match self {
+            CatalogItem::MaterializedView(mv) => &mv.collections,
+            CatalogItem::Table(table) => &table.collections,
+            CatalogItem::Source(source) => return Some(source.global_id),
+            CatalogItem::Log(log) => return Some(log.global_id),
+            CatalogItem::View(view) => return Some(view.global_id),
+            CatalogItem::Sink(sink) => return Some(sink.global_id),
+            CatalogItem::Index(index) => return Some(index.global_id),
+            CatalogItem::Type(ty) => return Some(ty.global_id),
+            CatalogItem::Func(func) => return Some(func.global_id),
+            CatalogItem::Secret(secret) => return Some(secret.global_id),
+            CatalogItem::Connection(conn) => return Some(conn.global_id),
+            CatalogItem::ContinualTask(ct) => return Some(ct.global_id),
+        };
+        match version {
+            RelationVersionSelector::Latest => collections.values().last().copied(),
+            RelationVersionSelector::Specific(version) => collections.get(&version).copied(),
         }
     }
 }
