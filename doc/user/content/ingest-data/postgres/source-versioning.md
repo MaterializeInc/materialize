@@ -24,7 +24,7 @@ INSERT INTO T (A) VALUES
 ```
 
 ### Connect your source database to Materialize
-Follow our [guide to ingest data from a PostgreSQL database](ingest-data/postgres/). Make sure to setup logical replication in your PostgreSQL database, create a publication and replication user, create a cluster in Materialize, and finally create a connection in Materialize.
+Follow our [guide to ingest data from a PostgreSQL database](/ingest-data/postgres/). Make sure to setup logical replication in your PostgreSQL database, create a publication and replication user, create a cluster in Materialize, and finally create a connection in Materialize.
 
 ## Create a source using our updated syntax
 Create a source in Materialize using our updated [CREATE SOURCE syntax](/sql/create-source/postgres-v2/).
@@ -46,7 +46,7 @@ CREATE TABLE v1.T
     FROM SOURCE my_source(REFERENCE public.T);
 ```
 
-Once you've created a table, the [initial snapshot](ingest-data/#snapshotting) of table T will begin. No other tables will be ingested into Materialize. As before, you can monitor progress for the snaphot operation on the overview page for the source in the Materialize console.
+Once you've created a table, the [initial snapshot](/ingest-data/#snapshotting) of table T will begin. No other tables will be ingested into Materialize. As before, you can monitor progress for the snaphot operation on the overview page for the source in the Materialize console.
 
 You can create a materialized view on top of this table. You might notice that we're adding this view into a `v1` schema.
 ```sql
