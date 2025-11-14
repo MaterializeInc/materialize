@@ -19,8 +19,8 @@ use differential_dataflow::trace::Description;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use mz_dyncfg::Config;
-use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::location::Blob;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
@@ -32,7 +32,7 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
-use tracing::{Instrument, debug_span, info, warn};
+use tracing::{Instrument, debug_span, error, info, warn};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -568,6 +568,23 @@ where
                     TODO: Error on very old versions once the leaked blob detector exists."
                 )
             }
+            fn assert_schema<A: Codec>(writer_schema: &A::Schema, batch_schema: &bytes::Bytes) {
+                if batch_schema.is_empty() {
+                    // Schema is either trivial or missing!
+                    return;
+                }
+                let batch_schema: A::Schema = A::decode_schema(batch_schema);
+                if *writer_schema != batch_schema {
+                    error!(
+                        ?writer_schema,
+                        ?batch_schema,
+                        "writer and batch schemas should be identical"
+                    );
+                    soft_panic_or_log!("writer and batch schemas should be identical");
+                }
+            }
+            assert_schema::<K>(&*self.write_schemas.key, &batch.schemas.0);
+            assert_schema::<V>(&*self.write_schemas.val, &batch.schemas.1);
         }
 
         let lower = expected_upper.clone();
