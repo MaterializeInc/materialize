@@ -180,6 +180,25 @@ While this design looks appealing at first, it has several drawbacks:
 * A materialized view binds a persist shard.
   Creating a new materialized view would create a new shard, and we have no mechanism to reconcile two shards.
 
+## Multi-output materialized views
+
+The MVP design lets the replacement write at the same shard as the original materialized view.
+This comes with limitations, most importantly that we need to ensure that we don't write until cut-over time.
+In turn, this prevents reads from the replacement until we're cutting over.
+
+An alternative design is to let the replacement materialized view write to a separate shard in addition to the original materialized view's shard.
+A benefit would be that the replacement can be read from immediately, allowing users to inspect the data.
+
+Several parts of Materialize would need to be updated to support this:
+* Dataflows support multiple exports, but the behavior is untested and collides with the assumption that we can identify a dataflow by a single global ID.
+* The catalog would need to support multiple shards per materialized view.
+* We would need to control read-write mode per dataflow export.
+  This might be a positive change as the controller sends instructions per global ID, not per dataflow.
+* It is unclear how we could cut over from one shard to another to reclaim storage space.
+  If we don't, we'll have to pay the hydration and storage cost for all shards indefinitely.
+  (We can't cut-over existing dataflows to a new shard, and the only other time we can do breaking changes is when deploying a new version of Materialize.
+  It feels odd to tie a clean-up mechanism to a version deployment.)
+
 ## Open questions
 
 <!--
