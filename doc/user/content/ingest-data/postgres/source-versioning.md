@@ -48,7 +48,7 @@ CREATE TABLE v1.T
 
 Once you've created a table, the [initial snapshot](/ingest-data/#snapshotting) of table T will begin. No other tables will be ingested into Materialize. As before, you can monitor progress for the snaphot operation on the overview page for the source in the Materialize console.
 
-You can create a materialized view on top of this table. You might notice that we're adding this view into a `v1` schema.
+You can create a materialized view on top of this table. You might notice that we're adding this view into the `v1` schema.
 ```sql
 CREATE MATERIALIZED VIEW v1.matview AS
     SELECT SUM(A) from v1.T
@@ -108,5 +108,5 @@ When you're ready to fully cut over to the new source version, you can optionall
 ```sql
 ALTER SCHEMA v1 SWAP WITH v3;
 
-DROP SCHEMA v1 CASCADE;
+DROP SCHEMA v3 CASCADE;
 ```
