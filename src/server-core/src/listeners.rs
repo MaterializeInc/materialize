@@ -18,6 +18,7 @@ pub enum AuthenticatorKind {
     /// Authenticate users using Frontegg.
     Frontegg,
     /// Authenticate users using internally stored password hashes.
+    /// The backend secret must contain external_login_password_mz_system.
     Password,
     /// Authenticate users using SASL.
     Sasl,
