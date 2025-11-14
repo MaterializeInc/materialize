@@ -1,10 +1,10 @@
 ---
-title: "Guide: Handling upstreams schema changes with 0 downtime"
-description: "How to handle schema changes in your upstream source systems without any downtime"
+title: "Guide: Handling upstreams schema changes with zero downtime"
+description: "How to add a column, or drop a column, from your source PostgreSQL database, without any downtime in Materialize"
 ---
 
 {{< private-preview >}}
-New in version 26.0.0. Currently in private preview. This feature is currently supported for Postgres, with additional source types coming soon. Changing column types is currently unsupported.
+New in version 26.0.0. Currently in private preview. This feature is currently supported for PostgreSQL sources, with additional source types coming soon. Changing column types is currently unsupported.
 {{</ private-preview >}}
 
 Materialize allows you to handle certain types of upstream schema changes seamlessly. This guide explains how you can incorporate a new column from an upstream database, as well as drop a column in an upstream database, without any downtime in Materialize.
