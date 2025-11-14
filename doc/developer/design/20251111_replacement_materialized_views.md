@@ -22,6 +22,24 @@ We preserve existing dependencies on the materialized view when doing so, and we
 Changing a running materialized can cause additional work for downstream consumers.
 While we cannot avoid this work, we aim to provide tools to quantify the amount of changed data.
 
+We provide a mechanism that allows cutting over to a new definition with minimal downtime.
+A stop-and-restart approach is not acceptable, unless explicitly requested by the user.
+
+## Background
+
+Materialized views are views that Materialize maintains and writes down durably.
+They're identified by a name, have a SQL definition, and produce a set of output columns.
+The name of a materialized view uniquely identifies a _shard_, which is the durable storage location for the materialized view's data.
+When a materialized view is created, Materialize plans and deploys a dataflow that computes the view's contents based on its definition.
+
+(We can rename materialized views, which merely changes the name associated with the shard.)
+
+A materialized view has a unique and immutable catalog item ID that is valid for the lifetime of the object.
+It also has a global ID that identifies the dataflow, and associates a schema (`RelationDesc`) with the shard.
+The global ID associates compute and storage: it needs to be registered with persist so persist knows what schema to expect, and to reclaim durable resources when the materialized view is dropped.
+
+When a materialized view is dropped, Materialize tears down the dataflow and reclaims the shard.
+
 ## Solution proposal
 
 We introduce the notion of a "replacement" for maintained SQL objects, starting with materialized views.
@@ -48,6 +66,14 @@ We provide introspection commands:
     Shows the SQL command that would recreate the specified replacement.
 * The `mz_replacement_materialized_views` catalog relation, which contains metadata about all replacements for materialized views.
 * The `mz_show_replacements` view and index for serving the show replacements commands.
+
+More specifically, we change the definition of a materialized view as follows:
+* A materialized view is uniquely identified by its name and catalog item ID.
+* A materialized view uniquely identifies a persist shard.
+* A materialized view has a current definition and output columns, identified by a unique global ID.
+* A materialized view can have additional versions, each with their own unique global ID and schema.
+
+This corresponds with switch from a strongly-coupled model to a loosely-coupled model: We switch from binding the view definition and schema, to just binding the schmea.
 
 ## Formalism
 
@@ -94,6 +120,13 @@ Optionally, we could allow users to let the new materialized view start at a lat
 This is highly risky as it introduces gaps in the history, and we should only consider it if there is a strong use case.
 The behavior should be guarded with an explicit clause, such as `WITH (FORWARD TIME)`.
 
+### Future work: Marking spans of time as invalid
+
+Except for some subscribes and sinks, times that have errors aren't generally readable by users.
+We could use this property to mask the period that we jump forward as invalid, by emitting an error at the beginning of the jump until the end of the jump.
+Specifically, when advancing time from `upper` to `upper'`, `upper` <= `upper'`, we would emit the error `[("masked interval", upper + 1, 1), ("masked interval", upper', -1)]`.
+An issue with implementing this is that the materialized view dataflow would need to be aware of the replacement, which complicates the implementation.
+
 ## Minimal Viable Prototype
 
 * Update the parser to support the above syntax.
@@ -129,15 +162,23 @@ This has some interesting implications:
 
 ## Alternatives
 
-<!--
-What other solutions were considered, and why weren't they chosen?
+### Hooking into `CREATE MATERIALIZED VIEW`
 
-This is your chance to demonstrate that you've fully discovered the problem.
-Alternative solutions can come from many places, like: you or your Materialize
-team members, our customers, our prospects, academic research, prior art, or
-competitive research. One of our company values is to "do the reading" and
-to "write things down." This is your opportunity to demonstrate both!
--->
+We could extend the existing `CREATE MATERIALIZED VIEW` command to support replacing an existing materialized view.
+
+```
+CREATE MATERIALIZED VIEW <replacement_mv_name> REPLACES <mv_name> AS SELECT ...
+```
+
+And later:
+
+```
+ALTER MATERIALIZED VIEW <mv_name> APPLY REPLACEMENT <replacement_mv_name>;
+```
+
+While this design looks appealing at first, it has several drawbacks:
+* A materialized view binds a persist shard.
+  Creating a new materialized view would create a new shard, and we have no mechanism to reconcile two shards.
 
 ## Open questions
 
