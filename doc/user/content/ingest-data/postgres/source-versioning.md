@@ -61,8 +61,8 @@ not include the `FOR [[ALL] TABLES|SCHEMAS]` clause; i.e., the new syntax does
 not create corresponding subsources in Materialize automatically. Instead, the
 new syntax requires a separate [`CREATE TABLE ... FROM
 SOURCE`](/sql/create-table/), which will create the corresponding tables and
-start the snapshotting process. See [2. Create a table from the
-source](#2-create-a-table-from-the-source).
+start the snapshotting process. See [Create a table from the
+source](#create-a-table-from-the-source).
 
 {{< note >}}
 The [legacy syntax](/sql/create-source/postgres/) is still supported. However,

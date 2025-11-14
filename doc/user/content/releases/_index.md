@@ -41,7 +41,7 @@ PostgreSQL tables.
 
 {{< note >}}
 - This feature is currently supported for PostgreSQL sources, with
-additional source types coming soon. 
+additional source types coming soon.
 
 - Changing column types is currently unsupported.
 {{< /note >}}
