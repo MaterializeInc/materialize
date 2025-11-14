@@ -1451,10 +1451,17 @@ def publish_multiarch_images(
         names = set(image.image.name for image in images)
         assert len(names) == 1, "dependency sets did not contain identical images"
         name = images[0].image.docker_name(tag)
-        spawn.runv(
-            ["docker", "manifest", "create", name, *(image.spec() for image in images)]
-        )
-        spawn.runv(["docker", "manifest", "push", name])
+        if not is_docker_image_pushed(name):
+            spawn.runv(
+                [
+                    "docker",
+                    "manifest",
+                    "create",
+                    name,
+                    *(image.spec() for image in images),
+                ]
+            )
+            spawn.runv(["docker", "manifest", "push", name])
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(

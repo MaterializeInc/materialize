@@ -74,6 +74,24 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
         branches: "main"
 
+      - id: devel-docker-tags
+        label: Tag development docker images
+        command: bin/ci-builder run min bin/pyactivate -m ci.test.dev_tag
+        inputs:
+          - "*"
+        depends_on:
+          - build-x86_64
+          - build-aarch64
+        timeout_in_minutes: 20
+        agents:
+          queue: linux-aarch64-small
+        coverage: skip
+        # Fortify against intermittent DockerHub/GHCR issues
+        retry:
+          automatic:
+            - exit_status: 1
+              limit: 2
+
   - group: Linters
     key: linters
     steps:
@@ -1442,7 +1460,7 @@ steps:
     - id: terraform-aws
       label: "Terraform + Helm Chart E2E on AWS"
       artifact_paths: [test/terraform/aws-temporary/terraform.tfstate, "mz_debug_*.zip"]
-      depends_on: build-aarch64
+      depends_on: devel-docker-tags
       timeout_in_minutes: 120
       concurrency: 1
       concurrency_group: 'terraform-aws'
@@ -1461,7 +1479,7 @@ steps:
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
       artifact_paths: [test/terraform/aws-upgrade/terraform.tfstate, "mz_debug_*.zip"]
-      depends_on: build-aarch64
+      depends_on: devel-docker-tags
       timeout_in_minutes: 120
       concurrency: 1
       concurrency_group: 'terraform-upgrade-aws'
@@ -1485,7 +1503,7 @@ steps:
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
       artifact_paths: [test/terraform/gcp-temporary/terraform.tfstate, "mz_debug_*.zip"]
-      depends_on: build-aarch64
+      depends_on: devel-docker-tags
       timeout_in_minutes: 120
       concurrency: 1
       concurrency_group: 'terraform-gcp'
@@ -1504,7 +1522,7 @@ steps:
     - id: terraform-azure
       label: "Terraform + Helm Chart E2E on Azure"
       artifact_paths: [test/terraform/azure-temporary/terraform.tfstate, "mz_debug_*.zip"]
-      depends_on: build-aarch64
+      depends_on: devel-docker-tags
       timeout_in_minutes: 120
       concurrency: 1
       concurrency_group: 'terraform-azure'
@@ -2346,7 +2364,7 @@ steps:
     steps:
       - id: orchestratord-defaults
         label: "Orchestratord test (defaults from documentation)"
-        depends_on: build-aarch64
+        depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2358,7 +2376,7 @@ steps:
 
       - id: orchestratord-default-properties
         label: "Orchestratord test (defaults for properties)"
-        depends_on: build-aarch64
+        depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2370,7 +2388,7 @@ steps:
 
       - id: orchestratord-individual
         label: "Orchestratord test (individual properties)"
-        depends_on: build-aarch64
+        depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2394,7 +2412,7 @@ steps:
 
       - id: orchestratord-upgrade-individual
         label: "Orchestratord test (upgrade, individual props)"
-        depends_on: build-aarch64
+        depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2409,7 +2427,7 @@ steps:
 
       - id: orchestratord-upgrade-combine
         label: "Orchestratord test (upgrade, combine props)"
-        depends_on: build-aarch64
+        depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2424,7 +2442,7 @@ steps:
 
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
-        depends_on: build-aarch64
+        depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
@@ -2439,7 +2457,7 @@ steps:
 
       - id: orchestratord-upgrade-chain-combine
         label: "Orchestratord test (upgrade chain, combine props)"
-        depends_on: build-aarch64
+        depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:

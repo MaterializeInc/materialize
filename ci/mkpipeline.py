@@ -624,6 +624,7 @@ def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
                 "build-aarch64",
                 "build-x86_64-lto",
                 "build-aarch64-lto",
+                "devel-docker-tags",
             )
             and not step.get("async")
         ):
@@ -646,6 +647,7 @@ def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
                 "build-aarch64",
                 "build-x86_64-lto",
                 "build-aarch64-lto",
+                "devel-docker-tags",
             )
             and not step.get("async")
         ):
@@ -921,6 +923,11 @@ def trim_builds(
         elif step.get("id") == "upload-debug-symbols-aarch64":
             if hash_check[Arch.AARCH64][1]:
                 step["skip"] = True
+        elif step.get("id") == "devel-docker-tags":
+            step["concurrency"] = 1
+            step["concurrency_group"] = (
+                f"devel-docker-tags/{hash_check[Arch.X86_64][0]}"
+            )
 
 
 _github_changed_files: set[str] | None = None

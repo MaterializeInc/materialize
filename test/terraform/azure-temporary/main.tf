@@ -45,7 +45,7 @@ resource "random_password" "pass" {
 
 variable "operator_version" {
   type    = string
-  default = "v26.0.0-beta.1.tgz"
+  default = "v26.0.0-beta.1"
 }
 
 variable "orchestratord_version" {
@@ -67,7 +67,7 @@ module "materialize" {
 
   install_materialize_operator = true
   use_local_chart              = true
-  helm_chart                   = "materialize-operator-v26.0.0-beta.1.tgz"
+  helm_chart                   = "materialize-operator-${var.operator_version}.tgz"
   operator_version             = var.operator_version
   orchestratord_version        = var.orchestratord_version
 
