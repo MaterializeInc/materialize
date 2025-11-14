@@ -82,7 +82,7 @@ impl Catalog {
                             id_bundle.storage_ids.insert(source.global_id());
                         }
                         CatalogItem::MaterializedView(mv) => {
-                            id_bundle.storage_ids.insert(mv.global_id());
+                            id_bundle.storage_ids.insert(mv.global_id_writes());
                         }
                         CatalogItem::ContinualTask(ct) => {
                             id_bundle.storage_ids.insert(ct.global_id());

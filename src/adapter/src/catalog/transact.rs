@@ -1080,7 +1080,7 @@ impl Catalog {
                         storage_collections_to_create.insert(source.global_id());
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        storage_collections_to_create.insert(mv.global_id());
+                        storage_collections_to_create.insert(mv.global_id_writes());
                     }
                     CatalogItem::ContinualTask(ct) => {
                         storage_collections_to_create.insert(ct.global_id());

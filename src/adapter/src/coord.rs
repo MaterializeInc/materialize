@@ -2064,11 +2064,11 @@ impl Coordinator {
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(mview.global_id());
+                        .insert(mview.global_id_writes());
 
                     let mut df_desc = self
                         .catalog()
-                        .try_get_physical_plan(&mview.global_id())
+                        .try_get_physical_plan(&mview.global_id_writes())
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
@@ -2088,7 +2088,7 @@ impl Coordinator {
 
                     let df_meta = self
                         .catalog()
-                        .try_get_dataflow_metainfo(&mview.global_id())
+                        .try_get_dataflow_metainfo(&mview.global_id_writes())
                         .expect("added in `bootstrap_dataflow_plans`");
 
                     if self.catalog().state().system_config().enable_mz_notices() {
@@ -2101,7 +2101,7 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, mview.cluster_id, None).await;
-                    self.allow_writes(mview.cluster_id, mview.global_id());
+                    self.allow_writes(mview.cluster_id, mview.global_id_writes());
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
@@ -2798,15 +2798,16 @@ impl Coordinator {
                     };
                 }
                 CatalogItem::MaterializedView(mv) => {
-                    let collection_desc = CollectionDescription {
-                        desc: mv.desc.clone(),
-                        data_source: DataSource::Other,
-                        since: mv.initial_as_of.clone(),
-                        status_collection_id: None,
-                        timeline: None,
-                    };
-                    compute_collections.push((mv.global_id(), mv.desc.clone()));
-                    collections.push((mv.global_id(), collection_desc));
+                    let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
+                        let collection_desc = CollectionDescription::for_materialized_view(
+                            desc,
+                            mv.initial_as_of.clone(),
+                        );
+                        (gid, collection_desc)
+                    });
+
+                    collections.extend(collection_descs);
+                    compute_collections.push((mv.global_id_writes(), mv.desc.latest()));
                 }
                 CatalogItem::ContinualTask(ct) => {
                     let collection_desc = CollectionDescription {
@@ -3077,7 +3078,7 @@ impl Coordinator {
                             self.instance_snapshot(mv.cluster_id)
                                 .expect("compute instance exists")
                         });
-                    let global_id = mv.global_id();
+                    let global_id = mv.global_id_writes();
 
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {
@@ -3107,7 +3108,7 @@ impl Coordinator {
                                         compute_instance.clone(),
                                         global_id,
                                         internal_view_id,
-                                        mv.desc.iter_names().cloned().collect(),
+                                        mv.desc.latest().iter_names().cloned().collect(),
                                         mv.non_null_assertions.clone(),
                                         mv.refresh_schedule.clone(),
                                         debug_name,
@@ -3139,7 +3140,7 @@ impl Coordinator {
                                     self.catalog().render_notices(
                                         metainfo,
                                         notice_ids,
-                                        Some(mv.global_id()),
+                                        Some(mv.global_id_writes()),
                                     )
                                 };
                                 uncached_expressions.insert(
@@ -3158,11 +3159,11 @@ impl Coordinator {
                         };
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(mv.global_id(), optimized_plan);
-                    catalog.set_physical_plan(mv.global_id(), physical_plan);
-                    catalog.set_dataflow_metainfo(mv.global_id(), metainfo);
+                    catalog.set_optimized_plan(mv.global_id_writes(), optimized_plan);
+                    catalog.set_physical_plan(mv.global_id_writes(), physical_plan);
+                    catalog.set_dataflow_metainfo(mv.global_id_writes(), metainfo);
 
-                    compute_instance.insert_collection(mv.global_id());
+                    compute_instance.insert_collection(mv.global_id_writes());
                 }
                 CatalogItem::ContinualTask(ct) => {
                     let compute_instance =
@@ -3242,7 +3243,7 @@ impl Coordinator {
         for entry in self.catalog.entries() {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
-                CatalogItem::MaterializedView(mv) => mv.global_id(),
+                CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
                 CatalogItem::ContinualTask(ct) => ct.global_id(),
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)

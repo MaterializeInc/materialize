@@ -210,7 +210,7 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc_for(id).typ().clone(), monotonic);
+                        dataflow.import_source(*id, table.desc_for(id).into_typ(), monotonic);
                     }
                     CatalogItem::Source(source) => {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
@@ -220,7 +220,7 @@ impl<'a> DataflowBuilder<'a> {
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
+                        dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);
