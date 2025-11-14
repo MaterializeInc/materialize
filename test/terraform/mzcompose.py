@@ -196,6 +196,12 @@ def get_tag(tag: str | None) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
 
+def get_operator_version() -> str:
+    with open(MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml") as f:
+        content = yaml.load(f, Loader=yaml.Loader)
+        return content["version"]
+
+
 def build_mz_debug_async(env: dict[str, str] | None = None) -> threading.Thread:
     def run():
         spawn.capture(
@@ -566,11 +572,7 @@ class State:
                 cur.execute("SELECT mz_version()")
                 version = cur.fetchall()[0][0]
                 assert version.startswith(tag.split("--")[0] + " ")
-                with open(
-                    MZ_ROOT / "misc" / "helm-charts" / "operator" / "Chart.yaml"
-                ) as f:
-                    content = yaml.load(f, Loader=yaml.Loader)
-                    helm_chart_version = content["version"]
+                helm_chart_version = get_operator_version()
                 assert version.endswith(
                     f", helm chart: {helm_chart_version})"
                 ), f"Actual version: {version}, expected to contain {helm_chart_version}"
@@ -685,7 +687,7 @@ class AWS(State):
 
         vars = [
             "-var",
-            "operator_version=v26.0.0-beta.1",
+            "operator_version={get_operator_version()}",
         ]
         if orchestratord_override:
             vars += [
@@ -1168,7 +1170,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         vars = [
             "-var",
-            "operator_version=v26.0.0-beta.1",
+            "operator_version={get_operator_version()}",
         ]
         if args.orchestratord_override:
             vars += [
@@ -1280,7 +1282,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
 
         vars = [
             "-var",
-            "operator_version=v26.0.0-beta.1",
+            "operator_version={get_operator_version()}",
         ]
         if args.orchestratord_override:
             vars += [
