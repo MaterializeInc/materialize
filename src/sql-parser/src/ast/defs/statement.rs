@@ -3428,6 +3428,9 @@ pub enum ShowObjectType<T: AstInfo> {
         in_cluster: Option<T::ClusterName>,
     },
     NetworkPolicy,
+    Replacement {
+        in_cluster: Option<T::ClusterName>,
+    },
 }
 /// `SHOW <object>S`
 ///
@@ -3471,6 +3474,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::RoleMembership { .. } => "ROLE MEMBERSHIP",
             ShowObjectType::ContinualTask { .. } => "CONTINUAL TASKS",
             ShowObjectType::NetworkPolicy => "NETWORK POLICIES",
+            ShowObjectType::Replacement { .. } => "REPLACEMENTS",
         });
 
         if let ShowObjectType::Index { on_object, .. } = &self.object_type {
@@ -3496,7 +3500,8 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
             | ShowObjectType::Source { in_cluster }
-            | ShowObjectType::ContinualTask { in_cluster } => {
+            | ShowObjectType::ContinualTask { in_cluster }
+            | ShowObjectType::Replacement { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
                     f.write_node(cluster);
@@ -4225,6 +4230,7 @@ pub enum ObjectType {
     Subsource,
     ContinualTask,
     NetworkPolicy,
+    Replacement,
 }
 
 impl ObjectType {
@@ -4241,7 +4247,8 @@ impl ObjectType {
             | ObjectType::Connection
             | ObjectType::Func
             | ObjectType::Subsource
-            | ObjectType::ContinualTask => true,
+            | ObjectType::ContinualTask
+            | ObjectType::Replacement => true,
             ObjectType::Database
             | ObjectType::Schema
             | ObjectType::Cluster
@@ -4273,6 +4280,7 @@ impl AstDisplay for ObjectType {
             ObjectType::Subsource => "SUBSOURCE",
             ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::Replacement => "REPLACEMENT",
         })
     }
 }

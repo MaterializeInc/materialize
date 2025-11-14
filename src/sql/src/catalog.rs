@@ -895,6 +895,8 @@ pub enum CatalogItemType {
     Connection,
     /// A continual task.
     ContinualTask,
+    /// A replacement materialized view.
+    ReplacementMaterializedView,
 }
 
 impl CatalogItemType {
@@ -929,6 +931,8 @@ impl CatalogItemType {
             CatalogItemType::Secret => false,
             CatalogItemType::Connection => false,
             CatalogItemType::ContinualTask => true,
+            // TODO(alter-mv): Determine if replacement materialized views should conflict with types.
+            CatalogItemType::ReplacementMaterializedView => false,
         }
     }
 }
@@ -947,6 +951,9 @@ impl fmt::Display for CatalogItemType {
             CatalogItemType::Secret => f.write_str("secret"),
             CatalogItemType::Connection => f.write_str("connection"),
             CatalogItemType::ContinualTask => f.write_str("continual task"),
+            CatalogItemType::ReplacementMaterializedView => {
+                f.write_str("replacement materialized view")
+            }
         }
     }
 }
@@ -965,6 +972,7 @@ impl From<CatalogItemType> for ObjectType {
             CatalogItemType::Secret => ObjectType::Secret,
             CatalogItemType::Connection => ObjectType::Connection,
             CatalogItemType::ContinualTask => ObjectType::ContinualTask,
+            CatalogItemType::ReplacementMaterializedView => ObjectType::ReplacementMaterializedView,
         }
     }
 }
@@ -983,6 +991,9 @@ impl From<CatalogItemType> for mz_audit_log::ObjectType {
             CatalogItemType::Secret => mz_audit_log::ObjectType::Secret,
             CatalogItemType::Connection => mz_audit_log::ObjectType::Connection,
             CatalogItemType::ContinualTask => mz_audit_log::ObjectType::ContinualTask,
+            CatalogItemType::ReplacementMaterializedView => {
+                mz_audit_log::ObjectType::ReplacementMaterializedView
+            }
         }
     }
 }
@@ -1518,6 +1529,7 @@ pub enum ObjectType {
     Func,
     ContinualTask,
     NetworkPolicy,
+    ReplacementMaterializedView,
 }
 
 impl ObjectType {
@@ -1541,6 +1553,8 @@ impl ObjectType {
             | ObjectType::ClusterReplica
             | ObjectType::Role
             | ObjectType::NetworkPolicy => false,
+            // TODO(alter-mv): Determine if replacement MVs should be treated as relations.
+            ObjectType::ReplacementMaterializedView => false,
         }
     }
 }
@@ -1566,6 +1580,8 @@ impl From<mz_sql_parser::ast::ObjectType> for ObjectType {
             mz_sql_parser::ast::ObjectType::Func => ObjectType::Func,
             mz_sql_parser::ast::ObjectType::ContinualTask => ObjectType::ContinualTask,
             mz_sql_parser::ast::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            // TODO(alter-mv): If we want to replace other objects, this needs to distinguish them.
+            mz_sql_parser::ast::ObjectType::Replacement => ObjectType::ReplacementMaterializedView,
         }
     }
 }
@@ -1590,6 +1606,9 @@ impl From<CommentObjectId> for ObjectType {
             CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
             CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
             CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+            CommentObjectId::ReplacementMaterializedView(_) => {
+                ObjectType::ReplacementMaterializedView
+            }
         }
     }
 }
@@ -1614,6 +1633,7 @@ impl Display for ObjectType {
             ObjectType::Func => "FUNCTION",
             ObjectType::ContinualTask => "CONTINUAL TASK",
             ObjectType::NetworkPolicy => "NETWORK POLICY",
+            ObjectType::ReplacementMaterializedView => "REPLACEMENT MATERIALIZED VIEW",
         })
     }
 }

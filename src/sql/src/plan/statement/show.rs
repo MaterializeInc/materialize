@@ -429,6 +429,9 @@ pub fn show_objects<'a>(
             assert_none!(from, "parser should reject from");
             show_network_policies(scx, filter)
         }
+        ShowObjectType::Replacement { in_cluster: _ } => {
+            sql_bail!("SHOW REPLACEMENTS is not yet implemented");
+        }
     }
 }
 
@@ -719,7 +722,9 @@ pub fn show_columns<'a>(
         | CatalogItemType::Table
         | CatalogItemType::View
         | CatalogItemType::MaterializedView
-        | CatalogItemType::ContinualTask => (),
+        | CatalogItemType::ContinualTask
+        // TODO(alter-mv): Decide if we support SHOW COLUMNS on replacement MVs.
+        | CatalogItemType::ReplacementMaterializedView => (),
         ty @ CatalogItemType::Connection
         | ty @ CatalogItemType::Index
         | ty @ CatalogItemType::Func

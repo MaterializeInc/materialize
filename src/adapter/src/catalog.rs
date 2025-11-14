@@ -396,7 +396,8 @@ impl Catalog {
                     | CatalogItemType::Func
                     | CatalogItemType::Secret
                     | CatalogItemType::Connection
-                    | CatalogItemType::ContinualTask => {
+                    | CatalogItemType::ContinualTask
+                    | CatalogItemType::ReplacementMaterializedView => {
                         dependencies.extend(global_ids);
                     }
                     CatalogItemType::View => {
@@ -1553,6 +1554,7 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::ClusterReplica(_) => ObjectType::ClusterReplica,
         CommentObjectId::ContinualTask(_) => ObjectType::ContinualTask,
         CommentObjectId::NetworkPolicy(_) => ObjectType::NetworkPolicy,
+        CommentObjectId::ReplacementMaterializedView(_) => ObjectType::ReplacementMaterializedView,
     }
 }
 
@@ -1584,6 +1586,9 @@ pub(crate) fn system_object_type_to_audit_object_type(
             mz_sql::catalog::ObjectType::Func => ObjectType::Func,
             mz_sql::catalog::ObjectType::ContinualTask => ObjectType::ContinualTask,
             mz_sql::catalog::ObjectType::NetworkPolicy => ObjectType::NetworkPolicy,
+            mz_sql::catalog::ObjectType::ReplacementMaterializedView => {
+                ObjectType::ReplacementMaterializedView
+            }
         },
         SystemObjectType::System => ObjectType::System,
     }

@@ -3031,7 +3031,11 @@ impl Coordinator {
                         }
                     }
                     match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView | ContinualTask) => {
+                        typ @ (Func
+                        | View
+                        | MaterializedView
+                        | ContinualTask
+                        | ReplacementMaterializedView) => {
                             ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
