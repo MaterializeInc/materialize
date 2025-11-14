@@ -1,5 +1,5 @@
 ---
-title: "Upgrade on Azure"
+title: "Upgrade on Azure (Terraform)"
 description: "Procedure to upgrade your Materialize operator and instances running on Azure"
 menu:
   main:
@@ -7,6 +7,18 @@ menu:
     identifier: "upgrade-on-azure"
     weight: 10
 ---
+
+{{< annotation type="Disambiguation" >}}
+
+This page is for upgrading from v25.2.13 or later using Terraform. For upgrading
+from v25.2.12 or earlier, see:
+
+- For upgrade via Terraform, see {{< include-md
+file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md" >}}.
+
+- For upgrade via Helm, see [Upgrade from v25.2.12 or earlier(Non-Terraform)](/installation/install-on-azure/upgrade-to-swap/).
+
+{{< /annotation >}}
 
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on Azure Kubernetes Service (AKS).

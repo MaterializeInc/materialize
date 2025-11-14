@@ -12,6 +12,13 @@ menu:
 disable_list: true
 ---
 
+{{< annotation type="Disambiguation" >}}
+
+This page is for upgrading from v25.2.13 or later. For upgrading
+from v25.2.12 or earlier, see [Upgrade from v25.2.12 or earlier](/installation/install-on-local-kind/upgrade-to-swap/).
+
+{{< /annotation >}}
+
 {{% self-managed/materialize-components-sentence %}}
 
 The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster

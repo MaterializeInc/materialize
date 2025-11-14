@@ -1,28 +1,21 @@
----
-title: "Guide: Node preparation for swap and upgrading to v26"
-description: "Upgrade procedure when upgrading to v26 which has swap enabled by default."
-menu:
-  main:
-    parent: "installation"
-    weight: 69
----
+Starting in v26.0.0, Self-Managed Materialize enables swap by default. Swap
+allows for infrequently accessed data to be moved from memory to disk. Enabling
+swap reduces the memory required to operate Materialize and improves cost
+efficiency.
 
-Swap allows for infrequently accessed data to be moved from memory to disk. Enabling swap reduces the memory required to operate Materialize and improves cost efficiency. Upgrades to v26 and later have swap enabled by default.
-
-## Upgrading to v26 with swap requires node preparation
-We've added new labels to the node selectors for clusterd pods to enable smooth upgrades. As a result, if you are running v25.2.12 or earlier, your existing nodes will not match these selectors and won't be selected to run the pods. Before upgrading to v26, you must prepare your nodes by adding the required labels.
-
-## Preparing for the upgrade using terraform
-v0.6.1 of the Materialize terraform modules can handle much of the preparation work for you. If using our terraform modules, please follow the instructions provided in the respective upgrade notes:
-- [AWS](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061)
-- [GCP](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061)
-- [Azure](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061)
+To facilitate upgrades, Self-Managed Materialize added new labels to the node
+selectors for `clusterd` pods. To upgrade via Helm from v25.2.12 or earlier, you
+must prepare your nodes with the new labels. This guide provides instructions
+for upgrading from v25.2.12 if you are not using Terraform.
 
 ## Preparing for the upgrade without terraform
 
-1. Label existing scratchfs/lgalloc node groups
+1. Label existing scratchfs/lgalloc node groups.
 
-   If using lgalloc on scratchfs volumes, you must add the additional `"materialize.cloud/scratch-fs": "true"` label to your existing node groups and nodes running Materialize workloads.
+   If using lgalloc on scratchfs volumes, add the additional
+   `"materialize.cloud/scratch-fs": "true"` label to your existing node groups
+   and nodes running Materialize workloads.
+
 
    Adding this label to the node group (or nodepool) configuration will apply the label to newly spawned nodes, but depending on your cloud provider may not apply the label to existing nodes.
 
@@ -115,4 +108,5 @@ v0.6.1 of the Materialize terraform modules can handle much of the preparation w
     If you no longer have anything running on the old scratchfs/lgalloc nodes, you may delete their node group and the disk-setup-scratchfs daemonset.
 
 ## How to disable swap
-If you wish to opt out of swap and retain the old behavior, you may set `operator.clusters.swap_enabled: false` in your helm values.
+
+If you wish to opt out of swap and retain the old behavior, you may set `operator.clusters.swap_enabled: false` in your Helm values.
