@@ -1,12 +1,37 @@
 - name: "create-source"
   description: |
-    Once you have created the connection, you can use the connection in the
-    [`CREATE SOURCE`](/sql/create-source/) command to connect to your PostgreSQL
-    instance and start ingesting data from the publication you created
-    [earlier](#2-create-a-publication-and-a-replication-user):
+
 
     {{< tabs >}}
-    {{< tab "Current Syntax">}}
+
+    {{< tab "Legacy Syntax">}}
+
+    Once you have created the connection, you can use the connection in the
+    [`CREATE SOURCE`](/sql/create-source/postgres/) command to connect to your
+    PostgreSQL instance and start ingesting data from the publication you
+    created [earlier](#2-create-a-publication-and-a-replication-user):
+
+    ```mzsql
+    CREATE SOURCE mz_source
+      IN CLUSTER ingest_postgres
+      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
+      FOR ALL TABLES;
+    ```
+
+    - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
+    - To ingest data from specific schemas or tables, use the `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
+    - To handle [unsupported data types](#supported-types), use the `TEXT
+    COLUMNS` or `EXCLUDE COLUMNS` options in the `CREATE SOURCE` statement.
+
+    {{< /tab >}}
+    {{< tab "New Syntax">}}
+
+    Once you have created the connection, you can:
+    - use the connection in the [`CREATE SOURCE`](/sql/create-source/postgres/)
+    command to connect to your PostgreSQL instance and
+    - use the source in the [`CREATE TABLE`](/sql/create-table/) to create the
+    tables in Materialize and start ingesting data from the publication you
+    created [earlier](#2-create-a-publication-and-a-replication-user):
 
     ```mzsql
     -- Step 1: Create the source
@@ -19,37 +44,13 @@
     CREATE TABLE table2 FROM SOURCE mz_source (REFERENCE table2);
     ```
 
-    {{< /tab >}}
-    {{< tab "Legacy Syntax">}}
-
-    ```mzsql
-    CREATE SOURCE mz_source
-      IN CLUSTER ingest_postgres
-      FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source')
-      FOR ALL TABLES;
-    ```
-
-    {{< warning >}}
-    This syntax is deprecated and may be removed in a future version. Please use the current syntax for new implementations.
-    {{< /warning >}}
+    - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
+    - After creating the source, you can query `mz_internal.mz_source_references` to see available tables in the publication.
+    - Create individual tables using [`CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)`](/sql/create-table/).
+    - To handle [unsupported data types](#supported-types), use `WITH (TEXT COLUMNS = [<column>])` or `WITH (EXCLUDE COLUMNS = [<column>])` in the [`CREATE TABLE`](/sql/create-table/) statement.
 
     {{< /tab >}}
     {{< /tabs >}}
-
-- name: "create-source-options"
-  description: |
-    **Current Syntax:**
-
-    - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
-    - After creating the source, you can query `mz_internal.mz_source_references` to see available tables in the publication.
-    - Create individual tables using `CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)`.
-    - To handle [unsupported data types](#supported-types), use `WITH (TEXT COLUMNS = [<column>])` or `WITH (EXCLUDE COLUMNS = [<column>])` in the `CREATE TABLE` statement.
-
-    **Legacy Syntax:**
-
-    - By default, the source will be created in the active cluster; to use a different cluster, use the `IN CLUSTER` clause.
-    - To ingest data from specific schemas or tables, use the `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
-    - To handle [unsupported data types](#supported-types), use the `TEXT COLUMNS` or `EXCLUDE COLUMNS` options in the `CREATE SOURCE` statement.
 
 - name: "schema-changes"
   description: |
