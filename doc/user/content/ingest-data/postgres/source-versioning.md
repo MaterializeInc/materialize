@@ -83,7 +83,7 @@ Now, you can create a new materialized view which incorporates the new column:
 CREATE MATERIALIZED VIEW v2.matview AS
     SELECT SUM(A)
     FROM v2.T
-    WHERE B = true
+    WHERE B = true;
 ```
 
 ## Drop a column
