@@ -24,6 +24,7 @@ import multiprocessing
 import os
 import platform
 import re
+import selectors
 import shutil
 import stat
 import subprocess
@@ -46,6 +47,78 @@ from requests.auth import HTTPBasicAuth
 from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
+
+
+class RustICE(Exception):
+    pass
+
+
+def run_and_detect_rust_ice(
+    cmd: list[str], cwd: str | Path
+) -> subprocess.CompletedProcess:
+    """This function is complex since it prints out each line immediately to
+    stdout/stderr, but still records them at the same time so that we can scan
+    for the Rust ICE."""
+    stdout_result = ""
+    stderr_result = ""
+    p = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+
+    sel = selectors.DefaultSelector()
+    sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
+    sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+    assert p.stdout is not None
+    assert p.stderr is not None
+    os.set_blocking(p.stdout.fileno(), False)
+    os.set_blocking(p.stderr.fileno(), False)
+    while True:
+        for key, val in sel.select():
+            output = ""
+            while True:
+                new_output = key.fileobj.read(1024)  # type: ignore
+                if not new_output:
+                    break
+                output += new_output
+            if not output:
+                continue
+            if key.fileobj is p.stdout:
+                print(
+                    output,
+                    end="",
+                    flush=True,
+                )
+                stdout_result += output
+            else:
+                print(
+                    output,
+                    end="",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                stderr_result += output
+        p.wait()
+        retcode = p.poll()
+        assert retcode is not None
+        if retcode:
+            panic_msg = (
+                "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
+            )
+            if panic_msg in stdout_result or panic_msg in stderr_result:
+                raise RustICE()
+
+            raise subprocess.CalledProcessError(
+                retcode, p.args, output=stdout_result, stderr=stderr_result
+            )
+        return subprocess.CompletedProcess(
+            p.args, retcode, stdout_result, stderr_result
+        )
+
+    assert False, "unreachable"
 
 
 class Fingerprint(bytes):
@@ -470,7 +543,7 @@ class CargoBuild(CargoPreImage):
 
         cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
 
-        spawn.runv(cargo_build, cwd=rd.root)
+        run_and_detect_rust_ice(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly
