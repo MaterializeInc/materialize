@@ -30,6 +30,12 @@ statement ok
 CREATE INDEX objects_idx ON objects(schema, object)
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_global_ids' ORDER BY position
+----
+1  id  text
+2  global_id  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_recent_activity_log' ORDER BY position
 ----
 1  execution_id  uuid
@@ -729,6 +735,7 @@ mz_notices
 mz_notices_redacted
 mz_object_dependencies
 mz_object_fully_qualified_names
+mz_object_global_ids
 mz_object_history
 mz_object_lifetimes
 mz_object_oid_alias
