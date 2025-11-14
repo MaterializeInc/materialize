@@ -138,7 +138,7 @@ impl StorageMetrics {
         source::SourceMetrics::new(&self.source_defs.source_defs, id, worker_id)
     }
 
-    /// Get a `PgMetrics` for the given id.
+    /// Get a `PgSourceMetrics` for the given id.
     pub(crate) fn get_postgres_source_metrics(
         &self,
         id: GlobalId,
@@ -152,6 +152,19 @@ impl StorageMetrics {
         id: GlobalId,
     ) -> source::mysql::MySqlSourceMetrics {
         source::mysql::MySqlSourceMetrics::new(&self.source_defs.mysql_defs, id)
+    }
+
+    /// Get a `SqlServerSourceMetrics` for the given id.
+    pub(crate) fn get_sql_server_source_metrics(
+        &self,
+        source_id: GlobalId,
+        worker_id: usize,
+    ) -> source::sql_server::SqlServerSourceMetrics {
+        source::sql_server::SqlServerSourceMetrics::new(
+            &self.source_defs.sql_server_defs,
+            source_id,
+            worker_id,
+        )
     }
 
     /// Get an `OffsetCommitMetrics` for the given id.

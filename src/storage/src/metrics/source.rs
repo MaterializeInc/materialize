@@ -25,6 +25,7 @@ use prometheus::core::{AtomicI64, AtomicU64};
 pub mod kafka;
 pub mod mysql;
 pub mod postgres;
+pub mod sql_server;
 
 /// Definitions for general metrics about sources that are not specific to the source type.
 ///
@@ -225,6 +226,7 @@ pub(crate) struct SourceMetricDefs {
     pub(crate) postgres_defs: postgres::PgSourceMetricDefs,
     pub(crate) mysql_defs: mysql::MySqlSourceMetricDefs,
     pub(crate) kafka_source_defs: kafka::KafkaSourceMetricDefs,
+    pub(crate) sql_server_defs: sql_server::SqlServerSourceMetricDefs,
     /// A cluster-wide counter shared across all sources.
     pub(crate) bytes_read: IntCounter,
 }
@@ -236,6 +238,7 @@ impl SourceMetricDefs {
             postgres_defs: postgres::PgSourceMetricDefs::register_with(registry),
             mysql_defs: mysql::MySqlSourceMetricDefs::register_with(registry),
             kafka_source_defs: kafka::KafkaSourceMetricDefs::register_with(registry),
+            sql_server_defs: sql_server::SqlServerSourceMetricDefs::register_with(registry),
             bytes_read: registry.register(metric!(
                 name: "mz_bytes_read_total",
                 help: "Count of bytes read from sources",
