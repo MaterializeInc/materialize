@@ -687,7 +687,7 @@ class AWS(State):
 
         vars = [
             "-var",
-            "operator_version={get_operator_version()}",
+            f"operator_version={get_operator_version()}",
         ]
         if orchestratord_override:
             vars += [
@@ -1170,7 +1170,7 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
 
         vars = [
             "-var",
-            "operator_version={get_operator_version()}",
+            f"operator_version={get_operator_version()}",
         ]
         if args.orchestratord_override:
             vars += [
@@ -1282,7 +1282,7 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
 
         vars = [
             "-var",
-            "operator_version={get_operator_version()}",
+            f"operator_version={get_operator_version()}",
         ]
         if args.orchestratord_override:
             vars += [
