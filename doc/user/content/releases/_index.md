@@ -27,11 +27,11 @@ instructions for your deployment:
   - [Upgrade on Kind (via
     Helm)](/installation/install-on-local-kind/upgrade-on-local-kind/)
   - [Upgrade on AWS (via
-    Terraform)](/installation/install-on-aws/upgrade-on-aws/)
+    Terraform)](/installation/install-on-aws/legacy-terraform-provider/upgrade/)
   - [Upgrade on Azure (via
-    Terraform)](/installation/install-on-azure/upgrade-on-azure/)
+    Terraform)](/installation/install-on-azure/legacy-terraform-provider/upgrade/)
   - [Upgrade on GCP (via
-    Terraform)](/installation/install-on-gcp/upgrade-on-gcp/)
+    Terraform)](/installation/install-on-gcp/legacy-terraform-provider/upgrade/)
 
 - To upgrade from v25.2.12 or earlier, you must prepare your nodes by adding the
 required labels. For detailed instructions, see:
