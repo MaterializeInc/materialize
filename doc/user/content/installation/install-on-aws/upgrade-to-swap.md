@@ -1,5 +1,5 @@
 ---
-title: "Upgrade from v25.2.12 or earlier (Via Helm)"
+title: "Upgrade from v25.2.12 or earlier (using Helm)"
 description: "Upgrade procedure when upgrading from v25.2.12 or earlier without swap to v26.0 with swap enabled if not using Terraform."
 menu:
   main:
