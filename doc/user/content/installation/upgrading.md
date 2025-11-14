@@ -172,8 +172,9 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 - Swap is now enabled by default. Swap reduces the memory required to
   operate Materialize and improves cost efficiency. Upgrading to `v26.0`
   requires some preparation to ensure kubernetes nodes are labeled
-  and configured correctly. Please refer to our guide on [swap node
-  preparation](/installation/upgrade-to-swap).
+  and configured correctly. Please refer to our guides:
+
+  {{< yaml-table data="self_managed/enable_swap_upgrade_guides" >}}
 
 
 #### Upgrading between minor versions less than `v26`
