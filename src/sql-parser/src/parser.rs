@@ -8141,6 +8141,13 @@ impl<'a> Parser<'a> {
                     redacted,
                 },
             ))
+        } else if self.parse_keywords(&[CREATE, REPLACEMENT]) {
+            Ok(ShowStatement::ShowCreateReplacement(
+                ShowCreateReplacementStatement {
+                    replacement_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, SOURCE]) {
             Ok(ShowStatement::ShowCreateSource(ShowCreateSourceStatement {
                 source_name: self.parse_raw_name()?,
@@ -9763,6 +9770,7 @@ impl<'a> Parser<'a> {
                 SUBSOURCES,
                 CONTINUAL,
                 NETWORK,
+                REPLACEMENTS,
             ])? {
                 TABLES => ObjectType::Table,
                 VIEWS => ObjectType::View,
@@ -9809,6 +9817,7 @@ impl<'a> Parser<'a> {
                         return None;
                     }
                 }
+                REPLACEMENTS => ObjectType::Replacement,
                 _ => unreachable!(),
             },
         )

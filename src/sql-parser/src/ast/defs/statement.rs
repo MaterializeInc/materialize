@@ -3698,6 +3698,25 @@ impl<T: AstInfo> AstDisplay for ShowCreateMaterializedViewStatement<T> {
 }
 impl_display_t!(ShowCreateMaterializedViewStatement);
 
+/// `SHOW [REDACTED] CREATE REPLACEMENT <name>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateReplacementStatement<T: AstInfo> {
+    pub replacement_name: T::ItemName,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateReplacementStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE REPLACEMENT ");
+        f.write_node(&self.replacement_name);
+    }
+}
+impl_display_t!(ShowCreateReplacementStatement);
+
 /// `SHOW [REDACTED] CREATE SOURCE <source>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ShowCreateSourceStatement<T: AstInfo> {
@@ -5212,6 +5231,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowColumns(ShowColumnsStatement<T>),
     ShowCreateView(ShowCreateViewStatement<T>),
     ShowCreateMaterializedView(ShowCreateMaterializedViewStatement<T>),
+    ShowCreateReplacement(ShowCreateReplacementStatement<T>),
     ShowCreateSource(ShowCreateSourceStatement<T>),
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
@@ -5230,6 +5250,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowColumns(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateView(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateMaterializedView(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateReplacement(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateSource(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateTable(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),

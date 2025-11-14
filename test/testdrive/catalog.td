@@ -679,6 +679,7 @@ mz_show_my_schema_privileges             ""
 mz_show_my_system_privileges             ""
 mz_show_network_policies                 ""
 mz_show_object_privileges                ""
+mz_show_replacements                     ""
 mz_show_role_members                     ""
 mz_show_roles                            ""
 mz_show_schema_privileges                ""
@@ -806,7 +807,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-64
+65
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'

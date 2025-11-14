@@ -211,6 +211,9 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::describe_show_create_materialized_view(&scx, stmt)?
         }
+        Statement::Show(ShowStatement::ShowCreateReplacement(stmt)) => {
+            show::describe_show_create_replacement(&scx, stmt)?
+        }
         Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
             show::describe_show_create_type(&scx, stmt)?
         }
@@ -422,6 +425,9 @@ pub fn plan(
         }
         Statement::Show(ShowStatement::ShowCreateMaterializedView(stmt)) => {
             show::plan_show_create_materialized_view(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateReplacement(stmt)) => {
+            show::plan_show_create_replacement(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateType(stmt)) => {
             show::plan_show_create_type(scx, stmt).map(Plan::ShowCreate)
@@ -1139,6 +1145,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateMaterializedView(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateReplacement(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateType(_)) => Show,
             Statement::Show(ShowStatement::ShowObjects(_)) => Show,
 

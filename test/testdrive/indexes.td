@@ -358,6 +358,7 @@ mz_show_connections_ind                                     mz_show_connections 
 mz_show_databases_ind                                       mz_show_databases                            mz_catalog_server    {name}                                      ""
 mz_show_indexes_ind                                         mz_show_indexes                              mz_catalog_server    {schema_id}                                 ""
 mz_show_materialized_views_ind                              mz_show_materialized_views                   mz_catalog_server    {schema_id}                                 ""
+mz_show_replacements_ind                                    mz_show_replacements                         mz_catalog_server    {schema_id}                                 ""
 mz_show_roles_ind                                           mz_show_roles                                mz_catalog_server    {name}                                      ""
 mz_show_schemas_ind                                         mz_show_schemas                              mz_catalog_server    {database_id}                               ""
 mz_show_secrets_ind                                         mz_show_secrets                              mz_catalog_server    {schema_id}                                 ""

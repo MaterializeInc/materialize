@@ -11199,6 +11199,41 @@ FROM
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_SHOW_REPLACEMENTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_replacements",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_REPLACEMENTS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("replaces", SqlScalarType::String.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("comment", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'replacement' AND object_sub_id IS NULL
+)
+SELECT
+    mviews.id as id,
+    mviews.name,
+    mviews.replaces,
+    clusters.name AS cluster,
+    schema_id,
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
+FROM
+    mz_internal.mz_replacement_materialized_views AS mviews
+    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
+    LEFT JOIN comments ON mviews.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_SHOW_INDEXES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_indexes",
     schema: MZ_INTERNAL_SCHEMA,
@@ -12811,6 +12846,15 @@ ON mz_internal.mz_show_materialized_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SHOW_REPLACEMENTS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_replacements_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_REPLACEMENTS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_show_replacements (schema_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -13978,6 +14022,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
+        Builtin::View(&MZ_SHOW_REPLACEMENTS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CONTINUAL_TASKS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
@@ -14128,6 +14173,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_SHOW_SOURCES_IND),
         Builtin::Index(&MZ_SHOW_VIEWS_IND),
         Builtin::Index(&MZ_SHOW_MATERIALIZED_VIEWS_IND),
+        Builtin::Index(&MZ_SHOW_REPLACEMENTS_IND),
         Builtin::Index(&MZ_SHOW_SINKS_IND),
         Builtin::Index(&MZ_SHOW_TYPES_IND),
         Builtin::Index(&MZ_SHOW_ALL_OBJECTS_IND),

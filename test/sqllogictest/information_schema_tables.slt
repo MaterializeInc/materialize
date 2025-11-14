@@ -609,6 +609,10 @@ mz_show_object_privileges
 VIEW
 materialize
 mz_internal
+mz_show_replacements
+VIEW
+materialize
+mz_internal
 mz_show_role_members
 VIEW
 materialize

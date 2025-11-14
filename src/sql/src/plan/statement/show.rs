@@ -23,8 +23,8 @@ use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 use mz_sql_parser::ast::{
     CreateSubsourceOptionName, ExternalReferenceExport, ExternalReferences, ObjectType,
     ShowCreateClusterStatement, ShowCreateConnectionStatement, ShowCreateMaterializedViewStatement,
-    ShowCreateTypeStatement, ShowObjectType, SqlServerConfigOptionName, SystemObjectType,
-    UnresolvedItemName, WithOptionValue,
+    ShowCreateReplacementStatement, ShowCreateTypeStatement, ShowObjectType,
+    SqlServerConfigOptionName, SystemObjectType, UnresolvedItemName, WithOptionValue,
 };
 use mz_sql_pretty::PrettyConfig;
 use query::QueryContext;
@@ -93,6 +93,34 @@ pub fn plan_show_create_materialized_view(
         scx,
         &materialized_view_name,
         CatalogItemType::MaterializedView,
+        redacted,
+    )
+}
+
+pub fn describe_show_create_replacement(
+    _: &StatementContext,
+    _: ShowCreateReplacementStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_replacement(
+    scx: &StatementContext,
+    ShowCreateReplacementStatement {
+        replacement_name,
+        redacted,
+    }: ShowCreateReplacementStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    // TODO(alter-mv): distinguish between replacement types
+    plan_show_create_item(
+        scx,
+        &replacement_name,
+        CatalogItemType::ReplacementMaterializedView,
         redacted,
     )
 }
@@ -429,8 +457,8 @@ pub fn show_objects<'a>(
             assert_none!(from, "parser should reject from");
             show_network_policies(scx, filter)
         }
-        ShowObjectType::Replacement { in_cluster: _ } => {
-            sql_bail!("SHOW REPLACEMENTS is not yet implemented");
+        ShowObjectType::Replacement { in_cluster } => {
+            show_replacements(scx, from, in_cluster, filter)
         }
     }
 }
@@ -581,6 +609,35 @@ fn show_materialized_views<'a>(
     let query = format!(
         "SELECT name, cluster, comment
         FROM mz_internal.mz_show_materialized_views
+        WHERE {where_clause}"
+    );
+
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        Some(&["name", "cluster", "comment"]),
+    )
+}
+
+fn show_replacements<'a>(
+    scx: &'a StatementContext<'a>,
+    from: Option<ResolvedSchemaName>,
+    in_cluster: Option<ResolvedClusterName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+    let mut where_clause = format!("schema_id = '{schema_spec}'");
+
+    if let Some(cluster) = in_cluster {
+        write!(where_clause, " AND cluster_id = '{}'", cluster.id)
+            .expect("write on string cannot fail");
+    }
+
+    let query = format!(
+        "SELECT name, cluster, comment
+        FROM mz_internal.mz_show_replacements
         WHERE {where_clause}"
     );
 
