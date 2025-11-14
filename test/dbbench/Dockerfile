@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Build the dbbench Go binary from https://github.com/sjwiesman/dbbench
+# Build the dbbench Go binary from https://github.com/MaterializeInc/dbbench
 # We use the standard Materialize mzbuild base image.
 
 MZFROM ubuntu-base
@@ -27,10 +27,10 @@ ENV CGO_ENABLED=0
 
 # Pin to specific commit for reproducibility
 # TODO: Fork it under the MaterializeInc organization (like e.g. sqlsmith).
-ADD https://api.github.com/repos/sjwiesman/dbbench/git/commits/10b2a0b5159f06945646fa1179bda4be51fe02b4 version.json
+ADD https://api.github.com/repos/MaterializeInc/dbbench/git/commits/10b2a0b5159f06945646fa1179bda4be51fe02b4 version.json
 
 # Clone and build dbbench. Some forks place main under ./cmd/dbbench; handle both.
-RUN git clone https://github.com/sjwiesman/dbbench /workdir/dbbench \
+RUN git clone https://github.com/MaterializeInc/dbbench /workdir/dbbench \
     && cd /workdir/dbbench \
     && git checkout 10b2a0b5159f06945646fa1179bda4be51fe02b4 \
     && go mod download \
