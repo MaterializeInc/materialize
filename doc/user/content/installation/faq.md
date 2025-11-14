@@ -14,7 +14,7 @@ menu:
 Community edition license keys are valid for one year. Enterprise license
 keys will vary based on the terms of your contract.
 
-## How do I get a  license key?
+## How do I get a license key?
 
 {{< include-md file="shared-content/license-key-required.md" >}}
 
