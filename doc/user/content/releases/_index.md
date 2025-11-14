@@ -12,6 +12,33 @@ menu:
 
 ## Self-Managed v26.0.0
 
+### Swap support
+
+Starting in v26.0.0, Self-Managed Materialize enables swap by default. Swap
+allows for infrequently accessed data to be moved from memory to disk. Enabling
+swap reduces the memory required to operate Materialize and improves cost
+efficiency.
+
+To facilitate upgrades, Self-Managed Materialize added new labels to the node
+selectors for `clusterd` pods:
+
+- To upgrade from v25.2.13 or later, you can follow the standard upgrade
+instructions for your deployment:
+  - [Upgrade on Kind (via
+    Helm)](/installation/install-on-local-kind/upgrade-on-local-kind/)
+  - [Upgrade on AWS (via
+    Terraform)](/installation/install-on-aws/upgrade-on-aws/)
+  - [Upgrade on Azure (via
+    Terraform)](/installation/install-on-azure/upgrade-on-azure/)
+  - [Upgrade on GCP (via
+    Terraform)](/installation/install-on-gcp/upgrade-on-gcp/)
+
+- To upgrade from v25.2.12 or earlier, you must prepare your nodes by adding the
+required labels. For detailed instructions, see:
+
+  {{< yaml-table data="self_managed/enable_swap_upgrade_guides" >}}
+
+
 ### SASL/SCRAM-SHA-256 support
 
 Starting in v26.0.0, Self-Managed Materialize supports SASL/SCRAM-SHA-256
@@ -29,7 +56,6 @@ existing installation, run:
 ```bash
 kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
 ```
-
 
 ## See also
 
