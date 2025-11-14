@@ -57,7 +57,10 @@ use mz_repr::namespaces::{
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector};
+use mz_repr::{
+    CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    VersionedRelationDesc,
+};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
@@ -1300,6 +1303,12 @@ impl CatalogState {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
+                let collections = extra_versions
+                    .iter()
+                    .map(|(version, gid)| (*version, *gid))
+                    .chain([(RelationVersion::root(), global_id)].into_iter())
+                    .collect();
+
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -1347,6 +1356,7 @@ impl CatalogState {
                     typ.column_types[i].nullable = false;
                 }
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
+                let desc = VersionedRelationDesc::new(desc);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
 
@@ -1359,7 +1369,7 @@ impl CatalogState {
 
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
-                    global_id,
+                    collections,
                     raw_expr,
                     optimized_expr,
                     desc,

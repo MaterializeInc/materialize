@@ -1619,7 +1619,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
             let mut bindings = Vec::new();
             for (id, value, shadowed_val) in cte_bindings.into_iter() {
                 if let Some(cte) = qcx.ctes.remove(&id) {
-                    bindings.push((cte.name, id, value, cte.desc.typ().clone()));
+                    bindings.push((cte.name, id, value, cte.desc.into_typ()));
                 }
                 if let Some(shadowed_val) = shadowed_val {
                     qcx.ctes.insert(id, shadowed_val);
@@ -2025,8 +2025,8 @@ fn plan_set_expr(
             ) -> Result<(HirRelationExpr, Scope), PlanError> {
                 let rows = vec![plan.row.iter().collect::<Vec<_>>()];
                 let desc = desc.relation_desc.expect("must exist");
-                let expr = HirRelationExpr::constant(rows, desc.typ().clone());
                 let scope = Scope::from_source(None, desc.iter_names());
+                let expr = HirRelationExpr::constant(rows, desc.into_typ());
                 Ok((expr, scope))
             }
 

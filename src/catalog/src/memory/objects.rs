@@ -689,33 +689,10 @@ impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
     }
 
     fn global_id(&self) -> GlobalId {
-        match self.entry.item() {
-            CatalogItem::Source(source) => source.global_id,
-            CatalogItem::Log(log) => log.global_id,
-            CatalogItem::View(view) => view.global_id,
-            CatalogItem::MaterializedView(mv) => mv.global_id,
-            CatalogItem::Sink(sink) => sink.global_id,
-            CatalogItem::Index(index) => index.global_id,
-            CatalogItem::Type(ty) => ty.global_id,
-            CatalogItem::Func(func) => func.global_id,
-            CatalogItem::Secret(secret) => secret.global_id,
-            CatalogItem::Connection(conn) => conn.global_id,
-            CatalogItem::ContinualTask(ct) => ct.global_id,
-            CatalogItem::Table(table) => match self.version {
-                RelationVersionSelector::Latest => {
-                    let (_version, gid) = table
-                        .collections
-                        .last_key_value()
-                        .expect("at least one version");
-                    *gid
-                }
-                RelationVersionSelector::Specific(version) => table
-                    .collections
-                    .get(&version)
-                    .expect("catalog corruption, missing version!")
-                    .clone(),
-            },
-        }
+        self.entry
+            .item()
+            .global_id_for_version(self.version)
+            .expect("catalog corruption, missing version!")
     }
 }
 
@@ -922,11 +899,11 @@ impl Table {
 
     /// Returns the latest [`GlobalId`] for this [`Table`] which should be used for writes.
     pub fn global_id_writes(&self) -> GlobalId {
-        self.collections
+        *self
+            .collections
             .last_key_value()
             .expect("at least one version of a table")
             .1
-            .clone()
     }
 
     /// Returns all of the collections and their [`RelationDesc`]s associated with this [`Table`].
@@ -1399,14 +1376,15 @@ impl View {
 pub struct MaterializedView {
     /// Parse-able SQL that defines this materialized view.
     pub create_sql: String,
-    /// [`GlobalId`] used to reference this materialized view from outside the catalog.
-    pub global_id: GlobalId,
+    /// Versions of this materialized view, and the [`GlobalId`]s that refer to them.
+    #[serde(serialize_with = "mz_ore::serde::map_key_to_string")]
+    pub collections: BTreeMap<RelationVersion, GlobalId>,
     /// Raw high-level expression from planning, derived from the `create_sql`.
     pub raw_expr: Arc<HirRelationExpr>,
     /// Optimized mid-level expression, derived from the `raw_expr`.
     pub optimized_expr: Arc<OptimizedMirRelationExpr>,
-    /// Columns for this materialized view.
-    pub desc: RelationDesc,
+    /// [`VersionedRelationDesc`] of this materialized view, derived from the `create_sql`.
+    pub desc: VersionedRelationDesc,
     /// Other catalog items that this materialized view references, determined at name resolution.
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
@@ -1429,9 +1407,42 @@ pub struct MaterializedView {
 }
 
 impl MaterializedView {
-    /// The single [`GlobalId`] this [`MaterializedView`] can be referenced by.
-    pub fn global_id(&self) -> GlobalId {
-        self.global_id
+    /// Returns all [`GlobalId`]s that this [`MaterializedView`] can be referenced by.
+    pub fn global_ids(&self) -> impl Iterator<Item = GlobalId> + '_ {
+        self.collections.values().copied()
+    }
+
+    /// The latest [`GlobalId`] for this [`MaterializedView`] which represents the writing
+    /// version.
+    pub fn global_id_writes(&self) -> GlobalId {
+        *self
+            .collections
+            .last_key_value()
+            .expect("at least one version of a materialized view")
+            .1
+    }
+
+    /// Returns all collections and their [`RelationDesc`]s associated with this [`MaterializedView`].
+    pub fn collection_descs(
+        &self,
+    ) -> impl Iterator<Item = (GlobalId, RelationVersion, RelationDesc)> + '_ {
+        self.collections.iter().map(|(version, gid)| {
+            let desc = self
+                .desc
+                .at_version(RelationVersionSelector::Specific(*version));
+            (*gid, *version, desc)
+        })
+    }
+
+    /// Returns the [`RelationDesc`] for a specific [`GlobalId`].
+    pub fn desc_for(&self, id: &GlobalId) -> RelationDesc {
+        let (version, _gid) = self
+            .collections
+            .iter()
+            .find(|(_version, gid)| *gid == id)
+            .expect("GlobalId to exist");
+        self.desc
+            .at_version(RelationVersionSelector::Specific(*version))
     }
 }
 
@@ -1619,18 +1630,18 @@ impl CatalogItem {
     /// Returns a string indicating the type of this catalog entry.
     pub fn typ(&self) -> mz_sql::catalog::CatalogItemType {
         match self {
-            CatalogItem::Table(_) => mz_sql::catalog::CatalogItemType::Table,
-            CatalogItem::Source(_) => mz_sql::catalog::CatalogItemType::Source,
-            CatalogItem::Log(_) => mz_sql::catalog::CatalogItemType::Source,
-            CatalogItem::Sink(_) => mz_sql::catalog::CatalogItemType::Sink,
-            CatalogItem::View(_) => mz_sql::catalog::CatalogItemType::View,
-            CatalogItem::MaterializedView(_) => mz_sql::catalog::CatalogItemType::MaterializedView,
-            CatalogItem::Index(_) => mz_sql::catalog::CatalogItemType::Index,
-            CatalogItem::Type(_) => mz_sql::catalog::CatalogItemType::Type,
-            CatalogItem::Func(_) => mz_sql::catalog::CatalogItemType::Func,
-            CatalogItem::Secret(_) => mz_sql::catalog::CatalogItemType::Secret,
-            CatalogItem::Connection(_) => mz_sql::catalog::CatalogItemType::Connection,
-            CatalogItem::ContinualTask(_) => mz_sql::catalog::CatalogItemType::ContinualTask,
+            CatalogItem::Table(_) => CatalogItemType::Table,
+            CatalogItem::Source(_) => CatalogItemType::Source,
+            CatalogItem::Log(_) => CatalogItemType::Source,
+            CatalogItem::Sink(_) => CatalogItemType::Sink,
+            CatalogItem::View(_) => CatalogItemType::View,
+            CatalogItem::MaterializedView(_) => CatalogItemType::MaterializedView,
+            CatalogItem::Index(_) => CatalogItemType::Index,
+            CatalogItem::Type(_) => CatalogItemType::Type,
+            CatalogItem::Func(_) => CatalogItemType::Func,
+            CatalogItem::Secret(_) => CatalogItemType::Secret,
+            CatalogItem::Connection(_) => CatalogItemType::Connection,
+            CatalogItem::ContinualTask(_) => CatalogItemType::ContinualTask,
         }
     }
 
@@ -1641,7 +1652,9 @@ impl CatalogItem {
             CatalogItem::Log(log) => log.global_id,
             CatalogItem::Sink(sink) => sink.global_id,
             CatalogItem::View(view) => view.global_id,
-            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::MaterializedView(mv) => {
+                return itertools::Either::Left(mv.collections.values().copied());
+            }
             CatalogItem::ContinualTask(ct) => ct.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
@@ -1664,7 +1677,7 @@ impl CatalogItem {
             CatalogItem::Log(log) => log.global_id,
             CatalogItem::Sink(sink) => sink.global_id,
             CatalogItem::View(view) => view.global_id,
-            CatalogItem::MaterializedView(mv) => mv.global_id,
+            CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
             CatalogItem::ContinualTask(ct) => ct.global_id,
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
@@ -1711,7 +1724,9 @@ impl CatalogItem {
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
             CatalogItem::Table(tbl) => Some(Cow::Owned(tbl.desc.at_version(version))),
             CatalogItem::View(view) => Some(Cow::Borrowed(&view.desc)),
-            CatalogItem::MaterializedView(mview) => Some(Cow::Borrowed(&mview.desc)),
+            CatalogItem::MaterializedView(mview) => {
+                Some(Cow::Owned(mview.desc.at_version(version)))
+            }
             CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
             CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
             CatalogItem::Func(_)
@@ -2297,7 +2312,11 @@ impl CatalogItem {
             }
             CatalogItem::View(view) => (view.create_sql.clone(), view.global_id, BTreeMap::new()),
             CatalogItem::MaterializedView(mview) => {
-                (mview.create_sql.clone(), mview.global_id, BTreeMap::new())
+                let mut collections = mview.collections.clone();
+                let global_id = collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (mview.create_sql.clone(), global_id, collections)
             }
             CatalogItem::Index(index) => {
                 (index.create_sql.clone(), index.global_id, BTreeMap::new())
@@ -2349,8 +2368,12 @@ impl CatalogItem {
                 (create_sql, source.global_id, BTreeMap::new())
             }
             CatalogItem::View(view) => (view.create_sql, view.global_id, BTreeMap::new()),
-            CatalogItem::MaterializedView(mview) => {
-                (mview.create_sql, mview.global_id, BTreeMap::new())
+            CatalogItem::MaterializedView(mut mview) => {
+                let global_id = mview
+                    .collections
+                    .remove(&RelationVersion::root())
+                    .expect("at least one version");
+                (mview.create_sql, global_id, mview.collections)
             }
             CatalogItem::Index(index) => (index.create_sql, index.global_id, BTreeMap::new()),
             CatalogItem::Sink(sink) => (sink.create_sql, sink.global_id, BTreeMap::new()),
@@ -2364,6 +2387,29 @@ impl CatalogItem {
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::ContinualTask(ct) => (ct.create_sql, ct.global_id, BTreeMap::new()),
+        }
+    }
+
+    /// Returns a global ID for a specific version selector. Returns `None` if the item does
+    /// not have versions or if the version does not exist.
+    pub fn global_id_for_version(&self, version: RelationVersionSelector) -> Option<GlobalId> {
+        let collections = match self {
+            CatalogItem::MaterializedView(mv) => &mv.collections,
+            CatalogItem::Table(table) => &table.collections,
+            CatalogItem::Source(source) => return Some(source.global_id),
+            CatalogItem::Log(log) => return Some(log.global_id),
+            CatalogItem::View(view) => return Some(view.global_id),
+            CatalogItem::Sink(sink) => return Some(sink.global_id),
+            CatalogItem::Index(index) => return Some(index.global_id),
+            CatalogItem::Type(ty) => return Some(ty.global_id),
+            CatalogItem::Func(func) => return Some(func.global_id),
+            CatalogItem::Secret(secret) => return Some(secret.global_id),
+            CatalogItem::Connection(conn) => return Some(conn.global_id),
+            CatalogItem::ContinualTask(ct) => return Some(ct.global_id),
+        };
+        match version {
+            RelationVersionSelector::Latest => collections.values().last().copied(),
+            RelationVersionSelector::Specific(version) => collections.get(&version).copied(),
         }
     }
 }

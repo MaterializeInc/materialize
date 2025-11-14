@@ -154,6 +154,18 @@ pub struct CollectionDescription<T> {
 }
 
 impl<T> CollectionDescription<T> {
+    /// Create a CollectionDescription for [`DataSource::Other`].
+    pub fn for_other(desc: RelationDesc, since: Option<Antichain<T>>) -> Self {
+        Self {
+            desc,
+            data_source: DataSource::Other,
+            since,
+            status_collection_id: None,
+            timeline: None,
+        }
+    }
+
+    /// Create a CollectionDescription for a table.
     pub fn for_table(desc: RelationDesc, primary: Option<GlobalId>) -> Self {
         Self {
             desc,

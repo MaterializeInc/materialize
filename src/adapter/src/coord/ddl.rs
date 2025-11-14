@@ -279,7 +279,7 @@ impl Coordinator {
                                     }
                                     CatalogItem::MaterializedView(mv) => {
                                         materialized_views_to_drop
-                                            .push((mv.cluster_id, mv.global_id()));
+                                            .push((mv.cluster_id, mv.global_id_writes()));
                                     }
                                     CatalogItem::View(view) => {
                                         views_to_drop.push((*id, view.clone()))
