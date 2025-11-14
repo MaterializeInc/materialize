@@ -68,6 +68,7 @@ max_tables                               200                     "The maximum nu
 network_policy                           default                 "Sets the fallback network policy applied to all users without an explicit policy."
 optimizer_e2e_latency_warning_threshold  "500 ms"                "Sets the duration that a query can take to compile; queries that take longer will trigger a warning. If this value is specified without units, it is taken as milliseconds. A value of zero disables the timeout (Materialize)."
 mz_version                               <VARIES>                "Shows the Materialize server version (Materialize)."
+scram_iterations                         600000                  "Iterations to use when hashing passwords. Higher iterations are more secure, but take longer to validated. Please consider the security risks before reducing this below the default value."
 real_time_recency                        off                     "Feature flag indicating whether real time recency is enabled (Materialize)."
 real_time_recency_timeout                "10 s"                  "Sets the maximum allowed duration of SELECTs that actively use real-time recency, i.e. reach out to an external system to determine their most recencly exposed data (Materialize)."
 search_path                              public                  "Sets the schema search order for names that are not schema-qualified (PostgreSQL)."

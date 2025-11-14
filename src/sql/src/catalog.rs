@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
@@ -486,11 +487,20 @@ pub trait CatalogSchema {
     fn privileges(&self) -> &PrivilegeMap;
 }
 
+/// Parameters used to modify password
+#[derive(Debug, Clone, Eq, PartialEq, Arbitrary)]
+pub struct PasswordConfig {
+    /// The Password.
+    pub password: Password,
+    /// a non default iteration count for hashing the password.
+    pub scram_iterations: NonZeroU32,
+}
+
 /// A modification of a role password in the catalog
 #[derive(Debug, Clone, Eq, PartialEq, Arbitrary)]
 pub enum PasswordAction {
     /// Set a new password.
-    Set(Password),
+    Set(PasswordConfig),
     /// Remove the existing password.
     Clear,
     /// Leave the existing password unchanged.
@@ -499,7 +509,7 @@ pub enum PasswordAction {
 
 /// A raw representation of attributes belonging to a [`CatalogRole`] that we might
 /// get as input from the user. This includes the password.
-/// This struct explicity does not implement `Serialize` or `Deserialize` to avoid
+/// This struct explicitly does not implement `Serialize` or `Deserialize` to avoid
 /// accidentally serializing passwords.
 #[derive(Debug, Clone, Eq, PartialEq, Ord, PartialOrd, Arbitrary)]
 pub struct RoleAttributesRaw {
@@ -507,6 +517,8 @@ pub struct RoleAttributesRaw {
     pub inherit: bool,
     /// The raw password of the role. This is for self managed auth, not cloud.
     pub password: Option<Password>,
+    /// Hash iterations used to securely store passwords. This is for self-managed auth
+    pub scram_iterations: Option<NonZeroU32>,
     /// Whether or not this user is a superuser.
     pub superuser: Option<bool>,
     /// Whether this role is login
@@ -534,6 +546,7 @@ impl RoleAttributesRaw {
         RoleAttributesRaw {
             inherit: true,
             password: None,
+            scram_iterations: None,
             superuser: None,
             login: None,
             _private: (),
@@ -604,6 +617,7 @@ impl From<RoleAttributes> for RoleAttributesRaw {
         RoleAttributesRaw {
             inherit,
             password: None,
+            scram_iterations: None,
             superuser,
             login,
             _private: (),
@@ -616,6 +630,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
         PlannedRoleAttributes {
             inherit,
             password,
+            scram_iterations,
             superuser,
             login,
             ..
@@ -625,6 +640,7 @@ impl From<PlannedRoleAttributes> for RoleAttributesRaw {
         RoleAttributesRaw {
             inherit: inherit.unwrap_or(default_attributes.inherit),
             password,
+            scram_iterations,
             superuser,
             login,
             _private: (),

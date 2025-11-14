@@ -10,6 +10,7 @@
 use std::any::Any;
 use std::borrow::Cow;
 use std::fmt::{self, Debug};
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -1162,6 +1163,8 @@ impl_value_for_simple!(u32, "unsigned integer");
 impl_value_for_simple!(u64, "64-bit unsigned integer");
 impl_value_for_simple!(usize, "unsigned integer");
 impl_value_for_simple!(f64, "double-precision floating-point number");
+
+impl_value_for_simple!(NonZeroU32, "unsigned integer");
 
 impl_value_for_simple!(mz_repr::Timestamp, "mz-timestamp");
 impl_value_for_simple!(mz_repr::bytes::ByteSize, "bytes");

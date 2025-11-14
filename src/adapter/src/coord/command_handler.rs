@@ -363,7 +363,11 @@ impl Coordinator {
              mock_nonce: String,
              nonce: String,
              tx: oneshot::Sender<Result<SASLChallengeResponse, AdapterError>>| {
-                let opts = mz_auth::hash::mock_sasl_challenge(&role_name, &mock_nonce);
+                let opts = mz_auth::hash::mock_sasl_challenge(
+                    &role_name,
+                    &mock_nonce,
+                    &self.catalog().system_config().scram_iterations(),
+                );
                 let _ = tx.send(Ok(SASLChallengeResponse {
                     iteration_count: mz_ore::cast::u32_to_usize(opts.iterations.get()),
                     salt: BASE64_STANDARD.encode(opts.salt),
