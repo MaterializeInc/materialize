@@ -8,6 +8,10 @@ menu:
     identifier: "grafana-prometheus-sm"
 ---
 
+{{< warning >}}
+The metrics scraped are unstable and may change across releases.
+{{< /warning >}}
+
 This guide walks you through the steps required to monitor the performance and
 overall health of your Materialize instance using Prometheus and Grafana.
 
