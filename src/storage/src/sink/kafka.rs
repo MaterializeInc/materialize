@@ -1183,8 +1183,9 @@ fn progress_search<C: ConsumerContext + 'static>(
             Some(Err(e)) => bail!("failed to fetch progress message {e}"),
             None => {
                 bail!(
-                    "timed out while waiting to reach high water mark of non-empty \
-                        topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position}"
+                    "timed out after {progress_record_fetch_timeout:?} while waiting to reach high water mark of non-empty \
+                        topic {progress_topic}:{partition}, lo/hi: {lo}/{hi}, current position: {current_position} \
+                        HINT: timeout can be changed via 'kafka_progress_record_fetch_timeout'"
                 );
             }
         };
