@@ -17,7 +17,9 @@ pub mod connections;
 pub mod controller;
 pub mod dyncfgs;
 pub mod errors;
-pub mod instances;
+pub mod instances {
+    pub use mz_catalog_types::cluster::StorageInstanceId;
+}
 pub mod oneshot_sources;
 pub mod parameters;
 pub mod read_holds;
