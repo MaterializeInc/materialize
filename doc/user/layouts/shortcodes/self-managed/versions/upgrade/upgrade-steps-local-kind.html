@@ -1,5 +1,4 @@
 {{ $environmentd_version := site.Data.self_managed.latest_versions.environmentd_version }}
-{{ $operator_version := site.Data.self_managed.latest_versions.operator_helm_chart_version }}
 
 1. Open a Terminal window.
 
@@ -18,9 +17,9 @@
 1. Get the sample configuration files for the new version.
 
    ```shell
-   mz_operator_version=self-managed-{{ $operator_version }}
+   mz_version={{ $environmentd_version }}
 
-   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
+   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/operator/values.yaml
    ```
 
    If you have previously modified the `sample-values.yaml` file for your
@@ -33,7 +32,7 @@
    ```shell
    helm upgrade my-materialize-operator materialize/materialize-operator \
    --namespace=materialize \
-   --version {{ $operator_version }} \
+   --version {{ $environmentd_version }} \
    -f upgrade-values.yaml \
    --set observability.podMetrics.enabled=true
    ```
