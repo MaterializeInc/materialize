@@ -24,19 +24,20 @@ use mz_catalog::builtin::{
     MZ_INTERNAL_CLUSTER_REPLICAS, MZ_KAFKA_CONNECTIONS, MZ_KAFKA_SINKS, MZ_KAFKA_SOURCE_TABLES,
     MZ_KAFKA_SOURCES, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
-    MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OPERATORS,
-    MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES, MZ_PSEUDO_TYPES,
-    MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS,
-    MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES,
-    MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES,
-    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
+    MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS,
+    MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
+    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
+    MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func, Index,
-    MaterializedView, Sink, Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func,
+    Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
@@ -900,7 +901,24 @@ impl CatalogState {
             updates.push(self.pack_history_retention_strategy_update(id, cw, diff));
         }
 
+        updates.extend(Self::pack_item_global_id_update(entry, diff));
+
         updates
+    }
+
+    fn pack_item_global_id_update(
+        entry: &CatalogEntry,
+        diff: Diff,
+    ) -> impl Iterator<Item = BuiltinTableUpdate<&'static BuiltinTable>> + use<'_> {
+        let id = entry.id().to_string();
+        let global_ids = entry.global_ids();
+        global_ids.map(move |global_id| {
+            BuiltinTableUpdate::row(
+                &*MZ_OBJECT_GLOBAL_IDS,
+                Row::pack_slice(&[Datum::String(&id), Datum::String(&global_id.to_string())]),
+                diff,
+            )
+        })
     }
 
     fn pack_history_retention_strategy_update(
