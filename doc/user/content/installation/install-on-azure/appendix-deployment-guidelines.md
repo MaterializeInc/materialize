@@ -47,22 +47,6 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
-### Swap support
-
-Starting in v0.6.1 of Materialize on Azure Terraform,
-disk support (using swap on NVMe instance storage) may be enabled for
-Materialize. With this change, the Terraform:
-
-  - Creates a node group for Materialize.
-  - Configures NVMe instance store volumes as swap using a daemonset.
-  - Enables swap at the Kubelet.
-
-For swap support, the following configuration option is available:
-
-- [`swap_enabled`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_swap_enabled)
-
-See [Upgrade Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061).
-
 ## Recommended Azure Blob Storage
 
 Materialize writes **block** blobs on Azure. As a general guideline, we
@@ -84,11 +68,3 @@ Certificate Authority (CA) rather than self-signed certificates.
 - [Configuration](/installation/configuration/)
 - [Installation](/installation/)
 - [Troubleshooting](/installation/troubleshooting/)
-
-[`enable_disk_support`]: https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#disk-support-for-materialize-on-azure
-
-[`disk_support_config`]:
-    https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_disk_support_config
-
-[`disk_setup_image`]:
-    https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_disk_setup_image
