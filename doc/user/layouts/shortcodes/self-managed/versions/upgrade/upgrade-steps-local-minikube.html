@@ -18,9 +18,9 @@
 1. Get the sample configuration files for the new version.
 
    ```shell
-   mz_operator_version=self-managed-{{ $operator_version }}
+   mz_version={{ $environmentd_version }}
 
-   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
+   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/operator/values.yaml
    ```
 
    If you have previously modified the `sample-values.yaml` file for your

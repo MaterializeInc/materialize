@@ -1,9 +1,9 @@
-{{ $operator_helm_chart_version := site.Data.self_managed.latest_versions.operator_helm_chart_version }}
+{{ $environmentd_version := site.Data.self_managed.latest_versions.environmentd_version }}
 
 ```shell
-mz_version={{ $operator_helm_chart_version }}
+mz_version={{ $environmentd_version }}
 
-curl -o sample-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/self-managed-$mz_version/misc/helm-charts/operator/values.yaml
+curl -o sample-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/operator/values.yaml
 curl -o sample-postgres.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/testing/postgres.yaml
 curl -o sample-minio.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/testing/minio.yaml
 curl -o sample-materialize.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/testing/materialize.yaml
