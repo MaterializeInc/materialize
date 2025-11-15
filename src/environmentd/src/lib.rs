@@ -470,13 +470,16 @@ impl Listeners {
         let system_parameter_sync_config =
             match (config.launchdarkly_sdk_key, config.config_sync_file_path) {
                 (None, None) => None,
-                (None, Some(f)) => Some(SystemParameterSyncConfig::new(
-                    config.environment_id.clone(),
-                    &BUILD_INFO,
-                    &config.metrics_registry,
-                    config.launchdarkly_key_map,
-                    SystemParameterSyncClientConfig::File { path: f },
-                )),
+                (None, Some(f)) => {
+                    info!("Using config file path {:?}", f);
+                    Some(SystemParameterSyncConfig::new(
+                        config.environment_id.clone(),
+                        &BUILD_INFO,
+                        &config.metrics_registry,
+                        config.launchdarkly_key_map,
+                        SystemParameterSyncClientConfig::File { path: f },
+                    ))
+                }
                 (Some(key), None) => Some(SystemParameterSyncConfig::new(
                     config.environment_id.clone(),
                     &BUILD_INFO,
