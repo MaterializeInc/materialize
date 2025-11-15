@@ -28,6 +28,19 @@ class ClusterSpecSheetResultEntry:
     time_ms: int | None
 
 
+@dataclass
+class ClusterSpecSheetEnvironmentdResultEntry:
+    scenario: str
+    scenario_version: str
+    scale: int
+    mode: str
+    category: str
+    test_name: str
+    envd_cpus: int
+    repetition: int
+    qps: float | None
+
+
 class ClusterSpecSheetResultStorage(BaseDataStorage):
 
     def add_result(
@@ -71,6 +84,54 @@ class ClusterSpecSheetResultStorage(BaseDataStorage):
                     {result_entry.repetition},
                     {result_entry.size_bytes or 'NULL::BIGINT'},
                     {result_entry.time_ms or 'NULL::BIGINT'}
+                ;
+                """
+            )
+
+        self.database_connector.add_update_statements(sql_statements)
+
+
+class ClusterSpecSheetEnvironmentdResultStorage(BaseDataStorage):
+
+    def add_result(
+        self,
+        framework_version: str,
+        results: list[ClusterSpecSheetEnvironmentdResultEntry],
+    ) -> None:
+        job_id = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_JOB_ID)
+
+        sql_statements = []
+
+        for result_entry in results:
+            # TODO: remove NULL castings when database-issues#8100 is resolved
+            sql_statements.append(
+                f"""
+                INSERT INTO cluster_spec_sheet_environmentd_result
+                (
+                    build_job_id,
+                    framework_version,
+                    scenario,
+                    scenario_version,
+                    scale,
+                    mode,
+                    category,
+                    test_name,
+                    envd_cpus,
+                    repetition,
+                    qps
+                )
+                SELECT
+                    {as_sanitized_literal(job_id)},
+                    {as_sanitized_literal(framework_version)},
+                    {as_sanitized_literal(result_entry.scenario)},
+                    {as_sanitized_literal(result_entry.scenario_version)},
+                    {result_entry.scale},
+                    {as_sanitized_literal(result_entry.mode)},
+                    {as_sanitized_literal(result_entry.category)},
+                    {as_sanitized_literal(result_entry.test_name)},
+                    {result_entry.envd_cpus},
+                    {result_entry.repetition},
+                    {result_entry.qps or 'NULL::FLOAT'}
                 ;
                 """
             )
