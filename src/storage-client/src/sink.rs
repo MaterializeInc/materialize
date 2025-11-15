@@ -162,10 +162,16 @@ pub async fn ensure_kafka_topic(
     }: &KafkaTopicOptions,
     ensure_topic_config: EnsureTopicConfig,
 ) -> Result<bool, anyhow::Error> {
+    let mut storage_configuration = storage_configuration.clone();
+    // With recent librdkafka the topic metadata propagation for a sink error takes longer
+    storage_configuration
+        .parameters
+        .kafka_timeout_config
+        .topic_metadata_propagation_max = Duration::from_secs(10);
     let client: AdminClient<_> = connection
         .connection
         .create_with_context(
-            storage_configuration,
+            &storage_configuration,
             MzClientContext::default(),
             &BTreeMap::new(),
             // Only called from `mz_storage`.

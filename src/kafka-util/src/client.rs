@@ -744,6 +744,8 @@ pub const DEFAULT_FETCH_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
 /// The timeout for reading records from the progress topic. Set to something slightly longer than
 /// the idle transaction timeout (60s) to wait out any stuck producers.
 pub const DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT: Duration = Duration::from_secs(90);
+/// Delays marking a topic as non-existent until configured time has passed.
+pub const DEFAULT_TOPIC_METADATA_PROPAGATION_MAX: Duration = Duration::from_secs(30);
 
 /// Configurable timeouts for Kafka connections.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -761,6 +763,8 @@ pub struct TimeoutConfig {
     pub fetch_metadata_timeout: Duration,
     /// The timeout for reading records from the progress topic.
     pub progress_record_fetch_timeout: Duration,
+    /// Delays marking a topic as non-existent until configured time has passed.
+    pub topic_metadata_propagation_max: Duration,
 }
 
 impl Default for TimeoutConfig {
@@ -772,6 +776,7 @@ impl Default for TimeoutConfig {
             socket_connection_setup_timeout: DEFAULT_SOCKET_CONNECTION_SETUP_TIMEOUT,
             fetch_metadata_timeout: DEFAULT_FETCH_METADATA_TIMEOUT,
             progress_record_fetch_timeout: DEFAULT_PROGRESS_RECORD_FETCH_TIMEOUT,
+            topic_metadata_propagation_max: DEFAULT_TOPIC_METADATA_PROPAGATION_MAX,
         }
     }
 }
@@ -879,6 +884,7 @@ impl TimeoutConfig {
             socket_connection_setup_timeout,
             fetch_metadata_timeout,
             progress_record_fetch_timeout,
+            topic_metadata_propagation_max: DEFAULT_TOPIC_METADATA_PROPAGATION_MAX,
         }
     }
 }
@@ -952,6 +958,14 @@ pub fn create_new_client_config(
         "socket.connection.setup.timeout.ms",
         timeout_config
             .socket_connection_setup_timeout
+            .as_millis()
+            .to_string(),
+    );
+
+    config.set(
+        "topic.metadata.propagation.max.ms",
+        timeout_config
+            .topic_metadata_propagation_max
             .as_millis()
             .to_string(),
     );
