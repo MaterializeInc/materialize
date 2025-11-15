@@ -190,28 +190,30 @@ else
   done
 fi
 
-echo "--- Bumping versions in Self-Managed Materialize documentation"
-ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/values.yaml)
-DOCS_BRANCH=self-managed-docs/$(echo "$CI_HELM_CHART_VERSION" | cut -d. -f1,2)
-git fetch origin "$DOCS_BRANCH"
-git checkout "origin/$DOCS_BRANCH"
-git submodule update --init --recursive
-git config user.email "noreply@materialize.com"
-git config user.name "Buildkite"
-VERSIONS_YAML_PATH=doc/user/data/self_managed/latest_versions.yml
-yq -i ".operator_helm_chart_version = \"$CI_HELM_CHART_VERSION\"" $VERSIONS_YAML_PATH
-yq -i ".environmentd_version = \"$CI_MZ_VERSION\"" $VERSIONS_YAML_PATH
-yq -i ".orchestratord_version = \"$ORCHESTRATORD_VERSION\"" $VERSIONS_YAML_PATH
-if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
-  yq -i ".terraform_helm_version= \"$TERRAFORM_HELM_VERSION\"" $VERSIONS_YAML_PATH
-  yq -i ".terraform_gcp_version= \"${TERRAFORM_VERSION[terraform-google-materialize]}\"" $VERSIONS_YAML_PATH
-  yq -i ".terraform_azure_version= \"${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"" $VERSIONS_YAML_PATH
-  yq -i ".terraform_aws_version= \"${TERRAFORM_VERSION[terraform-aws-materialize]}\"" $VERSIONS_YAML_PATH
+if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
+  echo "--- Bumping versions in Self-Managed Materialize documentation"
+  ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/values.yaml)
+  DOCS_BRANCH=self-managed-docs/$(echo "$CI_HELM_CHART_VERSION" | cut -d. -f1,2)
+  git fetch origin "$DOCS_BRANCH"
+  git checkout "origin/$DOCS_BRANCH"
+  git submodule update --init --recursive
+  git config user.email "noreply@materialize.com"
+  git config user.name "Buildkite"
+  VERSIONS_YAML_PATH=doc/user/data/self_managed/latest_versions.yml
+  yq -i ".operator_helm_chart_version = \"$CI_HELM_CHART_VERSION\"" $VERSIONS_YAML_PATH
+  yq -i ".environmentd_version = \"$CI_MZ_VERSION\"" $VERSIONS_YAML_PATH
+  yq -i ".orchestratord_version = \"$ORCHESTRATORD_VERSION\"" $VERSIONS_YAML_PATH
+  if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
+    yq -i ".terraform_helm_version= \"$TERRAFORM_HELM_VERSION\"" $VERSIONS_YAML_PATH
+    yq -i ".terraform_gcp_version= \"${TERRAFORM_VERSION[terraform-google-materialize]}\"" $VERSIONS_YAML_PATH
+    yq -i ".terraform_azure_version= \"${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"" $VERSIONS_YAML_PATH
+    yq -i ".terraform_aws_version= \"${TERRAFORM_VERSION[terraform-aws-materialize]}\"" $VERSIONS_YAML_PATH
+  fi
+  git add $VERSIONS_YAML_PATH
+  git commit -m "docs: Bump to helm-chart $CI_HELM_CHART_VERSION, environmentd $CI_MZ_VERSION, orchestratord $ORCHESTRATORD_VERSION"
+  git --no-pager diff HEAD~
+  run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
 fi
-git add $VERSIONS_YAML_PATH
-git commit -m "docs: Bump to helm-chart $CI_HELM_CHART_VERSION, environmentd $CI_MZ_VERSION, orchestratord $ORCHESTRATORD_VERSION"
-git --no-pager diff HEAD~
-run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
 
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
   echo "--- Bumping versions in Terraform Nightly tests"
