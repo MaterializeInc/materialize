@@ -81,6 +81,9 @@ pub struct Batch<K, V, T, D> {
     /// The version of Materialize which wrote this batch.
     pub(crate) version: Version,
 
+    /// The encoded schemas of the data in the batch.
+    pub(crate) schemas: (Bytes, Bytes),
+
     /// A handle to the data represented by this batch.
     pub(crate) batch: HollowBatch<T>,
 
@@ -121,6 +124,7 @@ where
         blob: Arc<dyn Blob>,
         shard_metrics: Arc<ShardMetrics>,
         version: Version,
+        schemas: (Bytes, Bytes),
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
@@ -128,6 +132,7 @@ where
             metrics,
             shard_metrics,
             version,
+            schemas,
             batch,
             blob,
             _phantom: PhantomData,
@@ -209,6 +214,8 @@ where
             shard_id: self.shard_metrics.shard_id.into_proto(),
             version: self.version.to_string(),
             batch: Some(self.batch.into_proto()),
+            key_schema: self.schemas.0.clone(),
+            val_schema: self.schemas.1.clone(),
         };
         self.mark_consumed();
         ret
@@ -729,6 +736,10 @@ where
             self.blob,
             shard_metrics,
             self.version,
+            (
+                K::encode_schema(&*self.write_schemas.key),
+                V::encode_schema(&*self.write_schemas.val),
+            ),
             HollowBatch::new(desc, run_parts, total_updates, run_meta, run_splits),
         );
 
