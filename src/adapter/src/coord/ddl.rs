@@ -216,6 +216,7 @@ impl Coordinator {
         let mut storage_sink_gids_to_drop = vec![];
         let mut indexes_to_drop = vec![];
         let mut materialized_views_to_drop = vec![];
+        let mut materialized_views_to_drop_compute = vec![];
         let mut continual_tasks_to_drop = vec![];
         let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
@@ -307,6 +308,10 @@ impl Coordinator {
                                             }
                                             _ => (),
                                         }
+                                    }
+                                    CatalogItem::ReplacementMaterializedView(rmv) => {
+                                        materialized_views_to_drop_compute
+                                            .push((rmv.cluster_id, rmv.global_id()));
                                     }
                                     _ => (),
                                 }
@@ -413,6 +418,13 @@ impl Coordinator {
                         config.location.num_processes(),
                     ));
                 }
+                catalog::Op::AlterMaterializedViewApplyReplacement {
+                    cluster_id,
+                    replaced_id,
+                    ..
+                } => {
+                    materialized_views_to_drop_compute.push((*cluster_id, *replaced_id));
+                }
                 _ => (),
             }
         }
@@ -500,11 +512,17 @@ impl Coordinator {
             .chain(storage_sink_gids_to_drop.iter().copied())
             .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid))
             .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
+            .chain(
+                materialized_views_to_drop_compute
+                    .iter()
+                    .map(|(_, gid)| *gid),
+            )
             .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid));
         let compute_ids_to_drop = indexes_to_drop
             .iter()
             .copied()
             .chain(materialized_views_to_drop.iter().copied())
+            .chain(materialized_views_to_drop_compute.iter().copied())
             .chain(
                 continual_tasks_to_drop
                     .iter()
@@ -660,6 +678,9 @@ impl Coordinator {
             }
             if !materialized_views_to_drop.is_empty() {
                 self.drop_materialized_views(materialized_views_to_drop);
+            }
+            if !materialized_views_to_drop_compute.is_empty() {
+                self.drop_materialized_views_compute_only(materialized_views_to_drop_compute);
             }
             if !continual_tasks_to_drop.is_empty() {
                 self.drop_continual_tasks(continual_tasks_to_drop);
@@ -1046,13 +1067,14 @@ impl Coordinator {
         }
     }
 
-    /// A convenience method for dropping materialized views.
-    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
+    /// A convenience method for dropping the compute part of materialized views.
+    fn drop_materialized_views_compute_only<I>(&mut self, mviews: I)
+    where
+        I: IntoIterator<Item = (ClusterId, GlobalId)>,
+    {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut mv_gids = Vec::new();
         for (cluster_id, gid) in mviews {
             by_cluster.entry(cluster_id).or_default().push(gid);
-            mv_gids.push(gid);
         }
 
         // Drop compute sinks.
@@ -1065,6 +1087,13 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
+    }
+
+    /// A convenience method for dropping materialized views.
+    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
+        self.drop_materialized_views_compute_only(mviews.iter().cloned());
+
+        let mv_gids = mviews.into_iter().map(|(_cluster_id, gid)| gid).collect();
 
         // Drop storage resources.
         let storage_metadata = self.catalog.state().storage_metadata();
@@ -1429,6 +1458,9 @@ impl Coordinator {
                         CatalogItem::ContinualTask(_) => {
                             new_continual_tasks += 1;
                         }
+                        CatalogItem::ReplacementMaterializedView(_) => {
+                            new_materialized_views += 1;
+                        }
                         CatalogItem::Log(_)
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
@@ -1511,6 +1543,9 @@ impl Coordinator {
                                     CatalogItem::ContinualTask(_) => {
                                         new_continual_tasks -= 1;
                                     }
+                                    CatalogItem::ReplacementMaterializedView(_) => {
+                                        new_materialized_views -= 1;
+                                    }
                                     CatalogItem::Log(_)
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
@@ -1546,8 +1581,19 @@ impl Coordinator {
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
-                    | CatalogItem::ContinualTask(_) => {}
+                    | CatalogItem::ContinualTask(_)
+                    | CatalogItem::ReplacementMaterializedView(_) => {}
                 },
+                Op::AlterMaterializedViewApplyReplacement { replacement_id, .. } => {
+                    let entry = self.catalog().get_entry(replacement_id);
+                    *new_objects_per_schema
+                        .entry((
+                            entry.name().qualifiers.database_spec.clone(),
+                            entry.name().qualifiers.schema_spec.clone(),
+                        ))
+                        .or_insert(0) -= 1;
+                    new_materialized_views -= 1;
+                }
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
                 | Op::AlterNetworkPolicy { .. }

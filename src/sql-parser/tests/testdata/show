@@ -994,3 +994,32 @@ SHOW REDACTED MATERIALIZED
 error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
 SHOW REDACTED MATERIALIZED
               ^
+
+parse-statement
+SHOW REPLACEMENTS
+----
+SHOW REPLACEMENTS
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Replacement { in_cluster: None }, from: None, filter: None }))
+
+
+parse-statement
+SHOW REPLACEMENTS FROM abc IN CLUSTER my_cluster
+----
+SHOW REPLACEMENTS FROM abc IN CLUSTER my_cluster
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Replacement { in_cluster: Some(Unresolved(Ident("my_cluster"))) }, from: Some(UnresolvedSchemaName([Ident("abc")])), filter: None }))
+
+parse-statement
+SHOW REPLACEMENTS FROM abc IN CLUSTER my_cluster WHERE true
+----
+SHOW REPLACEMENTS FROM abc IN CLUSTER my_cluster WHERE true
+=>
+Show(ShowObjects(ShowObjectsStatement { object_type: Replacement { in_cluster: Some(Unresolved(Ident("my_cluster"))) }, from: Some(UnresolvedSchemaName([Ident("abc")])), filter: Some(Where(Value(Boolean(true)))) }))
+
+parse-statement
+SHOW REDACTED REPLACEMENTS
+----
+error: SHOW REDACTED is only supported for SHOW REDACTED CREATE ...
+SHOW REDACTED REPLACEMENTS
+              ^

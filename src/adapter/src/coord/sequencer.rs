@@ -276,6 +276,10 @@ impl Coordinator {
                         .await;
                     ctx.retire(res);
                 }
+                Plan::CreateReplacementMaterializedView(plan) => {
+                    self.sequence_create_replacement_materialized_view(ctx, plan, resolved_ids)
+                        .await;
+                }
                 Plan::Comment(plan) => {
                     let result = self.sequence_comment_on(ctx.session(), plan).await;
                     ctx.retire(result);
@@ -459,6 +463,12 @@ impl Coordinator {
                 }
                 Plan::AlterConnection(plan) => {
                     self.sequence_alter_connection(ctx, plan).await;
+                }
+                Plan::AlterMaterializedViewApplyReplacement(plan) => {
+                    let result = self
+                        .sequence_alter_materialized_view_apply_replacement(&mut ctx, plan)
+                        .await;
+                    ctx.retire(result);
                 }
                 Plan::AlterSetCluster(plan) => {
                     let result = self.sequence_alter_set_cluster(ctx.session(), plan).await;

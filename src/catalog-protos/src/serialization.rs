@@ -220,6 +220,9 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             CatalogItemType::Secret => crate::objects::CatalogItemType::Secret,
             CatalogItemType::Connection => crate::objects::CatalogItemType::Connection,
             CatalogItemType::ContinualTask => crate::objects::CatalogItemType::ContinualTask,
+            CatalogItemType::ReplacementMaterializedView => {
+                crate::objects::CatalogItemType::ReplacementMaterializedView
+            }
         }
     }
 
@@ -236,6 +239,9 @@ impl RustType<crate::objects::CatalogItemType> for CatalogItemType {
             crate::objects::CatalogItemType::Secret => CatalogItemType::Secret,
             crate::objects::CatalogItemType::Connection => CatalogItemType::Connection,
             crate::objects::CatalogItemType::ContinualTask => CatalogItemType::ContinualTask,
+            crate::objects::CatalogItemType::ReplacementMaterializedView => {
+                CatalogItemType::ReplacementMaterializedView
+            }
             crate::objects::CatalogItemType::Unknown => {
                 return Err(TryFromProtoError::unknown_enum_variant("CatalogItemType"));
             }
@@ -264,6 +270,9 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             ObjectType::Func => crate::objects::ObjectType::Func,
             ObjectType::ContinualTask => crate::objects::ObjectType::ContinualTask,
             ObjectType::NetworkPolicy => crate::objects::ObjectType::NetworkPolicy,
+            ObjectType::ReplacementMaterializedView => {
+                crate::objects::ObjectType::ReplacementMaterializedView
+            }
         }
     }
 
@@ -286,6 +295,9 @@ impl RustType<crate::objects::ObjectType> for ObjectType {
             crate::objects::ObjectType::Func => Ok(ObjectType::Func),
             crate::objects::ObjectType::ContinualTask => Ok(ObjectType::ContinualTask),
             crate::objects::ObjectType::NetworkPolicy => Ok(ObjectType::NetworkPolicy),
+            crate::objects::ObjectType::ReplacementMaterializedView => {
+                Ok(ObjectType::ReplacementMaterializedView)
+            }
             crate::objects::ObjectType::Unknown => Err(TryFromProtoError::unknown_enum_variant(
                 "ObjectType::Unknown",
             )),
@@ -434,6 +446,11 @@ impl RustType<crate::objects::comment_key::Object> for CommentObjectId {
             CommentObjectId::MaterializedView(global_id) => {
                 crate::objects::comment_key::Object::MaterializedView(global_id.into_proto())
             }
+            CommentObjectId::ReplacementMaterializedView(global_id) => {
+                crate::objects::comment_key::Object::ReplacementMaterializedView(
+                    global_id.into_proto(),
+                )
+            }
             CommentObjectId::Source(global_id) => {
                 crate::objects::comment_key::Object::Source(global_id.into_proto())
             }
@@ -496,6 +513,9 @@ impl RustType<crate::objects::comment_key::Object> for CommentObjectId {
             }
             crate::objects::comment_key::Object::MaterializedView(item_id) => {
                 CommentObjectId::MaterializedView(item_id.into_rust()?)
+            }
+            crate::objects::comment_key::Object::ReplacementMaterializedView(item_id) => {
+                CommentObjectId::ReplacementMaterializedView(item_id.into_rust()?)
             }
             crate::objects::comment_key::Object::Source(item_id) => {
                 CommentObjectId::Source(item_id.into_rust()?)

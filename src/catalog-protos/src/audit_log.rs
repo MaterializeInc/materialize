@@ -124,6 +124,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             mz_audit_log::ObjectType::Type => crate::objects::audit_log_event_v1::ObjectType::Type,
             mz_audit_log::ObjectType::View => crate::objects::audit_log_event_v1::ObjectType::View,
+            mz_audit_log::ObjectType::ReplacementMaterializedView => {
+                crate::objects::audit_log_event_v1::ObjectType::ReplacementMaterializedView
+            }
         }
     }
 
@@ -184,6 +187,9 @@ impl RustType<crate::objects::audit_log_event_v1::ObjectType> for mz_audit_log::
             }
             crate::objects::audit_log_event_v1::ObjectType::View => {
                 Ok(mz_audit_log::ObjectType::View)
+            }
+            crate::objects::audit_log_event_v1::ObjectType::ReplacementMaterializedView => {
+                Ok(mz_audit_log::ObjectType::ReplacementMaterializedView)
             }
             crate::objects::audit_log_event_v1::ObjectType::Unknown => Err(
                 TryFromProtoError::unknown_enum_variant("ObjectType::Unknown"),

@@ -12,7 +12,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use itertools::Itertools;
-use mz_catalog::memory::objects::{CatalogItem, ContinualTask, MaterializedView, View};
+use mz_catalog::memory::objects::{
+    CatalogItem, ContinualTask, MaterializedView, ReplacementMaterializedView, View,
+};
 use mz_expr::CollectionPlan;
 use mz_ore::collections::CollectionExt;
 use mz_repr::{CatalogItemId, GlobalId};
@@ -82,7 +84,10 @@ impl Catalog {
                             id_bundle.storage_ids.insert(source.global_id());
                         }
                         CatalogItem::MaterializedView(mv) => {
-                            id_bundle.storage_ids.insert(mv.global_id_writes());
+                            id_bundle.storage_ids.extend(mv.global_ids());
+                        }
+                        CatalogItem::ReplacementMaterializedView(mv) => {
+                            id_bundle.storage_ids.insert(mv.global_id());
                         }
                         CatalogItem::ContinualTask(ct) => {
                             id_bundle.storage_ids.insert(ct.global_id());
@@ -205,6 +210,23 @@ impl Catalog {
                         ids.extend(item_ids);
                     }
                     CatalogItem::MaterializedView(MaterializedView { optimized_expr, .. }) => {
+                        // In some cases the timestamp selected may not affect the answer to a
+                        // query, but it may affect our ability to query the materialized view.
+                        // Materialized views must durably materialize the result of a query, even
+                        // for constant queries. If we choose a timestamp larger than the upper,
+                        // which represents the current progress of the view, then the query will
+                        // need to block and wait for the materialized view to advance.
+                        timelines.insert(TimelineContext::TimestampDependent);
+                        let item_ids = optimized_expr
+                            .depends_on()
+                            .into_iter()
+                            .map(|gid| self.resolve_item_id(&gid));
+                        ids.extend(item_ids);
+                    }
+                    CatalogItem::ReplacementMaterializedView(ReplacementMaterializedView {
+                        optimized_expr,
+                        ..
+                    }) => {
                         // In some cases the timestamp selected may not affect the answer to a
                         // query, but it may affect our ability to query the materialized view.
                         // Materialized views must durably materialize the result of a query, even
