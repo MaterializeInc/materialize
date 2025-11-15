@@ -44,7 +44,7 @@ Credits | Consumption rate increase by X% | Consumption rate increase by Y% | Av
 
 ## Maintenance window
 
-Materialize has a [release and a maintenance window almost every week](/releases/) at a defined [schedule](/releases/#materialize-cloud-upgrade-schedule).
+Materialize has a [release and a maintenance window almost every week](/releases/) at a defined [schedule](/releases/cloud-upgrade-schedule).
 
 During an upgrade, clients may experience brief connection interruptions, but the service otherwise remains fully available. Alerts may get triggered during this brief period of time. For this case, you can configure your monitoring tool to avoid unnecessary alerts as follows:
 

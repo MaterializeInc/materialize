@@ -1,0 +1,64 @@
+- name: "syntax"
+  description: |
+    To create a source from an external PostgreSQL:
+
+  code: |
+    CREATE SOURCE [IF NOT EXISTS] <source_name>
+    [IN CLUSTER <cluster_name>]
+    FROM POSTGRES CONNECTION <connection_name> (PUBLICATION '<publication_name>')
+    ;
+- name: "syntax-options"
+  description: |
+    {{% yaml-table
+    data="syntax_options/create_source/create_source_options_postgres" %}}
+
+- name: "create-source"
+  description: |
+    Once you have configured the upstream PostgreSQL, network security, and
+    created the connection, you can create the source. In this example, the
+    PostgreSQL publication is `mz_source` and the connection to PostgreSQL is
+    `pg_connection`.
+
+  code: |
+    /* This example assumes:
+    - In the upstream PostgreSQL, you have defined:
+      - replication user and password with the appropriate access.
+      - a publication named `mz_source` for the `public.items` and `public.orders` tables.
+    - In Materialize:
+      - You have created a secret for the PostgreSQL password.
+      - You have defined the connection to the upstream PostgreSQL.
+      - You have used the connection to create a source.
+
+      For example (substitute with your configuration):
+        CREATE SECRET pgpass AS '<replication user password>'; -- substitute
+        CREATE CONNECTION pg_connection TO POSTGRES (
+          HOST '<hostname>',          -- substitute
+          DATABASE <db>,              -- substitute
+          USER <replication user>,    -- substitute
+          PASSWORD SECRET pgpass
+          -- [, <network security configuration> ]
+        );
+    */
+
+    CREATE SOURCE pg_source
+    FROM POSTGRES CONNECTION pg_connection (
+      PUBLICATION 'mz_source'
+    );
+
+- name: "create-table"
+  description: |
+    After a source is created, you can create tables from the source,
+    referencing specific table(s). For example, the following creates a table in Materialize from the upstream table `public.items`.
+  code: |
+    CREATE TABLE items
+    FROM SOURCE pg_source(REFERENCE public.items)
+    ;
+  results: |
+
+    {{< note >}}
+
+    - Although the example creates the table with the same name as the upstream table, the table in Materialize can have a different name.
+    - You can create multiple tables that reference the same upstream table.
+    {{< /note >}}
+
+    For more information, see [`CREATE TABLE`](/sql/create-table/).

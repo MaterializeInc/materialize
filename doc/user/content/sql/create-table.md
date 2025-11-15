@@ -9,49 +9,57 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE TABLE` defines a table that is persisted in durable storage and can be
-written to, updated and seamlessly joined with other tables, views or sources.
+`CREATE TABLE` defines a table that is persisted in durable storage.
+
+In Materialize, you can create:
+- Read-write tables. With read-write tables, users can read ([`SELECT`]) and
+  write to the tables ([`INSERT`], [`UPDATE`], [`DELETE`]).
+
+-  *Private Preview*. Read-only tables from [PostgreSQL sources (new
+  syntax)](/sql/create-source/postgres-v2/). Users cannot be write ([`INSERT`],
+  [`UPDATE`], [`DELETE`]) to these tables. These tables are populated by [data
+  ingestion from a source](/ingest-data/postgres/).
 
 Tables in Materialize are similar to tables in standard relational databases:
 they consist of rows and columns where the columns are fixed when the table is
-created but rows can be added to at will via [`INSERT`](../insert) statements.
+created.
 
-{{< warning >}}
-At the moment, tables have many [known limitations](#known-limitations). In most
-situations, you should use [sources](/sql/create-source) instead.
-{{< /warning >}}
+Tables can be joined with other tables, materialized views, views, and
+subsources; and you can create views/materialized views/indexes on tables.
+
 
 [//]: # "TODO(morsapaes) Bring back When to use a table? once there's more
 clarity around best practices."
 
 ## Syntax
 
-{{< diagram "create-table.svg" >}}
+{{< tabs >}}
+{{< tab "Read-write table" >}}
+### Read-write table
 
-### `col_option`
+{{% include-example file="examples/create_table/example_user_populated_table" example="syntax" %}}
 
-{{< diagram "col-option.svg" >}}
+{{% include-example file="examples/create_table/example_user_populated_table" example="syntax-options" %}}
 
-Field | Use
-------|-----
-**TEMP** / **TEMPORARY** | Mark the table as [temporary](#temporary-tables).
-_table&lowbar;name_ | A name for the table.
-_col&lowbar;name_ | The name of the column to be created in the table.
-_col&lowbar;type_ | The data type of the column indicated by _col&lowbar;name_.
-**NOT NULL** | Do not allow the column to contain _NULL_ values. Columns without this constraint can contain _NULL_ values.
-*default_expr* | A default value to use for the column in an [`INSERT`](/sql/insert) statement if an explicit value is not provided. If not specified, `NULL` is assumed.
+{{< /tab >}}
+{{< tab "PostgreSQL source table" >}}
+### PostgreSQL source table
 
-### `with_options`
+{{< private-preview />}}
+{{% include-example file="examples/create_table/example_postgres_table" example="syntax" %}}
 
-{{< diagram "with-options.svg" >}}
+{{% include-example file="examples/create_table/example_postgres_table" example="syntax-options" %}}
+{{< /tab >}}
 
-| Field                                    | Value               | Description                                                                                                                                                       |
-|------------------------------------------|---------------------| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **PARTITION BY** _columns_               | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details.
-| **RETAIN HISTORY FOR** _retention_period_ | `interval`          | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{< /tabs >}}
 
 
-## Details
+## Read-write tables
+
+### Table names and column names
+
+Names for tables and column(s) must follow the [naming
+guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Known limitations
 
@@ -61,42 +69,60 @@ Tables do not currently support:
 - Unique constraints
 - Check constraints
 
-See also the known limitations for [`INSERT`](../insert#known-limitations),
-[`UPDATE`](../update#known-limitations), and [`DELETE`](../delete#known-limitations).
+See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
+[`UPDATE`](/sql/update#known-limitations), and [`DELETE`](/sql/delete#known-limitations).
 
-### Temporary tables
+## PostgreSQL source tables
 
-The `TEMP`/`TEMPORARY` keyword creates a temporary table. Temporary tables are
-automatically dropped at the end of the SQL session and are not visible to other
-connections. They are always created in the special `mz_temp` schema.
+{{< private-preview />}}
 
-Temporary tables may depend upon other temporary database objects, but non-temporary
-tables may not depend on temporary objects.
+### Table names and column names
 
-## Examples
+Names for tables and column(s) must follow the [naming
+guidelines](/sql/identifiers/#naming-restrictions).
 
-### Creating a table
+<a name="supported-db-source-types"></a>
 
-You can create a table `t` with the following statement:
+### Read-only tables
 
-```mzsql
-CREATE TABLE t (a int, b text NOT NULL);
-```
+{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
 
-Once a table is created, you can inspect the table with various `SHOW` commands.
+### Source-populated tables and snapshotting
 
-```mzsql
-SHOW TABLES;
-TABLES
-------
-t
+{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+>}}
 
-SHOW COLUMNS IN t;
-name       nullable  type
--------------------------
-a          true      int4
-b          false     text
-```
+### Supported data types
+
+{{< include-md file="shared-content/postgres-supported-types.md" >}}
+
+{{< include-md file="shared-content/postgres-unsupported-types.md" >}}
+
+### Handling table schema changes
+
+The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE TABLE
+FROM SOURCE` allows for the handling of the upstream DDL changes, specifically
+adding or dropping columns, without downtime.
+
+#### Incompatible schema changes
+
+All other schema changes to upstream tables (such as changing types) will set
+the corresponding subsource into an error state, which prevents you from reading
+from the source.
+
+To handle incompatible schema changes, use [`DROP
+SOURCE`](/sql/alter-source/#context) and [`ALTER SOURCE...ADD
+SUBSOURCE`](/sql/alter-source/) to first drop the affected subsource, and then
+add the table back to the source. When you add the subsource, it will have the
+updated schema from the corresponding upstream table.
+
+### Upstream table truncation restrictions
+
+{{< include-md file="shared-content/postgres-truncation-restriction.md" >}}
+
+### Inherited tables
+
+{{< include-md file="shared-content/postgres-inherited-tables.md" >}}
 
 ## Privileges
 
@@ -104,7 +130,55 @@ The privileges required to execute this statement are:
 
 {{< include-md file="shared-content/sql-command-privileges/create-table.md" >}}
 
+## Examples
+
+### Create a table (User-populated)
+
+{{% include-example file="examples/create_table/example_user_populated_table"
+ example="create-table" %}}
+
+Once a user-populated table is created, you can perform CRUD
+(Create/Read/Update/Write) operations on it.
+
+{{% include-example file="examples/create_table/example_user_populated_table"
+ example="write-to-table" %}}
+
+{{% include-example file="examples/create_table/example_user_populated_table"
+ example="read-from-table" %}}
+
+### Create a table (PostgreSQL source)
+
+{{< private-preview />}}
+
+{{< note >}}
+
+The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
+enabled logical replication, created the publication for the various tables and
+replication user, and updated the network configuration).
+
+For details about configuring your upstream system, see the [PostgreSQL
+integration guides](/ingest-data/postgres/#supported-versions-and-services).
+
+{{</ note >}}
+
+{{% include-example file="examples/create_table/example_postgres_table"
+ example="create-table" %}}
+
+{{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
+
+{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
+>}}
+
+{{% include-example file="examples/create_table/example_postgres_table"
+ example="read-from-table" %}}
+
+
 ## Related pages
 
-- [`INSERT`](../insert)
-- [`DROP TABLE`](../drop-table)
+- [`INSERT`]
+- [`DROP TABLE`](/sql/drop-table)
+
+[`INSERT`]: /sql/insert/
+[`SELECT`]: /sql/select/
+[`UPDATE`]: /sql/update/
+[`DELETE`]: /sql/delete/

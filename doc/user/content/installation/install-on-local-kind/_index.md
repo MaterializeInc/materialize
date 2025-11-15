@@ -1,8 +1,9 @@
 ---
-title: "Install locally on kind"
+title: "Install locally on kind (via Helm)"
 description: "Deploy Self-managed Materialize to a local kind cluster."
 aliases:
   - /self-hosted/install-on-local-kind/
+  - /installation/install-on-local-minikube/
 menu:
   main:
     parent: "installation"
@@ -10,6 +11,13 @@ menu:
     weight: 10
 disable_list: true
 ---
+
+{{< annotation type="Disambiguation" >}}
+
+This page is for upgrading from v25.2.13 or later. For upgrading
+from v25.2.12 or earlier, see [Upgrade from v25.2.12 or earlier](/installation/install-on-local-kind/upgrade-to-swap/).
+
+{{< /annotation >}}
 
 {{% self-managed/materialize-components-sentence %}}
 
@@ -59,6 +67,10 @@ documentationq](https://kubernetes.io/docs/tasks/tools/).
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
+### License key
+
+{{< include-md file="shared-content/license-key-required.md" >}}
+
 ## Installation
 
 1. Start Docker if it is not already running.
@@ -103,6 +115,8 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    the Materialize repo:
 
    {{% self-managed/versions/curl-sample-files-local-install %}}
+
+1. Edit `sample-materialize.yaml` to add your license key to the `license_key` field in the backend secret.
 
 1. Install the Materialize Helm chart.
 

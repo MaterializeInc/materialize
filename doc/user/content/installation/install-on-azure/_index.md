@@ -1,5 +1,5 @@
 ---
-title: "Install on Azure"
+title: "Install on Azure (via Terraform)"
 description: "Install Materialize on Azure Kubernetes Service (AKS) using Terraform"
 disable_list: true
 menu:
@@ -64,6 +64,10 @@ the [Helm documentation](https://helm.sh/docs/intro/install/).
 *Optional*. `jq` is used to parse the AKS cluster name and region from the
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
+
+### License key
+
+{{< include-md file="shared-content/license-key-required.md" >}}
 
 ## A. Authenticate with Azure
 
@@ -331,6 +335,7 @@ deploys a sample infrastructure on Azure with the following components:
          cpu_request    = "1"
          memory_request = "2Gi"
          memory_limit   = "2Gi"
+         license_key    = ""
        }
    ]
    EOF

@@ -1,4 +1,14 @@
 parameters:
+  - parameter: balancerd.affinity
+    description: |
+      Affinity to use for balancerd pods spawned by the operator
+    default: "nil"
+
+  - parameter: balancerd.defaultResources
+    description: |
+      Default resources if not set in the Materialize CR
+    default: '{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}'
+
   - parameter: balancerd.enabled
     description: |
       Flag to indicate whether to create balancerd pods for the environments
@@ -7,12 +17,47 @@ parameters:
   - parameter: balancerd.nodeSelector
     description: |
       Node selector to use for balancerd pods spawned by the operator
-    default: "{}"
+    default: "nil"
+
+  - parameter: balancerd.tolerations
+    description: |
+      Tolerations to use for balancerd pods spawned by the operator
+    default: "nil"
+
+  - parameter: clusterd.affinity
+    description: |
+      Affinity to use for clusterd pods spawned by the operator
+    default: "nil"
 
   - parameter: clusterd.nodeSelector
     description: |
-      Node selector to use for clusterd pods spawned by the operator
+      Node selector to use for all clusterd pods spawned by the operator
     default: "{}"
+
+  - parameter: clusterd.scratchfsNodeSelector
+    description: |
+      Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`.
+    default: '{"materialize.cloud/scratch-fs":"true"}'
+
+  - parameter: clusterd.swapNodeSelector
+    description: |
+      Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`.
+    default: '{"materialize.cloud/swap":"true"}'
+
+  - parameter: clusterd.tolerations
+    description: |
+      Tolerations to use for clusterd pods spawned by the operator
+    default: "nil"
+
+  - parameter: console.affinity
+    description: |
+      Affinity to use for console pods spawned by the operator
+    default: "nil"
+
+  - parameter: console.defaultResources
+    description: |
+      Default resources if not set in the Materialize CR
+    default: '{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}'
 
   - parameter: console.enabled
     description: |
@@ -27,12 +72,32 @@ parameters:
   - parameter: console.nodeSelector
     description: |
       Node selector to use for console pods spawned by the operator
-    default: "{}"
+    default: "nil"
+
+  - parameter: console.tolerations
+    description: |
+      Tolerations to use for console pods spawned by the operator
+    default: "nil"
+
+  - parameter: environmentd.affinity
+    description: |
+      Affinity to use for environmentd pods spawned by the operator
+    default: "nil"
+
+  - parameter: environmentd.defaultResources
+    description: |
+      Default resources if not set in the Materialize CR
+    default: '{"limits":{"memory":"4Gi"},"requests":{"cpu":"1","memory":"4095Mi"}}'
 
   - parameter: environmentd.nodeSelector
     description: |
       Node selector to use for environmentd pods spawned by the operator
     default: "{}"
+
+  - parameter: environmentd.tolerations
+    description: |
+      Tolerations to use for environmentd pods spawned by the operator
+    default: "nil"
 
   - parameter: networkPolicies.egress
     description: |
@@ -69,9 +134,23 @@ parameters:
       Whether to annotate pods with common keys used for prometheus scraping.
     default: "true"
 
+  - parameter: operator.additionalMaterializeCRDColumns
+    description: |
+      Additional columns to display when printing the Materialize CRD in table format.
+    default: "nil"
+
+  - parameter: operator.affinity
+    description: |
+      Affinity to use for the operator pod
+    default: "nil"
+
   - parameter: operator.args.enableInternalStatementLogging
     description: ""
     default: "true"
+
+  - parameter: operator.args.enableLicenseKeyChecks
+    description: ""
+    default: "false"
 
   - parameter: operator.args.startupLogFilter
     description: |
@@ -109,7 +188,7 @@ parameters:
 
   - parameter: operator.cloudProvider.type
     description: |
-      Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure', 'generic', or 'local'
+      Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'
     default: "local"
 
   - parameter: operator.clusters.defaultReplicationFactor.analytics
@@ -152,6 +231,10 @@ parameters:
     description: ""
     default: "25cc"
 
+  - parameter: operator.clusters.swap_enabled
+    description: ""
+    default: "true"
+
   - parameter: operator.image.pullPolicy
     description: |
       Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
@@ -165,11 +248,12 @@ parameters:
   - parameter: operator.image.tag
     description: |
       The tag/version of the operator image to be used
-    default: "v0.138.0"
+    default: "v26.0.0"
 
   - parameter: operator.nodeSelector
-    description: ""
-    default: "{}"
+    description: |
+      Node selector to use for the operator pod
+    default: "nil"
 
   - parameter: operator.resources.limits
     description: |
@@ -186,6 +270,11 @@ parameters:
       Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'.
       Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions.
     default: "kubernetes"
+
+  - parameter: operator.tolerations
+    description: |
+      Tolerations to use for the operator pod
+    default: "nil"
 
   - parameter: rbac.create
     description: |

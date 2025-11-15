@@ -1,16 +1,20 @@
 ---
-title: "CREATE SOURCE: PostgreSQL"
+title: "CREATE SOURCE: PostgreSQL (Legacy Syntax)"
 description: "Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:
     parent: 'create-source'
     identifier: cs_postgres
-    name: PostgreSQL
-    weight: 20
+    name: PostgreSQL (Legacy Syntax)
+    weight: 21
 aliases:
   - /sql/create-source/postgresql
 ---
+
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/postgres-v2)"
+include_blurb=true >}}
 
 {{% create-source/intro %}}
 Materialize supports PostgreSQL (11+) as a data source. To connect to a

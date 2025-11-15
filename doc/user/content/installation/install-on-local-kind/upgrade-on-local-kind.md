@@ -5,23 +5,26 @@ menu:
   main:
     parent: "install-on-local-kind"
     identifier: "upgrade-on-local-kind"
+weight: 10
+aliases:
+  - /installation/install-on-local-minikube/upgrade-on-local-minikube/
 ---
 
-To upgrade your Materialize instances, upgrade the Materialize operator first
-and then the Materialize instances. The following tutorial upgrades your
-Materialize deployment running locally on a [`kind`](https://kind.sigs.k8s.io/)
+{{< annotation type="Disambiguation" >}}
+
+This page is for upgrading from v25.2.13 or later. For v25.1.12 or earlier, see
+[Upgrade from v25.2.12 or
+earlier](/installation/install-on-local-kind/upgrade-to-swap/).
+
+{{< /annotation >}}
+
+To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your Materialize deployment running locally on a [`kind`](https://kind.sigs.k8s.io/)
 cluster.
 
 The tutorial assumes you have installed Materialize on `kind` using the
 instructions on [Install locally on kind](/installation/install-on-local-kind/).
 
-## Version compatibility
-
-When updating, you need to specify the Materialize Operator version,
-`orchestratord` version, and the `environmentd` versions. The following table
-presents the versions compatibility for the operator and the applications:
-
-{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
+{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
 
 ## Prerequisites
 
@@ -37,6 +40,10 @@ documentationq](https://kubernetes.io/docs/tasks/tools/).
 
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
+
+### License key
+
+{{< include-md file="shared-content/license-key-required.md" >}}
 
 ## Upgrade
 

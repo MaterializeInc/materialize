@@ -1,5 +1,5 @@
 ---
-title: "Upgrade on AWS"
+title: "Upgrade on AWS (Terraform)"
 description: "Procedure to upgrade your Materialize operator and instances running on AWS"
 menu:
   main:
@@ -8,8 +8,19 @@ menu:
     weight: 10
 ---
 
-To upgrade your Materialize instances, upgrade the Materialize operator first
-and then the Materialize instances. The following tutorial upgrades your
+{{< annotation type="Disambiguation" >}}
+
+This page is for upgrading from v25.2.13 or later using Terraform. For upgrading
+from v25.2.12 or earlier, see:
+
+- For upgrade via Terraform, see {{< include-md
+file="shared-content/self-managed/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
+
+- For upgrade via Helm, see [Upgrade from v25.2.12 or earlier(Non-Terraform)](/installation/install-on-aws/upgrade-to-swap/).
+
+{{< /annotation >}}
+
+To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
 Materialize deployment running on  AWS Elastic Kubernetes Service (EKS).
 
 The tutorial assumes you have installed Materialize on AWS Elastic Kubernetes
@@ -19,17 +30,10 @@ or the root).
 
 ## Version compatibility
 
+{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+
 
 {{< tabs >}}
-
-{{< tab "Helm chart releases" >}}
-
-The following table presents the versions compatibility for the operator and the
-applications:
-
-{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
-
-{{</ tab >}}
 
 {{< tab "Materialize on AWS Terraform Releases" >}}
 
@@ -72,6 +76,10 @@ for details.
 
 If you do not have Helm 3.2.0+, install. For details, see the [Helm
 documentation](https://helm.sh/docs/intro/install/).
+
+### License key
+
+{{< include-md file="shared-content/license-key-required.md" >}}
 
 ## Procedure
 

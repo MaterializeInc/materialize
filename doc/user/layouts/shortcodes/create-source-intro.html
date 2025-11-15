@@ -1,0 +1,10 @@
+{{ $external_source := .Get "external_source" }}
+{{ $version := .Get "version" }}
+{{ $create_table_url := .Get "create_table" }}
+{{ $create_table := printf "[`CREATE TABLE FROM SOURCE`](%s)" $create_table_url | markdownify }}
+
+Creates a new source from {{ $external_source }}. {{ if $version }} Materialize
+supports creating sources from {{ $external_source }} version {{ $version }}. {{
+end }} Once a new source is created, you can {{ $create_table }} from the source
+to create the corresponding tables in Materialize and start the data ingestion
+process.

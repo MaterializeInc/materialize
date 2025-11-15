@@ -3,6 +3,10 @@ or on a cloud provider. Self-Managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 
+## License key
+
+{{< include-md file="shared-content/license-key-required.md" >}}
+
 ## Install locally
 
 {{< multilinkbox >}}

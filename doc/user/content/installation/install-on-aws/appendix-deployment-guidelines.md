@@ -33,38 +33,21 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
-*Starting in v0.3.1 of Materialize on AWS Terraform*, disk support (using
-OpenEBS and NVMe instance storage) is enabled, by default, for Materialize. With
-this change, the Terraform:
+### Swap support
 
-- Installs OpenEBS via Helm;
+Starting in v0.6.1 of Materialize on AWS Terraform,
+disk support (using swap on NVMe instance storage) may be enabled for
+Materialize. With this change, the Terraform:
 
-- Configures NVMe instance store volumes using a bootstrap script;
+- Creates a node group for Materialize.
+- Configures NVMe instance store volumes as swap using a daemonset.
+- Enables swap at the Kubelet.
 
-- Creates appropriate storage classes for Materialize.
+For swap support, the following configuration option is available:
 
-Associated with this change,
+- [`swap_enabled`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_swap_enabled)
 
-- The following configuration options are available:
-
-  - [`enable_disk_support`]
-  - [`disk_support_config`]
-
-- The default [`node_group_instance_types`] has changed from `"r8g.2xlarge"` to
-  `"r7gd.2xlarge"`. See [Recommended instance
-  types](#recommended-instance-types).
-
-[enable disk support]:
-    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#disk-support-for-materialize
-
-[`enable_disk_support`]:
-    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_enable_disk_support
-
-[`disk_support_config`]:
-    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_disk_support_config
-
-[`node_group_instance_types`]:
-    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_node_group_instance_types
+See [Upgrade Notes](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061).
 
 
 ## CPU affinity

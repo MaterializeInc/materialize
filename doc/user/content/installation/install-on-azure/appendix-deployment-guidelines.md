@@ -47,28 +47,21 @@ when operating on datasets larger than main memory as well as allows for a more
 graceful degradation rather than OOMing. Network-attached storage (like EBS
 volumes) can significantly degrade performance and is not supported.
 
-Starting in v0.4.0 of Materialize on Azure Terraform, disk support (using
-OpenEBS and NVMe instance storage) is enabled, by default, for Materialize. With
-this change, the Terraform:
+### Swap support
 
-- Installs OpenEBS via Helm;
+Starting in v0.6.1 of Materialize on Azure Terraform,
+disk support (using swap on NVMe instance storage) may be enabled for
+Materialize. With this change, the Terraform:
 
-- Configures NVMe instance store volumes using a bootstrap script;
+  - Creates a node group for Materialize.
+  - Configures NVMe instance store volumes as swap using a daemonset.
+  - Enables swap at the Kubelet.
 
-- Creates appropriate storage classes for Materialize.
+For swap support, the following configuration option is available:
 
-Associated with this change:
+- [`swap_enabled`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_swap_enabled)
 
-- The following configuration options are available:
-
-  - [`enable_disk_support`]
-  - [`disk_support_config`]
-  - [`disk_setup_image`]
-
-- The default
-[`aks_config.vm_size`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_aks_config)
-has changed from `Standard_E8ps_v6` to `Standard_E4pds_v6`. See [Recommended
-instance types](#recommended-instance-types).
+See [Upgrade Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061).
 
 ## Recommended Azure Blob Storage
 

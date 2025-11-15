@@ -26,7 +26,8 @@ Option                        | Description
 ### Known limitations
 
 * `UPDATE` cannot be used inside [transactions](../begin).
-* `UPDATE` can reference [user-created tables](../create-table) but not [sources](../create-source).
+* `UPDATE` can reference [read-write tables](../create-table) but not
+  [sources](../create-source) or read-only tables.
 * **Low performance.** While processing an `UPDATE` statement, Materialize cannot
   process other `INSERT`, `UPDATE`, or `DELETE` statements.
 
