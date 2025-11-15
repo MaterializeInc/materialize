@@ -264,16 +264,8 @@ rust-version = "1.89.0"
 split-debuginfo = "unpacked"
 
 [profile.dev.package]
-# Compile the backtrace crate and its dependencies with all optimizations, even
-# in dev builds, since otherwise backtraces can take 20s+ to symbolize. With
-# optimizations enabled, symbolizing a backtrace takes less than 1s.
-addr2line = { opt-level = 3 }
-adler2 = { opt-level = 3 }
 backtrace = { opt-level = 3 }
-gimli = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
-object = { opt-level = 3 }
-rustc-demangle = { opt-level = 3 }
 timely = { opt-level = 3 }
 differential-dataflow = { opt-level = 3 }
 mz-compute = { opt-level = 3 }
@@ -353,8 +345,12 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_changes` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c2d70cbfc4822ea826198c7787c709beb652fa31" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "c2d70cbfc4822ea826198c7787c709beb652fa31" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "fe7c01bfb359" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "fe7c01bfb359" }
+iceberg-catalog-s3tables = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "fe7c01bfb359" }
+#iceberg = { path = "/Users/dovalperin/workspace/materialize/iceberg-rust/crates/iceberg" }
+#iceberg-catalog-rest = { path = "/Users/dovalperin/workspace/materialize/iceberg-rust/crates/catalog/rest" }
+#iceberg-catalog-s3tables = { path = "/Users/dovalperin/workspace/materialize/iceberg-rust/crates/catalog/s3tables" }
 
 
 # BEGIN LINT CONFIG
