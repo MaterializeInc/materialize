@@ -555,9 +555,9 @@ impl Coordinator {
         }
 
         let span = Span::current();
-        Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
+        Ok(StageResult::Handle(mz_ore::task::spawn(
             || "optimize peek",
-            move || {
+            async move {
                 span.in_scope(|| {
                     let pipeline = || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, AdapterError> {
                         let _dispatch_guard = explain_ctx.dispatch_guard();
