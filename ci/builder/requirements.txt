@@ -47,7 +47,7 @@ pydantic==2.8.2
 pyelftools==0.32
 pyjwt==2.10.1
 PyMySQL==1.1.2
-pytest==8.4.2
+pytest==9.0.1
 pytest-split==0.10.0
 pyyaml==6.0.3
 requests==2.32.5
