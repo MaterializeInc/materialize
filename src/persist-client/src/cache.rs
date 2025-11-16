@@ -111,6 +111,39 @@ impl PersistClientCache {
         )
     }
 
+    #[cfg(feature = "turmoil")]
+    /// Create a [PersistClientCache] for use in turmoil tests.
+    ///
+    /// Turmoil wants to run all software under test in a single thread, so we disable the
+    /// (multi-threaded) isolated runtime.
+    pub fn new_for_turmoil() -> Self {
+        use crate::rpc::NoopPubSubSender;
+
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+
+        let pubsub_sender: Arc<dyn PubSubSender> = Arc::new(NoopPubSubSender);
+        let _pubsub_receiver_task = mz_ore::task::spawn(|| "noop", async {});
+
+        let state_cache = Arc::new(StateCache::new(
+            &cfg,
+            Arc::clone(&metrics),
+            Arc::clone(&pubsub_sender),
+        ));
+        let isolated_runtime = IsolatedRuntime::new_disabled();
+
+        PersistClientCache {
+            cfg,
+            metrics,
+            blob_by_uri: Mutex::new(BTreeMap::new()),
+            consensus_by_uri: Mutex::new(BTreeMap::new()),
+            isolated_runtime: Arc::new(isolated_runtime),
+            state_cache,
+            pubsub_sender,
+            _pubsub_receiver_task,
+        }
+    }
+
     /// Returns the [PersistConfig] being used by this cache.
     pub fn cfg(&self) -> &PersistConfig {
         &self.cfg
