@@ -1606,9 +1606,9 @@ dependencies = [
 
 [[package]]
 name = "buildid"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0188344028070a23e23eebec37f4c5699db7b5a5fd088d97e6fae7727ac0dd77"
+checksum = "834a85d2478807f41c43251c7ad226e1185bc34feb2133872f796a11b57155ae"
 dependencies = [
  "cfg-if",
  "libc",
