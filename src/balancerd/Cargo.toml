@@ -59,7 +59,7 @@ mz-environmentd = { path = "../environmentd", default-features = false, features
 mz-frontegg-mock = { path = "../frontegg-mock" }
 postgres = "0.19.5"
 reqwest = "0.11.24"
-tempfile = "3.20.0"
+tempfile = "3.23.0"
 
 [features]
 default = ["mz-alloc-default", "workspace-hack"]

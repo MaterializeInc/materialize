@@ -20,7 +20,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 datadriven = "0.8.0"
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
-tempfile = "3.20.0"
+tempfile = "3.23.0"
 
 [features]
 default = ["workspace-hack"]

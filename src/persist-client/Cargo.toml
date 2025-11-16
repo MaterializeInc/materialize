@@ -74,7 +74,7 @@ criterion = { version = "0.6.0", features = ["html_reports"] }
 datadriven = { version = "0.8.0", features = ["async"] }
 futures-task = "0.3.31"
 num_cpus = "1.17.0"
-tempfile = "3.20.0"
+tempfile = "3.23.0"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
