@@ -767,19 +767,6 @@ steps:
   - wait: ~
     continue_on_failure: true
 
-  - id: coverage-pr-analyze
-    label: Analyze code coverage for PR
-    timeout_in_minutes: 20
-    command: bin/ci-builder run stable ci/test/coverage_report.sh
-    inputs: ["*"]
-    priority: 1
-    agents:
-      queue: hetzner-aarch64-8cpu-16gb
-    coverage: only
-
-  - wait: ~
-    continue_on_failure: true
-
   - id: deploy
     label: Deploy
     trigger: deploy
@@ -792,3 +779,16 @@ steps:
         BUILDKITE_TAG: "$BUILDKITE_TAG"
     coverage: skip
     sanitizer: skip
+
+  - wait: ~
+    continue_on_failure: true
+
+  - id: coverage-pr-analyze
+    label: Analyze code coverage for PR
+    timeout_in_minutes: 20
+    command: bin/ci-builder run stable ci/test/coverage_report.sh
+    inputs: ["*"]
+    priority: 1
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+    coverage: only
