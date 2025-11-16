@@ -118,7 +118,7 @@ rand_chacha-274715c4dabd11b0 = { package = "rand_chacha", version = "0.9.0", def
 rand_chacha-468e82937335b1c9 = { package = "rand_chacha", version = "0.3.1" }
 rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
-regex = { version = "1.11.3" }
+regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.23", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
@@ -266,7 +266,7 @@ rand_chacha-274715c4dabd11b0 = { package = "rand_chacha", version = "0.9.0", def
 rand_chacha-468e82937335b1c9 = { package = "rand_chacha", version = "0.3.1" }
 rand_core = { version = "0.6.4", default-features = false, features = ["std"] }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
-regex = { version = "1.11.3" }
+regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
 reqwest-5ef9efb8ec2df382 = { package = "reqwest", version = "0.12.23", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
