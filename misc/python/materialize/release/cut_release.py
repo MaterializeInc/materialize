@@ -10,8 +10,12 @@
 """Cut a new release and push the tag to the upstream Materialize repository."""
 
 import argparse
+import os
 import re
+import shutil
+import subprocess
 import sys
+import time
 
 from semver.version import Version
 
@@ -54,6 +58,51 @@ def main():
     try:
         print(f"Checking out SHA {args.sha}")
         checkout(args.sha)
+        print("Cloning console repo")
+        console_dir = MZ_ROOT / "console"
+        if os.path.exists(console_dir):
+            shutil.rmtree(console_dir)
+        try:
+            spawn.runv(
+                [
+                    "git",
+                    "clone",
+                    "https://github.com/MaterializeInc/console",
+                    console_dir,
+                ],
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+        except subprocess.CalledProcessError:
+            spawn.runv(
+                ["git", "clone", "git@github.com:MaterializeInc/console", console_dir],
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+
+        print(f"Bumping console version to {version}")
+        spawn.runv(["git", "tag", "-a", version, "-m", version], cwd=console_dir)
+        spawn.runv(["git", "push", "origin", version], cwd=console_dir)
+
+        print("Waiting for console version to be released on DockerHub (~15 min)")
+        console_image = f"materialize/console:{version[1:]}"
+        time.sleep(15 * 60)
+        while True:
+            try:
+                spawn.runv(["docker", "manifest", "inspect", console_image])
+            except subprocess.CalledProcessError:
+                print(f"{console_image} not yet on DockerHub, sleeping 1 min")
+                time.sleep(60)
+                continue
+            break
+        print(f"{console_image} found on DockerHub")
+        spawn.runv(
+            [
+                "sed",
+                "-i",
+                f"s#FROM materialize/console:.* AS console#FROM {console_image} AS console#",
+                "misc/images/materialized-base/Dockerfile",
+            ]
+        )
+
         print(f"Bumping version to {version}")
         spawn.runv(
             [

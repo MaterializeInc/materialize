@@ -197,6 +197,7 @@ so it is executed.""",
         args.sanitizer,
         lto,
     )
+    add_nightly_deploy_dependency(pipeline, args.pipeline)
     remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
@@ -816,6 +817,29 @@ def trim_tests_pipeline(
         or ("group" in step and step["steps"])
         or step.get("id") in needed
     ]
+
+
+def add_nightly_deploy_dependency(pipeline: Any, pipeline_name: str) -> None:
+    """In release builds orchestratord and terraform tests in Nightly require
+    the release tag to exist already, so we have to wait for the Deploy step to
+    finish before triggering Nightly. But we don't want to make the Deploy step
+    synchronous in non-release builds since it would make the test run take
+    significantly longer to finish."""
+    tag = os.environ["BUILDKITE_TAG"]
+    if pipeline_name != "test" or not tag:
+        return
+
+    previous_step: dict | None = None
+    for step in steps(pipeline):
+        if step.get("id") == "deploy":
+            step["async"] = False
+            assert previous_step and "wait" in previous_step
+            previous_step["skip"] = True
+
+        if step.get("id") == "nightly-if-release":
+            step["depends_on"] = "deploy"
+
+        previous_step = step
 
 
 def add_cargo_test_dependency(
