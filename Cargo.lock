@@ -13362,7 +13362,7 @@ dependencies = [
  "crossbeam-queue",
  "crossbeam-utils",
  "csv-async",
- "darling_core 0.20.11",
+ "darling_core 0.21.2",
  "dec",
  "deranged",
  "digest",
