@@ -17,6 +17,10 @@ The tutorial assumes you have installed Materialize on Azure Kubernetes Service
 Azure](/installation/install-on-azure/) (either from the examples/simple
 directory or the root).
 
+{{< note >}}
+**It is strongly recommended to upgrade at to least version 25.2.15 (environmentd 0.147.20) prior to upgrading to the next major version.**
+{{</ note >}}
+
 ## Version compatibility
 
 {{< tabs >}}
