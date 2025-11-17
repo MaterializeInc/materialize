@@ -12,7 +12,7 @@ This is inconvenient for users as changes need to cascade through the dependency
 
 We call this strong coupling between a materialized view and its definition and output columns.
 This design explores an alternative in which we can decouple these concepts, allowing users to change one without needing to drop and recreate the other.
-This would move us closer to a losely coupled system, which is easier to maintain and evolve over time.
+This would move us closer to a loosely coupled system, which is easier to maintain and evolve over time.
 
 ## Success criteria
 
@@ -87,7 +87,7 @@ More specifically, we change the definition of a materialized view as follows:
 * A materialized view has a current definition and output columns, identified by a unique global ID.
 * A materialized view can have additional versions, each with their own unique global ID and schema.
 
-This corresponds with switch from a strongly-coupled model to a loosely-coupled model: We switch from binding the view definition and schema, to just binding the schmea.
+This corresponds with switching from a strongly-coupled model to a loosely-coupled model: We switch from binding the view definition and schema, to just binding the schema.
 
 ## Formalism
 
