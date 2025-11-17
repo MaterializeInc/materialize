@@ -482,7 +482,13 @@ pub async fn get_constraints_for_tables(
     schema_table_list: impl Iterator<Item = &(Arc<str>, Arc<str>)>,
 ) -> Result<BTreeMap<(Arc<str>, Arc<str>), Vec<SqlServerTableConstraintRaw>>, SqlServerError> {
     let qualified_table_names: Vec<_> = schema_table_list
-        .map(|(schema, table)| format!("{schema}.{table}"))
+        .map(|(schema, table)| {
+            format!(
+                "{quoted_schema}.{quoted_table}",
+                quoted_schema = quote_identifier(schema),
+                quoted_table = quote_identifier(table)
+            )
+        })
         .collect();
 
     if qualified_table_names.is_empty() {
@@ -512,7 +518,7 @@ pub async fn get_constraints_for_tables(
         ON ccu.constraint_schema = tc.constraint_schema \
         AND ccu.constraint_name = tc.constraint_name \
     WHERE
-        tc.table_schema + '.' + tc.table_name IN ({params})
+        QUOTENAME(tc.table_schema) + '.' + QUOTENAME(tc.table_name) IN ({params})
         AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')"
     );
 

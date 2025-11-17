@@ -457,7 +457,7 @@ pub(super) fn generate_source_export_statement_values(
                 constraint.constraint_type,
                 SqlServerTableConstraintType::PrimaryKey
             ),
-            // NULLs are distinct for SQL Server UNIQUE constraint, and not allowed for PRIMARY KEY.
+            // NULLs are not distinct for SQL Server UNIQUE constraint, and not allowed for PRIMARY KEY.
             // See <https://learn.microsoft.com/en-us/sql/relational-databases/tables/unique-constraints-and-check-constraints?view=sql-server-ver17#unique-constraints>
             nulls_not_distinct: matches!(
                 constraint.constraint_type,
