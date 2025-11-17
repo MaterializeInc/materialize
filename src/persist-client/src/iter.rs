@@ -26,7 +26,7 @@ use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use itertools::Itertools;
 use mz_ore::soft_assert_eq_or_log;
-use mz_ore::task::JoinHandle;
+use mz_ore::task::{JoinHandle, JoinHandleExt};
 use mz_persist::indexed::encoding::BlobTraceUpdates;
 use mz_persist::location::Blob;
 use mz_persist::metrics::ColumnarMetrics;
@@ -597,9 +597,7 @@ where
 
                     let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
                     let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
-                        Some(handle) => handle
-                            .await
-                            .unwrap_or_else(|join_err| Err(anyhow!(join_err))),
+                        Some(handle) => handle.wait_and_assert_finished().await,
                         None => {
                             data.clone()
                                 .fetch(
