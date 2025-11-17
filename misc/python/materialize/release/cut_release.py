@@ -94,14 +94,6 @@ def main():
                 continue
             break
         print(f"{console_image} found on DockerHub")
-        spawn.runv(
-            [
-                "sed",
-                "-i",
-                f"s#FROM materialize/console:.* AS console#FROM {console_image} AS console#",
-                "misc/images/materialized-base/Dockerfile",
-            ]
-        )
 
         print(f"Bumping version to {version}")
         spawn.runv(
@@ -113,6 +105,14 @@ def main():
                 version,
                 "--no-commit",
                 "--sbom",
+            ]
+        )
+        spawn.runv(
+            [
+                "sed",
+                "-i",
+                f"s#FROM materialize/console:.* AS console#FROM {console_image} AS console#",
+                "misc/images/materialized-base/Dockerfile",
             ]
         )
         # Commit here instead of in bump-version so we have access to the correct git author
