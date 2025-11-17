@@ -67,7 +67,7 @@ semver = "1.0.27"
 serde = "1.0.219"
 serde_json = { version = "1.0.145", features = ["raw_value"] }
 similar = "2.7.0"
-tempfile = "3.20.0"
+tempfile = "3.23.0"
 termcolor = "1.4.1"
 tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73"], default-features = false }
 time = "0.3.17"
