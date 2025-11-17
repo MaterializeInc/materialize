@@ -1147,7 +1147,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-util",
  "itoa",
  "matchit",
@@ -1606,9 +1606,9 @@ dependencies = [
 
 [[package]]
 name = "buildid"
-version = "1.0.3"
+version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0188344028070a23e23eebec37f4c5699db7b5a5fd088d97e6fae7727ac0dd77"
+checksum = "834a85d2478807f41c43251c7ad226e1185bc34feb2133872f796a11b57155ae"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1738,9 +1738,9 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cc"
-version = "1.2.45"
+version = "1.2.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35900b6c8d709fb1d854671ae27aeaa9eec2f8b01b364e1619a40da3e6fe2afe"
+checksum = "b97463e1064cb1b1c1384ad0a0b9c8abd0988e2a91f52606c80ef14aadb63e36"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -3215,9 +3215,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52051878f80a721bb68ebfbc930e07b65ba72f2da88968ea5c06fd6ca3d3a127"
+checksum = "3a3076410a55c90011c298b04d0cfa770b00fa04e1e3c97d3f6c9de105a03844"
 
 [[package]]
 name = "findshlibs"
@@ -3878,13 +3878,14 @@ dependencies = [
 
 [[package]]
 name = "hyper"
-version = "1.6.0"
+version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc2b571658e38e0c01b1fdca3bbbe93c00d3d71693ff2770043f8c29bc7d6f80"
+checksum = "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11"
 dependencies = [
+ "atomic-waker",
  "bytes",
  "futures-channel",
- "futures-util",
+ "futures-core",
  "h2 0.4.12",
  "http 1.2.0",
  "http-body 1.0.1",
@@ -3892,6 +3893,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
+ "pin-utils",
  "smallvec",
  "tokio",
  "want",
@@ -3904,7 +3906,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "527d4d619ca2c2aafa31ec139a3d1d60bf557bf7578a1f20f743637eccd9ca19"
 dependencies = [
  "http 1.2.0",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-util",
  "linked_hash_set",
  "once_cell",
@@ -3924,7 +3926,7 @@ checksum = "2d191583f3da1305256f22463b9bb0471acad48a4e534a5218b9963e9c1f59b2"
 dependencies = [
  "futures-util",
  "http 1.2.0",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-util",
  "rustls",
  "rustls-pki-types",
@@ -3951,7 +3953,7 @@ version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3203a961e5c83b6f5498933e78b6b263e208c197b63e9c6c53cc82ffd3f63793"
 dependencies = [
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-util",
  "pin-project-lite",
  "tokio",
@@ -3979,7 +3981,7 @@ checksum = "70206fc6890eaca9fde8a0bf71caa2ddfc9fe045ac9e5c70df101a7dbde866e0"
 dependencies = [
  "bytes",
  "http-body-util",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-util",
  "native-tls",
  "tokio",
@@ -3989,9 +3991,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.17"
+version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3c6995591a8f1380fcb4ba966a252a4b29188d51d2b89e3a252f5305be65aea8"
+checksum = "52e9a2a24dc5c6821e71a7030e1e14b7b632acac55c40e9d2e082c621261bb56"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -4000,7 +4002,7 @@ dependencies = [
  "futures-util",
  "http 1.2.0",
  "http-body 1.0.1",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "ipnet",
  "libc",
  "percent-encoding",
@@ -4509,7 +4511,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-openssl",
  "hyper-timeout 0.5.1",
  "hyper-util",
@@ -4810,9 +4812,9 @@ dependencies = [
 
 [[package]]
 name = "libz-sys"
-version = "1.1.22"
+version = "1.1.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b70e7a7df205e92a1a4cd9aaae7898dac0aa555503cc0a649494d0d60e7651d"
+checksum = "15d118bbf3771060e7311cc7bb0545b01d08a8b4a7de949198dec1fa0ca1c0f7"
 dependencies = [
  "cc",
  "libc",
@@ -5177,7 +5179,7 @@ dependencies = [
  "clap",
  "csv",
  "dirs",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "indicatif",
  "maplit",
  "mz-build-info",
@@ -5475,7 +5477,7 @@ dependencies = [
  "domain",
  "futures",
  "humantime",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-openssl",
  "hyper-util",
  "jsonwebtoken",
@@ -5661,7 +5663,7 @@ name = "mz-ccsr"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-util",
  "mz-build-tools",
  "mz-ore",
@@ -5773,7 +5775,7 @@ dependencies = [
  "clap",
  "fail",
  "futures",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-util",
  "mz-alloc",
  "mz-alloc-default",
@@ -6091,7 +6093,7 @@ dependencies = [
  "http 1.2.0",
  "http-body-util",
  "humantime",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-openssl",
  "hyper-tls 0.6.0",
  "hyper-util",
@@ -6406,7 +6408,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "clap",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "jsonwebtoken",
  "mz-frontegg-auth",
  "mz-ore",
@@ -6431,7 +6433,7 @@ dependencies = [
  "axum-extra",
  "headers",
  "http 1.2.0",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "include_dir",
  "mz-ore",
  "prometheus",
@@ -10273,7 +10275,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-rustls",
  "hyper-tls 0.6.0",
  "hyper-util",
@@ -12197,7 +12199,7 @@ dependencies = [
  "http 1.2.0",
  "http-body 1.0.1",
  "http-body-util",
- "hyper 1.6.0",
+ "hyper 1.8.1",
  "hyper-timeout 0.5.1",
  "hyper-util",
  "percent-encoding",
