@@ -5,7 +5,9 @@ or on a cloud provider. Self-Managed Materialize requires:
 
 ## License key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+Starting in v26.0, Materialize requires a license key.
+
+{{< yaml-table data="self_managed/license_key" >}}
 
 ## Install locally
 

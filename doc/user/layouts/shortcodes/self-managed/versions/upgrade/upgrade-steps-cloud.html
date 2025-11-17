@@ -82,14 +82,15 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    | `environmentd_version`  | New Materialize instance version. This should be the same as the operator version: `{{ $operator_version }}`.|
    | `request_rollout`  or `force_rollout` | A new UUID string.  Can be generated with `uuidgen`.<br> <ul><li>`request_rollout` triggers a rollout only if changes exist. </li><li>`force_rollout`  triggers a rollout even if no changes exist.</li></ul> |
    | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
-   | `license_key` | Set to the value of your license key. |
+   | `license_key` | Required. Set to the value of your license key. If your existing deployment does not have a license key, contact Materialize at https://materialize.com/self-managed/. If you have a license key, substitute your license key for `<ENTER YOUR LICENSE KEY HERE>`. |
 
    For example, the following instance specifies:
 
    - a `create_database` of `false`,
    - an `inPlaceRollout` of `false`,
-   - an `environmentd_version` of `"{{ $environmentd_version }}"`, and
-   - a `request_rollout` of `"22222222-2222-2222-2222-222222222222"`.
+   - an `environmentd_version` of `"{{ $environmentd_version }}"`,
+   - a `request_rollout` of `"22222222-2222-2222-2222-222222222222"`, and
+   - a `license_key` (substituting your license key for `<ENTER YOUR LICENSE KEY HERE>`).
 
    ```sh
    materialize_instances = [
@@ -101,7 +102,7 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
          memory_request = "2Gi"
          memory_limit   = "2Gi"
          create_database = false
-         license_key    = "[...]"
+         license_key    = "<ENTER YOUR LICENSE KEY HERE>"        # Required.
          environmentd_version = "{{ $environmentd_version }}"
          inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
          requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID

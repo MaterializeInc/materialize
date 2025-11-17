@@ -22,7 +22,7 @@ agreement.
 
 A license key is required to use Self-Managed Materialize.
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+{{< yaml-table data="self_managed/license_key" >}}
 
 ### Self-Managed Community Edition Privacy Policy
 

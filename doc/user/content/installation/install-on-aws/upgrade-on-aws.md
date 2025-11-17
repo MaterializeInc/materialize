@@ -79,7 +79,7 @@ documentation](https://helm.sh/docs/intro/install/).
 
 ### License key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
 
 ## Procedure
 

@@ -1,0 +1,19 @@
+columns:
+  - column: "Deployment"
+  - column: "Type"
+  - column: "Action"
+rows:
+  - Deployment: "New deployments"
+    Type: "Community"
+    Action: |
+      To get a license key:
+      - If you have a Cloud account, visit the [**License** page in the
+      Materialize Console](https://console.materialize.com/license/).
+      - If you do not have a Cloud account, visit
+      https://materialize.com/self-managed/community-license/.
+  - Deployment: "New deployments"
+    Type: "Enterprise"
+    Action: "Contact Materialize at https://materialize.com/self-managed/."
+  - Deployment: "Existing deployments"
+    Type: "Community or Enterprise"
+    Action: "Contact Materialize at https://materialize.com/self-managed/."
