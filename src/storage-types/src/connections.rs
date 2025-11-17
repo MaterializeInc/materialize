@@ -60,7 +60,8 @@ use crate::connections::string_or_secret::StringOrSecret;
 use crate::controller::AlterError;
 use crate::dyncfgs::{
     ENFORCE_EXTERNAL_ADDRESSES, KAFKA_CLIENT_ID_ENRICHMENT_RULES,
-    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM,
+    KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM, KAFKA_RECONNECT_BACKOFF,
+    KAFKA_RECONNECT_BACKOFF_MAX, KAFKA_RETRY_BACKOFF, KAFKA_RETRY_BACKOFF_MAX,
 };
 use crate::errors::{ContextCreationError, CsrConnectError};
 
@@ -851,6 +852,35 @@ impl KafkaConnection {
                 options.insert("sasl.password".into(), StringOrSecret::Secret(password));
             }
         }
+
+        options.insert(
+            "retry.backoff.ms".into(),
+            KAFKA_RETRY_BACKOFF
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
+        options.insert(
+            "retry.backoff.max.ms".into(),
+            KAFKA_RETRY_BACKOFF_MAX
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
+        options.insert(
+            "reconnect.backoff.ms".into(),
+            KAFKA_RECONNECT_BACKOFF
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
+        options.insert(
+            "reconnect.backoff.max.ms".into(),
+            KAFKA_RECONNECT_BACKOFF_MAX
+                .get(storage_configuration.config_set())
+                .as_millis()
+                .into(),
+        );
 
         let mut config = mz_kafka_util::client::create_new_client_config(
             storage_configuration
