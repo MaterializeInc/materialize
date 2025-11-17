@@ -612,6 +612,7 @@ mz_mysql_source_tables                   ""
 mz_network_policies                      ""
 mz_network_policy_rules                  ""
 mz_object_dependencies                   ""
+mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
 mz_postgres_sources                      ""
 mz_postgres_source_tables                ""
@@ -804,7 +805,7 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-63
+64
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
