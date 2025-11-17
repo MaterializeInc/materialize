@@ -45,7 +45,7 @@ use crate::explain::dot::{DisplayDot, dot_string};
 use crate::explain::json::{DisplayJson, json_string};
 use crate::explain::text::{DisplayText, text_string};
 use crate::optimize::OptimizerFeatureOverrides;
-use crate::{GlobalId, ReprColumnType, ReprScalarType, SqlColumnType, SqlScalarType};
+use crate::{GlobalId, SqlColumnType, SqlScalarType};
 
 pub mod dot;
 pub mod json;
@@ -444,12 +444,6 @@ pub trait ExprHumanizer: fmt::Debug {
     /// compatibility is more important.
     fn humanize_scalar_type(&self, ty: &SqlScalarType, postgres_compat: bool) -> String;
 
-    /// Returns a human-readable name for the specified scalar type.
-    /// Calls `humanize_scalar_type` with the `SqlScalarType` representation of the specified type.
-    fn humanize_scalar_type_repr(&self, typ: &ReprScalarType, postgres_compat: bool) -> String {
-        self.humanize_scalar_type(&SqlScalarType::from_repr(typ), postgres_compat)
-    }
-
     /// Returns a human-readable name for the specified column type.
     /// Used in, e.g., EXPLAIN and error msgs, in which case exact Postgres compatibility is less
     /// important than showing as much detail as possible. Also used in `pg_typeof`, where Postgres
@@ -460,12 +454,6 @@ pub trait ExprHumanizer: fmt::Debug {
             self.humanize_scalar_type(&typ.scalar_type, postgres_compat),
             if typ.nullable { "?" } else { "" }
         )
-    }
-
-    /// Returns a human-readable name for the specified column type.
-    /// Calls `humanize_column_type` with the `SqlColumnType` representation of the specified type.
-    fn humanize_column_type_repr(&self, typ: &ReprColumnType, postgres_compat: bool) -> String {
-        self.humanize_column_type(&SqlColumnType::from_repr(typ), postgres_compat)
     }
 
     /// Returns a vector of column names for the relation identified by `id`.

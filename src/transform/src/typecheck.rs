@@ -22,7 +22,7 @@ use mz_expr::{
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
-use mz_repr::{ColumnName, Row, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType};
+use mz_repr::{ColumnName, Row, ScalarBaseType, SqlColumnType, SqlRelationType, SqlScalarType};
 
 /// Typechecking contexts as shared by various typechecking passes.
 ///
@@ -366,7 +366,7 @@ pub fn scalar_subtype_difference(
             },
         )
         | (Array(sub_elt), Array(sup_elt)) => {
-            let ctor = format!("{:?}", SqlScalarBaseType::from(sub));
+            let ctor = format!("{:?}", ScalarBaseType::from(sub));
             diffs.extend(
                 scalar_subtype_difference(sub_elt, sup_elt)
                     .into_iter()
@@ -405,7 +405,7 @@ pub fn scalar_subtype_difference(
         }
         (_, _) => {
             // TODO(mgree) confirm that we don't want to allow numeric subtyping
-            if SqlScalarBaseType::from(sub) != SqlScalarBaseType::from(sup) {
+            if ScalarBaseType::from(sub) != ScalarBaseType::from(sup) {
                 diffs.push(SqlColumnTypeDifference::NotSubtype {
                     sub: sub.clone(),
                     sup: sup.clone(),

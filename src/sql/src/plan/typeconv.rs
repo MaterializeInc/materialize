@@ -18,9 +18,7 @@ use dynfmt::{Format, SimpleCurlyFormat};
 use itertools::Itertools;
 use mz_expr::func::{CastArrayToJsonb, CastListToJsonb};
 use mz_expr::{VariadicFunc, func};
-use mz_repr::{
-    ColumnName, Datum, SqlColumnType, SqlRelationType, SqlScalarBaseType, SqlScalarType,
-};
+use mz_repr::{ColumnName, Datum, ScalarBaseType, SqlColumnType, SqlRelationType, SqlScalarType};
 
 use crate::catalog::TypeCategory;
 use crate::plan::error::PlanError;
@@ -296,9 +294,9 @@ macro_rules! casts(
     }};
 );
 
-static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), CastImpl>> =
-    LazyLock::new(|| {
-        use SqlScalarBaseType::*;
+static VALID_CASTS: LazyLock<BTreeMap<(ScalarBaseType, ScalarBaseType), CastImpl>> = LazyLock::new(
+    || {
+        use ScalarBaseType::*;
         use UnaryFunc::*;
 
         casts! {
@@ -867,7 +865,8 @@ static VALID_CASTS: LazyLock<BTreeMap<(SqlScalarBaseType, SqlScalarBaseType), Ca
                 )
             )")
         }
-    });
+    },
+);
 
 /// Get casts directly between two [`SqlScalarType`]s, with control over the
 /// allowed [`CastContext`].

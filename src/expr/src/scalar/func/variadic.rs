@@ -29,7 +29,7 @@ use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_boun
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{ColumnName, Datum, Row, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
@@ -1321,11 +1321,8 @@ impl VariadicFunc {
             .nullable(true),
             ArrayCreate { elem_type } => {
                 debug_assert!(
-                    input_types
-                        .iter()
-                        .all(|t| ReprScalarType::from(&t.scalar_type)
-                            == ReprScalarType::from(elem_type)),
-                    "Args to ArrayCreate should have types that are repr-compatible with the elem_type"
+                    input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
+                    "Args to ArrayCreate should have types that are compatible with the elem_type"
                 );
                 match elem_type {
                     SqlScalarType::Array(_) => elem_type.clone().nullable(false),

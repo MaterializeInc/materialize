@@ -1591,7 +1591,7 @@ impl fmt::Display for Datum<'_> {
 #[derive(
     Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
 )]
-#[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
+#[enum_kind(ScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
@@ -3212,7 +3212,7 @@ impl SqlScalarType {
                                 && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
                         })
             }
-            (s, o) => SqlScalarBaseType::from(s) == SqlScalarBaseType::from(o),
+            (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
         }
     }
 
@@ -3968,8 +3968,12 @@ impl Arbitrary for ReprScalarType {
             Just(ReprScalarType::Numeric).boxed(),
             Just(ReprScalarType::Date).boxed(),
             Just(ReprScalarType::Time).boxed(),
-            Just(ReprScalarType::Timestamp).boxed(),
-            Just(ReprScalarType::TimestampTz).boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::Timestamp { precision })
+                .boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
+                .boxed(),
             Just(ReprScalarType::MzTimestamp).boxed(),
             Just(ReprScalarType::Interval).boxed(),
             Just(ReprScalarType::Bytes).boxed(),
@@ -3991,8 +3995,12 @@ impl Arbitrary for ReprScalarType {
             Just(ReprScalarType::Int64).boxed(),
             Just(ReprScalarType::Date).boxed(),
             Just(ReprScalarType::Numeric).boxed(),
-            Just(ReprScalarType::Timestamp).boxed(),
-            Just(ReprScalarType::TimestampTz).boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::Timestamp { precision })
+                .boxed(),
+            any::<Option<TimestampPrecision>>()
+                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
+                .boxed(),
         ]);
         let range = range_leaf
             .prop_map(|inner_type| ReprScalarType::Range {
@@ -4060,10 +4068,7 @@ impl Arbitrary for ReprScalarType {
 /// There is a direct correspondence between `Datum` variants and `ReprScalarType`
 /// variants: every `Datum` variant corresponds to exactly one `ReprScalarType` variant
 /// (with an exception for `Datum::Array`, which could be both an `Int2Vector` and an `Array`).
-#[derive(
-    Clone, Debug, EnumKind, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect,
-)]
-#[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect)]
 pub enum ReprScalarType {
     Bool,
     Int16,
@@ -4078,8 +4083,12 @@ pub enum ReprScalarType {
     Numeric,
     Date,
     Time,
-    Timestamp,
-    TimestampTz,
+    Timestamp {
+        precision: Option<TimestampPrecision>,
+    },
+    TimestampTz {
+        precision: Option<TimestampPrecision>,
+    },
     MzTimestamp,
     Interval,
     Bytes,
@@ -4088,10 +4097,18 @@ pub enum ReprScalarType {
     Uuid,
     Array(Box<ReprScalarType>),
     Int2Vector, // differs from Array enough to stick around
-    List { element_type: Box<ReprScalarType> },
-    Record { fields: Box<[ReprColumnType]> },
-    Map { value_type: Box<ReprScalarType> },
-    Range { element_type: Box<ReprScalarType> },
+    List {
+        element_type: Box<ReprScalarType>,
+    },
+    Record {
+        fields: Box<[ReprColumnType]>,
+    },
+    Map {
+        value_type: Box<ReprScalarType>,
+    },
+    Range {
+        element_type: Box<ReprScalarType>,
+    },
     MzAclItem,
     AclItem,
 }
@@ -4111,8 +4128,12 @@ impl From<&SqlScalarType> for ReprScalarType {
             SqlScalarType::Numeric { max_scale: _ } => ReprScalarType::Numeric,
             SqlScalarType::Date => ReprScalarType::Date,
             SqlScalarType::Time => ReprScalarType::Time,
-            SqlScalarType::Timestamp { precision: _ } => ReprScalarType::Timestamp,
-            SqlScalarType::TimestampTz { precision: _ } => ReprScalarType::TimestampTz,
+            SqlScalarType::Timestamp { precision } => ReprScalarType::Timestamp {
+                precision: *precision,
+            },
+            SqlScalarType::TimestampTz { precision } => ReprScalarType::TimestampTz {
+                precision: *precision,
+            },
             SqlScalarType::Interval => ReprScalarType::Interval,
             SqlScalarType::PgLegacyChar => ReprScalarType::UInt8,
             SqlScalarType::PgLegacyName => ReprScalarType::String,
@@ -4193,8 +4214,12 @@ impl SqlScalarType {
             ReprScalarType::Numeric => SqlScalarType::Numeric { max_scale: None },
             ReprScalarType::Date => SqlScalarType::Date,
             ReprScalarType::Time => SqlScalarType::Time,
-            ReprScalarType::Timestamp => SqlScalarType::Timestamp { precision: None },
-            ReprScalarType::TimestampTz => SqlScalarType::TimestampTz { precision: None },
+            ReprScalarType::Timestamp { precision } => SqlScalarType::Timestamp {
+                precision: *precision,
+            },
+            ReprScalarType::TimestampTz { precision } => SqlScalarType::TimestampTz {
+                precision: *precision,
+            },
             ReprScalarType::MzTimestamp => SqlScalarType::MzTimestamp,
             ReprScalarType::Interval => SqlScalarType::Interval,
             ReprScalarType::Bytes => SqlScalarType::Bytes,
@@ -4978,19 +5003,6 @@ mod tests {
             // For example, many SqlScalarType variants map to ReprScalarType::String.
             let sql_type = SqlScalarType::from_repr(&repr_type);
             assert_eq!(repr_type, ReprScalarType::from(&sql_type));
-        }
-    }
-
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10000))]
-        #[mz_ore::test]
-        #[cfg_attr(miri, ignore)]
-        fn sql_type_base_eq_implies_repr_type_eq(sql_type1 in any::<SqlScalarType>(), sql_type2 in any::<SqlScalarType>()) {
-            let repr_type1 = ReprScalarType::from(&sql_type1);
-            let repr_type2 = ReprScalarType::from(&sql_type2);
-            if sql_type1.base_eq(&sql_type2) {
-                assert_eq!(repr_type1, repr_type2);
-            }
         }
     }
 

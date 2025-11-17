@@ -15,7 +15,7 @@
 //! use mz_expr::{MirRelationExpr, MirScalarExpr};
 //! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
-//! use mz_transform::{reprtypecheck, typecheck, Transform, TransformCtx};
+//! use mz_transform::{typecheck, Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::fusion::filter::Filter;
@@ -36,9 +36,8 @@
 //!
 //! let features = OptimizerFeatures::default();
 //! let typecheck_ctx = typecheck::empty_context();
-//! let repr_typecheck_ctx = reprtypecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &repr_typecheck_ctx, &mut df_meta, None, None);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
 //!
 //! // Filter.transform() will deduplicate any predicates
 //! Filter.transform(&mut expr, &mut transform_ctx);
