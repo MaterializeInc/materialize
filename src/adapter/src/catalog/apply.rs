@@ -1418,9 +1418,9 @@ impl CatalogState {
             }
 
             // Wait for a view to be ready.
-            let (handle, _idx, remaining) = future::select_all(handles).await;
+            let (selected, _idx, remaining) = future::select_all(handles).await;
             handles = remaining;
-            let (id, global_id, res) = handle.expect("must join");
+            let (id, global_id, res) = selected;
             let mut insert_cached_expr = |cached_expr| {
                 if let Some(cached_expr) = cached_expr {
                     local_expression_cache.insert_cached_expression(global_id, cached_expr);

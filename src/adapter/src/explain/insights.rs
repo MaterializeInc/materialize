@@ -132,7 +132,7 @@ impl PlanInsights {
             });
         for task in tasks {
             let res = task.await;
-            let Ok(Ok((name, plan))) = res else {
+            let Ok((name, plan)) = res else {
                 continue;
             };
             let (plan, _, _) = plan.unapply();

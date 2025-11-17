@@ -252,16 +252,7 @@ impl Coordinator {
         spawn(|| "sequence_staged", async move {
             tokio::select! {
                 res = handle => {
-                    let next = match res {
-                        Ok(next) => return_if_err!(next, ctx),
-                        Err(err) => {
-                            tracing::error!("sequence_staged join error {err}");
-                            ctx.retire(Err(AdapterError::Internal(
-                                "sequence_staged join error".into(),
-                            )));
-                            return;
-                        }
-                    };
+                    let next = return_if_err!(res, ctx);
                     f(ctx, next);
                 }
                 _ = rx, if cancel_enabled => {

@@ -32,7 +32,7 @@ use bincode::Options;
 use futures::future;
 use mz_ore::cast::CastInto;
 use mz_ore::netio::{Listener, SocketAddr, Stream, TimedReader, TimedWriter};
-use mz_ore::task::{AbortOnDropHandle, JoinHandle, JoinHandleExt};
+use mz_ore::task::{AbortOnDropHandle, JoinHandle};
 use semver::Version;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -166,7 +166,7 @@ where
         // Cancel any existing connection before starting to serve the new one.
         if let Some((task, token)) = connection_task.take() {
             drop(token);
-            task.wait_and_assert_finished().await;
+            task.await;
         }
 
         let handler = handler_fn();

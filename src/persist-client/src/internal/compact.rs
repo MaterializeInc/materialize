@@ -455,16 +455,14 @@ where
             .compaction
             .seconds
             .inc_by(start.elapsed().as_secs_f64());
-        let res = res
-            .map_err(|e| {
-                metrics.compaction.timed_out.inc();
-                anyhow!(
-                    "compaction timed out after {}s: {}",
-                    timeout.as_secs_f64(),
-                    e
-                )
-            })?
-            .map_err(|e| anyhow!(e))?;
+        let res = res.map_err(|e| {
+            metrics.compaction.timed_out.inc();
+            anyhow!(
+                "compaction timed out after {}s: {}",
+                timeout.as_secs_f64(),
+                e
+            )
+        })?;
 
         match res {
             Ok(maintenance) => Ok(maintenance),

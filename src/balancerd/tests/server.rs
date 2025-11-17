@@ -334,7 +334,7 @@ async fn test_balancer() {
                     handles.push(handle);
                 }
                 for handle in handles {
-                    handle.await.unwrap();
+                    handle.await;
                 }
                 let end_auth_count = *frontegg_server.auth_requests.lock().unwrap();
                 // We expect that the auth count increased by fewer than the number of connections.

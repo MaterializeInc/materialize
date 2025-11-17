@@ -449,7 +449,7 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
             || "persist::task::head",
             async move { backing.head(&key).await }.instrument(Span::current()),
         )
-        .await?
+        .await
     }
 
     async fn compare_and_set(
@@ -465,7 +465,7 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
             async move { backing.compare_and_set(&key, expected, new).await }
                 .instrument(Span::current()),
         )
-        .await?
+        .await
     }
 
     async fn scan(
@@ -480,7 +480,7 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
             || "persist::task::scan",
             async move { backing.scan(&key, from, limit).await }.instrument(Span::current()),
         )
-        .await?
+        .await
     }
 
     async fn truncate(&self, key: &str, seqno: SeqNo) -> Result<usize, ExternalError> {
@@ -490,7 +490,7 @@ impl<A: Consensus + 'static> Consensus for Tasked<A> {
             || "persist::task::truncate",
             async move { backing.truncate(&key, seqno).await }.instrument(Span::current()),
         )
-        .await?
+        .await
     }
 }
 
@@ -565,7 +565,7 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
             || "persist::task::get",
             async move { backing.get(&key).await }.instrument(Span::current()),
         )
-        .await?
+        .await
     }
 
     /// List all of the keys in the map with metadata about the entry.
@@ -590,7 +590,7 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
             || "persist::task::set",
             async move { backing.set(&key, value).await }.instrument(Span::current()),
         )
-        .await?
+        .await
     }
 
     /// Remove a key from the map.
@@ -604,7 +604,7 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
             || "persist::task::delete",
             async move { backing.delete(&key).await }.instrument(Span::current()),
         )
-        .await?
+        .await
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
@@ -614,7 +614,7 @@ impl<A: Blob + 'static> Blob for Tasked<A> {
             || "persist::task::restore",
             async move { backing.restore(&key).await }.instrument(Span::current()),
         )
-        .await?
+        .await
     }
 }
 

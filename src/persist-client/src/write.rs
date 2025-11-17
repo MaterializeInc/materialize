@@ -1400,6 +1400,6 @@ mod tests {
             tx.send(next_upper).expect("send failed");
         }
 
-        task.await.expect("await failed");
+        task.await;
     }
 }

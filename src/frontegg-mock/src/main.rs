@@ -137,6 +137,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     println!("frontegg-mock listening...");
     println!(" HTTP address: {}", server.base_url);
 
-    server.handle.await??;
+    server.handle.await?;
     anyhow::bail!("serving tasks unexpectedly exited");
 }

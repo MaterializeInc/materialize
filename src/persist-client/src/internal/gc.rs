@@ -168,7 +168,6 @@ where
                                 .await
                         })
                         .await
-                        .expect("gc_and_truncate failed")
                 };
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();

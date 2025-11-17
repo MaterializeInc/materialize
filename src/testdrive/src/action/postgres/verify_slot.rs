@@ -61,10 +61,7 @@ pub async fn run_verify_slot(
         .await?;
 
     drop(client);
-    conn_handle
-        .await
-        .unwrap()
-        .context("postgres connection error")?;
+    conn_handle.await.context("postgres connection error")?;
 
     Ok(ControlFlow::Continue)
 }

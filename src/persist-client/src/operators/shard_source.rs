@@ -402,7 +402,6 @@ where
             }
         })
         .await
-        .expect("reader creation shouldn't panic")
         .expect("could not open persist shard");
 
         // Wait for the start signal only after we have obtained a read handle. This makes "cannot
@@ -638,7 +637,6 @@ where
             }
         })
         .await
-        .expect("fetcher creation shouldn't panic")
         .expect("shard codecs should not change");
 
         while let Some(event) = descs_input.next().await {

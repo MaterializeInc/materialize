@@ -191,7 +191,6 @@ where
         }
     })
     .await
-    .map_err(|e| sql_err!("{}", e))?
 }
 
 // Kafka supports bulk lookup of watermarks, but it is not exposed in rdkafka.
@@ -243,7 +242,6 @@ where
         }
     })
     .await
-    .map_err(|e| sql_err!("{}", e))?
 }
 
 /// Validates that we can connect to the broker and obtain metadata about the topic.
@@ -268,5 +266,4 @@ where
         }
     })
     .await
-    .map_err(|e| sql_err!("{}", e))?
 }

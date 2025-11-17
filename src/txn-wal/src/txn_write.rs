@@ -666,7 +666,8 @@ mod tests {
                 txn.write(&ShardId::new(), "foo".into(), (), 1).await;
                 txn.commit_at(&mut txns, 1).await
             }
-        });
+        })
+        .into_tokio_handle();
         assert_err!(commit.await);
 
         let d0 = txns.expect_register(2).await;
@@ -681,7 +682,8 @@ mod tests {
                 txn.write(&d0, "foo".into(), (), 1).await;
                 txn.commit_at(&mut txns, 4).await
             }
-        });
+        })
+        .into_tokio_handle();
         assert_err!(commit.await);
     }
 
