@@ -179,7 +179,7 @@ def load_composition(args: argparse.Namespace) -> Composition:
         compose_local_version = Version.parse(
             spawn.capture(["docker", "compose", "version", "--short"])
         )
-        compose_ci_version = Version.parse("2.15.1")
+        compose_ci_version = Version.parse("2.36.0")
         if compose_local_version < compose_ci_version:
             raise UIError(
                 f"Your Docker Compose version is {compose_local_version} while the version used in CI is {compose_ci_version}, please upgrade your local Docker Compose version to prevent unexpected breakages.",
