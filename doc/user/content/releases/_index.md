@@ -47,11 +47,14 @@ see [Authentication](/security/self-managed/authentication/).
 
 ### License Key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+Starting in v26.0.0, Self-Managed Materialize requires a license key.
 
-The license key should be configured in the Kubernetes Secret resource
-created during the installation process. To configure a license key in an
-existing installation, run:
+{{< yaml-table data="self_managed/license_key" >}}
+
+For new deployments, you configure your license key in the Kubernetes Secret
+resource during the installation process. For details, see the installation
+guides [/installation/]. For existing deployments, you can configure your
+license key via:
 
 ```bash
 kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge

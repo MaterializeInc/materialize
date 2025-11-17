@@ -43,7 +43,7 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 ### License key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
 
 ## Upgrade
 

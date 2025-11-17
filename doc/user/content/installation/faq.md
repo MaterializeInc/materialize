@@ -16,7 +16,7 @@ keys will vary based on the terms of your contract.
 
 ## How do I get a license key?
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+{{< yaml-table data="self_managed/license_key" >}}
 
 ## How do I add a license key to an existing installation?
 

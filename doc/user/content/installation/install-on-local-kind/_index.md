@@ -12,13 +12,6 @@ menu:
 disable_list: true
 ---
 
-{{< annotation type="Disambiguation" >}}
-
-This page is for upgrading from v25.2.13 or later. For upgrading
-from v25.2.12 or earlier, see [Upgrade from v25.2.12 or earlier](/installation/install-on-local-kind/upgrade-to-swap/).
-
-{{< /annotation >}}
-
 {{% self-managed/materialize-components-sentence %}}
 
 The following tutorial uses a local [`kind`](https://kind.sigs.k8s.io/) cluster
@@ -69,7 +62,9 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
 ### License key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+Starting in v26.0, Self-Managed Materialize requires a license key.
+
+{{< yaml-table data="self_managed/license_key" >}}
 
 ## Installation
 
@@ -116,7 +111,28 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
    {{% self-managed/versions/curl-sample-files-local-install %}}
 
-1. Edit `sample-materialize.yaml` to add your license key to the `license_key` field in the backend secret.
+1. Add your license key:
+
+   a. To get your license key:
+
+      {{% yaml-table data="self_managed/license_key" %}}
+
+   b. Edit `sample-materialize.yaml` to add your license key to the
+   `license_key` field in the backend secret.
+
+   ```yaml {hl_lines="10"}
+   ---
+   apiVersion: v1
+   kind: Secret
+   metadata:
+   name: materialize-backend
+   namespace: materialize-environment
+   stringData:
+   metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+   persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+   license_key: "<enter your license key here>"
+   ---
+   ```
 
 1. Install the Materialize Helm chart.
 
