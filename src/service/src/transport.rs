@@ -148,6 +148,8 @@ where
     Out: Message,
     H: GenericClient<In, Out> + 'static,
 {
+    let cmd_type = std::any::type_name::<In>();
+
     // Keep a handle to the task serving the current connection, as well as a cancelation token, so
     // we can cancel it when a new client connects.
     //
@@ -157,16 +159,18 @@ where
     let mut connection_task: Option<(JoinHandle<()>, oneshot::Sender<()>)> = None;
 
     let listener = Listener::bind(&address).await?;
-    info!(%address, "ctp: listening for client connections");
+    info!(%address, "[{cmd_type}] ctp: listening for client connections");
 
     loop {
         let (stream, peer) = listener.accept().await?;
-        info!(%peer, "ctp: accepted client connection");
+        info!(%peer, "[{cmd_type}] ctp: accepted client connection");
 
         // Cancel any existing connection before starting to serve the new one.
         if let Some((task, token)) = connection_task.take() {
             drop(token);
+            info!("[{cmd_type}] ctp: before wait");
             task.wait_and_assert_finished().await;
+            info!("[{cmd_type}] ctp: after wait");
         }
 
         let handler = handler_fn();
@@ -176,6 +180,7 @@ where
         let (cancel_tx, cancel_rx) = oneshot::channel();
 
         let handle = mz_ore::task::spawn(|| "ctp::connection", async move {
+            info!("[{cmd_type}] ctp: serve_connection");
             let Err(error) = serve_connection(
                 stream,
                 handler,
@@ -186,7 +191,7 @@ where
                 metrics,
             )
             .await;
-            info!("ctp: connection failed: {error}");
+            info!("[{cmd_type}] ctp: connection failed: {error}");
         });
 
         connection_task = Some((handle, cancel_tx));
@@ -208,7 +213,11 @@ where
     Out: Message,
     H: GenericClient<In, Out>,
 {
+    let cmd_type = std::any::type_name::<In>();
+
+    info!("[{cmd_type}] serve_connection");
     let mut conn = Connection::start(stream, version, server_fqdn, timeout, metrics).await?;
+    info!("[{cmd_type}] serve_connection after start");
 
     let mut cancel_rx = cancel_rx;
     loop {
@@ -216,14 +225,29 @@ where
             // `Connection::recv` is documented to be cancel safe.
             inbound = conn.recv() => {
                 let msg = inbound?;
+                info!("[{cmd_type}] serve_connection before handler.send");
                 handler.send(msg).await?;
+                info!("[{cmd_type}] serve_connection after handler.send");
             },
             // `GenericClient::recv` is documented to be cancel safe.
             outbound = handler.recv() => match outbound? {
-                Some(msg) => conn.send(msg).await?,
-                None => bail!("client disconnected"),
-            },
-            _ = &mut cancel_rx => bail!("connection canceled"),
+                 Some(msg) => {
+                     info!("[{cmd_type}] serve_connection before conn.send");
+                     conn.send(msg).await?;
+                     info!("[{cmd_type}] serve_connection after conn.send");
+                 },
+                 None => {
+                     info!("[{cmd_type}] serve_connection client disconnected");
+                     bail!("client disconnected")
+                 },
+             },
+             _ = tokio::time::sleep(Duration::from_secs(10)) => {
+                 info!("[{cmd_type}] serve_connection tick");
+             }
+             _ = &mut cancel_rx => {
+                 info!("[{cmd_type}] serve_connection connection canceled");
+                 bail!("connection canceled")
+             },
         }
     }
 }
