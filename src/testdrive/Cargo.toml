@@ -61,7 +61,7 @@ prost-reflect = { version = "0.15.3", features = ["serde"] }
 prost-types = { version = "0.13.5" }
 rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
-regex = "1.11.3"
+regex = "1.12.2"
 reqwest = { version = "0.11.13", features = ["native-tls-vendored"] }
 semver = "1.0.27"
 serde = "1.0.219"
