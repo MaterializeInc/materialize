@@ -2300,9 +2300,29 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(UInt32, UInt32) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt32, oid::FUNC_MOD_UINT32_OID;
             params!(UInt64, UInt64) => Operation::nullary(|_ecx| catalog_name_only!("mod")) => UInt64, oid::FUNC_MOD_UINT64_OID;
         },
+        // Normalize is a unary func with a keyword parameter in PG, which we
+        // translate into distinct function names for each normalization form.
         "normalize" => Scalar {
-            // Parser always provides two arguments (defaults second to "NFC" when omitted)
-            params!(String, String) => BinaryFunc::Normalize => String, oid::FUNC_NORMALIZE_OID;
+            params!(String) => UnaryFunc::from(func::NormalizeNfc) => String, oid::FUNC_NORMALIZE_OID;
+            params!(String, String) => sql_impl_func(
+                "(CASE WHEN $2 = 'NFC' THEN mz_normalize_nfc($1)
+                      WHEN $2 = 'NFD' THEN mz_normalize_nfd($1)
+                      WHEN $2 = 'NFKC' THEN mz_normalize_nfkc($1)
+                      WHEN $2 = 'NFKD' THEN mz_normalize_nfkd($1)
+                      ELSE NULL END)"
+            ) => String, oid::FUNC_NORMALIZE_OID;
+        },
+        "mz_normalize_nfc" => Scalar {
+            params!(String) => UnaryFunc::from(func::NormalizeNfc) => String, oid::FUNC_MZ_NORMALIZE_NFC_OID;
+        },
+        "mz_normalize_nfd" => Scalar {
+            params!(String) => UnaryFunc::from(func::NormalizeNfd) => String, oid::FUNC_MZ_NORMALIZE_NFD_OID;
+        },
+        "mz_normalize_nfkc" => Scalar {
+            params!(String) => UnaryFunc::from(func::NormalizeNfkc) => String, oid::FUNC_MZ_NORMALIZE_NFKC_OID;
+        },
+        "mz_normalize_nfkd" => Scalar {
+            params!(String) => UnaryFunc::from(func::NormalizeNfkd) => String, oid::FUNC_MZ_NORMALIZE_NFKD_OID;
         },
         "now" => Scalar {
             params!() => UnmaterializableFunc::CurrentTimestamp => TimestampTz, 1299;

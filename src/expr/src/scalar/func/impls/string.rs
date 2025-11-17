@@ -891,29 +891,28 @@ sqlfunc!(
     }
 );
 
-pub fn normalize_with_form<'a>(
-    text: Datum<'a>,
-    form_str: Datum<'a>,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+#[mz_expr_derive::sqlfunc(sqlname = "normalize")]
+pub fn normalize_nfc(text: &str) -> String {
     use unicode_normalization::UnicodeNormalization;
+    text.nfc().collect()
+}
 
-    let text = text.unwrap_str();
-    let form_str = form_str.unwrap_str();
+#[mz_expr_derive::sqlfunc(sqlname = "normalize")]
+pub fn normalize_nfd(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    text.nfd().collect()
+}
 
-    let normalized = match form_str.to_uppercase().as_str() {
-        "NFC" => text.nfc().collect(),
-        "NFD" => text.nfd().collect(),
-        "NFKC" => text.nfkc().collect(),
-        "NFKD" => text.nfkd().collect(),
-        _ => {
-            return Err(EvalError::InvalidParameterValue(
-                format!("invalid normalization form: {}", form_str).into(),
-            ));
-        }
-    };
+#[mz_expr_derive::sqlfunc(sqlname = "normalize")]
+pub fn normalize_nfkc(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    text.nfkc().collect()
+}
 
-    Ok(Datum::String(temp_storage.push_string(normalized)))
+#[mz_expr_derive::sqlfunc(sqlname = "normalize")]
+pub fn normalize_nfkd(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    text.nfkd().collect()
 }
 
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
