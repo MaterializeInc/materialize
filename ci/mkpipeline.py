@@ -890,6 +890,7 @@ def remove_dependencies_on_prs(
         not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
         or os.environ["BUILDKITE_TAG"]
         or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+        or os.environ["BUILDKITE_BRANCH"].startswith("dependabot/")
     ):
         return
     for step in steps(pipeline):
