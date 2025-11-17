@@ -717,3 +717,38 @@ CREATE TABLE t (x int, y text VERSION ADDED '10000')
 error: Expected literal unsigned integer, found string literal "10000"
 CREATE TABLE t (x int, y text VERSION ADDED '10000')
                                             ^
+
+parse-statement
+CREATE REPLACEMENT IF NOT EXISTS rp1 FOR MATERIALIZED VIEW mv AS SELECT 1;
+----
+error: Expected FOR, found NOT
+CREATE REPLACEMENT IF NOT EXISTS rp1 FOR MATERIALIZED VIEW mv AS SELECT 1;
+                      ^
+
+parse-statement
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv AS SELECT 1;
+----
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv AS SELECT 1
+=>
+CreateReplacementMaterializedView(CreateReplacementMaterializedViewStatement { name: UnresolvedItemName([Ident("rp1")]), target_name: Name(UnresolvedItemName([Ident("mv")])), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] })
+
+parse-statement
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv (a) AS SELECT 1;
+----
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv (a) AS SELECT 1
+=>
+CreateReplacementMaterializedView(CreateReplacementMaterializedViewStatement { name: UnresolvedItemName([Ident("rp1")]), target_name: Name(UnresolvedItemName([Ident("mv")])), columns: [Ident("a")], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] })
+
+parse-statement
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv (a) IN CLUSTER t AS SELECT 1;
+----
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv (a) IN CLUSTER t AS SELECT 1
+=>
+CreateReplacementMaterializedView(CreateReplacementMaterializedViewStatement { name: UnresolvedItemName([Ident("rp1")]), target_name: Name(UnresolvedItemName([Ident("mv")])), columns: [Ident("a")], in_cluster: Some(Unresolved(Ident("t"))), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] })
+
+parse-statement
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv (a) IN CLUSTER t WITH (ASSERT NOT NULL a) AS SELECT 1;
+----
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv (a) IN CLUSTER t WITH (ASSERT NOT NULL = a) AS SELECT 1
+=>
+CreateReplacementMaterializedView(CreateReplacementMaterializedViewStatement { name: UnresolvedItemName([Ident("rp1")]), target_name: Name(UnresolvedItemName([Ident("mv")])), columns: [Ident("a")], in_cluster: Some(Unresolved(Ident("t"))), query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("1")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [MaterializedViewOption { name: AssertNotNull, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("a")]))) }] })

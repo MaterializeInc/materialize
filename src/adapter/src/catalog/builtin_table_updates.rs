@@ -26,18 +26,18 @@ use mz_catalog::builtin::{
     MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_MATERIALIZED_VIEWS, MZ_MYSQL_SOURCE_TABLES,
     MZ_NETWORK_POLICIES, MZ_NETWORK_POLICY_RULES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
     MZ_OPERATORS, MZ_PENDING_CLUSTER_REPLICAS, MZ_POSTGRES_SOURCE_TABLES, MZ_POSTGRES_SOURCES,
-    MZ_PSEUDO_TYPES, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS, MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS,
-    MZ_SECRETS, MZ_SESSIONS, MZ_SINKS, MZ_SOURCE_REFERENCES, MZ_SOURCES,
-    MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS,
-    MZ_WEBHOOKS_SOURCES,
+    MZ_PSEUDO_TYPES, MZ_REPLACEMENT_MATERIALIZED_VIEWS, MZ_ROLE_AUTH, MZ_ROLE_MEMBERS,
+    MZ_ROLE_PARAMETERS, MZ_ROLES, MZ_SCHEMAS, MZ_SECRETS, MZ_SESSIONS, MZ_SINKS,
+    MZ_SOURCE_REFERENCES, MZ_SOURCES, MZ_SQL_SERVER_SOURCE_TABLES, MZ_SSH_TUNNEL_CONNECTIONS,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS, MZ_SYSTEM_PRIVILEGES, MZ_TABLES,
+    MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterVariant, Connection, ContinualTask, DataSourceDesc, Func,
-    Index, MaterializedView, Sink, Table, TableDataSource, Type, View,
+    Index, MaterializedView, ReplacementMaterializedView, Sink, Table, TableDataSource, Type, View,
 };
 use mz_controller::clusters::{
     ManagedReplicaAvailabilityZones, ManagedReplicaLocation, ReplicaLocation,
@@ -55,7 +55,7 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
 use mz_repr::adt::regex;
 use mz_repr::network_policy_id::NetworkPolicyId;
-use mz_repr::refresh_schedule::RefreshEvery;
+use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
 use mz_repr::role_id::RoleId;
 use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, Row, RowPacker, SqlScalarType, Timestamp};
 use mz_sql::ast::{ContinualTaskStmt, CreateIndexStatement, Statement, UnresolvedItemName};
@@ -818,6 +818,10 @@ impl CatalogState {
             CatalogItem::ContinualTask(ct) => self.pack_continual_task_update(
                 id, oid, schema_id, name, owner_id, privileges, ct, diff,
             ),
+            CatalogItem::ReplacementMaterializedView(mview) => self
+                .pack_replacement_materialized_view_update(
+                    id, oid, schema_id, name, owner_id, privileges, mview, diff,
+                ),
         };
 
         if !entry.item().is_temporary() {
@@ -1480,7 +1484,23 @@ impl CatalogState {
             diff,
         ));
 
-        if let Some(refresh_schedule) = &mview.refresh_schedule {
+        Self::pack_refresh_strategy_update(
+            &id,
+            mview.refresh_schedule.as_ref(),
+            diff,
+            &mut updates,
+        );
+
+        updates
+    }
+
+    fn pack_refresh_strategy_update(
+        id: &CatalogItemId,
+        refresh_schedule: Option<&RefreshSchedule>,
+        diff: Diff,
+        updates: &mut Vec<BuiltinTableUpdate<&BuiltinTable>>,
+    ) {
+        if let Some(refresh_schedule) = refresh_schedule {
             // This can't be `ON COMMIT`, because that is represented by a `None` instead of an
             // empty `RefreshSchedule`.
             assert!(!refresh_schedule.is_empty());
@@ -1537,6 +1557,65 @@ impl CatalogState {
                 diff,
             ));
         }
+    }
+
+    fn pack_replacement_materialized_view_update(
+        &self,
+        id: CatalogItemId,
+        oid: u32,
+        schema_id: &SchemaSpecifier,
+        name: &str,
+        owner_id: &RoleId,
+        privileges: Datum,
+        mview: &ReplacementMaterializedView,
+        diff: Diff,
+    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+        let create_stmt = mz_sql::parse::parse(&mview.create_sql)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    mview.create_sql, e
+                )
+            })
+            .into_element()
+            .ast;
+        let query_string = match &create_stmt {
+            Statement::CreateReplacementMaterializedView(stmt) => {
+                let mut query_string = stmt.query.to_ast_string_stable();
+                // PostgreSQL appends a semicolon in `pg_matviews.definition`, we
+                // do the same for compatibility's sake.
+                query_string.push(';');
+                query_string
+            }
+            _ => unreachable!(),
+        };
+
+        let mut updates = Vec::new();
+
+        updates.push(BuiltinTableUpdate::row(
+            &*MZ_REPLACEMENT_MATERIALIZED_VIEWS,
+            Row::pack_slice(&[
+                Datum::String(&id.to_string()),
+                Datum::UInt32(oid),
+                Datum::String(&mview.replaces.to_string()),
+                Datum::String(&schema_id.to_string()),
+                Datum::String(name),
+                Datum::String(&mview.cluster_id.to_string()),
+                Datum::String(&query_string),
+                Datum::String(&owner_id.to_string()),
+                privileges,
+                Datum::String(&mview.create_sql),
+                Datum::String(&create_stmt.to_ast_string_redacted()),
+            ]),
+            diff,
+        ));
+
+        Self::pack_refresh_strategy_update(
+            &id,
+            mview.refresh_schedule.as_ref(),
+            diff,
+            &mut updates,
+        );
 
         updates
     }

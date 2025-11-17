@@ -72,7 +72,8 @@ impl DataflowBuilder<'_> {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::ReplacementMaterializedView(_) => {
                         // Non-indexable thing; no work to do.
                     }
                 }

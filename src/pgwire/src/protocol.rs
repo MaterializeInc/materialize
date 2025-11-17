@@ -2104,6 +2104,7 @@ where
             | ExecuteResponse::CreatedView { .. }
             | ExecuteResponse::CreatedViews { .. }
             | ExecuteResponse::CreatedNetworkPolicy
+            | ExecuteResponse::CreatedReplacementMaterializedView
             | ExecuteResponse::Comment
             | ExecuteResponse::Deallocate { .. }
             | ExecuteResponse::Deleted(..)

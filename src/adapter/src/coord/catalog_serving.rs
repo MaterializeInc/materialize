@@ -85,6 +85,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
+        | Plan::CreateReplacementMaterializedView(_)
         | Plan::Comment(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
@@ -114,6 +115,7 @@ pub fn auto_run_on_catalog_server<'a, 's, 'p>(
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterConnection(_)
+        | Plan::AlterMaterializedViewApplyReplacement(_)
         | Plan::AlterSource(_)
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)

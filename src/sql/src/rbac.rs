@@ -668,6 +668,28 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateReplacementMaterializedView(plan::CreateReplacementMaterializedViewPlan {
+            name,
+            materialized_view,
+            replaces,
+            ..
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*replaces)],
+            privileges: vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(materialized_view.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::Comment(plan::CommentPlan {
             object_id,
             sub_component: _,
@@ -1052,6 +1074,13 @@ fn generate_rbac_requirements(
         },
         Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
+            ..Default::default()
+        },
+        Plan::AlterMaterializedViewApplyReplacement(
+            plan::AlterMaterializedViewApplyReplacementPlan { id, replacement_id },
+        ) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id), ObjectId::Item(*replacement_id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSource(plan::AlterSourcePlan {

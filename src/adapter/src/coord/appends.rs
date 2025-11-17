@@ -961,6 +961,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
         | Plan::CreateType(_)
+        | Plan::CreateReplacementMaterializedView(_)
         | Plan::Comment(_)
         | Plan::DiscardTemp
         | Plan::DiscardAll
@@ -990,6 +991,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::AlterClusterReplicaRename(_)
         | Plan::AlterCluster(_)
         | Plan::AlterConnection(_)
+        | Plan::AlterMaterializedViewApplyReplacement(_)
         | Plan::AlterSource(_)
         | Plan::AlterSetCluster(_)
         | Plan::AlterItemRename(_)

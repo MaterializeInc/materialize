@@ -41,6 +41,8 @@ breaking:
     - catalog-protos/protos/objects_v77.proto
     # reason: does currently not require backward-compatibility
     - catalog-protos/protos/objects_v78.proto
+    # reason: does currently not require backward-compatibility
+    - catalog-protos/protos/objects_v79.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/scalar.proto
     # reason: we very carefully evolve these protobuf definitions

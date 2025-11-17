@@ -20,6 +20,8 @@
 
 //! SQL Parser
 
+mod replace;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -1982,6 +1984,8 @@ impl<'a> Parser<'a> {
         } else if self.peek_keywords(&[NETWORK, POLICY]) {
             self.parse_create_network_policy()
                 .map_parser_err(StatementKind::CreateNetworkPolicy)
+        } else if self.peek_one_of_keywords(&[REPLACE, REPLACEMENT]) {
+            self.parse_create_replace()
         } else {
             let index = self.index;
 
@@ -6434,10 +6438,10 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_item_name().map_no_statement_parser_err()?;
-        let keywords = if object_type == ObjectType::Table {
-            [SET, RENAME, OWNER, RESET, ADD].as_slice()
-        } else {
-            [SET, RENAME, OWNER, RESET].as_slice()
+        let keywords = match object_type {
+            ObjectType::Table => [SET, RENAME, OWNER, RESET, ADD].as_slice(),
+            ObjectType::MaterializedView => [SET, RENAME, OWNER, RESET, APPLY].as_slice(),
+            _ => [SET, RENAME, OWNER, RESET].as_slice(),
         };
 
         let action = self
@@ -6525,6 +6529,27 @@ impl<'a> Parser<'a> {
                         if_col_not_exist,
                         column_name,
                         data_type,
+                    },
+                ))
+            }
+            APPLY => {
+                assert_eq!(
+                    object_type,
+                    ObjectType::MaterializedView,
+                    "checked object_type above"
+                );
+
+                self.expect_keyword(REPLACEMENT)
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                let replacement_name = self
+                    .parse_raw_name()
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                Ok(Statement::AlterMaterializedViewApplyReplacement(
+                    AlterMaterializedViewApplyReplacementStatement {
+                        materialized_view_name: RawItemName::Name(name),
+                        replacement_name,
                     },
                 ))
             }
@@ -9563,6 +9588,7 @@ impl<'a> Parser<'a> {
                 FUNCTION,
                 CONTINUAL,
                 NETWORK,
+                REPLACEMENT,
             ])? {
                 TABLE => ObjectType::Table,
                 VIEW => ObjectType::View,
@@ -9604,6 +9630,7 @@ impl<'a> Parser<'a> {
                     }
                     ObjectType::NetworkPolicy
                 }
+                REPLACEMENT => ObjectType::Replacement,
                 _ => unreachable!(),
             },
         )

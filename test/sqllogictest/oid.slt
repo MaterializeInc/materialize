@@ -856,6 +856,7 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16729  mz_internal_cluster_replicas
 16730  mz_cluster_replica_statuses
 16731  mz_cluster_replica_sizes
+16732  mz_replacement_materialized_views
 16733  mz_audit_events
 16734  mz_source_status_history
 16735  mz_aws_privatelink_connection_status_history

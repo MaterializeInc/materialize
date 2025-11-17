@@ -14,9 +14,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
-use std::iter;
 use std::num::NonZeroU32;
 use std::time::Duration;
+use std::{fmt, iter};
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
@@ -45,21 +45,22 @@ use mz_repr::{
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
-    AlterNetworkPolicyStatement, AlterObjectRenameStatement, AlterObjectSwapStatement,
-    AlterRetainHistoryStatement, AlterRoleOption, AlterRoleStatement, AlterSecretStatement,
-    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    AlterTableAddColumnStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName,
-    ClusterAlterOption, ClusterAlterOptionName, ClusterAlterOptionValue,
-    ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName, ClusterFeature,
-    ClusterFeatureName, ClusterOption, ClusterOptionName, ClusterScheduleOptionValue, ColumnDef,
-    ColumnOption, CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
-    ContinualTaskOption, ContinualTaskOptionName, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateConnectionStatement, CreateConnectionType, CreateContinualTaskStatement,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
+    AlterMaterializedViewApplyReplacementStatement, AlterNetworkPolicyStatement,
+    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
+    AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
+    ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
+    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
+    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
+    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateNetworkPolicyStatement,
+    CreateReplacementMaterializedViewStatement, CreateRoleStatement, CreateSchemaStatement,
     CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
     CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
     CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
@@ -74,7 +75,7 @@ use mz_sql_parser::ast::{
     MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
     NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
     NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
+    QualifiedReplica, Query, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
     ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
     SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
     Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
@@ -148,21 +149,22 @@ use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
-    AlterNetworkPolicyPlan, AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan,
-    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
-    AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
-    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
-    PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
-    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
-    transform_ast,
+    AlterMaterializedViewApplyReplacementPlan, AlterNetworkPolicyPlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
+    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
+    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
+    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateNetworkPolicyPlan, CreateReplacementMaterializedViewPlan, CreateRolePlan,
+    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
+    CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
+    HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
+    NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice, PolicyAddress, QueryContext,
+    ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue, View,
+    WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
+    plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -2695,6 +2697,13 @@ pub fn describe_create_materialized_view(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_create_replacement_materialized_view(
+    _: &StatementContext,
+    _: CreateReplacementMaterializedViewStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn describe_create_continual_task(
     _: &StatementContext,
     _: CreateContinualTaskStatement<Aug>,
@@ -2727,18 +2736,115 @@ pub fn plan_create_materialized_view(
         print_name: None,
     });
 
-    let create_sql =
-        normalize::create_statement(scx, Statement::CreateMaterializedView(stmt.clone()))?;
+    // Override the statement-level IfExistsBehavior with Skip if this is
+    // explicitly requested in the PlanContext (the default is `false`).
+    let if_exists = match scx.pcx().map(|pcx| pcx.ignore_if_exists_errors) {
+        Ok(true) => IfExistsBehavior::Skip,
+        _ => stmt.if_exists,
+    };
 
-    let partial_name = normalize::unresolved_item_name(stmt.name)?;
+    let partial_name = normalize::unresolved_item_name(stmt.name.clone())?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    let materialized_view = plan_create_materialized_view_inner(
+        scx,
+        Statement::CreateMaterializedView(stmt.clone()),
+        &stmt.columns,
+        stmt.query,
+        stmt.as_of,
+        cluster_id,
+        stmt.with_options,
+        format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
+    )?;
+
+    let mut replace = None;
+    let mut if_not_exists = false;
+    match if_exists {
+        IfExistsBehavior::Replace => {
+            let if_exists = true;
+            let cascade = false;
+            let replace_id = plan_drop_item(
+                scx,
+                ObjectType::MaterializedView,
+                if_exists,
+                partial_name.into(),
+                cascade,
+            )?;
+
+            // Check if the new Materialized View depends on the item that we would be replacing.
+            if let Some(id) = replace_id {
+                let dependencies = materialized_view.expr.depends_on();
+                let invalid_drop = scx
+                    .get_item(&id)
+                    .global_ids()
+                    .any(|gid| dependencies.contains(&gid));
+                if invalid_drop {
+                    let item = scx.catalog.get_item(&id);
+                    sql_bail!(
+                        "cannot replace materialized view {0}: depended upon by new {0} definition",
+                        scx.catalog.resolve_full_name(item.name())
+                    );
+                }
+                replace = Some(id);
+            }
+        }
+        IfExistsBehavior::Skip => if_not_exists = true,
+        IfExistsBehavior::Error => (),
+    }
+    let drop_ids = replace
+        .map(|id| {
+            scx.catalog
+                .item_dependents(id)
+                .into_iter()
+                .map(|id| id.unwrap_item_id())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    // For PostgreSQL compatibility, we need to prevent creating materialized
+    // views when there is an existing object *or* type of the same name.
+    if let (IfExistsBehavior::Error, Ok(item)) =
+        (if_exists, scx.catalog.resolve_item_or_type(&partial_name))
+    {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    Ok(Plan::CreateMaterializedView(CreateMaterializedViewPlan {
+        name,
+        materialized_view,
+        replace,
+        drop_ids,
+        if_not_exists,
+        ambiguous_columns: *scx.ambiguous_columns.borrow(),
+    }))
+}
+
+/// Plans the inner parts of a CREATE MATERIALIZED VIEW statement, returning a
+/// materialized view definition. Shared for materialized views and their replacements.
+fn plan_create_materialized_view_inner(
+    scx: &StatementContext,
+    stmt: Statement<Aug>,
+    columns: &[Ident],
+    query: Query<Aug>,
+    as_of: Option<u64>,
+    cluster_id: ClusterId,
+    with_options: Vec<MaterializedViewOption<Aug>>,
+    context: impl fmt::Display,
+) -> Result<MaterializedView, PlanError> {
+    let create_sql = normalize::create_statement(scx, stmt)?;
 
     let query::PlannedRootQuery {
         expr,
         mut desc,
         finishing,
         scope: _,
-    } = query::plan_root_query(scx, stmt.query, QueryLifetime::MaterializedView)?;
+    } = query::plan_root_query(scx, query, QueryLifetime::MaterializedView)?;
     // We get back a trivial finishing, see comment in `plan_view`.
     assert!(HirRelationExpr::is_trivial_row_set_finishing_hir(
         &finishing,
@@ -2750,11 +2856,7 @@ pub fn plan_create_materialized_view(
         ));
     }
 
-    plan_utils::maybe_rename_columns(
-        format!("materialized view {}", scx.catalog.resolve_full_name(&name)),
-        &mut desc,
-        &stmt.columns,
-    )?;
+    plan_utils::maybe_rename_columns(context, &mut desc, columns)?;
     let column_names: Vec<ColumnName> = desc.iter_names().cloned().collect();
 
     let MaterializedViewOptionExtracted {
@@ -2763,7 +2865,7 @@ pub fn plan_create_materialized_view(
         retain_history,
         refresh,
         seen: _,
-    }: MaterializedViewOptionExtracted = stmt.with_options.try_into()?;
+    }: MaterializedViewOptionExtracted = with_options.try_into()?;
 
     if let Some(partition_by) = partition_by {
         scx.require_feature_flag(&ENABLE_COLLECTION_PARTITION_BY)?;
@@ -2885,7 +2987,7 @@ pub fn plan_create_materialized_view(
         }
     };
 
-    let as_of = stmt.as_of.map(Timestamp::from);
+    let as_of = as_of.map(Timestamp::from);
     let compaction_window = plan_retain_history_option(scx, retain_history)?;
     let mut non_null_assertions = assert_not_null
         .into_iter()
@@ -2912,94 +3014,23 @@ pub fn plan_create_materialized_view(
         sql_bail!("column {} specified more than once", dup.quoted());
     }
 
-    // Override the statement-level IfExistsBehavior with Skip if this is
-    // explicitly requested in the PlanContext (the default is `false`).
-    let if_exists = match scx.pcx().map(|pcx| pcx.ignore_if_exists_errors) {
-        Ok(true) => IfExistsBehavior::Skip,
-        _ => stmt.if_exists,
-    };
-
-    let mut replace = None;
-    let mut if_not_exists = false;
-    match if_exists {
-        IfExistsBehavior::Replace => {
-            let if_exists = true;
-            let cascade = false;
-            let replace_id = plan_drop_item(
-                scx,
-                ObjectType::MaterializedView,
-                if_exists,
-                partial_name.into(),
-                cascade,
-            )?;
-
-            // Check if the new Materialized View depends on the item that we would be replacing.
-            if let Some(id) = replace_id {
-                let dependencies = expr.depends_on();
-                let invalid_drop = scx
-                    .get_item(&id)
-                    .global_ids()
-                    .any(|gid| dependencies.contains(&gid));
-                if invalid_drop {
-                    let item = scx.catalog.get_item(&id);
-                    sql_bail!(
-                        "cannot replace materialized view {0}: depended upon by new {0} definition",
-                        scx.catalog.resolve_full_name(item.name())
-                    );
-                }
-                replace = Some(id);
-            }
-        }
-        IfExistsBehavior::Skip => if_not_exists = true,
-        IfExistsBehavior::Error => (),
-    }
-    let drop_ids = replace
-        .map(|id| {
-            scx.catalog
-                .item_dependents(id)
-                .into_iter()
-                .map(|id| id.unwrap_item_id())
-                .collect()
-        })
-        .unwrap_or_default();
     let dependencies = expr
         .depends_on()
         .into_iter()
         .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
 
-    // Check for an object in the catalog with this same name
-    let full_name = scx.catalog.resolve_full_name(&name);
-    let partial_name = PartialItemName::from(full_name.clone());
-    // For PostgreSQL compatibility, we need to prevent creating materialized
-    // views when there is an existing object *or* type of the same name.
-    if let (IfExistsBehavior::Error, Ok(item)) =
-        (if_exists, scx.catalog.resolve_item_or_type(&partial_name))
-    {
-        return Err(PlanError::ItemAlreadyExists {
-            name: full_name.to_string(),
-            item_type: item.item_type(),
-        });
-    }
-
-    Ok(Plan::CreateMaterializedView(CreateMaterializedViewPlan {
-        name,
-        materialized_view: MaterializedView {
-            create_sql,
-            expr,
-            dependencies,
-            column_names,
-            cluster_id,
-            non_null_assertions,
-            compaction_window,
-            refresh_schedule,
-            as_of,
-        },
-        replace,
-        drop_ids,
-        if_not_exists,
-        ambiguous_columns: *scx.ambiguous_columns.borrow(),
-    }))
+    Ok(MaterializedView {
+        create_sql,
+        expr,
+        dependencies,
+        column_names,
+        cluster_id,
+        non_null_assertions,
+        compaction_window,
+        refresh_schedule,
+        as_of,
+    })
 }
 
 generate_extracted_config!(
@@ -3009,6 +3040,99 @@ generate_extracted_config!(
     (RetainHistory, OptionalDuration),
     (Refresh, RefreshOptionValue<Aug>, AllowMultiple)
 );
+
+pub fn plan_create_replacement_materialized_view(
+    scx: &StatementContext,
+    mut stmt: CreateReplacementMaterializedViewStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let target_item = scx.get_item_by_resolved_name(&stmt.target_name)?;
+
+    if target_item.id().is_system() {
+        sql_bail!(
+            "cannot replace {} {} because it is required by the database system",
+            target_item.item_type(),
+            scx.catalog.minimal_qualification(target_item.name()),
+        );
+    }
+    if !matches!(target_item.item_type(), CatalogItemType::MaterializedView) {
+        sql_bail!(
+            "cannot replace {} {} because it is not a materialized view",
+            target_item.item_type(),
+            scx.catalog.minimal_qualification(target_item.name()),
+        );
+    }
+    let replaces = target_item.id();
+
+    let cluster_id =
+        crate::plan::statement::resolve_cluster(scx.catalog, stmt.in_cluster.as_ref())?;
+    stmt.in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+
+    let partial_name = normalize::unresolved_item_name(stmt.name.clone())?;
+    let name = scx.allocate_qualified_name(partial_name.clone())?;
+
+    // Check for an object in the catalog with this same name
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    // For PostgreSQL compatibility, we need to prevent creating materialized
+    // views when there is an existing object *or* type of the same name.
+    if let Ok(item) = scx.catalog.resolve_item_or_type(&partial_name) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    let materialized_view = plan_create_materialized_view_inner(
+        scx,
+        Statement::CreateReplacementMaterializedView(stmt.clone()),
+        &stmt.columns,
+        stmt.query,
+        stmt.as_of,
+        cluster_id,
+        stmt.with_options,
+        format!(
+            "replacement materialized view {}",
+            scx.catalog.minimal_qualification(target_item.name())
+        ),
+    )?;
+
+    Ok(Plan::CreateReplacementMaterializedView(
+        CreateReplacementMaterializedViewPlan {
+            name,
+            materialized_view,
+            replaces,
+            ambiguous_columns: *scx.ambiguous_columns.borrow(),
+        },
+    ))
+}
+
+pub fn plan_alter_materialized_view_apply_replacement(
+    scx: &StatementContext,
+    stmt: AlterMaterializedViewApplyReplacementStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    let mv = scx.get_item_by_resolved_name(&stmt.materialized_view_name)?;
+    let replacement = scx.get_item_by_resolved_name(&stmt.replacement_name)?;
+
+    if replacement.replaces_item() != Some(mv.id()) {
+        sql_bail!(
+            "{} {} does not replace {} {}",
+            replacement.item_type(),
+            scx.catalog.minimal_qualification(replacement.name()),
+            mv.item_type(),
+            scx.catalog.minimal_qualification(mv.name()),
+        );
+    }
+
+    Ok(Plan::AlterMaterializedViewApplyReplacement(
+        AlterMaterializedViewApplyReplacementPlan {
+            id: mv.id(),
+            replacement_id: replacement.id(),
+        },
+    ))
+}
 
 pub fn plan_create_continual_task(
     scx: &StatementContext,
@@ -5630,6 +5754,13 @@ pub fn describe_alter_index_options(
     Ok(StatementDesc::new(None))
 }
 
+pub fn describe_alter_materialized_view_apply_replacement(
+    _: &StatementContext,
+    _: AlterMaterializedViewApplyReplacementStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
 pub fn describe_drop_owned(
     _: &StatementContext,
     _: DropOwnedStatement<Aug>,
@@ -6722,6 +6853,7 @@ fn alter_retain_history(
     history: Option<WithOptionValue<Aug>>,
 ) -> Result<Plan, PlanError> {
     let name = match (object_type, name) {
+        // TODO(alter-mv): Consider allowing ALTER RETAIN HISTORY on replacement MVs.
         (
             // View gets a special error below.
             ObjectType::View

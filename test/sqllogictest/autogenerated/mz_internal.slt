@@ -751,6 +751,7 @@ mz_recent_activity_log_redacted
 mz_recent_activity_log_thinned
 mz_recent_sql_text
 mz_recent_sql_text_redacted
+mz_replacement_materialized_views
 mz_session_history
 mz_sessions
 mz_show_all_my_privileges

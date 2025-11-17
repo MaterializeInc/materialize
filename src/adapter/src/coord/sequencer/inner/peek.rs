@@ -888,15 +888,11 @@ impl Coordinator {
             {
                 let entry = self.catalog.state().get_entry(&item_id);
                 match entry.item() {
-                    // TODO(alter_table): Adding all of the GlobalIds for an object is incorrect.
-                    // For example, this peek may depend on just a single version of a table, but
-                    // we would add dependencies on all versions of said table. Doing this is okay
-                    // for now since we can't yet version tables, but should get fixed.
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                        transitive_storage_deps.extend(entry.global_ids());
+                        transitive_storage_deps.insert(entry.latest_global_id());
                     }
                     CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
-                        transitive_compute_deps.extend(entry.global_ids());
+                        transitive_compute_deps.insert(entry.latest_global_id());
                     }
                     _ => {}
                 }

@@ -56,6 +56,7 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::vars::OwnedVarInput;
+use mz_sql_parser::ast::CreateMaterializedViewStatement;
 use mz_storage_client::controller::IntrospectionType;
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::sinks::{SinkEnvelope, StorageSinkConnection};
@@ -822,6 +823,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
     fn latest_version(&self) -> Option<RelationVersion> {
         self.entry.latest_version()
     }
+
+    fn replaces_item(&self) -> Option<CatalogItemId> {
+        self.entry.replaces_item()
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -838,6 +843,7 @@ pub enum CatalogItem {
     Secret(Secret),
     Connection(Connection),
     ContinualTask(ContinualTask),
+    ReplacementMaterializedView(ReplacementMaterializedView),
 }
 
 impl From<CatalogEntry> for durable::Item {
@@ -1447,6 +1453,112 @@ impl MaterializedView {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ReplacementMaterializedView {
+    /// Parse-able SQL that defines this replacement materialized view.
+    pub create_sql: String,
+    /// [`GlobalId`] used to reference this replacement materialized view from outside the catalog.
+    pub global_id: GlobalId,
+    /// The item this replacement materialized view replaces.
+    pub replaces: CatalogItemId,
+    /// Raw high-level expression from planning, derived from the `create_sql`.
+    pub raw_expr: Arc<HirRelationExpr>,
+    /// Optimized mid-level expression, derived from the `raw_expr`.
+    pub optimized_expr: Arc<OptimizedMirRelationExpr>,
+    /// Columns for this materialized view.
+    pub desc: RelationDesc,
+    /// Other catalog items that this replacement materialized view references, determined at name resolution.
+    pub resolved_ids: ResolvedIds,
+    /// All of the catalog objects that are referenced by this view.
+    pub dependencies: DependencyIds,
+    /// Cluster that this replacement materialized view runs on.
+    pub cluster_id: ClusterId,
+    /// Column indexes that we assert are not `NULL`.
+    ///
+    /// TODO(parkmycar): Switch this to use the `ColumnIdx` type.
+    pub non_null_assertions: Vec<usize>,
+    /// Custom compaction window, e.g. set via `ALTER RETAIN HISTORY`.
+    pub custom_logical_compaction_window: Option<CompactionWindow>,
+    /// Schedule to refresh this replacement materialized view, e.g. set via `REFRESH EVERY` option.
+    pub refresh_schedule: Option<RefreshSchedule>,
+    /// The initial `as_of` of the storage collection associated with the replacement materialized view.
+    ///
+    /// Note: This doesn't change upon restarts.
+    /// (The dataflow's initial `as_of` can be different.)
+    pub initial_as_of: Option<Antichain<mz_repr::Timestamp>>,
+}
+
+impl ReplacementMaterializedView {
+    /// The single [`GlobalId`] this [`ReplacementMaterializedView`] can be referenced by.
+    pub fn global_id(&self) -> GlobalId {
+        self.global_id
+    }
+
+    /// Merge the definition of the replacement into an existing materialized view.
+    pub fn merge_into(&self, mv: &MaterializedView) -> MaterializedView {
+        let replacement_create_stmt = mz_sql::parse::parse(&self.create_sql)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    self.create_sql, e
+                )
+            })
+            .into_element()
+            .ast;
+        let mv_create_stmt = mz_sql::parse::parse(&mv.create_sql)
+            .unwrap_or_else(|e| {
+                panic!(
+                    "create_sql cannot be invalid: `{}` --- error: `{}`",
+                    self.create_sql, e
+                )
+            })
+            .into_element()
+            .ast;
+        let create_sql = match (replacement_create_stmt, mv_create_stmt) {
+            (
+                Statement::CreateReplacementMaterializedView(rmv_stmt),
+                Statement::CreateMaterializedView(mut mv_stmt),
+            ) => {
+                let CreateMaterializedViewStatement {
+                    if_exists: _,
+                    name: _,
+                    columns,
+                    in_cluster,
+                    query,
+                    as_of,
+                    with_options,
+                } = &mut mv_stmt;
+                columns.clone_from(&rmv_stmt.columns);
+                in_cluster.clone_from(&rmv_stmt.in_cluster);
+                query.clone_from(&rmv_stmt.query);
+                as_of.clone_from(&rmv_stmt.as_of);
+                with_options.clone_from(&rmv_stmt.with_options);
+
+                mv_stmt.to_ast_string_stable()
+            }
+            _ => unreachable!(),
+        };
+        let latest_version = mv.desc.latest_version();
+        let version = latest_version.bump();
+        let mut new = MaterializedView {
+            create_sql,
+            collections: mv.collections.clone(),
+            raw_expr: Arc::clone(&self.raw_expr),
+            optimized_expr: Arc::clone(&self.optimized_expr),
+            desc: VersionedRelationDesc::new(self.desc.clone()),
+            resolved_ids: self.resolved_ids.clone(),
+            dependencies: self.dependencies.clone(),
+            cluster_id: self.cluster_id,
+            non_null_assertions: self.non_null_assertions.clone(),
+            custom_logical_compaction_window: self.custom_logical_compaction_window,
+            refresh_schedule: self.refresh_schedule.clone(),
+            initial_as_of: self.initial_as_of.clone(),
+        };
+        new.collections.insert(version, self.global_id());
+        new
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct Index {
     /// Parse-able SQL that defines this table.
     pub create_sql: String,
@@ -1642,6 +1754,9 @@ impl CatalogItem {
             CatalogItem::Secret(_) => CatalogItemType::Secret,
             CatalogItem::Connection(_) => CatalogItemType::Connection,
             CatalogItem::ContinualTask(_) => CatalogItemType::ContinualTask,
+            CatalogItem::ReplacementMaterializedView(_) => {
+                CatalogItemType::ReplacementMaterializedView
+            }
         }
     }
 
@@ -1659,6 +1774,7 @@ impl CatalogItem {
             CatalogItem::Index(index) => index.global_id,
             CatalogItem::Func(func) => func.global_id,
             CatalogItem::Type(ty) => ty.global_id,
+            CatalogItem::ReplacementMaterializedView(mv) => mv.global_id,
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::Table(table) => {
@@ -1685,6 +1801,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => secret.global_id,
             CatalogItem::Connection(conn) => conn.global_id,
             CatalogItem::Table(table) => table.global_id_writes(),
+            CatalogItem::ReplacementMaterializedView(mv) => mv.global_id,
         }
     }
 
@@ -1695,7 +1812,8 @@ impl CatalogItem {
             | CatalogItem::Source(_)
             | CatalogItem::MaterializedView(_)
             | CatalogItem::Sink(_)
-            | CatalogItem::ContinualTask(_) => true,
+            | CatalogItem::ContinualTask(_)
+            | Self::ReplacementMaterializedView(_) => true,
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Index(_)
@@ -1734,6 +1852,7 @@ impl CatalogItem {
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
+            Self::ReplacementMaterializedView(_mv) => None,
         }
     }
 
@@ -1800,6 +1919,7 @@ impl CatalogItem {
             CatalogItem::Secret(_) => &*EMPTY,
             CatalogItem::Connection(connection) => &connection.resolved_ids,
             CatalogItem::ContinualTask(ct) => &ct.resolved_ids,
+            Self::ReplacementMaterializedView(mv) => &mv.resolved_ids,
         }
     }
 
@@ -1827,6 +1947,7 @@ impl CatalogItem {
             CatalogItem::ContinualTask(ct) => uses.extend(ct.dependencies.0.iter().copied()),
             CatalogItem::Secret(_) => {}
             CatalogItem::Connection(_) => {}
+            Self::ReplacementMaterializedView(mv) => uses.extend(mv.dependencies.0.iter().copied()),
         }
         uses
     }
@@ -1846,7 +1967,8 @@ impl CatalogItem {
             | CatalogItem::Type(_)
             | CatalogItem::Func(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::ContinualTask(_)
+            | Self::ReplacementMaterializedView(_) => None,
         }
     }
 
@@ -1931,6 +2053,11 @@ impl CatalogItem {
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::ContinualTask(i))
             }
+            Self::ReplacementMaterializedView(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ReplacementMaterializedView(i))
+            }
         }
     }
 
@@ -2005,6 +2132,11 @@ impl CatalogItem {
                 let mut i = i.clone();
                 i.create_sql = do_rewrite(i.create_sql)?;
                 Ok(CatalogItem::ContinualTask(i))
+            }
+            Self::ReplacementMaterializedView(i) => {
+                let mut i = i.clone();
+                i.create_sql = do_rewrite(i.create_sql)?;
+                Ok(CatalogItem::ReplacementMaterializedView(i))
             }
         }
     }
@@ -2133,6 +2265,9 @@ impl CatalogItem {
             | CatalogItem::Secret(Secret { create_sql, .. })
             | CatalogItem::Connection(Connection { create_sql, .. })
             | CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => Some(create_sql),
+            Self::ReplacementMaterializedView(ReplacementMaterializedView {
+                create_sql, ..
+            }) => Some(create_sql),
             CatalogItem::Func(_) | CatalogItem::Log(_) => None,
         };
         let Some(create_sql) = create_sql else {
@@ -2168,7 +2303,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::ContinualTask(_)
+            | Self::ReplacementMaterializedView(_) => None,
         }
     }
 
@@ -2195,6 +2331,7 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_) => None,
+            Self::ReplacementMaterializedView(mv) => Some(mv.cluster_id),
         }
     }
 
@@ -2214,6 +2351,7 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
             | CatalogItem::ContinualTask(_) => None,
+            Self::ReplacementMaterializedView(mv) => mv.custom_logical_compaction_window,
         }
     }
 
@@ -2236,6 +2374,7 @@ impl CatalogItem {
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
             | CatalogItem::ContinualTask(_) => return None,
+            Self::ReplacementMaterializedView(mv) => &mut mv.custom_logical_compaction_window,
         };
         Some(cw)
     }
@@ -2253,7 +2392,8 @@ impl CatalogItem {
             | CatalogItem::Source(_)
             | CatalogItem::Index(_)
             | CatalogItem::MaterializedView(_)
-            | CatalogItem::ContinualTask(_) => self.custom_logical_compaction_window(),
+            | CatalogItem::ContinualTask(_)
+            | Self::ReplacementMaterializedView(_) => self.custom_logical_compaction_window(),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)
@@ -2281,7 +2421,8 @@ impl CatalogItem {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => false,
+            | CatalogItem::ContinualTask(_)
+            | Self::ReplacementMaterializedView(_) => false,
         }
     }
 
@@ -2341,6 +2482,9 @@ impl CatalogItem {
             CatalogItem::ContinualTask(ct) => {
                 (ct.create_sql.clone(), ct.global_id, BTreeMap::new())
             }
+            CatalogItem::ReplacementMaterializedView(mview) => {
+                (mview.create_sql.clone(), mview.global_id, BTreeMap::new())
+            }
         }
     }
 
@@ -2387,6 +2531,9 @@ impl CatalogItem {
             }
             CatalogItem::Func(_) => unreachable!("cannot serialize functions yet"),
             CatalogItem::ContinualTask(ct) => (ct.create_sql, ct.global_id, BTreeMap::new()),
+            CatalogItem::ReplacementMaterializedView(mview) => {
+                (mview.create_sql, mview.global_id, BTreeMap::new())
+            }
         }
     }
 
@@ -2406,6 +2553,7 @@ impl CatalogItem {
             CatalogItem::Secret(secret) => return Some(secret.global_id),
             CatalogItem::Connection(conn) => return Some(conn.global_id),
             CatalogItem::ContinualTask(ct) => return Some(ct.global_id),
+            CatalogItem::ReplacementMaterializedView(rmv) => return Some(rmv.global_id),
         };
         match version {
             RelationVersionSelector::Latest => collections.values().last().copied(),
@@ -2454,6 +2602,14 @@ impl CatalogEntry {
     pub fn materialized_view(&self) -> Option<&MaterializedView> {
         match self.item() {
             CatalogItem::MaterializedView(mv) => Some(mv),
+            _ => None,
+        }
+    }
+
+    /// Returns the inner [`ReplacementMaterializedView`] if this entry is a materialized view, else `None`.
+    pub fn replacement_materialized_view(&self) -> Option<&ReplacementMaterializedView> {
+        match self.item() {
+            CatalogItem::ReplacementMaterializedView(rmv) => Some(rmv),
             _ => None,
         }
     }
@@ -2616,7 +2772,8 @@ impl CatalogEntry {
             | CatalogItem::Func(_)
             | CatalogItem::Secret(_)
             | CatalogItem::Connection(_)
-            | CatalogItem::ContinualTask(_) => None,
+            | CatalogItem::ContinualTask(_)
+            | CatalogItem::ReplacementMaterializedView(_) => None,
         }
     }
 
@@ -3340,6 +3497,10 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
             CatalogItem::Func(_) => "<builtin>",
             CatalogItem::Log(_) => "<builtin>",
             CatalogItem::ContinualTask(ContinualTask { create_sql, .. }) => create_sql,
+            CatalogItem::ReplacementMaterializedView(ReplacementMaterializedView {
+                create_sql,
+                ..
+            }) => create_sql,
         }
     }
 
@@ -3440,6 +3601,13 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 
     fn latest_version(&self) -> Option<RelationVersion> {
         self.table().map(|t| t.desc.latest_version())
+    }
+
+    fn replaces_item(&self) -> Option<CatalogItemId> {
+        match &self.item() {
+            CatalogItem::ReplacementMaterializedView(rmv) => Some(rmv.replaces),
+            _ => None,
+        }
     }
 }
 

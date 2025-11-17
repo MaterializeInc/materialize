@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or CONTINUAL or NETWORK, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or CONTINUAL or NETWORK or REPLACEMENT, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -616,6 +616,7 @@ mz_object_global_ids                     ""
 mz_optimizer_notices                     ""
 mz_postgres_sources                      ""
 mz_postgres_source_tables                ""
+mz_replacement_materialized_views        ""
 mz_sessions                              ""
 mz_source_references                     ""
 mz_sql_server_source_tables              ""
@@ -809,7 +810,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-263
+264
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

@@ -855,6 +855,9 @@ pub trait CatalogItem {
 
     /// The latest version of this item, if it's version-able.
     fn latest_version(&self) -> Option<RelationVersion>;
+
+    /// The item this catalog item replaces, if any.
+    fn replaces_item(&self) -> Option<CatalogItemId>;
 }
 
 /// An item in a [`SessionCatalog`] and the specific "collection"/pTVC that it

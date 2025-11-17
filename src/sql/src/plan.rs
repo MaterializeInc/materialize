@@ -148,6 +148,7 @@ pub enum Plan {
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
     CreateType(CreateTypePlan),
+    CreateReplacementMaterializedView(CreateReplacementMaterializedViewPlan),
     Comment(CommentPlan),
     DiscardTemp,
     DiscardAll,
@@ -183,6 +184,7 @@ pub enum Plan {
     AlterClusterRename(AlterClusterRenamePlan),
     AlterClusterReplicaRename(AlterClusterReplicaRenamePlan),
     AlterItemRename(AlterItemRenamePlan),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementPlan),
     AlterSchemaRename(AlterSchemaRenamePlan),
     AlterSchemaSwap(AlterSchemaSwapPlan),
     AlterSecret(AlterSecretPlan),
@@ -222,6 +224,9 @@ impl Plan {
             StatementKind::AlterConnection => &[PlanKind::AlterNoop, PlanKind::AlterConnection],
             StatementKind::AlterDefaultPrivileges => &[PlanKind::AlterDefaultPrivileges],
             StatementKind::AlterIndex => &[PlanKind::AlterRetainHistory, PlanKind::AlterNoop],
+            StatementKind::AlterMaterializedViewApplyReplacement => {
+                &[PlanKind::AlterMaterializedViewApplyReplacement]
+            }
             StatementKind::AlterObjectRename => &[
                 PlanKind::AlterClusterRename,
                 PlanKind::AlterClusterReplicaRename,
@@ -282,6 +287,9 @@ impl Plan {
             StatementKind::CreateTableFromSource => &[PlanKind::CreateTable],
             StatementKind::CreateType => &[PlanKind::CreateType],
             StatementKind::CreateView => &[PlanKind::CreateView],
+            StatementKind::CreateReplacementMaterializedView => {
+                &[PlanKind::CreateReplacementMaterializedView]
+            }
             StatementKind::Deallocate => &[PlanKind::Deallocate],
             StatementKind::Declare => &[PlanKind::Declare],
             StatementKind::Delete => &[PlanKind::ReadThenWrite],
@@ -325,7 +333,7 @@ impl Plan {
         }
     }
 
-    /// Returns a human readable name of the plan. Meant for use in messages sent back to a user.
+    /// Returns a human-readable name of the plan. Meant for use in messages sent back to a user.
     pub fn name(&self) -> &str {
         match self {
             Plan::CreateConnection(_) => "create connection",
@@ -345,6 +353,7 @@ impl Plan {
             Plan::CreateIndex(_) => "create index",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
+            Plan::CreateReplacementMaterializedView(_) => "create replacement materialized view",
             Plan::Comment(_) => "comment",
             Plan::DiscardTemp => "discard temp",
             Plan::DiscardAll => "discard all",
@@ -418,6 +427,9 @@ impl Plan {
             Plan::AlterConnection(_) => "alter connection",
             Plan::AlterSource(_) => "alter source",
             Plan::AlterItemRename(_) => "rename item",
+            Plan::AlterMaterializedViewApplyReplacement(_) => {
+                "alter materialized view apply replacement"
+            }
             Plan::AlterSchemaRename(_) => "alter rename schema",
             Plan::AlterSchemaSwap(_) => "alter swap schema",
             Plan::AlterSecret(_) => "alter secret",
@@ -768,6 +780,19 @@ pub struct CreateContinualTaskPlan {
 pub struct CreateNetworkPolicyPlan {
     pub name: String,
     pub rules: Vec<NetworkPolicyRule>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateReplacementMaterializedViewPlan {
+    /// The name of this replacement.
+    pub name: QualifiedItemName,
+    /// The definition of the new materialized view to replace `replaces`.
+    pub materialized_view: MaterializedView,
+    /// The Catalog objects that this materialized view is replacing, if any.
+    pub replaces: CatalogItemId,
+    /// True if the materialized view contains an expression that can make the exact column list
+    /// ambiguous. For example `NATURAL JOIN` or `SELECT *`.
+    pub ambiguous_columns: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -1261,6 +1286,15 @@ pub struct AlterItemRenamePlan {
     pub current_full_name: FullItemName,
     pub to_name: String,
     pub object_type: ObjectType,
+}
+
+/// A plan to apply a replacement to a materialized view.
+#[derive(Debug)]
+pub struct AlterMaterializedViewApplyReplacementPlan {
+    /// The identifier of the materialized view to update.
+    pub id: CatalogItemId,
+    /// The identifier of the replacement to apply on the materialized view.
+    pub replacement_id: CatalogItemId,
 }
 
 #[derive(Debug)]
@@ -1814,6 +1848,25 @@ pub struct MaterializedView {
     /// Unoptimized high-level expression from parsing the `create_sql`.
     pub expr: HirRelationExpr,
     /// All of the catalog objects that are referenced by this materialized view, according to the `expr`.
+    pub dependencies: DependencyIds,
+    /// Columns of this view.
+    pub column_names: Vec<ColumnName>,
+    /// Cluster this materialized view will get installed on.
+    pub cluster_id: ClusterId,
+    pub non_null_assertions: Vec<usize>,
+    pub compaction_window: Option<CompactionWindow>,
+    pub refresh_schedule: Option<RefreshSchedule>,
+    pub as_of: Option<Timestamp>,
+}
+
+/// A replacement for a materialized view.
+#[derive(Clone, Debug)]
+pub struct ReplacementMaterializedView {
+    /// Parse-able SQL that is stored durably and defines this materialized view.
+    pub create_sql: String,
+    /// Unoptimized high-level expression from parsing the `create_sql`.
+    pub expr: HirRelationExpr,
+    /// All catalog objects that are referenced by this materialized view, according to the `expr`.
     pub dependencies: DependencyIds,
     /// Columns of this view.
     pub column_names: Vec<ColumnName>,

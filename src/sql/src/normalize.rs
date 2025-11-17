@@ -23,11 +23,12 @@ use mz_sql_parser::ast::visit_mut::{self, VisitMut};
 use mz_sql_parser::ast::{
     ContinualTaskStmt, CreateConnectionStatement, CreateContinualTaskStatement,
     CreateContinualTaskSugar, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateSecretStatement, CreateSinkStatement, CreateSourceStatement, CreateSubsourceStatement,
-    CreateTableFromSourceStatement, CreateTableStatement, CreateTypeStatement, CreateViewStatement,
-    CreateWebhookSourceStatement, CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior,
-    MutRecBlock, Op, Query, Statement, TableFactor, TableFromSourceColumns, UnresolvedItemName,
-    UnresolvedSchemaName, Value, ViewDefinition,
+    CreateReplacementMaterializedViewStatement, CreateSecretStatement, CreateSinkStatement,
+    CreateSourceStatement, CreateSubsourceStatement, CreateTableFromSourceStatement,
+    CreateTableStatement, CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement,
+    CteBlock, Function, FunctionArgs, Ident, IfExistsBehavior, MutRecBlock, Op, Query, Statement,
+    TableFactor, TableFromSourceColumns, UnresolvedItemName, UnresolvedSchemaName, Value,
+    ViewDefinition,
 };
 
 use crate::names::{Aug, FullItemName, PartialItemName, PartialSchemaName, RawDatabaseSpecifier};
@@ -419,6 +420,28 @@ pub fn create_statement(
             *if_exists = IfExistsBehavior::Error;
         }
 
+        Statement::CreateReplacementMaterializedView(
+            CreateReplacementMaterializedViewStatement {
+                name,
+                target_name,
+                columns: _,
+                in_cluster: _,
+                query,
+                with_options: _,
+                as_of: _,
+            },
+        ) => {
+            *name = allocate_name(name)?;
+            {
+                let mut normalizer = QueryNormalizer::new();
+                normalizer.visit_item_name_mut(target_name);
+                normalizer.visit_query_mut(query);
+                if let Some(err) = normalizer.err {
+                    return Err(err);
+                }
+            }
+        }
+
         Statement::CreateContinualTask(CreateContinualTaskStatement {
             name,
             columns: _,
@@ -506,7 +529,67 @@ pub fn create_statement(
                 .retain(|o| o.name != mz_sql_parser::ast::CreateConnectionOptionName::Validate);
         }
 
-        _ => unreachable!(),
+        Statement::Select(_)
+        | Statement::Insert(_)
+        | Statement::Copy(_)
+        | Statement::Update(_)
+        | Statement::Delete(_)
+        | Statement::CreateDatabase(_)
+        | Statement::CreateSchema(_)
+        | Statement::CreateRole(_)
+        | Statement::CreateCluster(_)
+        | Statement::CreateClusterReplica(_)
+        | Statement::CreateNetworkPolicy(_)
+        | Statement::AlterCluster(_)
+        | Statement::AlterOwner(_)
+        | Statement::AlterObjectRename(_)
+        | Statement::AlterObjectSwap(_)
+        | Statement::AlterRetainHistory(_)
+        | Statement::AlterIndex(_)
+        | Statement::AlterMaterializedViewApplyReplacement(_)
+        | Statement::AlterSecret(_)
+        | Statement::AlterSetCluster(_)
+        | Statement::AlterSink(_)
+        | Statement::AlterSource(_)
+        | Statement::AlterSystemSet(_)
+        | Statement::AlterSystemReset(_)
+        | Statement::AlterSystemResetAll(_)
+        | Statement::AlterConnection(_)
+        | Statement::AlterNetworkPolicy(_)
+        | Statement::AlterRole(_)
+        | Statement::AlterTableAddColumn(_)
+        | Statement::Discard(_)
+        | Statement::DropObjects(_)
+        | Statement::DropOwned(_)
+        | Statement::SetVariable(_)
+        | Statement::ResetVariable(_)
+        | Statement::Show(_)
+        | Statement::StartTransaction(_)
+        | Statement::SetTransaction(_)
+        | Statement::Commit(_)
+        | Statement::Rollback(_)
+        | Statement::Subscribe(_)
+        | Statement::ExplainAnalyzeCluster(_)
+        | Statement::ExplainAnalyzeObject(_)
+        | Statement::ExplainPlan(_)
+        | Statement::ExplainPushdown(_)
+        | Statement::ExplainTimestamp(_)
+        | Statement::ExplainSinkSchema(_)
+        | Statement::Declare(_)
+        | Statement::Fetch(_)
+        | Statement::Close(_)
+        | Statement::Prepare(_)
+        | Statement::Execute(_)
+        | Statement::Deallocate(_)
+        | Statement::Raise(_)
+        | Statement::GrantRole(_)
+        | Statement::RevokeRole(_)
+        | Statement::GrantPrivileges(_)
+        | Statement::RevokePrivileges(_)
+        | Statement::AlterDefaultPrivileges(_)
+        | Statement::ReassignOwned(_)
+        | Statement::ValidateConnection(_)
+        | Statement::Comment(_) => unreachable!(),
     }
 
     Ok(stmt.to_ast_string_stable())
