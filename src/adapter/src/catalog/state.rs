@@ -1394,7 +1394,7 @@ impl CatalogState {
                 create_sql: index.create_sql,
                 global_id,
                 on: index.on,
-                keys: index.keys.into(),
+                key: index.key.into(),
                 conn_id: None,
                 resolved_ids,
                 cluster_id: index.cluster_id,
