@@ -97,6 +97,28 @@ tests:
       path: spec.template.spec.containers[0].args[13]
       pattern: materialize.cloud/swap":"true"
 
+- it: should handle default of swap_enabled, but some sizes without
+  set:
+    operator.clusters.sizes.mysize:
+      swap_enabled: false
+      workers: 1
+      scale: 1
+      cpu_exclusive: false
+      cpu_limit: 0.1
+      credits_per_hour: "0.00"
+      disk_limit: "1552MiB"
+      memory_limit: "776MiB"
+  asserts:
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[13]
+      pattern: '"mysize":{"cpu_exclusive":false,"cpu_limit":0.1,"credits_per_hour":"0.00","disk_limit":"0","is_cc":true,"memory_limit":"776MiB","scale":1,"selectors":{},"swap_enabled":false,"workers":1}'
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[13]
+      pattern: swap_enabled":true
+  - matchRegex:
+      path: spec.template.spec.containers[0].args[13]
+      pattern: materialize.cloud/swap":"true"
+
 - it: should configure for AWS provider correctly
   set:
     operator.cloudProvider.type: "aws"
