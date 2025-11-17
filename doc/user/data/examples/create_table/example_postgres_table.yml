@@ -8,7 +8,6 @@
     [WITH (
         TEXT COLUMNS (<column_name> [, ...])
       | EXCLUDE COLUMNS (<column_name> [, ...])
-      | PARTITION BY (<column_name> [, ...])
       [, ...]
     )]
     ;
