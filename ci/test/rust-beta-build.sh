@@ -16,4 +16,5 @@ curl https://sh.rustup.rs -sSf | sh -s -- -y
 source /cargo/env
 trap "rustup self uninstall -y || true" SIGTERM SIGINT EXIT
 rustup install beta
+rustup run beta cargo build --all-targets --release
 rustup run beta cargo build --all-targets
