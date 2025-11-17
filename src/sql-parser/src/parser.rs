@@ -2577,6 +2577,10 @@ impl<'a> Parser<'a> {
         let name = match self.expect_one_of_keywords(&[NAMESPACE, TABLE])? {
             NAMESPACE => IcebergSinkConfigOptionName::Namespace,
             TABLE => IcebergSinkConfigOptionName::Table,
+            COMMIT => {
+                self.expect_keyword(INTERVAL)?;
+                IcebergSinkConfigOptionName::CommitInterval
+            }
             _ => unreachable!(),
         };
         Ok(IcebergSinkConfigOption {
