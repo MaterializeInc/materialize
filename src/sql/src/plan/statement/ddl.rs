@@ -2720,6 +2720,14 @@ pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
 ) -> Result<Plan, PlanError> {
+    let replacing = if let Some(name) = &stmt.replacing {
+        let item = scx.get_item_by_resolved_name(name)?;
+        assert_eq!(item.item_type(), CatalogItemType::MaterializedView);
+        Some(item.id())
+    } else {
+        None
+    };
+
     let cluster_id =
         crate::plan::statement::resolve_cluster_for_materialized_view(scx.catalog, &stmt)?;
     stmt.in_cluster = Some(ResolvedClusterName {
@@ -2994,6 +3002,7 @@ pub fn plan_create_materialized_view(
             compaction_window,
             refresh_schedule,
             as_of,
+            replacing,
         },
         replace,
         drop_ids,
@@ -3243,6 +3252,7 @@ pub fn plan_create_continual_task(
             compaction_window: None,
             refresh_schedule: None,
             as_of,
+            replacing: None,
         },
     }))
 }

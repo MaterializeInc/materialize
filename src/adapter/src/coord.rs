@@ -2810,7 +2810,7 @@ impl Coordinator {
                 CatalogItem::ContinualTask(ct) => {
                     let collection_desc = CollectionDescription {
                         desc: ct.desc.clone(),
-                        data_source: DataSource::Other,
+                        data_source: DataSource::Other { primary: None },
                         since: ct.initial_as_of.clone(),
                         status_collection_id: None,
                         timeline: None,

@@ -1088,7 +1088,7 @@ where
                     );
                     table_registers.push((id, write));
                 }
-                DataSource::Progress | DataSource::Other => {
+                DataSource::Progress | DataSource::Other { .. } => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "not registering {id} with a controller persist worker",
@@ -1214,7 +1214,7 @@ where
                 | DataSource::Webhook
                 | DataSource::Table { .. }
                 | DataSource::Progress
-                | DataSource::Other => {}
+                | DataSource::Other { .. } => {}
                 DataSource::Sink { .. } => {
                     if !self.read_only {
                         self.run_export(id)?;
@@ -1460,6 +1460,38 @@ where
         self.append_shard_mappings([new_collection].into_iter(), Diff::ONE);
 
         Ok(())
+    }
+
+    async fn create_alias(&mut self, id: GlobalId, desc: CollectionDescription<Self::Timestamp>) {
+        self.storage_collections.create_alias(id, desc.clone()).await;
+
+        let primary = match &desc.data_source {
+            DataSource::Other { primary: Some(id) } => *id,
+            _ => panic!("invalid data source"),
+        };
+
+        let data_shard = self
+            .collection(primary)
+            .unwrap()
+            .collection_metadata
+            .data_shard;
+
+        let collection_meta = CollectionMetadata {
+            persist_location: self.persist_location.clone(),
+            data_shard,
+            relation_desc: desc.desc,
+            txns_shard: None,
+        };
+        let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(id, None);
+        let collection = CollectionState::new(
+            desc.data_source,
+            collection_meta,
+            CollectionStateExtra::None,
+            wallclock_lag_metrics,
+        );
+
+        self.collections.insert(id, collection);
+        self.append_shard_mappings([id].into_iter(), Diff::ONE);
     }
 
     fn export(
@@ -1884,7 +1916,7 @@ where
                         ingestions_to_drop.insert(*id);
                         source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Progress | DataSource::Table { .. } | DataSource::Other => {
+                    DataSource::Progress | DataSource::Table { .. } | DataSource::Other { .. } => {
                         collections_to_drop.push(*id);
                     }
                     DataSource::Introspection(_) | DataSource::Sink { .. } => {
@@ -3221,8 +3253,11 @@ where
             | DataSource::Webhook
             | DataSource::Table { primary: None }
             | DataSource::Progress
-            | DataSource::Other => vec![],
+            | DataSource::Other { primary: None } => vec![],
             DataSource::Table {
+                primary: Some(primary),
+            }
+            | DataSource::Other {
                 primary: Some(primary),
             } => vec![*primary],
             DataSource::IngestionExport { ingestion_id, .. } => {
@@ -3832,7 +3867,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
         // duplicate measurements. Collections written by other components (e.g. compute) have
         // their wallclock lags recorded by these components.
         let wallclock_lag_histogram_stash = match &data_source {
-            DataSource::Other => None,
+            DataSource::Other { .. } => None,
             _ => Some(Default::default()),
         };
 

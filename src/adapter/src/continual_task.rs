@@ -43,6 +43,7 @@ pub fn ct_item_from_plan(
                 compaction_window: _,
                 refresh_schedule: _,
                 as_of,
+                replacing: _,
             },
     } = plan;
 

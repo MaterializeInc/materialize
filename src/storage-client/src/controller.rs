@@ -132,7 +132,7 @@ pub enum DataSource<T> {
     },
     /// This source's data does not need to be managed by the storage
     /// controller, e.g. it's a materialized view or the catalog collection.
-    Other,
+    Other { primary: Option<GlobalId> },
     /// This collection is the output collection of a sink.
     Sink { desc: ExportDescription<T> },
 }
@@ -158,7 +158,7 @@ impl<T> CollectionDescription<T> {
     pub fn for_other(desc: RelationDesc, since: Option<Antichain<T>>) -> Self {
         Self {
             desc,
-            data_source: DataSource::Other,
+            data_source: DataSource::Other { primary: None },
             since,
             status_collection_id: None,
             timeline: None,
@@ -514,6 +514,8 @@ pub trait StorageController: Debug {
         register_ts: Self::Timestamp,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    async fn create_alias(&mut self, id: GlobalId, desc: CollectionDescription<Self::Timestamp>);
+
     /// Acquire an immutable reference to the export state, should it exist.
     fn export(
         &self,
@@ -737,7 +739,7 @@ impl<T> DataSource<T> {
     pub fn in_txns(&self) -> bool {
         match self {
             DataSource::Table { .. } => true,
-            DataSource::Other
+            DataSource::Other { .. }
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }
             | DataSource::Introspection(_)

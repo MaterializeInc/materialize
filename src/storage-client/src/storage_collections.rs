@@ -306,6 +306,8 @@ pub trait StorageCollections: Debug {
         expected_version: RelationVersion,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
+    async fn create_alias(&self, id: GlobalId, desc: CollectionDescription<Self::Timestamp>);
+
     /// Drops the read capability for the sources and allows their resources to
     /// be reclaimed.
     ///
@@ -916,8 +918,11 @@ where
             | DataSource::Webhook
             | DataSource::Table { primary: None }
             | DataSource::Progress
-            | DataSource::Other => Vec::new(),
+            | DataSource::Other { primary: None } => Vec::new(),
             DataSource::Table {
+                primary: Some(primary),
+            }
+            | DataSource::Other {
                 primary: Some(primary),
             } => vec![*primary],
             DataSource::IngestionExport {
@@ -1346,7 +1351,7 @@ where
                 let collection = collections.get(&key).expect("must still exist");
                 let should_emit_persist_compaction = !matches!(
                     collection.description.data_source,
-                    DataSource::Table { primary: Some(_) }
+                    DataSource::Table { primary: Some(_) } | DataSource::Other { primary: Some(_) }
                 );
 
                 if frontier.is_empty() {
@@ -1904,7 +1909,7 @@ where
                         | DataSource::Webhook
                         | DataSource::Ingestion(_)
                         | DataSource::Progress
-                        | DataSource::Other => {}
+                        | DataSource::Other { .. } => {}
                         DataSource::Sink { .. } => {}
                         DataSource::Table { .. } => {
                             let register_ts = register_ts.expect(
@@ -2108,7 +2113,7 @@ where
                     }
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Progress | DataSource::Other => {
+                DataSource::Progress | DataSource::Other { .. } => {
                     self_collections.insert(id, collection_state);
                 }
                 DataSource::Ingestion(_) => {
@@ -2413,6 +2418,62 @@ where
         Ok(())
     }
 
+    async fn create_alias(&self, id: GlobalId, desc: CollectionDescription<Self::Timestamp>) {
+        let primary_id = match &desc.data_source {
+            DataSource::Other { primary: Some(id) } => *id,
+            _ => panic!("invalid data source"),
+        };
+
+        let data_shard = {
+            let mut collections = self.collections.lock().unwrap();
+            let primary = collections.get(&primary_id).unwrap();
+            let data_shard = primary.collection_metadata.data_shard;
+
+            let implied_capability = primary.read_capabilities.frontier().to_owned();
+            let write_frontier = primary.write_frontier.clone();
+
+            let mut changes = ChangeBatch::new();
+            changes.extend(implied_capability.iter().map(|t| (t.clone(), 1)));
+
+            let collection_meta = CollectionMetadata {
+                persist_location: self.persist_location.clone(),
+                relation_desc: desc.desc.clone(),
+                data_shard,
+                txns_shard: None,
+            };
+
+            let collection = CollectionState::new(
+                desc.clone(),
+                implied_capability,
+                write_frontier,
+                Vec::new(),
+                collection_meta,
+            );
+            collections.insert(id, collection);
+
+            let mut updates = BTreeMap::from([(id, changes)]);
+            StorageCollectionsImpl::update_read_capabilities_inner(
+                &self.cmd_tx,
+                &mut *collections,
+                &mut updates,
+            );
+
+            data_shard
+        };
+
+        let persist_client = self
+            .persist
+            .open(self.persist_location.clone())
+            .await
+            .unwrap();
+
+        let (write_handle, since_handle) = self
+            .open_data_handles(&id, data_shard, None, desc.desc, &persist_client)
+            .await;
+
+        self.register_handles(id, true, since_handle, write_handle);
+    }
+
     fn drop_collections_unvalidated(
         &self,
         storage_metadata: &StorageMetadata,
@@ -2619,7 +2680,7 @@ where
                     result = Some(TimeDependence::default())
                 }
                 // Materialized views, continual tasks, etc, aren't managed by storage.
-                Other => {}
+                Other { .. } => {}
                 Sink { .. } => {}
             };
         }

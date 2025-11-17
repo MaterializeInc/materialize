@@ -3861,6 +3861,14 @@ impl<'a> Parser<'a> {
         }
 
         let name = self.parse_item_name()?;
+
+        let replacing = if self.parse_keyword(REPLACING) {
+            let name = self.parse_raw_name()?;
+            Some(name)
+        } else {
+            None
+        };
+
         let columns = self.parse_parenthesized_column_list(Optional)?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
@@ -3886,6 +3894,7 @@ impl<'a> Parser<'a> {
                 query,
                 as_of,
                 with_options,
+                replacing,
             },
         ))
     }

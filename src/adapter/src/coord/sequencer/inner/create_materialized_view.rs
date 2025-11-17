@@ -46,6 +46,7 @@ use crate::error::AdapterError;
 use crate::explain::explain_dataflow;
 use crate::explain::explain_plan;
 use crate::explain::optimizer_trace::OptimizerTrace;
+use crate::optimize::OptimizerCatalog;
 use crate::optimize::dataflows::dataflow_import_id_bundle;
 use crate::optimize::{self, Optimize};
 use crate::session::Session;
@@ -565,6 +566,7 @@ impl Coordinator {
                             non_null_assertions,
                             compaction_window,
                             refresh_schedule,
+                            replacing,
                             ..
                         },
                     drop_ids,
@@ -663,6 +665,9 @@ impl Coordinator {
             .take(global_lir_plan.df_meta().optimizer_notices.len())
             .collect::<Vec<_>>();
 
+        let primary =
+            replacing.map(|id| self.catalog().get_entry_by_item_id(&id).latest_global_id());
+
         let transact_result = self
             .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, ctx| {
                 Box::pin(async move {
@@ -688,25 +693,23 @@ impl Coordinator {
                     let storage_metadata = coord.catalog.state().storage_metadata();
 
                     // Announce the creation of the materialized view source.
-                    coord
-                        .controller
-                        .storage
-                        .create_collections(
-                            storage_metadata,
-                            None,
-                            vec![(
-                                global_id,
-                                CollectionDescription {
-                                    desc: output_desc,
-                                    data_source: DataSource::Other,
-                                    since: Some(storage_as_of),
-                                    status_collection_id: None,
-                                    timeline: None,
-                                },
-                            )],
-                        )
-                        .await
-                        .unwrap_or_terminate("cannot fail to append");
+                    let desc = CollectionDescription {
+                        desc: output_desc,
+                        data_source: DataSource::Other { primary },
+                        since: Some(storage_as_of),
+                        status_collection_id: None,
+                        timeline: None,
+                    };
+                    if primary.is_some() {
+                        coord.controller.storage.create_alias(global_id, desc).await;
+                    } else {
+                        coord
+                            .controller
+                            .storage
+                            .create_collections(storage_metadata, None, vec![(global_id, desc)])
+                            .await
+                            .unwrap_or_terminate("cannot fail to append");
+                    }
 
                     coord
                         .initialize_storage_read_policies(
@@ -722,7 +725,10 @@ impl Coordinator {
                             notice_builtin_updates_fut,
                         )
                         .await;
-                    coord.allow_writes(cluster_id, global_id);
+
+                    if replacing.is_none() {
+                        coord.allow_writes(cluster_id, global_id);
+                    }
                 })
             })
             .await;

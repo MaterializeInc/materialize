@@ -407,10 +407,14 @@ pub fn create_statement(
             query,
             with_options: _,
             as_of: _,
+            replacing,
         }) => {
             *name = allocate_name(name)?;
             {
                 let mut normalizer = QueryNormalizer::new();
+                if let Some(name) = replacing {
+                    normalizer.visit_item_name_mut(name);
+                }
                 normalizer.visit_query_mut(query);
                 if let Some(err) = normalizer.err {
                     return Err(err);
