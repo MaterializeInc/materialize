@@ -60,7 +60,7 @@ mod tests {
                 _ => anyhow::bail!("unexpected regex flags"),
             }
         }
-        Ok(Regex::new(needle, case_insensitive)?)
+        Regex::new(needle, case_insensitive).map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     // Assert equivalency to postgres and generate TestCases.

@@ -76,6 +76,9 @@ pub use variadic::VariadicFunc;
 /// The maximum size of the result strings of certain string functions, such as `repeat` and `lpad`.
 /// Chosen to be the smallest number to keep our tests passing without changing. 100MiB is probably
 /// higher than what we want, but it's better than no limit.
+///
+/// Note: This number appears in our user-facing documentation in the function reference for every
+/// function where it applies.
 const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
 
 pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {

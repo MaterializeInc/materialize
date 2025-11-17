@@ -818,5 +818,8 @@ SELECT regexp_matches(bar, '(b[^b]+)(b[^b]+)(b[^b]+)', 'ig') FROM foo2;
 db error: ERROR: function regexp_matches(smallint, unknown, unknown) does not exist
 HINT: No function matches the given name and argument types.  You might need to add explicit type casts.
 
+statement error db error: ERROR: invalid regular expression: regex pattern too large \(62400000 bytes, max 1048576 bytes\)
+SELECT 'aaaaaaaaaaa' ~ repeat('vxx.0.0-rc.4 (5b079d80c)', '2600000');
+
 statement ok
 DROP CLUSTER multiprocess;

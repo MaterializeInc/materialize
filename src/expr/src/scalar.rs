@@ -28,7 +28,7 @@ use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::adt::regex::Regex;
+use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
@@ -2892,8 +2892,8 @@ impl From<InvalidArrayError> for EvalError {
     }
 }
 
-impl From<regex::Error> for EvalError {
-    fn from(e: regex::Error) -> EvalError {
+impl From<RegexCompilationError> for EvalError {
+    fn from(e: RegexCompilationError) -> EvalError {
         EvalError::InvalidRegex(e.to_string().into())
     }
 }
