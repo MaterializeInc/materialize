@@ -10,7 +10,7 @@
 .content-wrapper {
     display: flex;
     justify-content: center;
-    padding-top: calc(var(--nav-height) + var(--xx-small));
+    padding-top: calc(var(--nav-height) + var(--small));
 
     @media(max-width: 800px) {
         padding-top: calc(var(--nav-height) + var(--small));
