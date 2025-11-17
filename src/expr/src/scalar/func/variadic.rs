@@ -35,7 +35,7 @@ use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use crate::func::{
-    MAX_STRING_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
+    MAX_STRING_FUNC_RESULT_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
     regexp_match_static, regexp_replace_parse_flags, regexp_replace_static,
     regexp_split_to_array_re, stringify_datum, timezone_time,
 };
@@ -719,7 +719,7 @@ fn pad_leading<'a>(
             ));
         }
     };
-    if len > MAX_STRING_BYTES {
+    if len > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
 
