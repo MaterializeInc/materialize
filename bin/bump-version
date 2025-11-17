@@ -69,7 +69,7 @@ rm -f src/{clusterd,environmentd,materialized,persist-client,testdrive,catalog-d
 
 cargo update --workspace
 
-crd_descriptions_json = doc/user/data/self_managed/materialize_crd_descriptions.json
+crd_descriptions_json=doc/user/data/self_managed/materialize_crd_descriptions.json
 cargo run -p mz-cloud-resources --bin crd-writer > "${crd_descriptions_json}"
 git add "${crd_descriptions_json}"
 
