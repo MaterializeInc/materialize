@@ -5270,6 +5270,7 @@ dependencies = [
  "mz-service",
  "mz-sql",
  "mz-sql-parser",
+ "mz-sql-server-util",
  "mz-ssh-util",
  "mz-storage-client",
  "mz-storage-types",

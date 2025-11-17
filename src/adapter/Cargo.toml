@@ -66,6 +66,7 @@ mz-segment = { path = "../segment" }
 mz-service = { path = "../service" }
 mz-sql = { path = "../sql" }
 mz-sql-parser = { path = "../sql-parser" }
+mz-sql-server-util = { path = "../sql-server-util"}
 mz-ssh-util = { path = "../ssh-util" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
