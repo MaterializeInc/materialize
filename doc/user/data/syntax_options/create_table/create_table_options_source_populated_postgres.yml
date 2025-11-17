@@ -47,4 +47,3 @@ rows:
       |--------|-------------|
       | `TEXT COLUMNS (<column_name> [, ...])` |*Optional.* If specified, decode data as `text` for the listed column(s),such as for unsupported data types. See also [supported types](#supported-data-types). |
       | `EXCLUDE COLUMNS (<column_name> [, ...])`| *Optional.* If specified,exclude the listed column(s) from the table, such as for unsupported data types. See also [supported types](#supported-data-types).|
-      | <a name="partition-by"></a>`PARTITION BY (<column_name> [, ...])` | {{< include-md file="shared-content/partition-by-option-description.md" >}} |
