@@ -47,7 +47,7 @@ In order to minimize unexpected downtime and avoid connection drops at critical
 periods for your application, changes are not immediately and automatically
 rolled out by the Operator. Instead, the upgrade process involves two steps:
 - First, staging spec changes to the Materialize custom resource.
-- Second, applying the changes via a `rolloutRequest`.
+- Second, applying the changes via a `requestRollout`.
 
 When upgrading your Materialize instances, you'll first want to update the `environmentdImageRef` field in the Materialize custom resource spec.
 
@@ -75,7 +75,7 @@ kubectl patch materialize <instance-name> \
   -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v26.0.0\"}}"
 ```
 
-#### Applying the changes via `rolloutRequest`
+#### Applying the changes via `requestRollout`
 
 To apply changes and kick off the Materialize instance upgrade, you must update the `requestRollout` field in the Materialize custom resource spec to a new UUID.
 Be sure to consult the [Rollout Configurations](#rollout-configuration) to ensure you've selected the correct rollout behavior.
@@ -91,7 +91,7 @@ kubectl patch materialize <instance-name> \
 It is possible to combine both operations in a single command if preferred:
 
 ```shell
-kubectl patch materialize 12345678-1234-1234-1234-123456789012 \
+kubectl patch materialize <instance-name> \
   -n materialize-environment \
   --type='merge' \
   -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:v26.0.0\", \"requestRollout\": \"$(uuidgen)\"}}"
@@ -148,7 +148,7 @@ Tears down the prior version before creating and promoting the new version. This
 
 #### In Place Rollout
 
-`inPlaceRollout` has been deprecated and will be ignored.
+The `inPlaceRollout` setting has been deprecated and will be ignored.
 
 
 ### Verifying the Upgrade
@@ -165,13 +165,13 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ### Version Specific Upgrade Notes
 
 #### Upgrading to `v26.0`
-- This is a major version upgrade. In order to upgrade to `v26.0`, you must first upgrade to `v25.2.15`, then upgrade to `v26.0.0`.
+- This is a major version upgrade. In order to upgrade to `v26.0` from `v25.2.X` (where `X < 15`) or `v25.1`, you must first upgrade to `v25.2.15`, then upgrade to `v26.0.0`.
 - New requirements were introduced for license keys. In order to upgrade, you will
   first need to add a license key to the `backendSecret` used in the spec for your
-  Materialize resource. Please refer to our [instructions on how to get and install a license keys](/installation/faq#how-do-i-get-a-license-key).
+  Materialize resource. Please refer to our [instructions on how to get and install a license key](/installation/faq#how-do-i-get-a-license-key).
 - Swap is now enabled by default. Swap reduces the memory required to
   operate Materialize and improves cost efficiency. Upgrading to `v26.0`
-  requires some preparation to ensure kubernetes nodes are labeled
+  requires some preparation to ensure Kubernetes nodes are labeled
   and configured correctly. Please refer to our guides:
 
   {{< yaml-table data="self_managed/enable_swap_upgrade_guides" >}}
