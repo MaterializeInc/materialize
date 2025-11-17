@@ -107,7 +107,6 @@ def main():
                 "--sbom",
             ]
         )
-
         spawn.runv(
             [
                 "sed",
@@ -116,7 +115,6 @@ def main():
                 "misc/images/materialized-base/Dockerfile",
             ]
         )
-
         # Commit here instead of in bump-version so we have access to the correct git author
         spawn.runv(["git", "commit", "-am", f"release: bump to version {version}"])
         print("Tagging version")

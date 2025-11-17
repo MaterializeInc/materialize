@@ -515,6 +515,7 @@ class KafkaRecordsEnvelopeUpsertSameValue(Generator):
 
 class KafkaRecordsEnvelopeUpsertDistinctValues(Generator):
     COUNT = Generator.COUNT * 1_000
+    MAX_COUNT = 64000000  # Too long-running with count 77968750
 
     @classmethod
     def body(cls) -> None:

@@ -772,6 +772,7 @@ steps:
     trigger: deploy
     async: true
     branches: "main v*.*"
+    depends_on: ["build-x86_64", "build-aarch64"]
     build:
       commit: "$BUILDKITE_COMMIT"
       branch: "$BUILDKITE_BRANCH"
