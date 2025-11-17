@@ -148,6 +148,7 @@ pub(crate) async fn migrate(
         // Migration functions may also take `tx` as input to stage
         // arbitrary changes to the catalog.
         ast_rewrite_create_sink_partition_strategy(stmt)?;
+        ast_rewrite_sql_server_constraints(stmt)?;
         Ok(())
     })?;
 
@@ -851,5 +852,92 @@ fn ast_rewrite_create_sink_partition_strategy(
     };
     stmt.with_options
         .retain(|op| op.name != CreateSinkOptionName::PartitionStrategy);
+    Ok(())
+}
+
+// Migrate SQL Server constraint information from the columns to dedicated constraints field.
+fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{
+        CreateSubsourceOptionName, TableFromSourceOptionName, Value, WithOptionValue,
+    };
+    use mz_sql_server_util::desc::{SqlServerTableConstraint, SqlServerTableConstraintType};
+    use mz_storage_types::sources::ProtoSourceExportStatementDetails;
+    use mz_storage_types::sources::proto_source_export_statement_details::Kind;
+
+    let deets: Option<&mut String> = match stmt {
+        Statement::CreateSubsource(stmt) => stmt.with_options.iter_mut().find_map(|option| {
+            if matches!(option.name, CreateSubsourceOptionName::Details)
+                && let Some(WithOptionValue::Value(Value::String(ref mut details))) = option.value
+            {
+                Some(details)
+            } else {
+                None
+            }
+        }),
+        Statement::CreateTableFromSource(stmt) => stmt.with_options.iter_mut().find_map(|option| {
+            if matches!(option.name, TableFromSourceOptionName::Details)
+                && let Some(WithOptionValue::Value(Value::String(ref mut details))) = option.value
+            {
+                Some(details)
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    };
+    let Some(deets) = deets else {
+        return Ok(());
+    };
+
+    let current_value = hex::decode(&mut *deets)?;
+    let current_value = ProtoSourceExportStatementDetails::decode(&*current_value)?;
+
+    // avoid further work if this isn't SQL Server
+    if !matches!(current_value.kind, Some(Kind::SqlServer(_))) {
+        return Ok(());
+    };
+
+    let SourceExportStatementDetails::SqlServer {
+        mut table,
+        capture_instance,
+        initial_lsn,
+    } = SourceExportStatementDetails::from_proto(current_value)?
+    else {
+        unreachable!("statement details must exist for SQL Server");
+    };
+
+    // Migration has already occured or did not need to happen.
+    if !table.constraints.is_empty() {
+        return Ok(());
+    }
+
+    // Relocates the primary key constraint information from the individual columns to the
+    // constraints field. This ensures that the columns no longer hold constraint information.
+    let mut migrated_constraints: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for col in table.columns.iter_mut() {
+        if let Some(constraint_name) = col.primary_key_constraint.take() {
+            migrated_constraints
+                .entry(constraint_name)
+                .or_default()
+                .push(col.name.to_string());
+        }
+    }
+
+    table.constraints = migrated_constraints
+        .into_iter()
+        .map(|(constraint_name, column_names)| SqlServerTableConstraint {
+            constraint_name: constraint_name.to_string(),
+            constraint_type: SqlServerTableConstraintType::PrimaryKey,
+            column_names,
+        })
+        .collect();
+
+    let new_value = SourceExportStatementDetails::SqlServer {
+        table,
+        capture_instance,
+        initial_lsn,
+    };
+    *deets = hex::encode(new_value.into_proto().encode_to_vec());
+
     Ok(())
 }

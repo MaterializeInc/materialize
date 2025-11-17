@@ -240,7 +240,7 @@ class SqlServerCdcBase:
             # > SELECT regexp_match(create_sql, 'TEXT COLUMNS = \\((.*?)\\)')[1] FROM (SHOW CREATE SOURCE sql_server_source_tableA{self.suffix});
             # "\"f4\""
 
-            # Confirm that the primary key information has been propagated from Pg
+            # Confirm that the primary key information has been propagated from SQL Server
             > SELECT key FROM (SHOW INDEXES ON sql_server_source_tableA{self.suffix});
             {{f1,f2}}
 
