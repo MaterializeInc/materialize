@@ -135,11 +135,6 @@ When you define a source, Materialize will automatically:
 source as change events stream in, as a result of `INSERT`, `UPDATE` and
 `DELETE` operations in the upstream PostgreSQL database.
 
-It's important to note that the schema metadata is captured when the source is
-initially created, and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a PostgreSQL source and want to
-replicate them to Materialize, the source must be dropped and recreated.
-
 ##### PostgreSQL replication slots
 
 Each source ingests the raw replication stream data for all tables in the

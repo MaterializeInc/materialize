@@ -92,13 +92,6 @@ SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
 ```
 
 
-{{< note >}}
-The schema metadata is captured when the source is
-initially created and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a PostgreSQL source and want to
-replicate them to Materialize, the source must be dropped and recreated.
-{{</ >}}
-
 {{< tip >}}
 
 - {{< include-md file="shared-content/postgres-wal.md" >}}
