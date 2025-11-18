@@ -26,7 +26,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use async_trait::async_trait;
 use bincode::Options;
 use futures::future;
@@ -243,9 +243,9 @@ where
 #[derive(Debug)]
 struct Connection<Out, In> {
     /// Message sender connected to the send task.
-    msg_tx: mpsc::Sender<Out>,
+    msg_tx: mpsc::UnboundedSender<Out>,
     /// Message receiver connected to the receive task.
-    msg_rx: mpsc::Receiver<In>,
+    msg_rx: mpsc::UnboundedReceiver<In>,
     /// Receiver for errors encountered by connection tasks.
     error_rx: watch::Receiver<String>,
 
@@ -289,8 +289,8 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
         handshake(&mut reader, &mut writer, version, server_fqdn).await?;
 
-        let (out_tx, out_rx) = mpsc::channel(1024);
-        let (in_tx, in_rx) = mpsc::channel(1024);
+        let (out_tx, out_rx) = mpsc::unbounded_channel();
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
         // Initialize the error channel with a default error to return if none of the tasks
         // produced an error.
         let (error_tx, error_rx) = watch::channel("connection closed".into());
@@ -314,7 +314,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
     /// Enqueue a message for sending.
     async fn send(&mut self, msg: Out) -> anyhow::Result<()> {
-        match self.msg_tx.send(msg).await {
+        match self.msg_tx.send(msg) {
             Ok(()) => Ok(()),
             Err(_) => bail!(self.collect_error().await),
         }
@@ -347,7 +347,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
         mut writer: W,
-        mut msg_rx: mpsc::Receiver<Out>,
+        mut msg_rx: mpsc::UnboundedReceiver<Out>,
         error_tx: watch::Sender<String>,
         mut metrics: impl Metrics<Out, In>,
     ) {
@@ -383,7 +383,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     /// Run a connection's recv task.
     async fn run_recv_task<R: AsyncRead + Unpin>(
         mut reader: R,
-        msg_tx: mpsc::Sender<In>,
+        msg_tx: mpsc::UnboundedSender<In>,
         error_tx: watch::Sender<String>,
         mut metrics: impl Metrics<Out, In>,
     ) {
@@ -393,7 +393,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                     trace!(?msg, "ctp: received message");
                     metrics.message_received(&msg);
 
-                    if msg_tx.send(msg).await.is_err() {
+                    if msg_tx.send(msg).is_err() {
                         break;
                     }
                 }
@@ -403,38 +403,6 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                     break;
                 }
             };
-        }
-    }
-}
-
-/// A connection handler that simply forwards messages over channels.
-#[derive(Debug)]
-pub struct ChannelHandler<In, Out> {
-    tx: mpsc::UnboundedSender<In>,
-    rx: mpsc::UnboundedReceiver<Out>,
-}
-
-impl<In, Out> ChannelHandler<In, Out> {
-    pub fn new(tx: mpsc::UnboundedSender<In>, rx: mpsc::UnboundedReceiver<Out>) -> Self {
-        Self { tx, rx }
-    }
-}
-
-#[async_trait]
-impl<In: Message, Out: Message> GenericClient<In, Out> for ChannelHandler<In, Out> {
-    async fn send(&mut self, cmd: In) -> anyhow::Result<()> {
-        let result = self.tx.send(cmd);
-        result.map_err(|_| anyhow!("client channel disconnected"))
-    }
-
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe.
-    async fn recv(&mut self) -> anyhow::Result<Option<Out>> {
-        // `mpsc::UnboundedReceiver::recv` is cancel safe.
-        match self.rx.recv().await {
-            Some(resp) => Ok(Some(resp)),
-            None => bail!("client channel disconnected"),
         }
     }
 }
