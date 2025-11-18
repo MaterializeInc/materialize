@@ -267,9 +267,9 @@ where
 #[derive(Debug)]
 struct Connection<Out, In> {
     /// Message sender connected to the send task.
-    msg_tx: mpsc::Sender<Out>,
+    msg_tx: mpsc::UnboundedSender<Out>,
     /// Message receiver connected to the receive task.
-    msg_rx: mpsc::Receiver<In>,
+    msg_rx: mpsc::UnboundedReceiver<In>,
     /// Receiver for errors encountered by connection tasks.
     error_rx: watch::Receiver<String>,
 
@@ -313,8 +313,8 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
         handshake(&mut reader, &mut writer, version, server_fqdn).await?;
 
-        let (out_tx, out_rx) = mpsc::channel(1024);
-        let (in_tx, in_rx) = mpsc::channel(1024);
+        let (out_tx, out_rx) = mpsc::unbounded_channel();
+        let (in_tx, in_rx) = mpsc::unbounded_channel();
         // Initialize the error channel with a default error to return if none of the tasks
         // produced an error.
         let (error_tx, error_rx) = watch::channel("connection closed".into());
@@ -338,7 +338,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
 
     /// Enqueue a message for sending.
     async fn send(&mut self, msg: Out) -> anyhow::Result<()> {
-        match self.msg_tx.send(msg).await {
+        match self.msg_tx.send(msg) {
             Ok(()) => Ok(()),
             Err(_) => bail!(self.collect_error().await),
         }
@@ -371,7 +371,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     /// Run a connection's send task.
     async fn run_send_task<W: AsyncWrite + Unpin>(
         mut writer: W,
-        mut msg_rx: mpsc::Receiver<Out>,
+        mut msg_rx: mpsc::UnboundedReceiver<Out>,
         error_tx: watch::Sender<String>,
         mut metrics: impl Metrics<Out, In>,
     ) {
@@ -407,7 +407,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
     /// Run a connection's recv task.
     async fn run_recv_task<R: AsyncRead + Unpin>(
         mut reader: R,
-        msg_tx: mpsc::Sender<In>,
+        msg_tx: mpsc::UnboundedSender<In>,
         error_tx: watch::Sender<String>,
         mut metrics: impl Metrics<Out, In>,
     ) {
@@ -417,7 +417,7 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                     trace!(?msg, "ctp: received message");
                     metrics.message_received(&msg);
 
-                    if msg_tx.send(msg).await.is_err() {
+                    if msg_tx.send(msg).is_err() {
                         break;
                     }
                 }
