@@ -813,7 +813,7 @@ where
             let num_runs = batch.run_meta.len();
 
             let runs = batch.runs().flat_map(|(meta, parts)| {
-                if meta.order.unwrap_or(RunOrder::Codec) == cfg.batch.preferred_order {
+                if meta.order.unwrap_or(RunOrder::Codec) == RunOrder::Structured {
                     Either::Left(std::iter::once((&batch.desc, meta, parts)))
                 } else {
                     // The downstream consolidation step will handle a long run that's not in
@@ -972,7 +972,7 @@ where
 
         let parts = BatchParts::new_ordered::<D>(
             batch_cfg,
-            cfg.batch.preferred_order,
+            RunOrder::Structured,
             Arc::clone(&metrics),
             Arc::clone(&shard_metrics),
             *shard_id,
