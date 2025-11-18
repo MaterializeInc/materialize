@@ -19,6 +19,7 @@ import argparse
 import base64
 import collections
 import hashlib
+import io
 import json
 import multiprocessing
 import os
@@ -60,8 +61,8 @@ def run_and_detect_rust_ice(
     """This function is complex since it prints out each line immediately to
     stdout/stderr, but still records them at the same time so that we can scan
     for the Rust ICE."""
-    stdout_result = ""
-    stderr_result = ""
+    stdout_result = io.StringIO()
+    stderr_result = io.StringIO()
     p = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -81,44 +82,52 @@ def run_and_detect_rust_ice(
     running = True
     while running:
         for key, val in sel.select():
-            output = ""
+            output = io.StringIO()
             running = False
             while True:
                 new_output = key.fileobj.read(1024)  # type: ignore
                 if not new_output:
                     break
-                output += new_output
-            if not output:
+                output.write(new_output)
+            contents = output.getvalue()
+            output.close()
+            if not contents:
                 continue
             # Keep running as long as stdout or stderr have any content
             running = True
             if key.fileobj is p.stdout:
                 print(
-                    output,
+                    contents,
                     end="",
                     flush=True,
                 )
-                stdout_result += output
+                stdout_result.write(contents)
             else:
                 print(
-                    output,
+                    contents,
                     end="",
                     file=sys.stderr,
                     flush=True,
                 )
-                stderr_result += output
+                stderr_result.write(contents)
     p.wait()
     retcode = p.poll()
     assert retcode is not None
+    stdout_contents = stdout_result.getvalue()
+    stdout_result.close()
+    stderr_contents = stderr_result.getvalue()
+    stderr_result.close()
     if retcode:
         panic_msg = "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
-        if panic_msg in stdout_result or panic_msg in stderr_result:
+        if panic_msg in stdout_contents or panic_msg in stderr_contents:
             raise RustICE()
 
         raise subprocess.CalledProcessError(
-            retcode, p.args, output=stdout_result, stderr=stderr_result
+            retcode, p.args, output=stdout_contents, stderr=stderr_contents
         )
-    return subprocess.CompletedProcess(p.args, retcode, stdout_result, stderr_result)
+    return subprocess.CompletedProcess(
+        p.args, retcode, stdout_contents, stderr_contents
+    )
 
 
 class Fingerprint(bytes):
