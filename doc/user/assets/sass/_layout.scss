@@ -345,6 +345,7 @@ table.inline-headings {
     position: sticky;
     top: 90px;
     overflow-y: auto;
+    height: 100vh;
 
     @media(max-width: 1050px) {
         display: none;
