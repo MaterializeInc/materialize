@@ -44,6 +44,15 @@ Starting in v26.0.0, Self-Managed Materialize supports SASL/SCRAM-SHA-256
 authentication for PostgreSQL wire protocol connections. For more information,
 see [Authentication](/security/self-managed/authentication/).
 
+When SASL authentication is enabled:
+
+- **PostgreSQL connections** (e.g., `psql`, client libraries, [connection
+  poolers](/integrations/connection-pooling/)) use SCRAM-SHA-256 authentication
+- **HTTP/Web Console connections** use standard password authentication
+
+This hybrid approach provides maximum security for SQL connections while maintaining
+compatibility with web-based tools.
+
 ### License Key
 
 Starting in v26.0.0, Self-Managed Materialize requires a license key.
@@ -86,6 +95,16 @@ For more information, see:
   downtime](/ingest-data/postgres/source-versioning/)
 - [`CREATE SOURCE`](/sql/create-source/postgres-v2/)
 - [`CREATE TABLE`](/sql/create-table/)
+
+### Deprecation
+
+The `inPlaceRollout` setting has been deprecated and will be ignored. Instead,
+use the new setting `rolloutStrategy` to specify either:
+
+- `WaitUntilReady` (*Default*)
+- `ImmediatelyPromoteCausingDowntime`
+
+For more information, see [`rolloutStrategy`](/installation/#rollout-strategies).
 
 ### Upgrade notes for v26.0.0
 
