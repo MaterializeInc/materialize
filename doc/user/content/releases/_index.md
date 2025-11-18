@@ -19,24 +19,23 @@ allows for infrequently accessed data to be moved from memory to disk. Enabling
 swap reduces the memory required to operate Materialize and improves cost
 efficiency.
 
-To facilitate upgrades, Self-Managed Materialize added new labels to the node
-selectors for `clusterd` pods:
+To facilitate upgrades from v25.2, Self-Managed Materialize added new labels to
+the node selectors for `clusterd` pods:
 
-- To upgrade from v25.2.13 or later, you can follow the standard upgrade
-instructions for your deployment:
-  - [Upgrade on Kind (via
-    Helm)](/installation/install-on-local-kind/upgrade-on-local-kind/)
-  - [Upgrade on AWS (via
-    Terraform)](/installation/install-on-aws/upgrade-on-aws/)
-  - [Upgrade on Azure (via
-    Terraform)](/installation/install-on-azure/upgrade-on-azure/)
-  - [Upgrade on GCP (via
-    Terraform)](/installation/install-on-gcp/upgrade-on-gcp/)
+- To upgrade using Materialize-provided Terraforms, upgrade your Terraform
+  version to `v0.6.1`:
+  - {{< include-md
+file="shared-content/self-managed/aws-terraform-v0.6.1-upgrade-notes.md" >}}.
+  - {{< include-md
+file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
+  - {{< include-md
+  file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md"
+  >}}.
 
-- To upgrade from v25.2.12 or earlier, you must prepare your nodes by adding the
-required labels. For detailed instructions, see:
-
-  {{< yaml-table data="self_managed/enable_swap_upgrade_guides" >}}
+- To upgrade if <red>**not**</red> using a Materialize-provided Terraforms,  you
+must prepare your nodes by adding the required labels. For detailed
+instructions, see [Prepare for swap and upgrade to
+v26.0](/installation/upgrade-to-swap/).
 
 
 ### SASL/SCRAM-SHA-256 support
@@ -52,8 +51,8 @@ Starting in v26.0.0, Self-Managed Materialize requires a license key.
 {{< yaml-table data="self_managed/license_key" >}}
 
 For new deployments, you configure your license key in the Kubernetes Secret
-resource during the installation process. For details, see the installation
-guides [/installation/]. For existing deployments, you can configure your
+resource during the installation process. For details, see the [installation
+guides](/installation/). For existing deployments, you can configure your
 license key via:
 
 ```bash
@@ -87,6 +86,13 @@ For more information, see:
   downtime](/ingest-data/postgres/source-versioning/)
 - [`CREATE SOURCE`](/sql/create-source/postgres-v2/)
 - [`CREATE TABLE`](/sql/create-table/)
+
+### Upgrade notes for v26.0.0
+
+{{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
+
+See also [General notes for upgrades](/installation/#general-notes-for-upgrades).
+
 
 ## See also
 

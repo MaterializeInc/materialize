@@ -10,13 +10,13 @@ menu:
 
 {{< annotation type="Disambiguation" >}}
 
-This page is for upgrading from v25.2.13 or later using Terraform. For upgrading
-from v25.2.12 or earlier, see:
-
-- For upgrade via Terraform, see {{< include-md
+- To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
+Terraform version to `v0.6.1`, {{< include-md
 file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md" >}}.
 
-- For upgrade via Helm, see [Upgrade from v25.2.12 or earlier(Non-Terraform)](/installation/install-on-azure/upgrade-to-swap/).
+- To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided Terraforms, you must
+prepare your nodes by adding the required labels. For detailed instructions, see
+[Prepare for swap and upgrade to v26.0](/installation/upgrade-to-swap/).
 
 {{< /annotation >}}
 
