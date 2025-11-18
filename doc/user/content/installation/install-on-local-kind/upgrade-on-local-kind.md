@@ -10,14 +10,6 @@ aliases:
   - /installation/install-on-local-minikube/upgrade-on-local-minikube/
 ---
 
-{{< annotation type="Disambiguation" >}}
-
-This page is for upgrading from v25.2.13 or later. For v25.1.12 or earlier, see
-[Upgrade from v25.2.12 or
-earlier](/installation/install-on-local-kind/upgrade-to-swap/).
-
-{{< /annotation >}}
-
 To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your Materialize deployment running locally on a [`kind`](https://kind.sigs.k8s.io/)
 cluster.
 

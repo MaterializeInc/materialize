@@ -4,11 +4,19 @@ swap reduces the memory required to operate Materialize and improves cost
 efficiency.
 
 To facilitate upgrades, Self-Managed Materialize added new labels to the node
-selectors for `clusterd` pods. To upgrade via Helm from v25.2.12 or earlier, you
-must prepare your nodes with the new labels. This guide provides instructions
-for upgrading from v25.2.12 if you are not using Terraform.
+selectors for `clusterd` pods. To upgrade, you must prepare your nodes with the
+new labels. This guide provides general instructions for preparing for swap and
+upgrading to v26.0.0 if you are <red>**not**</red> using the
+Materialize-provided Terraforms.
 
-## Preparing for the upgrade without terraform
+## Upgrade to v26.0 without Materialize-provided Terraforms
+
+{{< tip >}}
+{{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
+>}}
+
+See also [General notes for upgrades](/installation/#general-notes-for-upgrades)
+{{< /tip >}}
 
 1. Label existing scratchfs/lgalloc node groups.
 

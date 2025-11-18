@@ -7,13 +7,13 @@ enforced) when using [authentication](/security/self-managed/authentication/#con
 enable RBAC, set the system parameter `enable_rbac_checks` to `'on'` or `True`.
 You can enable the parameter in one of the following ways:
 
-- For [local installations using Kind/Minikube](/installation/#install-locally),
-  set `spec.enableRbac: true` option when instantiating the Materialize object.
+- For [local installations using
+  Kind/Minikube](/installation/#installation-guides), set `spec.enableRbac:
+  true` option when instantiating the Materialize object.
 
 - For [Cloud deployments using Materialize's
-  Terraforms](/installation/#install-on-cloud-provider), set
-  `enable_rbac_checks` in the environment CR via the `environmentdExtraArgs`
-  flag option.
+  Terraforms](/installation/#installation-guides), set `enable_rbac_checks` in
+  the environment CR via the `environmentdExtraArgs` flag option.
 
 - After the Materialize instance is running, run the following command as
   `mz_system` user:
