@@ -47,14 +47,3 @@ steps:
       queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy/npm
-
-  - id: deploy-helm-chart
-    label: ":rocket: :helm:"
-    command: bin/ci-builder run stable misc/helm-charts/publish.sh
-    depends_on: "deploy-docker"
-    branches: "v*.*"
-    timeout_in_minutes: 30
-    agents:
-      queue: linux-aarch64-small
-    concurrency: 1
-    concurrency_group: deploy/helm_chart
