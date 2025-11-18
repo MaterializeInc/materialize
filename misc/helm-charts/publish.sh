@@ -122,7 +122,8 @@ if ! is_truthy "$CI_DRY_RUN"; then
     exit 1
   fi
 
-  HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | sort -V | tail -n 1)
+  # sort -V doesn't do a proper semver sort, have to manually fix that, v26.0.0~rc.6 is considered to be less than v26.0.0
+  HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | sed "s/-rc\./~rc./" | sort -V | tail -n 1)
 
   if [ "$HIGHEST_HELM_CHART_VERSION" != "$BUILDKITE_TAG" ]; then
     echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $BUILDKITE_TAG has already been released, not bumping terraform versions"
