@@ -8,9 +8,3 @@ rows:
   "Notable changes": |
     - Released as part of v26.0.0.
     - Uses `terraform-helm-materialize` version `v0.1.35`.
-- "Terraform version": |
-    [v0.6.1](https://github.com/MaterializeInc/terraform-azurerm-materialize/releases/tag/v0.6.1)
-  "Notable changes": |
-    - Initial swap support. See {{< include-md
-    file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md"
-    >}} for details on upgrading.

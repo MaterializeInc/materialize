@@ -108,6 +108,49 @@ use the new setting `rolloutStrategy` to specify either:
 
 For more information, see [`rolloutStrategy`](/installation/#rollout-strategies).
 
+### Terraform helpers
+
+Corresponding to the v26.0.0 release, the following versions of the sample
+Terraform modules have been released:
+
+{{< yaml-table data="self_managed/terraform_list" >}}
+
+{{< tabs >}} {{< tab "Materialize on AWS" >}}
+
+{{< yaml-table data="self_managed/aws_terraform_versions" >}}
+
+{{% self-managed/aws-terraform-upgrade-notes %}}
+
+Click on the Terraform version link to go to the release-specific Upgrade Notes.
+
+{{</ tab >}}
+
+{{< tab "Materialize on Azure" >}}
+
+{{< yaml-table data="self_managed/azure_terraform_versions" >}}
+
+{{% self-managed/azure-terraform-upgrade-notes %}}
+
+See also Upgrade Notes for release specific notes.
+
+{{</ tab >}}
+
+{{< tab "Materialize on GCP" >}}
+
+{{< yaml-table data="self_managed/gcp_terraform_versions" >}}
+
+{{% self-managed/gcp-terraform-upgrade-notes %}}
+
+See also Upgrade Notes for release specific notes.
+
+{{</ tab >}}
+
+{{< tab "terraform-helm-materialize" >}}
+
+{{< yaml-table data="self_managed/terraform_helm_compatibility" >}}
+
+{{</ tab >}} {{</ tabs >}}
+
 ### Upgrade notes for v26.0.0
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
