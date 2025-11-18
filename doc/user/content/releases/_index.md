@@ -53,8 +53,6 @@ When SASL authentication is enabled:
 This hybrid approach provides maximum security for SQL connections while maintaining
 compatibility with web-based tools.
 
-See also: [Configuring PgBouncer]().
-
 ### License Key
 
 Starting in v26.0.0, Self-Managed Materialize requires a license key.
