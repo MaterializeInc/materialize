@@ -1,346 +1,876 @@
-parameters:
-  - parameter: balancerd.affinity
-    description: |
-      Affinity to use for balancerd pods spawned by the operator
-    default: "nil"
-
-  - parameter: balancerd.defaultResources
-    description: |
-      Default resources if not set in the Materialize CR
-    default: '{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}'
-
-  - parameter: balancerd.enabled
-    description: |
-      Flag to indicate whether to create balancerd pods for the environments
-    default: "true"
-
-  - parameter: balancerd.nodeSelector
-    description: |
-      Node selector to use for balancerd pods spawned by the operator
-    default: "nil"
-
-  - parameter: balancerd.tolerations
-    description: |
-      Tolerations to use for balancerd pods spawned by the operator
-    default: "nil"
-
-  - parameter: clusterd.affinity
-    description: |
-      Affinity to use for clusterd pods spawned by the operator
-    default: "nil"
-
-  - parameter: clusterd.nodeSelector
-    description: |
-      Node selector to use for all clusterd pods spawned by the operator
-    default: "{}"
-
-  - parameter: clusterd.scratchfsNodeSelector
-    description: |
-      Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`.
-    default: '{"materialize.cloud/scratch-fs":"true"}'
-
-  - parameter: clusterd.swapNodeSelector
-    description: |
-      Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`.
-    default: '{"materialize.cloud/swap":"true"}'
-
-  - parameter: clusterd.tolerations
-    description: |
-      Tolerations to use for clusterd pods spawned by the operator
-    default: "nil"
-
-  - parameter: console.affinity
-    description: |
-      Affinity to use for console pods spawned by the operator
-    default: "nil"
-
-  - parameter: console.defaultResources
-    description: |
-      Default resources if not set in the Materialize CR
-    default: '{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}'
-
-  - parameter: console.enabled
-    description: |
-      Flag to indicate whether to create console pods for the environments
-    default: "true"
-
-  - parameter: console.imageTagMapOverride
-    description: |
-      Override the mapping of environmentd versions to console versions
-    default: "{}"
-
-  - parameter: console.nodeSelector
-    description: |
-      Node selector to use for console pods spawned by the operator
-    default: "nil"
-
-  - parameter: console.tolerations
-    description: |
-      Tolerations to use for console pods spawned by the operator
-    default: "nil"
-
-  - parameter: environmentd.affinity
-    description: |
-      Affinity to use for environmentd pods spawned by the operator
-    default: "nil"
-
-  - parameter: environmentd.defaultResources
-    description: |
-      Default resources if not set in the Materialize CR
-    default: '{"limits":{"memory":"4Gi"},"requests":{"cpu":"1","memory":"4095Mi"}}'
-
-  - parameter: environmentd.nodeSelector
-    description: |
-      Node selector to use for environmentd pods spawned by the operator
-    default: "{}"
-
-  - parameter: environmentd.tolerations
-    description: |
-      Tolerations to use for environmentd pods spawned by the operator
-    default: "nil"
-
-  - parameter: networkPolicies.egress
-    description: |
-      egress from Materialize pods to sources and sinks
-    default: '{"cidrs":["0.0.0.0/0"],"enabled":false}'
-
-  - parameter: networkPolicies.enabled
-    description: |
-      Whether to enable network policies for securing communication between pods
-    default: "false"
-
-  - parameter: networkPolicies.ingress
-    description: |
-      Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd
-    default: '{"cidrs":["0.0.0.0/0"],"enabled":false}'
-
-  - parameter: networkPolicies.internal
-    description: |
-      Whether to enable internal communication between Materialize pods
-    default: '{"enabled":false}'
-
-  - parameter: observability.enabled
-    description: |
-      Whether to enable observability features
-    default: "true"
-
-  - parameter: observability.podMetrics.enabled
-    description: |
-      Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed)
-    default: "false"
-
-  - parameter: observability.prometheus.scrapeAnnotations.enabled
-    description: |
-      Whether to annotate pods with common keys used for prometheus scraping.
-    default: "true"
-
-  - parameter: operator.additionalMaterializeCRDColumns
-    description: |
-      Additional columns to display when printing the Materialize CRD in table format.
-    default: "nil"
-
-  - parameter: operator.affinity
-    description: |
-      Affinity to use for the operator pod
-    default: "nil"
-
-  - parameter: operator.args.enableInternalStatementLogging
-    description: ""
-    default: "true"
-
-  - parameter: operator.args.enableLicenseKeyChecks
-    description: ""
-    default: "false"
-
-  - parameter: operator.args.startupLogFilter
-    description: |
-      Log filtering settings for startup logs
-    default: "INFO,mz_orchestratord=TRACE"
-
-  - parameter: operator.cloudProvider.providers.aws.accountID
-    description: |
-      When using AWS, accountID is required
-    default: ""
-
-  - parameter: operator.cloudProvider.providers.aws.enabled
-    description: ""
-    default: "false"
-
-  - parameter: operator.cloudProvider.providers.aws.iam.roles.connection
-    description: |
-      ARN for CREATE CONNECTION feature
-    default: ""
-
-  - parameter: operator.cloudProvider.providers.aws.iam.roles.environment
-    description: |
-      ARN of the IAM role for environmentd
-    default: ""
-
-  - parameter: operator.cloudProvider.providers.gcp
-    description: |
-      GCP Configuration (placeholder for future use)
-    default: '{"enabled":false}'
-
-  - parameter: operator.cloudProvider.region
-    description: |
-      Common cloud provider settings
-    default: "kind"
-
-  - parameter: operator.cloudProvider.type
-    description: |
-      Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'
-    default: "local"
-
-  - parameter: operator.clusters.defaultReplicationFactor.analytics
-    description: ""
-    default: "0"
-
-  - parameter: operator.clusters.defaultReplicationFactor.probe
-    description: ""
-    default: "0"
-
-  - parameter: operator.clusters.defaultReplicationFactor.support
-    description: ""
-    default: "0"
-
-  - parameter: operator.clusters.defaultReplicationFactor.system
-    description: ""
-    default: "0"
-
-  - parameter: operator.clusters.defaultSizes.analytics
-    description: ""
-    default: "25cc"
-
-  - parameter: operator.clusters.defaultSizes.catalogServer
-    description: ""
-    default: "25cc"
-
-  - parameter: operator.clusters.defaultSizes.default
-    description: ""
-    default: "25cc"
-
-  - parameter: operator.clusters.defaultSizes.probe
-    description: ""
-    default: "mz_probe"
-
-  - parameter: operator.clusters.defaultSizes.support
-    description: ""
-    default: "25cc"
-
-  - parameter: operator.clusters.defaultSizes.system
-    description: ""
-    default: "25cc"
-
-  - parameter: operator.clusters.swap_enabled
-    description: ""
-    default: "true"
-
-  - parameter: operator.image.pullPolicy
-    description: |
-      Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
-    default: "IfNotPresent"
-
-  - parameter: operator.image.repository
-    description: |
-      The Docker repository for the operator image
-    default: "materialize/orchestratord"
-
-  - parameter: operator.image.tag
-    description: |
-      The tag/version of the operator image to be used
-    default: "v26.0.0"
-
-  - parameter: operator.nodeSelector
-    description: |
-      Node selector to use for the operator pod
-    default: "nil"
-
-  - parameter: operator.resources.limits
-    description: |
-      Resource limits for the operator's CPU and memory
-    default: '{"memory":"512Mi"}'
-
-  - parameter: operator.resources.requests
-    description: |
-      Resources requested by the operator for CPU and memory
-    default: '{"cpu":"100m","memory":"512Mi"}'
-
-  - parameter: operator.secretsController
-    description: |
-      Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'.
-      Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions.
-    default: "kubernetes"
-
-  - parameter: operator.tolerations
-    description: |
-      Tolerations to use for the operator pod
-    default: "nil"
-
-  - parameter: rbac.create
-    description: |
-      Whether to create necessary RBAC roles and bindings
-    default: "true"
-
-  - parameter: schedulerName
-    description: |
-      Optionally use a non-default kubernetes scheduler.
-    default: "nil"
-
-  - parameter: serviceAccount.create
-    description: |
-      Whether to create a new service account for the operator
-    default: "true"
-
-  - parameter: serviceAccount.name
-    description: |
-      The name of the service account to be created
-    default: "orchestratord"
-
-  - parameter: storage.storageClass.allowVolumeExpansion
-    description: ""
-    default: "false"
-
-  - parameter: storage.storageClass.create
-    description: |
-      Set to false to use an existing StorageClass instead.
-      Refer to the [Kubernetes StorageClass documentation](https://kubernetes.io/docs/concepts/storage/storage-classes/)
-    default: "false"
-
-  - parameter: storage.storageClass.name
-    description: |
-      Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"
-    default: ""
-
-  - parameter: storage.storageClass.parameters
-    description: |
-      Parameters for the CSI driver
-    default: '{"fsType":"ext4","storage":"lvm","volgroup":"instance-store-vg"}'
-
-  - parameter: storage.storageClass.provisioner
-    description: |
-      CSI driver to use, eg "local.csi.openebs.io"
-    default: ""
-
-  - parameter: storage.storageClass.reclaimPolicy
-    description: ""
-    default: "Delete"
-
-  - parameter: storage.storageClass.volumeBindingMode
-    description: ""
-    default: "WaitForFirstConsumer"
-
-  - parameter: telemetry.enabled
-    description: ""
-    default: "true"
-
-  - parameter: telemetry.segmentApiKey
-    description: ""
-    default: "hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"
-
-  - parameter: telemetry.segmentClientSide
-    description: ""
-    default: "true"
-
-  - parameter: tls.defaultCertificateSpecs
-    description: ""
-    default: "{}"
+- key: balancerd.affinity
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Affinity to use for balancerd pods spawned by the operator
+  description: Affinity to use for balancerd pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 249
+  dependency: ""
+  isglobal: false
+- key: balancerd.defaultResources
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`'
+  autodescription: Default resources if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 253
+  dependency: ""
+  isglobal: false
+- key: balancerd.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Flag to indicate whether to create balancerd pods for the environments
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 245
+  dependency: ""
+  isglobal: false
+- key: balancerd.nodeSelector
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Node selector to use for balancerd pods spawned by the operator
+  description: Node selector to use for balancerd pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 247
+  dependency: ""
+  isglobal: false
+- key: balancerd.tolerations
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Tolerations to use for balancerd pods spawned by the operator
+  description: Tolerations to use for balancerd pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 251
+  dependency: ""
+  isglobal: false
+- key: clusterd.affinity
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Affinity to use for clusterd pods spawned by the operator
+  description: Affinity to use for clusterd pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 239
+  dependency: ""
+  isglobal: false
+- key: clusterd.nodeSelector
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
+  autodescription: Node selector to use for all clusterd pods spawned by the operator
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 229
+  dependency: ""
+  isglobal: false
+- key: clusterd.scratchfsNodeSelector
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"materialize.cloud/scratch-fs":"true"}`'
+  autodescription: Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`.
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 232
+  dependency: ""
+  isglobal: false
+- key: clusterd.swapNodeSelector
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"materialize.cloud/swap":"true"}`'
+  autodescription: Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`.
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 236
+  dependency: ""
+  isglobal: false
+- key: clusterd.tolerations
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Tolerations to use for clusterd pods spawned by the operator
+  description: Tolerations to use for clusterd pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 241
+  dependency: ""
+  isglobal: false
+- key: console.affinity
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Affinity to use for console pods spawned by the operator
+  description: Affinity to use for console pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 268
+  dependency: ""
+  isglobal: false
+- key: console.defaultResources
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`'
+  autodescription: Default resources if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 272
+  dependency: ""
+  isglobal: false
+- key: console.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Flag to indicate whether to create console pods for the environments
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 262
+  dependency: ""
+  isglobal: false
+- key: console.imageTagMapOverride
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
+  autodescription: Override the mapping of environmentd versions to console versions
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 264
+  dependency: ""
+  isglobal: false
+- key: console.nodeSelector
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Node selector to use for console pods spawned by the operator
+  description: Node selector to use for console pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 266
+  dependency: ""
+  isglobal: false
+- key: console.tolerations
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Tolerations to use for console pods spawned by the operator
+  description: Tolerations to use for console pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 270
+  dependency: ""
+  isglobal: false
+- key: environmentd.affinity
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Affinity to use for environmentd pods spawned by the operator
+  description: Affinity to use for environmentd pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 214
+  dependency: ""
+  isglobal: false
+- key: environmentd.defaultResources
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"limits":{"memory":"4Gi"},"requests":{"cpu":"1","memory":"4095Mi"}}`'
+  autodescription: Default resources if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 218
+  dependency: ""
+  isglobal: false
+- key: environmentd.nodeSelector
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
+  autodescription: Node selector to use for environmentd pods spawned by the operator
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 212
+  dependency: ""
+  isglobal: false
+- key: environmentd.tolerations
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Tolerations to use for environmentd pods spawned by the operator
+  description: Tolerations to use for environmentd pods spawned by the operator
+  section: ""
+  column: 3
+  linenumber: 216
+  dependency: ""
+  isglobal: false
+- key: networkPolicies.egress
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"cidrs":["0.0.0.0/0"],"enabled":false}`'
+  autodescription: egress from Materialize pods to sources and sinks
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 327
+  dependency: ""
+  isglobal: false
+- key: networkPolicies.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: Whether to enable network policies for securing communication between pods
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 316
+  dependency: ""
+  isglobal: false
+- key: networkPolicies.ingress
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"cidrs":["0.0.0.0/0"],"enabled":false}`'
+  autodescription: Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 322
+  dependency: ""
+  isglobal: false
+- key: networkPolicies.internal
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"enabled":false}`'
+  autodescription: Whether to enable internal communication between Materialize pods
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 318
+  dependency: ""
+  isglobal: false
+- key: observability.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Whether to enable observability features
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 297
+  dependency: ""
+  isglobal: false
+- key: observability.podMetrics.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed)
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 302
+  dependency: ""
+  isglobal: false
+- key: observability.prometheus.scrapeAnnotations.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Whether to annotate pods with common keys used for prometheus scraping.
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 306
+  dependency: ""
+  isglobal: false
+- key: operator.additionalMaterializeCRDColumns
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Additional columns to display when printing the Materialize CRD in table format.
+  description: Additional columns to display when printing the Materialize CRD in table format.
+  section: ""
+  column: 3
+  linenumber: 29
+  dependency: ""
+  isglobal: false
+- key: operator.affinity
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Affinity to use for the operator pod
+  description: Affinity to use for the operator pod
+  section: ""
+  column: 3
+  linenumber: 192
+  dependency: ""
+  isglobal: false
+- key: operator.args.enableInternalStatementLogging
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 24
+  dependency: ""
+  isglobal: false
+- key: operator.args.enableLicenseKeyChecks
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 26
+  dependency: ""
+  isglobal: false
+- key: operator.args.startupLogFilter
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"INFO,mz_orchestratord=TRACE"`'
+  autodescription: Log filtering settings for startup logs
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 23
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.aws.accountID
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: When using AWS, accountID is required
+  description: ""
+  section: ""
+  column: 9
+  linenumber: 51
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.aws.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 9
+  linenumber: 49
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.aws.iam.roles.connection
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: ARN for CREATE CONNECTION feature
+  description: ""
+  section: ""
+  column: 13
+  linenumber: 57
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.aws.iam.roles.environment
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: ARN of the IAM role for environmentd
+  description: ""
+  section: ""
+  column: 13
+  linenumber: 55
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.providers.gcp
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"enabled":false}`'
+  autodescription: GCP Configuration (placeholder for future use)
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 60
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.region
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"kind"`'
+  autodescription: Common cloud provider settings
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 43
+  dependency: ""
+  isglobal: false
+- key: operator.cloudProvider.type
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"local"`'
+  autodescription: Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local'
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 40
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultReplicationFactor.analytics
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`0`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 187
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultReplicationFactor.probe
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`0`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 185
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultReplicationFactor.support
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`0`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 186
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultReplicationFactor.system
+  type: int
+  notationtype: ""
+  autodefault: ""
+  default: '`0`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 184
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultSizes.analytics
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"25cc"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 182
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultSizes.catalogServer
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"25cc"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 181
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultSizes.default
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"25cc"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 177
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultSizes.probe
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"mz_probe"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 179
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultSizes.support
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"25cc"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 180
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.defaultSizes.system
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"25cc"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 7
+  linenumber: 178
+  dependency: ""
+  isglobal: false
+- key: operator.clusters.swap_enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled.
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 69
+  dependency: ""
+  isglobal: false
+- key: operator.image.pullPolicy
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"IfNotPresent"`'
+  autodescription: 'Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images'
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 18
+  dependency: ""
+  isglobal: false
+- key: operator.image.repository
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"materialize/orchestratord"`'
+  autodescription: The Docker repository for the operator image
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 14
+  dependency: ""
+  isglobal: false
+- key: operator.image.tag
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"v26.0.0-dev.0--pr.gfa8ba620176a7d0f9abcc64f89f5d21db80c6d94"`'
+  autodescription: The tag/version of the operator image to be used
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 16
+  dependency: ""
+  isglobal: false
+- key: operator.nodeSelector
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Node selector to use for the operator pod
+  description: Node selector to use for the operator pod
+  section: ""
+  column: 3
+  linenumber: 190
+  dependency: ""
+  isglobal: false
+- key: operator.resources.limits
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"memory":"512Mi"}`'
+  autodescription: Resource limits for the operator's CPU and memory
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 201
+  dependency: ""
+  isglobal: false
+- key: operator.resources.requests
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"cpu":"100m","memory":"512Mi"}`'
+  autodescription: Resources requested by the operator for CPU and memory
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 197
+  dependency: ""
+  isglobal: false
+- key: operator.secretsController
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"kubernetes"`'
+  autodescription: Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions.
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 208
+  dependency: ""
+  isglobal: false
+- key: operator.tolerations
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Tolerations to use for the operator pod
+  description: Tolerations to use for the operator pod
+  section: ""
+  column: 3
+  linenumber: 194
+  dependency: ""
+  isglobal: false
+- key: rbac.create
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Whether to create necessary RBAC roles and bindings
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 282
+  dependency: ""
+  isglobal: false
+- key: schedulerName
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`nil`'
+  autodescription: Optionally use a non-default kubernetes scheduler.
+  description: Optionally use a non-default kubernetes scheduler.
+  section: ""
+  column: 1
+  linenumber: 285
+  dependency: ""
+  isglobal: false
+- key: serviceAccount.create
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: Whether to create a new service account for the operator
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 290
+  dependency: ""
+  isglobal: false
+- key: serviceAccount.name
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"orchestratord"`'
+  autodescription: The name of the service account to be created
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 292
+  dependency: ""
+  isglobal: false
+- key: storage.storageClass.allowVolumeExpansion
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 370
+  dependency: ""
+  isglobal: false
+- key: storage.storageClass.create
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: Set to false to use an existing StorageClass instead. Refer to the [Kubernetes StorageClass documentation](https://kubernetes.io/docs/concepts/storage/storage-classes/)
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 356
+  dependency: ""
+  isglobal: false
+- key: storage.storageClass.name
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: 'Name of the StorageClass to create/use: eg "openebs-lvm-instance-store-ext4"'
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 359
+  dependency: ""
+  isglobal: false
+- key: storage.storageClass.parameters
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"fsType":"ext4","storage":"lvm","volgroup":"instance-store-vg"}`'
+  autodescription: Parameters for the CSI driver
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 365
+  dependency: ""
+  isglobal: false
+- key: storage.storageClass.provisioner
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`""`'
+  autodescription: CSI driver to use, eg "local.csi.openebs.io"
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 362
+  dependency: ""
+  isglobal: false
+- key: storage.storageClass.reclaimPolicy
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"Delete"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 371
+  dependency: ""
+  isglobal: false
+- key: storage.storageClass.volumeBindingMode
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"WaitForFirstConsumer"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 372
+  dependency: ""
+  isglobal: false
+- key: telemetry.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 309
+  dependency: ""
+  isglobal: false
+- key: telemetry.segmentApiKey
+  type: string
+  notationtype: ""
+  autodefault: ""
+  default: '`"hMWi3sZ17KFMjn2sPWo9UJGpOQqiba4A"`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 310
+  dependency: ""
+  isglobal: false
+- key: telemetry.segmentClientSide
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`true`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 311
+  dependency: ""
+  isglobal: false
+- key: tls.defaultCertificateSpecs
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
+  autodescription: ""
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 333
+  dependency: ""
+  isglobal: false
