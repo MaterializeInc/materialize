@@ -67,7 +67,8 @@ deployment has not been configured with a license key:
    |-------|-------------|
    | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
    | `requestRollout` or `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`requestRollout` triggers a rollout only if changes exist. </li><li>`forceRollout` triggers a rollout even if no changes exist.</li></ul> |
-   | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
+   | `rolloutStrategy` | The mechanism to use when rolling out the new version. <br><ul><li>`WaitUntilReady` (*Default*): New instances are created and all dataflows are determined to be ready before cutover and terminating the old version, temporarily requiring twice the resources during the transition.</li><li>`ImmediatelyPromoteCausingDowntime`: Tear down the old generation of pods and promote the new generation of pods immediately. This causes downtime equal to the duration it takes for dataflows to hydrate, but does not require additional resources.</li></ul> |
+   | `inPlaceRollout` | Deprecated and ignored. Use `rolloutStrategy` instead. |
 
    ```yaml
    apiVersion: materialize.cloud/v1alpha1
@@ -79,7 +80,6 @@ deployment has not been configured with a license key:
      environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
      requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
      # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
-     inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
      backendSecretName: materialize-backend
    ```
    <div class="warning">

@@ -46,10 +46,7 @@ or the root).
 
 {{< important >}}
 
-The following procedure performs a rolling upgrade, where both the old and new
-Materialize instances are running before the the old instance are removed.
-When performing a rolling upgrade, ensure you have enough resources to support
-having both the old and new Materialize instances running.
+{{< include-md file="shared-content/self-managed/rollout-strategy.md" >}}
 
 {{</ important >}}
 
