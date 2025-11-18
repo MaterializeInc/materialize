@@ -7,7 +7,7 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = ""
+bannerMessage = "❗This is the v25.2 Self-Managed Materialize documentation. For the latest docs, go to https://materialize.com/docs/.<br>👉 **Note**: Before upgrading from **v25.2** to **v26.0**, [upgrade first to version **25.2.15**](/release-notes/#v25215). Afterwards, you can [upgrade to v26.0](https://materialize.com/docs/installation/#upgrade)."
 bannerLink = ""
 
 [frontmatter]

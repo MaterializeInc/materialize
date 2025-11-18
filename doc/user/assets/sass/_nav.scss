@@ -149,7 +149,7 @@
 
 button.show-topics {
     display: none;
-    margin: 0 0 var(--small) !important;
+    margin: var(--small) 0 var(--small) !important;
     text-align: left;
     font-weight: 300;
     font-size: var(--base);
@@ -172,6 +172,7 @@ button.close-topics {
     justify-content: center;
     align-items: center;
     top: 0;
+    margin-top: 80px;
     right: 0;
     transform: translateX(50%) translateY(50%);
     background: var(--bg);

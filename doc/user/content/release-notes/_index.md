@@ -12,7 +12,22 @@ menu:
 
 ### Bug fixes
 - Fixes potential issue with where environmentd crash during an upgrade can fence out environmentd.
-- **It is strongly recommended to upgrade at to least version 25.2.15 (environmentd 0.147.20) prior to upgrading to the next major version.**
+- **You must upgrade at to least version 25.2.15 (environmentd 0.147.20) prior to upgrading to the next major version.**:
+
+  - If you are using the Materialize-provided Terraforms, upgrade to version
+    `v0.6.1` of the Terraform:
+
+    - [AWS Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061)
+
+    - [GCP Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061)
+
+    - [Azure Terraform v0.6.1 Upgrade
+Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061)
+
+  - If you are <red>**not**</red> using a Materialize-provided Terraform, refer
+    to [Prepare for swap](/installation/upgrade-to-swap/).
 
 ## v25.2.12
 
