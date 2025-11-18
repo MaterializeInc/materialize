@@ -135,18 +135,17 @@ See also [General notes for upgrades](/installation/#general-notes-for-upgrades)
 
     Swap is enabled by default for clusterd, but not for environmentd. If you'd like to enable swap for environmentd, add `"materialize.cloud/swap": "true"` to the `environmentd.node_selector` helm value.
 
-1. Upgrade the Materialize operator helm chart to v25.2.15(`environmentd`
-   0.147.20).
+1. Upgrade the Materialize operator helm chart to v25.2.15.
 
     The cluster size definitions for existing Materialize instances will not be changed at this point, but any newly created Materialize instances, or upgraded Materialize instances will pick up the new sizes.
 
-    Do not create any new Materialize instances at versions less than
-   v25.2.15(`environmentd` 0.147.20) or perform any rollouts to existing
-   Materialize instances to versions less than v25.2.15(`environmentd` 0.147.20).
+    Do not create any new Materialize instances at versions less than v25.2.15
+   (`environmentd` 0.147.20) or perform any rollouts to existing Materialize
+   instances to versions less than v25.2.15(`environmentd` 0.147.20).
 
-1. Upgrade existing Materialize instances to v25.2.15.
+1. Upgrade existing Materialize instances to `v0.147.20`.
 
-    The new v25.2.15 pods should go to the new swap nodes.
+    The new pods should go to the new swap nodes.
 
     You can verify that swap is enabled and working by `exec`ing into a clusterd pod and running `cat /sys/fs/cgroup/memory.swap.max`. If you get a number greater than 0, swap is enabled and the pod is allowed to use it.
 
