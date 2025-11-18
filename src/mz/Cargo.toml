@@ -14,7 +14,7 @@ axum = "0.7.5"
 clap = { version = "4.5.23", features = [ "derive" ] }
 csv = "1.4.0"
 dirs = "6.0.0"
-indicatif = "0.17.2"
+indicatif = "0.18.3"
 termcolor = "1.4.1"
 maplit = "1.0.2"
 mz-cloud-api = { path = "../cloud-api" }

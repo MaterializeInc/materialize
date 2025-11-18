@@ -16,7 +16,7 @@ aws-sdk-s3 = { version = "1.48.0", default-features = false, features = ["rt-tok
 bytefmt = "0.1.7"
 clap = { version = "4.5.23", features = ["derive"] }
 futures = "0.3.31"
-indicatif = "0.17.2"
+indicatif = "0.18.3"
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-ore = { path = "../ore", features = ["cli"] }
 tokio = { version = "1.44.1", features = ["macros", "net", "rt", "rt-multi-thread", "time"] }
