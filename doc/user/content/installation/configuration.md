@@ -3,6 +3,7 @@ title: "Materialize Operator Configuration"
 description: "Configuration reference for the Materialize Operator Helm chart"
 aliases:
   - /self-hosted/configuration/
+  - /self-managed/v25.1/installation/configuration/
 menu:
   main:
     parent: "installation"

@@ -3,6 +3,7 @@ title: "Install on GCP (via Terraform)"
 description: ""
 aliases:
   - /self-hosted/install-on-gcp/
+  - /self-managed/v25.1/installation/install-on-gcp/
 disable_list: true
 menu:
   main:

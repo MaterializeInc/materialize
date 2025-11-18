@@ -8,6 +8,7 @@ menu:
     identifier: "sql-server-self-hosted"
 aliases:
   - /ingest-data/cdc-sql-server/
+  - /self-managed/v25.1/ingest-data/cdc-sql-server/
 ---
 
 This page shows you how to stream data from a self-hosted SQL Server database

@@ -7,6 +7,8 @@ menu:
     parent: "installation"
     identifier: "install-on-azure"
     weight: 30
+aliases:
+  - /self-managed/v25.1/installation/install-on-azure/
 ---
 
 {{% self-managed/materialize-components-sentence blobstorage="blob storage; specifically **block** blob storage on Azure" %}}

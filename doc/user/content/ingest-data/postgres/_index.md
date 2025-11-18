@@ -7,6 +7,8 @@ menu:
     parent: 'ingest-data'
     weight: 10
     identifier: 'postgresql'
+aliases:
+  - /self-managed/v25.1/ingest-data/postgres/
 ---
 
 ## Change Data Capture (CDC)
