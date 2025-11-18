@@ -5,7 +5,7 @@ aliases:
   - /self-hosted/install-on-aws/
 menu:
   main:
-    parent: "install-on-aws-legacy-terraform-provider"
+    parent: "install-on-aws-legacy-terraform-module"
     identifier: "install-aws"
     weight: 5
 ---

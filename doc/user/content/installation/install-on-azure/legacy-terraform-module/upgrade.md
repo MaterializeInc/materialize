@@ -3,7 +3,7 @@ title: "Upgrade"
 description: "Procedure to upgrade your Materialize operator and instances running on Azure"
 menu:
   main:
-    parent: "install-on-azure-legacy-terraform-provider"
+    parent: "install-on-azure-legacy-terraform-module"
     identifier: "upgrade-on-azure"
     weight: 10
 ---

@@ -3,7 +3,7 @@ title: "Install"
 description: "Install Materialize on Azure Kubernetes Service (AKS) using Terraform"
 menu:
   main:
-    parent: "install-on-azure-legacy-terraform-provider"
+    parent: "install-on-azure-legacy-terraform-module"
     identifier: "install-azure"
     weight: 5
 ---

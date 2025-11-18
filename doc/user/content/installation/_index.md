@@ -1,5 +1,5 @@
 ---
-title: "Installation (Self-Managed)"
+title: "Self-Managed Deployments"
 description: "Installation guides for Self-Managed Materialize."
 disable_list: true
 menu:

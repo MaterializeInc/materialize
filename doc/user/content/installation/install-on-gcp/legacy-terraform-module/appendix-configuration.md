@@ -3,8 +3,8 @@ title: "Appendix: Configuration"
 description: "Required configuration for Materialize on GCP Terraform (legacy)."
 menu:
   main:
-    parent: "install-on-gcp-legacy-terraform-provider"
-    identifier: "legacy-terraform-provider-appendix-configuration"
+    parent: "install-on-gcp-legacy-terraform-module"
+    identifier: "legacy-terraform-module-appendix-configuration"
     weight: 50
 aliases:
   - /installation/install-on-gcp/appendix-gcp-configuration/

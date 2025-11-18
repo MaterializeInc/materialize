@@ -3,7 +3,7 @@ title: "Appendix: Required configuration"
 description: "Required configuration for Materialize on AWS Terraform."
 menu:
   main:
-    parent: "install-on-aws-legacy-terraform-provider"
+    parent: "install-on-aws-legacy-terraform-module"
     identifier: "appendix-aws-provider-config"
     weight: 50
 aliases:

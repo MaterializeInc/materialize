@@ -12,9 +12,9 @@ For a more specific set of steps, please consult the deployment-specific upgrade
 documentation:
  - [Minikube](/installation/install-on-local-minikube/upgrade-on-local-minikube/)
  - [Kind](/installation/install-on-local-kind/upgrade-on-local-kind/)
- - [AWS](/installation/install-on-aws/legacy-terraform-provider/upgrade/)
- - [GCP](/installation/install-on-gcp/legacy-terraform-provider/upgrade/)
- - [Azure](/installation/install-on-azure/legacy-terraform-provider/upgrade/)
+ - [AWS](/installation/install-on-aws/legacy-terraform-module/upgrade/)
+ - [GCP](/installation/install-on-gcp/legacy-terraform-module/upgrade/)
+ - [Azure](/installation/install-on-azure/legacy-terraform-module/upgrade/)
 
 ***When upgrading always***:
 - Upgrade the operator first and ensure version compatibility between the operator and the Materialize instance you are upgrading to.

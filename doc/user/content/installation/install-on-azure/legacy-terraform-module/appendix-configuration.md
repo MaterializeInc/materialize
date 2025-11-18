@@ -3,7 +3,7 @@ title: "Appendix: Required configuration"
 description: "Required configuration for Materialize on Azure Terraform."
 menu:
   main:
-    parent: "install-on-azure-legacy-terraform-provider"
+    parent: "install-on-azure-legacy-terraform-module"
     identifier: "appendix-azure-config"
     weight: 50
 aliases:

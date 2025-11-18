@@ -3,7 +3,7 @@ title: "Upgrade"
 description: "Procedure to upgrade your Materialize operator and instances running on AWS"
 menu:
   main:
-    parent: "install-on-aws-legacy-terraform-provider"
+    parent: "install-on-aws-legacy-terraform-module"
     identifier: "upgrade-on-aws"
     weight: 10
 ---

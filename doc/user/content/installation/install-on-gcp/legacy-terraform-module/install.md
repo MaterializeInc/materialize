@@ -6,8 +6,8 @@ aliases:
   - /installation/install-on-gcp/
 menu:
   main:
-    parent: "install-on-gcp-legacy-terraform-provider"
-    identifier: "legacy-terraform-provider-install"
+    parent: "install-on-gcp-legacy-terraform-module"
+    identifier: "legacy-terraform-module-install"
     weight: 5
 ---
 
