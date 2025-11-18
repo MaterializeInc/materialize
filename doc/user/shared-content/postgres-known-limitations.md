@@ -10,8 +10,7 @@ This section refer to the legacy [`CREATE SOURCE ... FOR
 ...`](/sql/create-source/postgres/) that creates subsources as part of the
 `CREATE SOURCE` operation.  To be able to handle the upstream column additions
 and drops, see [`CREATE SOURCE (New Syntax)`](/sql/create-source/postgres-v2/)
-and see [`CREATE SOURCE (New Syntax)`](/sql/create-source/postgres-v2/) and
-[`CREATE TABLE FROM SOURCE`](/sql/create-table).
+and [`CREATE TABLE FROM SOURCE`](/sql/create-table).
 
 {{< /note >}}
 
