@@ -11,7 +11,7 @@ menu:
 {{< annotation type="Disambiguation" >}}
 
 - To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
-Terraform version to `v0.6.1`, {{< include-md
+Terraform version to `v0.6.1` or higher, {{< include-md
 file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
 
 - To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided
