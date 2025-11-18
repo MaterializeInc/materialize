@@ -122,7 +122,8 @@ if ! is_truthy "$CI_DRY_RUN"; then
     exit 1
   fi
 
-  HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | sort -V | tail -n 1)
+  # sort -V doesn't do a proper semver sort, have to manually fix that, v26.0.0~rc.6 is considered to be less than v26.0.0
+  HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | sed "s/-rc\./~rc./" | sort -V | tail -n 1)
 
   if [ "$HIGHEST_HELM_CHART_VERSION" != "$BUILDKITE_TAG" ]; then
     echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $BUILDKITE_TAG has already been released, not bumping terraform versions"
@@ -206,6 +207,15 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   git commit -m "docs: Bump self-managed to $BUILDKITE_TAG"
   git --no-pager diff HEAD~
   run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
+
+  OPERATOR_COMPAT_YAML_PATH=doc/user/data/self_managed/self_managed_operator_compatibility.yml
+  yq --prettyPrint --inplace ".rows = [{
+    \"Materialize Operator\": \"$BUILDKITE_TAG\",
+    \"orchestratord version\": \"$BUILDKITE_TAG\",
+    \"environmentd version\": \"$BUILDKITE_TAG\",
+    \"Release date\": \"$(date +%Y-%m-%d)\",
+    \"Notes\": \"\"
+  }] + .rows" $OPERATOR_COMPAT_YAML_PATH
 fi
 
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
