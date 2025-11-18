@@ -206,6 +206,15 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   git commit -m "docs: Bump self-managed to $BUILDKITE_TAG"
   git --no-pager diff HEAD~
   run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
+
+  OPERATOR_COMPAT_YAML_PATH=doc/user/data/self_managed/self_managed_operator_compatibility.yml
+  yq --prettyPrint --inplace ".rows = [{
+    \"Materialize Operator\": \"$BUILDKITE_TAG\",
+    \"orchestratord version\": \"$BUILDKITE_TAG\",
+    \"environmentd version\": \"$BUILDKITE_TAG\",
+    \"Release date\": \"$(date +%Y-%m-%d)\",
+    \"Notes\": \"\"
+  }] + .rows" $OPERATOR_COMPAT_YAML_PATH
 fi
 
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
