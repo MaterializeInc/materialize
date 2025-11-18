@@ -3127,6 +3127,12 @@ async fn test_password_auth() {
         .password("mz_system_password")
         .await
         .unwrap();
+
+    mz_system_client
+        .execute("ALTER SYSTEM SET scram_iterations to 9999", &[])
+        .await
+        .unwrap();
+
     mz_system_client
         .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
@@ -3157,6 +3163,35 @@ async fn test_password_auth() {
             .get::<_, bool>(0),
         false
     );
+
+    // Validate hash iterations.
+    // change the iteratoins, ensure that login works
+    // from the prior role and a new role
+    mz_system_client
+        .execute("ALTER SYSTEM SET scram_iterations to 9998", &[])
+        .await
+        .unwrap();
+
+    mz_system_client
+        .execute("CREATE ROLE foo_2 WITH LOGIN PASSWORD 'bar'", &[])
+        .await
+        .unwrap();
+
+    server
+        .connect()
+        .no_tls()
+        .user("foo")
+        .password("bar")
+        .await
+        .unwrap();
+
+    server
+        .connect()
+        .no_tls()
+        .user("foo_2")
+        .password("bar")
+        .await
+        .unwrap();
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]

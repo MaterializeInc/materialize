@@ -19,8 +19,8 @@ use differential_dataflow::trace::Description;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use mz_dyncfg::Config;
-use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::location::Blob;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
@@ -32,7 +32,7 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
-use tracing::{Instrument, debug_span, info, warn};
+use tracing::{Instrument, debug_span, error, info, warn};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -218,26 +218,20 @@ where
 
     /// Registers the write schema, if it isn't already registered.
     ///
-    /// # Panics
-    ///
     /// This method expects that either the shard doesn't yet have any schema registered, or one of
     /// the registered schemas is the same as the write schema. If all registered schemas are
-    /// different from the write schema, it panics.
-    pub async fn ensure_schema_registered(&mut self) -> SchemaId {
+    /// different from the write schema, or the shard is a tombstone, it returns `None`.
+    pub async fn try_register_schema(&mut self) -> Option<SchemaId> {
         let Schemas { id, key, val } = &self.write_schemas;
 
         if let Some(id) = id {
-            return *id;
+            return Some(*id);
         }
 
         let (schema_id, maintenance) = self.machine.register_schema(key, val).await;
         maintenance.start_performing(&self.machine, &self.gc);
 
-        let Some(schema_id) = schema_id else {
-            panic!("unable to register schemas: {key:?} {val:?}");
-        };
-
-        self.write_schemas.id = Some(schema_id);
+        self.write_schemas.id = schema_id;
         schema_id
     }
 
@@ -553,7 +547,9 @@ where
         D: Send + Sync,
     {
         // Before we append any data, we require a registered write schema.
-        let schema_id = self.ensure_schema_registered().await;
+        // We expect the caller to ensure our schema is already present... unless this shard is a
+        // tombstone, in which case this write is either a noop or will fail gracefully.
+        let schema_id = self.try_register_schema().await;
 
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
@@ -572,6 +568,23 @@ where
                     TODO: Error on very old versions once the leaked blob detector exists."
                 )
             }
+            fn assert_schema<A: Codec>(writer_schema: &A::Schema, batch_schema: &bytes::Bytes) {
+                if batch_schema.is_empty() {
+                    // Schema is either trivial or missing!
+                    return;
+                }
+                let batch_schema: A::Schema = A::decode_schema(batch_schema);
+                if *writer_schema != batch_schema {
+                    error!(
+                        ?writer_schema,
+                        ?batch_schema,
+                        "writer and batch schemas should be identical"
+                    );
+                    soft_panic_or_log!("writer and batch schemas should be identical");
+                }
+            }
+            assert_schema::<K>(&*self.write_schemas.key, &batch.schemas.0);
+            assert_schema::<V>(&*self.write_schemas.val, &batch.schemas.1);
         }
 
         let lower = expected_upper.clone();
@@ -711,10 +724,22 @@ where
 
             let mut combined_batch =
                 HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
+
             // The batch may have been written by a writer without a registered schema.
             // Ensure we have a schema ID in the batch metadata before we append, to avoid type
             // confusion later.
-            ensure_batch_schema(&mut combined_batch, self.shard_id(), schema_id);
+            match schema_id {
+                Some(schema_id) => {
+                    ensure_batch_schema(&mut combined_batch, self.shard_id(), schema_id);
+                }
+                None => {
+                    assert!(
+                        self.fetch_recent_upper().await.is_empty(),
+                        "fetching a schema id should only fail when the shard is tombstoned"
+                    )
+                }
+            }
+
             let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
@@ -814,6 +839,7 @@ where
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
             version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            schemas: (batch.key_schema, batch.val_schema),
             batch: batch
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")

@@ -114,11 +114,11 @@ Helper template to process cluster sizes based on storage class configuration
             {{- $_ := set $newConfig "disk_limit" "0" }}
         {{- end }}
 
-        {{- if and ($.Values.operator.clusters.swap_enabled) (not (index $newConfig "swap_enabled")) }}
-            {{- $_ := set $newConfig "swap_enabled" true }}
+        {{- if not (hasKey $newConfig "swap_enabled") }}
+            {{- $_ := set $newConfig "swap_enabled" $.Values.operator.clusters.swap_enabled }}
         {{- end }}
 
-        {{- if (not (index $newConfig "selectors")) }}
+        {{- if (not (hasKey $newConfig "selectors")) }}
             {{- $_ := set $newConfig "selectors" dict }}
         {{- end }}
         {{- if $newConfig.swap_enabled }}

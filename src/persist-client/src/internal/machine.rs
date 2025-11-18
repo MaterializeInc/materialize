@@ -1538,6 +1538,10 @@ pub mod datadriven {
                 Arc::clone(&self.client.blob),
                 self.client.metrics.shards.shard(&self.shard_id, "test"),
                 self.client.cfg.build_version.clone(),
+                (
+                    <String>::encode_schema(&*SCHEMAS.key),
+                    <()>::encode_schema(&*SCHEMAS.val),
+                ),
                 hollow,
             )
         }

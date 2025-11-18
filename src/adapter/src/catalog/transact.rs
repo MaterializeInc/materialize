@@ -46,7 +46,7 @@ use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv}
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
-    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, PasswordAction,
+    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, PasswordAction, PasswordConfig,
     RoleAttributesRaw, RoleMembership, RoleVars,
 };
 use mz_sql::names::{
@@ -680,12 +680,18 @@ impl Catalog {
 
                 let mut existing_role = state.get_role(&id).clone();
                 let password = attributes.password.clone();
+                let scram_iterations = attributes
+                    .scram_iterations
+                    .unwrap_or_else(|| state.system_config().scram_iterations());
                 existing_role.attributes = attributes.into();
                 existing_role.vars = vars;
                 let password_action = if nopassword {
                     PasswordAction::Clear
                 } else if let Some(password) = password {
-                    PasswordAction::Set(password)
+                    PasswordAction::Set(PasswordConfig {
+                        password,
+                        scram_iterations,
+                    })
                 } else {
                     PasswordAction::NoChange
                 };
@@ -1074,7 +1080,7 @@ impl Catalog {
                         storage_collections_to_create.insert(source.global_id());
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        storage_collections_to_create.insert(mv.global_id());
+                        storage_collections_to_create.insert(mv.global_id_writes());
                     }
                     CatalogItem::ContinualTask(ct) => {
                         storage_collections_to_create.insert(ct.global_id());

@@ -10,19 +10,25 @@
 use std::{
     collections::BTreeSet,
     fmt::Display,
+    future::ready,
     str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use anyhow::Context as _;
+use futures::StreamExt;
 use http::HeaderValue;
 use k8s_openapi::{
     api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
     apimachinery::pkg::apis::meta::v1::{Condition, Time},
 };
-use kube::{Api, Client, Resource, ResourceExt, api::PostParams, runtime::controller::Action};
-use serde::Deserialize;
-use tracing::{debug, trace};
+use kube::{
+    Api, Client, Resource, ResourceExt,
+    api::PostParams,
+    runtime::{controller::Action, reflector, watcher},
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tracing::{debug, trace, warn};
 use uuid::Uuid;
 
 use crate::{controller::materialize::environmentd::V161, metrics::Metrics};
@@ -263,15 +269,17 @@ pub struct Context {
     tracing: TracingCliArgs,
     orchestratord_namespace: String,
     metrics: Arc<Metrics>,
+    materializes: reflector::Store<Materialize>,
     needs_update: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Context {
-    pub fn new(
+    pub async fn new(
         config: MaterializeControllerArgs,
         tracing: TracingCliArgs,
         orchestratord_namespace: String,
         metrics: Arc<Metrics>,
+        client: kube::Client,
     ) -> Self {
         if config.cloud_provider == CloudProvider::Aws {
             assert!(
@@ -285,6 +293,7 @@ impl Context {
             tracing,
             orchestratord_namespace,
             metrics,
+            materializes: Self::make_reflector(client.clone()).await,
             needs_update: Default::default(),
         }
     }
@@ -368,6 +377,67 @@ impl Context {
         )
         .await?;
         Ok(None)
+    }
+
+    fn check_environment_id_conflicts(&self, mz: &Materialize) -> Result<(), Error> {
+        if mz.spec.environment_id.is_nil() {
+            // this is always a bug - we delay doing this check until the
+            // resource should have an environment id set, either from the
+            // license key, or explicitly given, or randomly defaulted.
+            return Err(Error::Anyhow(anyhow::anyhow!(
+                "trying to reconcile a materialize resource with no environment id - this is a bug!"
+            )));
+        }
+
+        for existing_mz in self.materializes.state() {
+            if existing_mz.spec.environment_id == mz.spec.environment_id
+                && existing_mz.metadata.uid != mz.metadata.uid
+            {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "Materialize resources {}/{} and {}/{} have the environmentId field set to the same value. This field must be unique across environments.",
+                    mz.namespace(),
+                    mz.name_unchecked(),
+                    existing_mz.namespace(),
+                    existing_mz.name_unchecked(),
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn make_reflector<K>(client: Client) -> reflector::Store<K>
+    where
+        K: kube::Resource<DynamicType = ()>
+            + Clone
+            + Send
+            + Sync
+            + DeserializeOwned
+            + Serialize
+            + std::fmt::Debug
+            + 'static,
+    {
+        let api = kube::Api::all(client);
+        let (store, writer) = reflector::store();
+        let reflector =
+            reflector::reflector(writer, watcher(api, watcher::Config::default().timeout(29)));
+        mz_ore::task::spawn(
+            || format!("{} reflector", K::kind(&Default::default())),
+            async {
+                reflector
+                    .for_each(|res| {
+                        if let Err(e) = res {
+                            warn!("error in {} reflector: {}", K::kind(&Default::default()), e);
+                        }
+                        ready(())
+                    })
+                    .await
+            },
+        );
+        // the only way this can return an error is if we drop the writer,
+        // which we do not ever do, so unwrap is fine
+        store.wait_until_ready().await.unwrap();
+        store
     }
 }
 
@@ -468,6 +538,8 @@ impl k8s_controller::Context for Context {
                 )));
             }
         }
+
+        self.check_environment_id_conflicts(mz)?;
 
         // we compare the hash against the environment resources generated
         // for the current active generation, since that's what we expect to

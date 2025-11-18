@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use itertools::{Either, Itertools};
@@ -4337,6 +4338,7 @@ pub enum PlannedAlterRoleOption {
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
     pub password: Option<Password>,
+    pub scram_iterations: Option<NonZeroU32>,
     /// `nopassword` is set to true if the password is from the parser is None.
     /// This is semantically different than not supplying a password at all,
     /// to allow for unsetting a password.
@@ -4345,10 +4347,14 @@ pub struct PlannedRoleAttributes {
     pub login: Option<bool>,
 }
 
-fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
+fn plan_role_attributes(
+    options: Vec<RoleAttribute>,
+    scx: &StatementContext,
+) -> Result<PlannedRoleAttributes, PlanError> {
     let mut planned_attributes = PlannedRoleAttributes {
         inherit: None,
         password: None,
+        scram_iterations: None,
         superuser: None,
         login: None,
         nopassword: None,
@@ -4391,6 +4397,8 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
             RoleAttribute::Password(password) => {
                 if let Some(password) = password {
                     planned_attributes.password = Some(password.into());
+                    planned_attributes.scram_iterations =
+                        Some(scx.catalog.system_vars().scram_iterations())
                 } else {
                     planned_attributes.nopassword = Some(true);
                 }
@@ -4464,10 +4472,10 @@ pub fn describe_create_role(
 }
 
 pub fn plan_create_role(
-    _: &StatementContext,
+    scx: &StatementContext,
     CreateRoleStatement { name, options }: CreateRoleStatement,
 ) -> Result<Plan, PlanError> {
-    let attributes = plan_role_attributes(options)?;
+    let attributes = plan_role_attributes(options, scx)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
         attributes: attributes.into(),
@@ -7214,12 +7222,12 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    _scx: &StatementContext,
+    scx: &StatementContext,
     AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let option = match option {
         AlterRoleOption::Attributes(attrs) => {
-            let attrs = plan_role_attributes(attrs)?;
+            let attrs = plan_role_attributes(attrs, scx)?;
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {

@@ -45,7 +45,7 @@ resource "random_password" "pass" {
 
 variable "operator_version" {
   type    = string
-  default = "v26.0.0-beta.1.tgz"
+  default = "v26.0.0-beta.1"
 }
 
 variable "orchestratord_version" {
@@ -60,14 +60,14 @@ resource "azurerm_resource_group" "materialize" {
 }
 
 module "materialize" {
-  source              = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.5.10"
+  source              = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.6.3"
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
   prefix              = "mz-tf-test"
 
   install_materialize_operator = true
   use_local_chart              = true
-  helm_chart                   = "materialize-operator-v26.0.0-beta.1.tgz"
+  helm_chart                   = "materialize-operator-${var.operator_version}.tgz"
   operator_version             = var.operator_version
   orchestratord_version        = var.orchestratord_version
 

@@ -19,11 +19,13 @@ import argparse
 import base64
 import collections
 import hashlib
+import io
 import json
 import multiprocessing
 import os
 import platform
 import re
+import selectors
 import shutil
 import stat
 import subprocess
@@ -44,8 +46,88 @@ import yaml
 from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize.docker import MZ_GHCR_DEFAULT
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
+
+
+class RustICE(Exception):
+    pass
+
+
+def run_and_detect_rust_ice(
+    cmd: list[str], cwd: str | Path
+) -> subprocess.CompletedProcess:
+    """This function is complex since it prints out each line immediately to
+    stdout/stderr, but still records them at the same time so that we can scan
+    for the Rust ICE."""
+    stdout_result = io.StringIO()
+    stderr_result = io.StringIO()
+    p = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        env={**os.environ, "CARGO_TERM_COLOR": "always", "RUSTC_COLOR": "always"},
+    )
+
+    sel = selectors.DefaultSelector()
+    sel.register(p.stdout, selectors.EVENT_READ)  # type: ignore
+    sel.register(p.stderr, selectors.EVENT_READ)  # type: ignore
+    assert p.stdout is not None
+    assert p.stderr is not None
+    os.set_blocking(p.stdout.fileno(), False)
+    os.set_blocking(p.stderr.fileno(), False)
+    running = True
+    while running:
+        for key, val in sel.select():
+            output = io.StringIO()
+            running = False
+            while True:
+                new_output = key.fileobj.read(1024)  # type: ignore
+                if not new_output:
+                    break
+                output.write(new_output)
+            contents = output.getvalue()
+            output.close()
+            if not contents:
+                continue
+            # Keep running as long as stdout or stderr have any content
+            running = True
+            if key.fileobj is p.stdout:
+                print(
+                    contents,
+                    end="",
+                    flush=True,
+                )
+                stdout_result.write(contents)
+            else:
+                print(
+                    contents,
+                    end="",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                stderr_result.write(contents)
+    p.wait()
+    retcode = p.poll()
+    assert retcode is not None
+    stdout_contents = stdout_result.getvalue()
+    stdout_result.close()
+    stderr_contents = stderr_result.getvalue()
+    stderr_result.close()
+    if retcode:
+        panic_msg = "panicked at compiler/rustc_metadata/src/rmeta/def_path_hash_map.rs"
+        if panic_msg in stdout_contents or panic_msg in stderr_contents:
+            raise RustICE()
+
+        raise subprocess.CalledProcessError(
+            retcode, p.args, output=stdout_contents, stderr=stderr_contents
+        )
+    return subprocess.CompletedProcess(
+        p.args, retcode, stdout_contents, stderr_contents
+    )
 
 
 class Fingerprint(bytes):
@@ -470,7 +552,7 @@ class CargoBuild(CargoPreImage):
 
         cargo_build = cls.generate_cargo_build_command(rd, list(bins), list(examples))
 
-        spawn.runv(cargo_build, cwd=rd.root)
+        run_and_detect_rust_ice(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly
@@ -1183,7 +1265,7 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = (
             "ghcr.io/materializeinc/materialize"
-            if ui.env_is_truthy("MZ_GHCR", "1")
+            if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
             else "materialize"
         ),
         image_prefix: str = "",
@@ -1289,7 +1371,8 @@ class Repository:
             "--image-registry",
             default=(
                 "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("CI") or ui.env_is_truthy("MZ_GHCR", "1")
+                if ui.env_is_truthy("CI")
+                or ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
                 else "materialize"
             ),
             help="the Docker image registry to pull images from and push images to",
@@ -1377,10 +1460,17 @@ def publish_multiarch_images(
         names = set(image.image.name for image in images)
         assert len(names) == 1, "dependency sets did not contain identical images"
         name = images[0].image.docker_name(tag)
-        spawn.runv(
-            ["docker", "manifest", "create", name, *(image.spec() for image in images)]
-        )
-        spawn.runv(["docker", "manifest", "push", name])
+        if not is_docker_image_pushed(name):
+            spawn.runv(
+                [
+                    "docker",
+                    "manifest",
+                    "create",
+                    name,
+                    *(image.spec() for image in images),
+                ]
+            )
+            spawn.runv(["docker", "manifest", "push", name])
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(

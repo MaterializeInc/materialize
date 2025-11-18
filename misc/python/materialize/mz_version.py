@@ -86,7 +86,7 @@ class TypedVersionBase(Version):
         return f"{self.get_prefix()}{self.str_without_prefix()}"
 
     def is_dev_version(self) -> bool:
-        return self.prerelease is not None
+        return self.prerelease == "dev"
 
 
 class MzVersion(TypedVersionBase):

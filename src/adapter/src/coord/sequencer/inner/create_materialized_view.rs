@@ -21,7 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, Row};
+use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -178,7 +178,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(item) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
-        let gid = item.global_id();
+        let gid = item.global_id_writes();
 
         let create_sql = item.create_sql.clone();
         let plan_result = self
@@ -231,7 +231,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
-        let gid = view.global_id();
+        let gid = view.global_id_writes();
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&gid) else {
             if !id.is_system() {
@@ -626,6 +626,9 @@ impl Coordinator {
             create_sql = stmt.to_ast_string_stable();
         }
 
+        let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -640,8 +643,8 @@ impl Coordinator {
                     create_sql,
                     raw_expr: raw_expr.into(),
                     optimized_expr: local_mir_plan.expr().into(),
-                    desc: global_lir_plan.desc().clone(),
-                    global_id,
+                    desc,
+                    collections,
                     resolved_ids,
                     dependencies,
                     cluster_id,
@@ -888,7 +891,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&item_id).item() else {
             unreachable!() // Asserted in `sequence_explain_pushdown`.
         };
-        let gid = mview.global_id();
+        let gid = mview.global_id_writes();
         let mview = mview.clone();
 
         let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {

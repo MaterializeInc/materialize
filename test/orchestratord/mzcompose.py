@@ -31,6 +31,7 @@ import yaml
 from semver.version import Version
 
 from materialize import MZ_ROOT, ci_util, git, spawn, ui
+from materialize.docker import MZ_GHCR_DEFAULT
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -62,6 +63,10 @@ def get_tag(tag: str | None = None) -> str:
     # environmentd/clusterd/balancerd and the orchestratord depends on them
     # being identical.
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
+
+
+def get_version(tag: str | None = None) -> MzVersion:
+    return MzVersion.parse_mz(get_tag(tag))
 
 
 def get_image(image: str, tag: str | None) -> str:
@@ -135,7 +140,9 @@ class Modification:
     pick_by_default: bool = True
 
     def __init__(self, value: Any):
-        assert value in self.values(), f"Expected {value} to be in {self.values()}"
+        assert value in self.values(
+            get_version()
+        ), f"Expected {value} to be in {self.values(get_version())}"
         self.value = value
 
     def to_dict(self) -> dict[str, Any]:
@@ -166,7 +173,7 @@ class Modification:
         return subclass(data["value"])
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         raise NotImplementedError
 
     @classmethod
@@ -174,8 +181,8 @@ class Modification:
         return cls.failed_reconciliation_values()
 
     @classmethod
-    def good_values(cls) -> list[Any]:
-        return [value for value in cls.values() if value not in cls.bad_values()]
+    def good_values(cls, version: MzVersion) -> list[Any]:
+        return [value for value in cls.values(version) if value not in cls.bad_values()]
 
     @classmethod
     def failed_reconciliation_values(cls) -> list[Any]:
@@ -198,7 +205,7 @@ def all_modifications() -> list[type[Modification]]:
 
 class LicenseKey(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return ["valid", "invalid", "del"]
 
     @classmethod
@@ -219,7 +226,9 @@ class LicenseKey(Modification):
         elif self.value == "del":
             del definition["secret"]["stringData"]["license_key"]
         else:
-            raise ValueError(f"Unknown value {self.value}, only know {self.values()}")
+            raise ValueError(
+                f"Unknown value {self.value}, only know {self.values(get_version())}"
+            )
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
@@ -250,7 +259,7 @@ class LicenseKey(Modification):
 
 class LicenseKeyCheck(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         # TODO: Reenable False when fixed
         return [None, True]
 
@@ -280,7 +289,7 @@ class LicenseKeyCheck(Modification):
 
 class BalancerdEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -321,7 +330,7 @@ class BalancerdEnabled(Modification):
 
 class BalancerdNodeSelector(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             {},
             # TODO: Reenable when we create nodes with these labels
@@ -361,7 +370,7 @@ class BalancerdNodeSelector(Modification):
 
 class ConsoleEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -403,7 +412,7 @@ class ConsoleEnabled(Modification):
 
 class EnableRBAC(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -432,7 +441,7 @@ class EnvironmentdImageRef(Modification):
     pick_by_default = False
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [str(version) for version in get_all_self_managed_versions()] + [
             get_tag()
         ]
@@ -455,7 +464,7 @@ class EnvironmentdImageRef(Modification):
             image = environmentd["items"][0]["spec"]["containers"][0]["image"]
             image_registry = (
                 "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("MZ_GHCR", "1")
+                if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
                 else "materialize"
             )
             expected = f"{image_registry}/environmentd:{self.value}"
@@ -471,7 +480,7 @@ class NumMaterializeEnvironments(Modification):
     pick_by_default = False
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [1, 2]
 
     @classmethod
@@ -538,7 +547,7 @@ class NumMaterializeEnvironments(Modification):
 
 class TelemetryEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -564,7 +573,7 @@ class TelemetryEnabled(Modification):
 
 class TelemetrySegmentClientSide(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -590,7 +599,7 @@ class TelemetrySegmentClientSide(Modification):
 
 class ObservabilityEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -606,7 +615,7 @@ class ObservabilityEnabled(Modification):
 
 class ObservabilityPodMetricsEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -634,7 +643,7 @@ class ObservabilityPodMetricsEnabled(Modification):
 
 class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -663,7 +672,7 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
 # TODO: Fix in upgrade tests
 # class BalancerdReplicas(Modification):
 #     @classmethod
-#     def values(cls) -> list[Any]:
+#     def values(cls, version: MzVersion) -> list[Any]:
 #         return [None, 1, 2]
 #
 #     @classmethod
@@ -691,7 +700,7 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
 
 class ConsoleReplicas(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [None, 1, 2]
 
     @classmethod
@@ -730,7 +739,7 @@ def validate_cluster_replica_size(
         assert size["swap_enabled"]
     elif storage_class_name_set:
         assert size["disk_limit"] != "0"
-        assert "swap_enabled" not in size
+        assert not size["swap_enabled"]
     else:
         assert size["disk_limit"] == "0"
 
@@ -763,7 +772,7 @@ def validate_container_resources(
 
 class SwapEnabledGlobal(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -816,7 +825,7 @@ class SwapEnabledGlobal(Modification):
 
 class StorageClass(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -869,7 +878,7 @@ class StorageClass(Modification):
 
 class EnvironmentdResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -919,7 +928,7 @@ class EnvironmentdResources(Modification):
 
 class BalancerdResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -974,7 +983,7 @@ class BalancerdResources(Modification):
 
 class ConsoleResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -1024,10 +1033,14 @@ class ConsoleResources(Modification):
 
 class AuthenticatorKind(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
-        # TODO: Reenable with Password for >= v0.147.7 only
-        # return ["None", "Password"]
-        return ["None"]
+    def values(cls, version: MzVersion) -> list[Any]:
+        # Test None, Password (v0.147.7+), and Sasl (v0.147.16+)
+        result = ["None"]
+        if version >= MzVersion.parse_mz("v0.147.7"):
+            result.append("Password")
+        if version >= MzVersion.parse_mz("v0.147.16"):
+            result.append("Sasl")
+        return result
 
     @classmethod
     def default(cls) -> Any:
@@ -1035,7 +1048,7 @@ class AuthenticatorKind(Modification):
 
     def modify(self, definition: dict[str, Any]) -> None:
         definition["materialize"]["spec"]["authenticatorKind"] = self.value
-        if self.value == "Password":
+        if self.value == "Password" or self.value == "Sasl":
             definition["secret"]["stringData"][
                 "external_login_password_mz_system"
             ] = "superpassword"
@@ -1051,9 +1064,13 @@ class AuthenticatorKind(Modification):
         if self.value == "Password" and version <= MzVersion.parse_mz("v0.147.6"):
             return
 
+        if self.value == "Sasl" and version < MzVersion.parse_mz("v0.147.16"):
+            return
+
         port = (
             6875
-            if version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password"
+            if (version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password")
+            or (version >= MzVersion.parse_mz("v0.147.16") and self.value == "Sasl")
             else 6877
         )
         for i in range(120):
@@ -1098,12 +1115,80 @@ class AuthenticatorKind(Modification):
 
         time.sleep(1)
         try:
+            # Verify listener configuration
+            listeners_cm = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "cm",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.STDOUT,
+            ).splitlines()
+            listeners_cm = [cm for cm in listeners_cm if "listeners" in cm]
+            if listeners_cm:
+                listeners_json = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        listeners_cm[0],
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.data.listeners\\.json}",
+                    ],
+                    stderr=subprocess.STDOUT,
+                )
+                import json
+
+                listeners = json.loads(listeners_json)
+
+                # Verify SQL listener authenticator
+                sql_auth = (
+                    listeners.get("sql", {})
+                    .get("external", {})
+                    .get("authenticator_kind")
+                )
+                http_auth = (
+                    listeners.get("http", {})
+                    .get("external", {})
+                    .get("authenticator_kind")
+                )
+
+                if self.value == "Sasl":
+                    assert (
+                        sql_auth == "Sasl"
+                    ), f"Expected SQL listener to use Sasl, got {sql_auth}"
+                    assert (
+                        http_auth == "Password"
+                    ), f"Expected HTTP listener to use Password with Sasl mode, got {http_auth}"
+                    print(f"SASL mode verified: SQL={sql_auth}, HTTP={http_auth}")
+                elif self.value == "Password":
+                    assert (
+                        sql_auth == "Password"
+                    ), f"Expected SQL listener to use Password, got {sql_auth}"
+                    assert (
+                        http_auth == "Password"
+                    ), f"Expected HTTP listener to use Password, got {http_auth}"
+                    print(f"Password mode verified: SQL={sql_auth}, HTTP={http_auth}")
+                elif self.value == "None":
+                    assert (
+                        sql_auth == "None"
+                    ), f"Expected SQL listener to use None, got {sql_auth}"
+                    assert (
+                        http_auth == "None"
+                    ), f"Expected HTTP listener to use None, got {http_auth}"
+                    print(f"None mode verified: SQL={sql_auth}, HTTP={http_auth}")
+
             # TODO: Figure out why this is not working in CI, but works locally
             pass
             # psycopg.connect(
             #     host="127.0.0.1",
             #     user="mz_system",
-            #     password="superpassword" if self.value == "Password" else None,
+            #     password="superpassword" if (self.value == "Password" or self.value == "Sasl") else None,
             #     dbname="materialize",
             #     port=port,
             # )
@@ -1452,6 +1537,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         definition["secret"] = materialize_setup[1]
         definition["materialize"] = materialize_setup[2]
 
+    current_version = get_version(args.tag)
     if args.orchestratord_override:
         definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
     # TODO: database-issues#9696, makes environmentd -> clusterd connections fail
@@ -1510,13 +1596,14 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             yield [NumMaterializeEnvironments(2)]
         elif properties == Properties.Individual:
             for mod_class in mod_classes:
-                for value in mod_class.values():
-                    yield [mod_class(value)]
+                for value in mod_class.values(current_version):
+                    if value in mod_class.values(current_version):
+                        yield [mod_class(value)]
         elif properties == Properties.Combine:
             assert args.runtime
             while time.time() < end_time:
                 yield [
-                    mod_class(rng.choice(mod_class.good_values()))
+                    mod_class(rng.choice(mod_class.good_values(current_version)))
                     for mod_class in mod_classes
                 ]
         else:
@@ -1532,7 +1619,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 run_scenario([mods], definition)
         elif action == Action.Upgrade:
             assert not ui.env_is_truthy(
-                "MZ_GHCR", "1"
+                "MZ_GHCR", MZ_GHCR_DEFAULT
             ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
@@ -1541,6 +1628,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             versions = get_all_self_managed_versions()
             while time.time() < end_time:
                 selected_versions = sorted(list(rng.sample(versions, 2)))
+                current_version = selected_versions[0]
                 try:
                     mod = next(mods_it)
                 except StopIteration:
@@ -1553,7 +1641,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 run_scenario(scenario, definition)
         elif action == Action.UpgradeChain:
             assert not ui.env_is_truthy(
-                "MZ_GHCR", "1"
+                "MZ_GHCR", MZ_GHCR_DEFAULT
             ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
@@ -1563,6 +1651,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             while time.time() < end_time:
                 random.randint(2, len(versions))
                 selected_versions = sorted(list(rng.sample(versions, 2)))
+                current_version = selected_versions[0]
                 try:
                     mod = next(mods_it)
                 except StopIteration:

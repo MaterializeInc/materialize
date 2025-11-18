@@ -140,7 +140,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
-        # Fortify against intermittent DockerHub issues
+        # Fortify against intermittent DockerHub/GHCR issues
         retry:
           automatic:
             - exit_status: 1
@@ -767,6 +767,23 @@ steps:
   - wait: ~
     continue_on_failure: true
 
+  - id: deploy
+    label: Deploy
+    trigger: deploy
+    async: true
+    branches: "main v*.*"
+    depends_on: ["build-x86_64", "build-aarch64"]
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+    coverage: skip
+    sanitizer: skip
+
+  - wait: ~
+    continue_on_failure: true
+
   - id: coverage-pr-analyze
     label: Analyze code coverage for PR
     timeout_in_minutes: 20
@@ -776,19 +793,3 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     coverage: only
-
-  - wait: ~
-    continue_on_failure: true
-
-  - id: deploy
-    label: Deploy
-    trigger: deploy
-    async: true
-    branches: "main v*.*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
-    coverage: skip
-    sanitizer: skip

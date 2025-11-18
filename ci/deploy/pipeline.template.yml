@@ -11,7 +11,9 @@
 priority: 30
 
 steps:
-  - command: bin/ci-builder run nightly ci/deploy/devsite.sh
+  - id: deploy-devsite
+    label: ":rocket: Dev. site"
+    command: bin/ci-builder run nightly ci/deploy/devsite.sh
     branches: main
     timeout_in_minutes: 60
     agents:
@@ -19,43 +21,40 @@ steps:
     concurrency: 1
     concurrency_group: deploy/devsite
 
-  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
+  - id: deploy-docker
+    label: ":rocket: :docker:"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.docker
     timeout_in_minutes: 30
     agents:
       queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy/linux
 
-  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.pypi
+  - id: deploy-pypi
+    label: ":rocket: :pypi:"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.pypi
     timeout_in_minutes: 30
+    agents:
+      queue: linux-x86_64-small
     concurrency: 1
     concurrency_group: deploy/pypi
+
+  - id: deploy-npm
+    label: ":rocket: :npm:"
+    command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm
+    timeout_in_minutes: 30
     agents:
       queue: linux-x86_64-small
-
-  - command: bin/ci-builder run stable bin/pyactivate -m ci.deploy.npm
-    timeout_in_minutes: 30
     concurrency: 1
     concurrency_group: deploy/npm
+
+  - id: deploy-helm-chart
+    label: ":rocket: :helm:"
+    command: bin/ci-builder run stable misc/helm-charts/publish.sh
+    depends_on: "deploy-docker"
+    branches: "v*.*"
+    timeout_in_minutes: 30
     agents:
-      queue: linux-x86_64-small
-
-  - label: ":bulb: Full SQL Logic Tests"
-    trigger: slt
-    async: true
-    branches: "v*.*rc*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
-
-  - label: ":nightmare: Full Nightly"
-    trigger: nightly
-    async: true
-    branches: "v*.*rc*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
+      queue: linux-aarch64-small
+    concurrency: 1
+    concurrency_group: deploy/helm_chart

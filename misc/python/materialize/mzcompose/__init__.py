@@ -578,6 +578,10 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_peek_stash_batch_size",
     "storage_statistics_retention_duration",
     "enable_paused_cluster_readhold_downgrade",
+    "kafka_retry_backoff",
+    "kafka_retry_backoff_max",
+    "kafka_reconnect_backoff",
+    "kafka_reconnect_backoff_max",
 ]
 
 

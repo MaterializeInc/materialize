@@ -197,6 +197,7 @@ so it is executed.""",
         args.sanitizer,
         lto,
     )
+    add_nightly_deploy_dependency(pipeline, args.pipeline)
     remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
@@ -624,6 +625,7 @@ def trim_test_selection_id(pipeline: Any, step_ids_to_run: set[int]) -> None:
                 "build-aarch64",
                 "build-x86_64-lto",
                 "build-aarch64-lto",
+                "devel-docker-tags",
             )
             and not step.get("async")
         ):
@@ -646,6 +648,7 @@ def trim_test_selection_name(pipeline: Any, steps_to_run: set[str]) -> None:
                 "build-aarch64",
                 "build-x86_64-lto",
                 "build-aarch64-lto",
+                "devel-docker-tags",
             )
             and not step.get("async")
         ):
@@ -816,6 +819,29 @@ def trim_tests_pipeline(
     ]
 
 
+def add_nightly_deploy_dependency(pipeline: Any, pipeline_name: str) -> None:
+    """In release builds orchestratord and terraform tests in Nightly require
+    the release tag to exist already, so we have to wait for the Deploy step to
+    finish before triggering Nightly. But we don't want to make the Deploy step
+    synchronous in non-release builds since it would make the test run take
+    significantly longer to finish."""
+    tag = os.environ["BUILDKITE_TAG"]
+    if pipeline_name != "test" or not tag:
+        return
+
+    previous_step: dict | None = None
+    for step in steps(pipeline):
+        if step.get("id") == "deploy":
+            step["async"] = False
+            assert previous_step and "wait" in previous_step
+            previous_step["skip"] = True
+
+        if step.get("id") == "nightly-if-release":
+            step["depends_on"] = "deploy"
+
+        previous_step = step
+
+
 def add_cargo_test_dependency(
     pipeline: Any,
     pipeline_name: str,
@@ -864,6 +890,7 @@ def remove_dependencies_on_prs(
         not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
         or os.environ["BUILDKITE_TAG"]
         or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
+        or os.environ["BUILDKITE_BRANCH"].startswith("dependabot/")
     ):
         return
     for step in steps(pipeline):
@@ -921,6 +948,11 @@ def trim_builds(
         elif step.get("id") == "upload-debug-symbols-aarch64":
             if hash_check[Arch.AARCH64][1]:
                 step["skip"] = True
+        elif step.get("id") == "devel-docker-tags":
+            step["concurrency"] = 1
+            step["concurrency_group"] = (
+                f"devel-docker-tags/{hash_check[Arch.X86_64][0]}"
+            )
 
 
 _github_changed_files: set[str] | None = None

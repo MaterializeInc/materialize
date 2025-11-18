@@ -5867,6 +5867,22 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_object_global_ids",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_GLOBAL_IDS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("global_id", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "Materialize's unique catalog item ID for the object."),
+        ("global_id", "A global ID for the object."),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
 pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_lifetimes",
@@ -13830,6 +13846,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_OBJECTS_ID_NAMESPACE_TYPES),
         Builtin::View(&MZ_OBJECT_HISTORY),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
+        Builtin::Table(&MZ_OBJECT_GLOBAL_IDS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),

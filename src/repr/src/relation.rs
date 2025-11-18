@@ -925,6 +925,11 @@ impl RelationDesc {
         &self.typ
     }
 
+    /// Returns the owned relation type underlying this relation description.
+    pub fn into_typ(self) -> SqlRelationType {
+        self.typ
+    }
+
     /// Returns an iterator over the columns in this relation.
     pub fn iter(&self) -> impl Iterator<Item = (&ColumnName, &SqlColumnType)> {
         self.metadata.values().map(|meta| {

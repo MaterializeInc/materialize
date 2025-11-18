@@ -20,6 +20,16 @@ message ProtoSqlServerTableDesc {
   string name = 1;
   string schema_name = 2;
   repeated ProtoSqlServerColumnDesc columns = 3;
+  repeated ProtoSqlServerTableConstraint constraints = 5;
+}
+
+message ProtoSqlServerTableConstraint {
+  string constraint_name = 1;
+  oneof constraint_type {
+    google.protobuf.Empty primary_key = 2;
+    google.protobuf.Empty unique = 3;
+  }
+  repeated string column_names = 4;
 }
 
 message ProtoSqlServerColumnDesc {
