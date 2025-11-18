@@ -193,6 +193,7 @@ table.inline-headings {
     @media(max-width: 850px) {
         padding-bottom: var(--large);
         height: calc(100vh - var(--nav-height));
+        margin-top: 80px;
     }
 
     a {
