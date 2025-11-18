@@ -6,6 +6,8 @@ menu:
     parent: "installation"
     identifier: "appendix-cluster-sizes"
     weight: 96
+aliases:
+  - /self-managed/v25.1/sql/appendix-cluster-sizes/
 ---
 
 ## Default Cluster Sizes

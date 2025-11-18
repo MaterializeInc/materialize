@@ -129,4 +129,4 @@ include = "docs/**"
 # exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
 
 # Avoid deleting self-managed docs which are deployed from the self-managed-docs branches.
-exclude = "docs/{self-managed/v25.1,self-managed/v25.2}/**"
+exclude = "docs/{self-managed/v25.2}/**"

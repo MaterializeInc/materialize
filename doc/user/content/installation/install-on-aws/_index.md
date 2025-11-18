@@ -3,6 +3,7 @@ title: "Install on AWS (via Terraform)"
 description: ""
 aliases:
   - /self-hosted/install-on-aws/
+  - /self-managed/v25.1/installation/install-on-aws/
 disable_list: true
 menu:
   main:

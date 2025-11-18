@@ -8,6 +8,8 @@ menu:
     weight: 30
     identifier: "manage-terraform"
     name: "Manage with Terraform"
+aliases:
+  - /self-managed/v25.1/manage/terraform/
 ---
 
 [Terraform](https://www.terraform.io/) is an infrastructure-as-code tool that

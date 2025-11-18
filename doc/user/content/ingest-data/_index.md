@@ -7,6 +7,8 @@ menu:
     identifier: "ingest-data"
     name: "Ingest data"
     weight: 11
+aliases:
+  - /self-managed/v25.1/ingest-data/
 ---
 
 You can ingest data into Materialize from various external systems:

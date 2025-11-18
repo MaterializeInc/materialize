@@ -4,6 +4,8 @@ description: "Deploy Self-managed Materialize to a local kind cluster."
 aliases:
   - /self-hosted/install-on-local-kind/
   - /installation/install-on-local-minikube/
+  - /self-managed/v25.1/installation/install-on-local-kind/
+  - /self-managed/v25.1/installation/install-on-local-minikube/
 menu:
   main:
     parent: "installation"

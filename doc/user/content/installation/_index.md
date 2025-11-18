@@ -6,7 +6,8 @@ menu:
   main:
     identifier: "installation"
     weight: 5
-
+aliases:
+  - /self-managed/v25.1/installation/
 ---
 
 {{< include-md file="shared-content/self-managed/install-landing-page.md" >}}
