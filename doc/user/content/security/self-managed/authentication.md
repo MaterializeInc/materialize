@@ -141,7 +141,8 @@ User passwords are automatically stored in SCRAM-SHA-256 format in the database.
 
 When SASL authentication is enabled:
 
-- **PostgreSQL connections** (e.g., `psql`, client libraries) use SCRAM-SHA-256 authentication
+- **PostgreSQL connections** (e.g., `psql`, client libraries, [connection
+  poolers](/integrations/connection-pooling/)) use SCRAM-SHA-256 authentication
 - **HTTP/Web Console connections** use standard password authentication
 
 This hybrid approach provides maximum security for SQL connections while maintaining
