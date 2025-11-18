@@ -1,0 +1,87 @@
+- name: "syntax"
+  description: |
+    To create a new read-write table (i.e., users can perform
+    [`SELECT`](/sql/select/), [`INSERT`](/sql/insert/),
+    [`UPDATE`](/sql/update/), and [`DELETE`](/sql/delete/) operations):
+
+  code: |
+    CREATE [TEMP|TEMPORARY] TABLE [IF NOT EXISTS] <table_name> (
+      <column_name> <column_type> [NOT NULL][DEFAULT <default_expr>]
+      [, ...]
+    )
+    [WITH (
+      PARTITION BY (<column_name> [, ...]) |
+      RETAIN HISTORY [=] FOR <duration>
+    )]
+    ;
+
+- name: "syntax-options"
+  description: |
+    {{% yaml-table
+    data="syntax_options/create_table/create_table_options_user_populated" %}}
+
+    For examples, see [Create a table
+    (user-populated)](/sql/create-table/#create-a-table-user-populated).
+
+- name: "create-table"
+  description: |
+    The following example uses `CREATE TABLE` to create a new read-write table
+    `mytable` with two columns `a` (of type `int`) and `b` (of type `text` and
+    not nullable):
+  code: |
+    CREATE TABLE mytable (a int, b text NOT NULL);
+
+- name: "show-tables"
+  description: |
+    To verify that the table has been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the table `mytable`:
+
+    ```hc {hl_lines="3"}
+    | name       | comment |
+    | ---------- | ------- |
+    | mytable    |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/) command:
+  code: |
+    SHOW COLUMNS FROM mytable;
+  results: |
+    The results should display information on columns `a` and `b`; these should
+    match the specification in your `CREATE TABLE` statement:
+
+    ```none
+    | name | nullable | type    | comment |
+    | ---- | -------- | ------- | ------- |
+    | a    | true     | integer |         |
+    | b    | false    | text    |         |
+    ```
+
+- name: "write-to-table"
+  description: |
+    The following example uses [`INSERT`](/sql/insert/) to write two rows to the table:
+  code: |
+    INSERT INTO mytable VALUES
+    (1, 'hello'),
+    (2, 'goodbye')
+    ;
+
+- name: "read-from-table"
+  description: |
+    The following example uses [`SELECT`](/sql/select/) to read all rows from the table:
+  code: |
+    SELECT * FROM mytable;
+  results: |
+    The results should display the two rows inserted:
+
+    ```hc {hl_lines="3-4"}
+    | a | b       |
+    | - | ------- |
+    | 1 | hello   |
+    | 2 | goodbye |
+    ```

@@ -62,7 +62,7 @@ operator:
         # TODO: Add any other additions for GCP-specific configurations
 
   clusters:
-    # Configure sizes such that the pod QoS class is not Guaranteed,
+    # -- Configure sizes such that the pod QoS class is not Guaranteed,
     # as is required for swap to be enabled.
     # Disk doesn't make much sense with swap, as swap performs better than
     # lgalloc, so it also gets disabled.

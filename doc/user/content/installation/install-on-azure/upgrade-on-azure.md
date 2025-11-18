@@ -1,5 +1,5 @@
 ---
-title: "Upgrade on Azure"
+title: "Upgrade on Azure (Terraform)"
 description: "Procedure to upgrade your Materialize operator and instances running on Azure"
 menu:
   main:
@@ -8,9 +8,20 @@ menu:
     weight: 10
 ---
 
-To upgrade your Materialize instances, upgrade the Materialize operator first
-and then the Materialize instances. The following tutorial upgrades your
-Materialize deployment running on Azure Kubernetes Service (AKS)
+{{< annotation type="Disambiguation" >}}
+
+- To upgrade to `v26.0` using Materialize-provided Terraforms, upgrade your
+Terraform version to `v0.6.1` or higher, {{< include-md
+file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md" >}}.
+
+- To upgrade to `v26.0` if <red>**not**</red> using a Materialize-provided Terraforms, you must
+prepare your nodes by adding the required labels. For detailed instructions, see
+[Prepare for swap and upgrade to v26.0](/installation/upgrade-to-swap/).
+
+{{< /annotation >}}
+
+To upgrade your Materialize instances, first choose a new operator version and upgrade the Materialize operator. Then, upgrade your Materialize instances to the same version. The following tutorial upgrades your
+Materialize deployment running on Azure Kubernetes Service (AKS).
 
 The tutorial assumes you have installed Materialize on Azure Kubernetes Service
 (AKS) using the instructions on [Install on
@@ -19,16 +30,11 @@ directory or the root).
 
 ## Version compatibility
 
+{{< include-md file="shared-content/self-managed/version-compatibility-upgrade-banner.md" >}}
+
+
+
 {{< tabs >}}
-
-{{< tab "Helm chart releases" >}}
-
-The following table presents the versions compatibility for the operator and the
-applications:
-
-{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
-
-{{</ tab >}}
 
 {{< tab "Materialize on Azure Terraform Releases" >}}
 
@@ -83,6 +89,10 @@ the [Helm documentation](https://helm.sh/docs/intro/install/).
 *Optional*. `jq` is used to parse the AKS cluster name and region from the
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
+
+### License key
+
+{{< include-md file="shared-content/self-managed/license-key-upgrades.md" >}}
 
 ## A. Authenticate with Azure
 

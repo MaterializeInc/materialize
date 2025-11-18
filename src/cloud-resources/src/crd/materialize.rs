@@ -43,39 +43,39 @@ pub mod v1alpha1 {
     #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
     #[serde(rename_all = "camelCase")]
     pub struct MaterializeCertSpec {
-        // Additional DNS names the cert will be valid for.
+        /// Additional DNS names the certificate will be valid for.
         pub dns_names: Option<Vec<String>>,
-        // Duration the certificate will be requested for.
-        // Value must be in units accepted by Go time.ParseDuration
-        // https://golang.org/pkg/time/#ParseDuration.
+        /// Duration the certificate will be requested for.
+        /// Value must be in units accepted by Go
+        /// [`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).
         pub duration: Option<String>,
-        // Duration before expiration the certificate will be renewed.
-        // Value must be in units accepted by Go time.ParseDuration
-        // https://golang.org/pkg/time/#ParseDuration.
+        /// Duration before expiration the certificate will be renewed.
+        /// Value must be in units accepted by Go
+        /// [`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).
         pub renew_before: Option<String>,
-        // Reference to an Issuer or ClusterIssuer that will generate the certificate.
+        /// Reference to an `Issuer` or `ClusterIssuer` that will generate the certificate.
         pub issuer_ref: Option<CertificateIssuerRef>,
-        // Additional annotations and labels to include in the Certificate object.
+        /// Additional annotations and labels to include in the Certificate object.
         pub secret_template: Option<CertificateSecretTemplate>,
     }
     #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
     pub enum MaterializeRolloutStrategy {
-        // Default. Create a new generation of pods, leaving the old generation around until the
-        // new ones are ready to take over.
-        // This minimizes downtime, and is what almost everyone should use.
+        /// Create a new generation of pods, leaving the old generation around until the
+        /// new ones are ready to take over.
+        /// This minimizes downtime, and is what almost everyone should use.
         #[default]
         WaitUntilReady,
 
-        // WARNING!!!
-        // THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
-        // WARNING!!!
-        //
-        // Tear down the old generation of pods and promote the new generation of pods immediately,
-        // without waiting for the new generation of pods to be ready.
-        //
-        // This strategy should ONLY be used by customers with physical hardware who do not have
-        // enough hardware for the WaitUntilReady strategy. If you think you want this, please
-        // consult with Materialize engineering to discuss your situation.
+        /// {{<warning>}}
+        /// THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
+        ///
+        /// This strategy should ONLY be used by customers with physical hardware who do not have
+        /// enough hardware for the `WaitUntilReady` strategy. If you think you want this, please
+        /// consult with Materialize engineering to discuss your situation.
+        /// {{</warning>}}
+        ///
+        /// Tear down the old generation of pods and promote the new generation of pods immediately,
+        /// without waiting for the new generation of pods to be ready.
         ImmediatelyPromoteCausingDowntime,
     }
 
@@ -96,117 +96,116 @@ pub mod v1alpha1 {
         printcolumn = r#"{"name": "UpToDate", "type": "string", "description": "Whether the spec has been applied", "jsonPath": ".status.conditions[?(@.type==\"UpToDate\")].status", "priority": 1}"#
     )]
     pub struct MaterializeSpec {
-        // The environmentd image to run
+        /// The environmentd image to run.
         pub environmentd_image_ref: String,
-        // Extra args to pass to the environmentd binary
+        /// Extra args to pass to the environmentd binary.
         pub environmentd_extra_args: Option<Vec<String>>,
-        // Extra environment variables to pass to the environmentd binary
+        /// Extra environment variables to pass to the environmentd binary.
         pub environmentd_extra_env: Option<Vec<EnvVar>>,
-        // DEPRECATED
-        // If running in AWS, override the IAM role to use to give
-        // environmentd access to the persist S3 bucket.
-        // DEPRECATED
-        // Use `service_account_annotations` to set "eks.amazonaws.com/role-arn" instead.
+        /// DEPRECATED
+        /// If running in AWS, override the IAM role to use to give
+        /// environmentd access to the persist S3 bucket.
+        /// DEPRECATED
+        /// Use `service_account_annotations` to set "eks.amazonaws.com/role-arn" instead.
         pub environmentd_iam_role_arn: Option<String>,
-        // If running in AWS, override the IAM role to use to support
-        // the CREATE CONNECTION feature
+        /// If running in AWS, override the IAM role to use to support
+        /// the CREATE CONNECTION feature.
         pub environmentd_connection_role_arn: Option<String>,
-        // Resource requirements for the environmentd pod
+        /// Resource requirements for the environmentd pod.
         pub environmentd_resource_requirements: Option<ResourceRequirements>,
-        // Amount of disk to allocate, if a storage class is provided
+        /// Amount of disk to allocate, if a storage class is provided.
         pub environmentd_scratch_volume_storage_requirement: Option<Quantity>,
-        // Resource requirements for the balancerd pod
+        /// Resource requirements for the balancerd pod.
         pub balancerd_resource_requirements: Option<ResourceRequirements>,
-        // Resource requirements for the console pod
+        /// Resource requirements for the console pod.
         pub console_resource_requirements: Option<ResourceRequirements>,
-        // Number of balancerd pods to create
+        /// Number of balancerd pods to create.
         pub balancerd_replicas: Option<i32>,
-        // Number of console pods to create
+        /// Number of console pods to create.
         pub console_replicas: Option<i32>,
 
-        // Name of the kubernetes service account to use.
-        // If not set, we will create one with the same name as this Materialize object.
+        /// Name of the kubernetes service account to use.
+        /// If not set, we will create one with the same name as this Materialize object.
         pub service_account_name: Option<String>,
-        // Annotations to apply to the service account
-        //
-        // Annotations on service accounts are commonly used by cloud providers for IAM.
-        // AWS uses "eks.amazonaws.com/role-arn".
-        // Azure uses "azure.workload.identity/client-id", but
-        // additionally requires "azure.workload.identity/use": "true" on the pods.
+        /// Annotations to apply to the service account.
+        ///
+        /// Annotations on service accounts are commonly used by cloud providers for IAM.
+        /// AWS uses "eks.amazonaws.com/role-arn".
+        /// Azure uses "azure.workload.identity/client-id", but
+        /// additionally requires "azure.workload.identity/use": "true" on the pods.
         pub service_account_annotations: Option<BTreeMap<String, String>>,
-        // Labels to apply to the service account
+        /// Labels to apply to the service account.
         pub service_account_labels: Option<BTreeMap<String, String>>,
-        // Annotations to apply to the pods
+        /// Annotations to apply to the pods.
         pub pod_annotations: Option<BTreeMap<String, String>>,
-        // Labels to apply to the pods
+        /// Labels to apply to the pods.
         pub pod_labels: Option<BTreeMap<String, String>>,
 
-        // When changes are made to the environmentd resources (either via
-        // modifying fields in the spec here or by deploying a new
-        // orchestratord version which changes how resources are generated),
-        // existing environmentd processes won't be automatically restarted.
-        // In order to trigger a restart, the request_rollout field should be
-        // set to a new (random) value. Once the rollout completes, the value
-        // of status.last_completed_rollout_request will be set to this value
-        // to indicate completion.
-        //
-        // Defaults to a random value in order to ensure that the first
-        // generation rollout is automatically triggered.
+        /// When changes are made to the environmentd resources (either via
+        /// modifying fields in the spec here or by deploying a new
+        /// orchestratord version which changes how resources are generated),
+        /// existing environmentd processes won't be automatically restarted.
+        /// In order to trigger a restart, the request_rollout field should be
+        /// set to a new (random) value. Once the rollout completes, the value
+        /// of `status.lastCompletedRolloutRequest` will be set to this value
+        /// to indicate completion.
+        ///
+        /// Defaults to a random value in order to ensure that the first
+        /// generation rollout is automatically triggered.
         #[serde(default)]
         pub request_rollout: Uuid,
-        // If force_promote is set to the same value as request_rollout, the
-        // current rollout will skip waiting for clusters in the new
-        // generation to rehydrate before promoting the new environmentd to
-        // leader.
+        /// If `forcePromote` is set to the same value as `requestRollout`, the
+        /// current rollout will skip waiting for clusters in the new
+        /// generation to rehydrate before promoting the new environmentd to
+        /// leader.
         #[serde(default)]
         pub force_promote: Uuid,
-        // This value will be written to an annotation in the generated
-        // environmentd statefulset, in order to force the controller to
-        // detect the generated resources as changed even if no other changes
-        // happened. This can be used to force a rollout to a new generation
-        // even without making any meaningful changes.
+        /// This value will be written to an annotation in the generated
+        /// environmentd statefulset, in order to force the controller to
+        /// detect the generated resources as changed even if no other changes
+        /// happened. This can be used to force a rollout to a new generation
+        /// even without making any meaningful changes, by setting it to the
+        /// same value as `requestRollout`.
         #[serde(default)]
         pub force_rollout: Uuid,
-        // Deprecated and ignored. Use rollout_strategy instead.
+        /// Deprecated and ignored. Use `rolloutStrategy` instead.
         #[serde(default)]
         pub in_place_rollout: bool,
-        // Rollout strategy to use when upgrading this Materialize instance.
+        /// Rollout strategy to use when upgrading this Materialize instance.
         #[serde(default)]
         pub rollout_strategy: MaterializeRolloutStrategy,
-        // The name of a secret containing metadata_backend_url and persist_backend_url.
-        // It may also contain external_login_password_mz_system, which will be used as
-        // the password for the mz_system user if authenticator_kind is Password or Sasl.
+        /// The name of a secret containing `metadata_backend_url` and `persist_backend_url`.
+        /// It may also contain `external_login_password_mz_system`, which will be used as
+        /// the password for the `mz_system` user if `authenticatorKind` is `Password`.
         pub backend_secret_name: String,
-        // How to authenticate with Materialize. Valid options are Password, Sasl, and None.
-        // If set to Password or Sasl, the backend secret must contain external_login_password_mz_system.
-        // Sasl enables SCRAM-SHA-256 authentication for PostgreSQL wire protocol connections.
+        /// How to authenticate with Materialize.
         #[serde(default)]
         pub authenticator_kind: AuthenticatorKind,
-        // Whether to enable role based access control. Defaults to false.
+        /// Whether to enable role based access control. Defaults to false.
         #[serde(default)]
         pub enable_rbac: bool,
 
-        // The value used by environmentd (via the --environment-id flag) to
-        // uniquely identify this instance. Must be globally unique, and
-        // is required if a license key is not provided.
-        // NOTE: This value MUST NOT be changed in an existing instance,
-        // since it affects things like the way data is stored in the persist
-        // backend.
+        /// The value used by environmentd (via the --environment-id flag) to
+        /// uniquely identify this instance. Must be globally unique, and
+        /// is required if a license key is not provided.
+        /// NOTE: This value MUST NOT be changed in an existing instance,
+        /// since it affects things like the way data is stored in the persist
+        /// backend.
         #[serde(default)]
         pub environment_id: Uuid,
 
-        // The configuration for generating an x509 certificate using cert-manager for balancerd
-        // to present to incoming connections.
-        // The dns_names and issuer_ref fields are required.
+        /// The configuration for generating an x509 certificate using cert-manager for balancerd
+        /// to present to incoming connections.
+        /// The `dnsNames` and `issuerRef` fields are required.
         pub balancerd_external_certificate_spec: Option<MaterializeCertSpec>,
-        // The configuration for generating an x509 certificate using cert-manager for the console
-        // to present to incoming connections.
-        // The dns_names and issuer_ref fields are required.
-        // Not yet implemented.
+        /// The configuration for generating an x509 certificate using cert-manager for the console
+        /// to present to incoming connections.
+        /// The `dnsNames` and `issuerRef` fields are required.
+        /// Not yet implemented.
         pub console_external_certificate_spec: Option<MaterializeCertSpec>,
-        // The cert-manager Issuer or ClusterIssuer to use for database internal communication.
-        // The issuer_ref field is required.
-        // This currently is only used for environmentd, but will eventually support clusterd.
+        /// The cert-manager Issuer or ClusterIssuer to use for database internal communication.
+        /// The `issuerRef` field is required.
+        /// This currently is only used for environmentd, but will eventually support clusterd.
         pub internal_certificate_spec: Option<MaterializeCertSpec>,
     }
 
@@ -518,9 +517,16 @@ pub mod v1alpha1 {
     #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema, PartialEq)]
     #[serde(rename_all = "camelCase")]
     pub struct MaterializeStatus {
+        /// Resource identifier used as a name prefix to avoid pod name collisions.
         pub resource_id: String,
+        /// The generation of Materialize pods actively capable of servicing requests.
         pub active_generation: u64,
+        /// The UUID of the last successfully completed rollout.
         pub last_completed_rollout_request: Uuid,
+        /// A hash calculated from the spec of resources to be created based on this Materialize
+        /// spec. This is used for detecting when the existing resources are up to date.
+        /// If you want to trigger a rollout without making other changes that would cause this
+        /// hash to change, you must set forceRollout to the same UUID as requestRollout.
         pub resources_hash: String,
         pub conditions: Vec<Condition>,
     }

@@ -1,25 +1,45 @@
 ### Schema changes
 
-{{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+Materialize supports schema changes in the upstream database as follows:
 
-{{% schema-changes %}}
+#### Compatible schema changes (Legacy syntax)
+
+{{< note >}}
+
+This section refer to the legacy [`CREATE SOURCE ... FOR
+...`](/sql/create-source/postgres/) that creates subsources as part of the
+`CREATE SOURCE` operation.  To be able to handle the upstream column additions
+and drops, see [`CREATE SOURCE (New Syntax)`](/sql/create-source/postgres-v2/)
+and [`CREATE TABLE FROM SOURCE`](/sql/create-table).
+
+{{< /note >}}
+
+- Adding columns to tables. Materialize will **not ingest** new columns added
+  upstream unless you use [`DROP SOURCE`](/sql/alter-source/#context) to first
+  drop the affected subsource, and then add the table back to the source using
+  [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/).
+
+- Dropping columns that were added after the source was created. These columns
+  are never ingested, so you can drop them without issue.
+
+- Adding or removing `NOT NULL` constraints to tables that were nullable when
+  the source was created.
+
+#### Incompatible schema changes
+
+All other schema changes to upstream tables will set the corresponding subsource
+into an error state, which prevents you from reading from the source.
+
+To handle incompatible [schema changes](#schema-changes), use [`DROP SOURCE`](/sql/alter-source/#context)
+and [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to first drop the
+affected subsource, and then add the table back to the source. When you add the
+subsource, it will have the updated schema from the corresponding upstream
+table.
+
 
 ### Publication membership
 
-PostgreSQL's logical replication API does not provide a signal when users remove
-tables from publications. Because of this, Materialize relies on periodic checks
-to determine if a table has been removed from a publication, at which time it
-generates an irrevocable error, preventing any values from being read from the
-table.
-
-However, it is possible to remove a table from a publication and then re-add it
-before Materialize notices that the table was removed. In this case, Materialize
-can no longer provide any consistency guarantees about the data we present from
-the table and, unfortunately, is wholly unaware that this occurred.
-
-To mitigate this issue, if you need to drop and re-add a table to a publication,
-ensure that you remove the table/subsource from the source _before_ re-adding it
-using the [`DROP SOURCE`](/sql/drop-source/) command.
+{{< include-md file="shared-content/postgres-publication-membership.md" >}}
 
 ### Supported types
 
@@ -29,32 +49,8 @@ using the [`DROP SOURCE`](/sql/drop-source/) command.
 
 ### Truncation
 
-Upstream tables replicated into Materialize should not be truncated. If an
-upstream table is truncated while replicated, the whole source becomes
-inaccessible and will not produce any data until it is recreated. Instead of
-truncating, you can use an unqualified `DELETE` to remove all rows from the
-table:
-
-```mzsql
-DELETE FROM t;
-```
+{{< include-md file="shared-content/postgres-truncation-restriction.md" >}}
 
 ### Inherited tables
 
-When using [PostgreSQL table inheritance](https://www.postgresql.org/docs/current/tutorial-inheritance.html),
-PostgreSQL serves data from `SELECT`s as if the inheriting tables' data is also
-present in the inherited table. However, both PostgreSQL's logical replication
-and `COPY` only present data written to the tables themselves, i.e. the
-inheriting data is _not_ treated as part of the inherited table.
-
-PostgreSQL sources use logical replication and `COPY` to ingest table data, so
-inheriting tables' data will only be ingested as part of the inheriting table,
-i.e. in Materialize, the data will not be returned when serving `SELECT`s from
-the inherited table.
-
-You can mimic PostgreSQL's `SELECT` behavior with inherited tables by creating a
-materialized view that unions data from the inherited and inheriting tables
-(using `UNION ALL`). However, if new tables inherit from the table, data from
-the inheriting tables will not be available in the view. You will need to add
-the inheriting tables via `ADD SUBSOURCE` and create a new view (materialized or
-non-) that unions the new table.
+{{< include-md file="shared-content/postgres-inherited-tables.md" >}}

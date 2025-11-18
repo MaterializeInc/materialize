@@ -1,5 +1,5 @@
 ---
-title: "Install on Azure"
+title: "Install on Azure (via Terraform)"
 description: "Install Materialize on Azure Kubernetes Service (AKS) using Terraform"
 disable_list: true
 menu:
@@ -64,6 +64,12 @@ the [Helm documentation](https://helm.sh/docs/intro/install/).
 *Optional*. `jq` is used to parse the AKS cluster name and region from the
 Terraform outputs. Alternatively, you can manually specify the name and region.
 If you want to use `jq` and do not have `jq` installed, install.
+
+### License key
+
+Starting in v26.0, Self-Managed Materialize requires a license key.
+
+{{< yaml-table data="self_managed/license_key" >}}
 
 ## A. Authenticate with Azure
 
@@ -331,10 +337,15 @@ deploys a sample infrastructure on Azure with the following components:
          cpu_request    = "1"
          memory_request = "2Gi"
          memory_limit   = "2Gi"
+         license_key    = "<ENTER YOUR LICENSE KEY HERE>"
        }
    ]
    EOF
    ```
+
+   - **Starting in v26.0**, Self-Managed Materialize requires a license key. To
+     get your license key:
+     {{% yaml-table data="self_managed/license_key" %}}
 
    - **Starting in v0.3.0**, the Materialize on Azure Terraform module also
      deploys, by default, a self-signed `ClusterIssuer`. The `ClusterIssuer` is

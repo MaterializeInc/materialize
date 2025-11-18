@@ -1,0 +1,49 @@
+columns:
+  - column: "Parameter"
+  - column: "Description"
+rows:
+  - "Parameter": "**IF NOT EXISTS**"
+    "Description": |
+      *Optional.* If specified, do not throw an error if the table with the same
+      name already exists. Instead, issue a notice and skip the table creation.
+
+      {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+  - "Parameter": "`<table_name>`"
+    "Description": |
+
+      The name of the table to create. Names for tables must follow the [naming
+      guidelines](/sql/identifiers/#naming-restrictions).
+
+  - "Parameter": "`<source_name>`"
+    "Description": |
+
+      The name of the [source](/sql/create-source/) associated with the
+      reference object from which to create the table.
+
+  - "Parameter": "**(REFERENCE <upstream_table>)**"
+    "Description": |
+
+      The name of the upstream table from which to create the
+      table. You can create multiple tables from the same upstream table.
+
+      To find the upstream tables available in your
+      [source](/sql/create-source/), you can use the following query,
+      substituting your source name for `<source_name>`:
+
+      <br>
+
+      ```mzsql
+      SELECT refs.*
+      FROM mz_internal.mz_source_references refs, mz_sources s
+      WHERE s.name = '<source_name>' -- substitute with your source name
+      AND refs.source_id = s.id;
+      ```
+
+  - "Parameter": "**WITH (<with_option>[,...])**"
+    "Description": |
+      The following `<with_option>`s are supported:
+
+      | Option | Description |
+      |--------|-------------|
+      | `TEXT COLUMNS (<column_name> [, ...])` |*Optional.* If specified, decode data as `text` for the listed column(s),such as for unsupported data types. See also [supported types](#supported-data-types). |
+      | `EXCLUDE COLUMNS (<column_name> [, ...])`| *Optional.* If specified,exclude the listed column(s) from the table, such as for unsupported data types. See also [supported types](#supported-data-types).|

@@ -1,5 +1,5 @@
 ---
-title: "Install on AWS"
+title: "Install on AWS (via Terraform)"
 description: ""
 aliases:
   - /self-hosted/install-on-aws/
@@ -58,6 +58,12 @@ for details.
 
 If you do not have Helm 3.2.0+, install. For details, see the [Helm
 documentation](https://helm.sh/docs/intro/install/).
+
+### License key
+
+Starting in v26.0, Self-Managed Materialize requires a license key.
+
+{{< yaml-table data="self_managed/license_key" >}}
 
 ## Set up AWS Kubernetes environment and install Materialize
 
@@ -265,7 +271,7 @@ components:
    `mz_instances.tfvars` file with the [Materialize instance
    configuration](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_materialize_instances).
 
-   For example, the following specifies the configuration for a `demo` instance.
+   For example, the following specifies the configuration for a `demo`:
 
    ```bash
    cat <<EOF > mz_instances.tfvars
@@ -278,10 +284,15 @@ components:
          cpu_request    = "1"
          memory_request = "2Gi"
          memory_limit   = "2Gi"
+         license_key    = "<ENTER YOUR LICENSE KEY HERE>"
        }
    ]
    EOF
    ```
+
+   - **Starting in v26.0**, Self-Managed Materialize requires a license key. To
+     get your license key:
+     {{% yaml-table data="self_managed/license_key" %}}
 
    - **Starting in v0.3.0**, the Materialize on AWS Terraform module also
    deploys, by default, Network Load Balancers (NLBs) for each Materialize

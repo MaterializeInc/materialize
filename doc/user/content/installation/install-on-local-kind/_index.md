@@ -1,8 +1,9 @@
 ---
-title: "Install locally on kind"
+title: "Install locally on kind (via Helm)"
 description: "Deploy Self-managed Materialize to a local kind cluster."
 aliases:
   - /self-hosted/install-on-local-kind/
+  - /installation/install-on-local-minikube/
 menu:
   main:
     parent: "installation"
@@ -59,6 +60,12 @@ documentationq](https://kubernetes.io/docs/tasks/tools/).
 For help with `kubectl` commands, see [kubectl Quick
 reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
 
+### License key
+
+Starting in v26.0, Self-Managed Materialize requires a license key.
+
+{{< yaml-table data="self_managed/license_key" >}}
+
 ## Installation
 
 1. Start Docker if it is not already running.
@@ -103,6 +110,29 @@ reference](https://kubernetes.io/docs/reference/kubectl/quick-reference/).
    the Materialize repo:
 
    {{% self-managed/versions/curl-sample-files-local-install %}}
+
+1. Add your license key:
+
+   a. To get your license key:
+
+      {{% yaml-table data="self_managed/license_key" %}}
+
+   b. Edit `sample-materialize.yaml` to add your license key to the
+   `license_key` field in the backend secret.
+
+   ```yaml {hl_lines="10"}
+   ---
+   apiVersion: v1
+   kind: Secret
+   metadata:
+   name: materialize-backend
+   namespace: materialize-environment
+   stringData:
+   metadata_backend_url: "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+   persist_backend_url: "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+   license_key: "<enter your license key here>"
+   ---
+   ```
 
 1. Install the Materialize Helm chart.
 

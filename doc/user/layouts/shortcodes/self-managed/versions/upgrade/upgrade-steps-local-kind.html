@@ -18,9 +18,9 @@
 1. Get the sample configuration files for the new version.
 
    ```shell
-   mz_operator_version=self-managed-{{ $operator_version }}
+   mz_version={{ $environmentd_version }}
 
-   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_operator_version/misc/helm-charts/operator/values.yaml
+   curl -o upgrade-values.yaml https://raw.githubusercontent.com/MaterializeInc/materialize/refs/tags/$mz_version/misc/helm-charts/operator/values.yaml
    ```
 
    If you have previously modified the `sample-values.yaml` file for your
@@ -50,11 +50,22 @@
    kubectl -n materialize describe pod -l app.kubernetes.io/name=materialize-operator
    ```
 
+1. As of v26.0, Self-Managed Materialize requires a license key. If your
+deployment has not been configured with a license key:
+
+   a. Contact [Materialize support](https://materialize.com/docs/support/).
+
+   b. Once you have your license key, run the following command to add it to the `materialize-backend` secret:
+
+      ```bash
+      kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
+      ```
+
 1. Create a new `upgrade-materialize.yaml` file with the following content:
 
    | Field | Description |
    |-------|-------------|
-   | `environmentdImageRef` | Update the version to the new version. |
+   | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
    | `requestRollout` or `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`requestRollout` triggers a rollout only if changes exist. </li><li>`forceRollout` triggers a rollout even if no changes exist.</li></ul> |
    | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
 

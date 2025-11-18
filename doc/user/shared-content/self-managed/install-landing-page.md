@@ -3,47 +3,29 @@ or on a cloud provider. Self-Managed Materialize requires:
 
 {{% self-managed/materialize-components-list %}}
 
-## Install locally
+## License key
 
-{{< multilinkbox >}}
-{{< linkbox title="Using Docker/kind" icon="materialize">}}
-[Install locally on kind](/installation/install-on-local-kind/)
-{{</ linkbox >}}
-{{< linkbox  title="Using Docker/minikube" icon="materialize">}}
-[Install locally on minikube](/installation/install-on-local-minikube/)
-{{</ linkbox >}}
-{{</ multilinkbox >}}
+Starting in v26.0, Materialize requires a license key.
 
-## Install on cloud provider
+{{< yaml-table data="self_managed/license_key" >}}
 
-{{< multilinkbox >}}
+## Install
 
-{{< linkbox title="Install on AWS" icon="materialize">}}
+### Installation guides
 
-[Deploy Materialize to AWS Elastic Kubernetes Service (EKS)](/installation/install-on-aws/)
+The following installation guides are available:
 
-{{</ linkbox >}}
-
-{{< linkbox title="Install on Azure" icon="materialize">}}
-
-[Deploy Materialize to Azure Kubernetes Service (AKS)](/installation/install-on-azure/)
-
-{{</ linkbox >}}
-
-{{< linkbox icon="materialize" title="Install on GCP" >}}
-
-[Deploy Materialize to Google Kubernetes Engine (GKE)](/installation/install-on-gcp/)
-{{</ linkbox >}}
-
-{{</ multilinkbox >}}
+|               | Notes  |
+| ------------- | -------|
+| [Install locally on kind](/installation/install-on-local-kind/) |
+| [Deploy Materialize to AWS Elastic Kubernetes Service (EKS)](/installation/install-on-aws/) | Uses Materialize provided Terraform |
+| [Deploy Materialize to Azure Kubernetes Service (AKS)](/installation/install-on-azure/) | Uses Materialize provided Terraform |
+| [Deploy Materialize to Google Kubernetes Engine (GKE)](/installation/install-on-gcp/) | Uses Materialize provided Terraform |
 
 See also:
-
 - [AWS Deployment
   guidelines](/installation/install-on-aws/appendix-deployment-guidelines/#recommended-instance-types)
-
 - [GCP Deployment
   guidelines](/installation/install-on-gcp/appendix-deployment-guidelines/#recommended-instance-types)
-
 - [Azure Deployment
   guidelines](/installation/install-on-azure/appendix-deployment-guidelines/#recommended-instance-types)
