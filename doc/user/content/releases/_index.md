@@ -12,6 +12,8 @@ menu:
 
 ## Self-Managed v26.0.0
 
+*Released: 2025-11-18*
+
 ### Swap support
 
 Starting in v26.0.0, Self-Managed Materialize enables swap by default. Swap
