@@ -731,7 +731,7 @@ def validate_cluster_replica_size(
         assert size["swap_enabled"]
     elif storage_class_name_set:
         assert size["disk_limit"] != "0"
-        assert "swap_enabled" not in size
+        assert not size["swap_enabled"]
     else:
         assert size["disk_limit"] == "0"
 
