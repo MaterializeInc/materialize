@@ -11,11 +11,11 @@ rows:
     "Community Edition": 48 GiB
   - "Feature": "**[Support](/support/)**"
     "Enterprise Edition": |
-      [Per terms of your license](https://materialize.com/self-managed)
+      [Per terms of your license](https://materialize.com/self-managed/enterprise-license/)
     "Community Edition": |
       [Community slack or messenger app](/support/)
   - "Feature": "**License**"
     "Enterprise Edition": |
-      [Enterprise License - Contact Us](https://materialize.com/self-managed/)
+      [Enterprise License - Contact Us](https://materialize.com/self-managed/enterprise-license/)
     "Community Edition": |
       [BSL/Privacy Policy](/license/)
