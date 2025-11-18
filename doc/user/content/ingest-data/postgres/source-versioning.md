@@ -187,7 +187,10 @@ In your upstream PostgreSQL database, drop the column `B` from the table `T`:
 ALTER TABLE T DROP COLUMN B;
 ```
 
-Dropping the column B will have no effect on `v3.T`.
+Dropping the column B will have no effect on `v3.T`. However, the drop affects
+`v2.T` and `v2.matview` from our earlier examples. When the user attempts to
+read from either, Materialize will report an error that the source table schema
+has been altered.
 
 ## Optional: Swap schemas
 
