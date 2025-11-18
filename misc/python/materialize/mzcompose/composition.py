@@ -21,6 +21,7 @@ import importlib
 import importlib.abc
 import importlib.util
 import inspect
+import io
 import json
 import os
 import re
@@ -361,8 +362,8 @@ class Composition:
         ]
 
         for retry in range(1, max_tries + 1):
-            stdout_result = ""
-            stderr_result = ""
+            stdout_result = io.StringIO()
+            stderr_result = io.StringIO()
             file.seek(0)
             try:
                 if capture_and_print:
@@ -391,19 +392,21 @@ class Composition:
                     while running:
                         running = False
                         for key, val in sel.select():
-                            output = ""
+                            output = io.StringIO()
                             while True:
                                 new_output = key.fileobj.read(1024)  # type: ignore
                                 if not new_output:
                                     break
-                                output += new_output
-                            if not output:
+                                output.write(new_output)
+                            contents = output.getvalue()
+                            output.close()
+                            if not contents:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
                             if key.fileobj is p.stdout:
                                 if print_prefix:
-                                    for line in output.splitlines(keepends=True):
+                                    for line in contents.splitlines(keepends=True):
                                         print(
                                             f"{print_prefix}{line}",
                                             end="",
@@ -411,14 +414,14 @@ class Composition:
                                         )
                                 else:
                                     print(
-                                        output,
+                                        contents,
                                         end="",
                                         flush=True,
                                     )
-                                stdout_result += output
+                                stdout_result.write(contents)
                             else:
                                 if print_prefix:
-                                    for line in output.splitlines(keepends=True):
+                                    for line in contents.splitlines(keepends=True):
                                         print(
                                             f"{print_prefix}{line}",
                                             end="",
@@ -427,21 +430,28 @@ class Composition:
                                         )
                                 else:
                                     print(
-                                        output,
+                                        contents,
                                         end="",
                                         file=sys.stderr,
                                         flush=True,
                                     )
-                                stderr_result += output
+                                stderr_result.write(contents)
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
+                    stdout_contents = stdout_result.getvalue()
+                    stdout_result.close()
+                    stderr_contents = stderr_result.getvalue()
+                    stderr_result.close()
                     if check and retcode:
                         raise subprocess.CalledProcessError(
-                            retcode, p.args, output=stdout_result, stderr=stderr_result
+                            retcode,
+                            p.args,
+                            output=stdout_contents,
+                            stderr=stderr_contents,
                         )
                     return subprocess.CompletedProcess(
-                        p.args, retcode, stdout_result, stderr_result
+                        p.args, retcode, stdout_contents, stderr_contents
                     )
                 else:
                     return subprocess.run(
