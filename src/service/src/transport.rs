@@ -26,7 +26,7 @@ use std::convert::Infallible;
 use std::fmt::Debug;
 use std::time::Duration;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use async_trait::async_trait;
 use bincode::Options;
 use futures::future;
@@ -403,38 +403,6 @@ impl<Out: Message, In: Message> Connection<Out, In> {
                     break;
                 }
             };
-        }
-    }
-}
-
-/// A connection handler that simply forwards messages over channels.
-#[derive(Debug)]
-pub struct ChannelHandler<In, Out> {
-    tx: mpsc::UnboundedSender<In>,
-    rx: mpsc::UnboundedReceiver<Out>,
-}
-
-impl<In, Out> ChannelHandler<In, Out> {
-    pub fn new(tx: mpsc::UnboundedSender<In>, rx: mpsc::UnboundedReceiver<Out>) -> Self {
-        Self { tx, rx }
-    }
-}
-
-#[async_trait]
-impl<In: Message, Out: Message> GenericClient<In, Out> for ChannelHandler<In, Out> {
-    async fn send(&mut self, cmd: In) -> anyhow::Result<()> {
-        let result = self.tx.send(cmd);
-        result.map_err(|_| anyhow!("client channel disconnected"))
-    }
-
-    /// # Cancel safety
-    ///
-    /// This method is cancel safe.
-    async fn recv(&mut self) -> anyhow::Result<Option<Out>> {
-        // `mpsc::UnboundedReceiver::recv` is cancel safe.
-        match self.rx.recv().await {
-            Some(resp) => Ok(Some(resp)),
-            None => bail!("client channel disconnected"),
         }
     }
 }
