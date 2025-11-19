@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-regex match=((\d+)\sbytes|u(\d+)|(\d+:\d+:\d+.\d+)) replacement=<XXX>
+$ set-regex match=((\d+)\sbytes|u(\d+)|s(\d+)|(\d+:\d+:\d+.\d+)) replacement=<XXX>
 
 # In case the environment has other replicas
 > SET cluster_replica = r1
@@ -58,3 +58,13 @@ operator                      total_memory   total_records
 object                      global_id    total_elapsed
 ------------------------------------------------------
 materialize.blue.t_idx      <XXX>        <XXX>
+
+# ensure we can explain mz_internal objects
+
+> SET CLUSTER = mz_catalog_server;
+
+> EXPLAIN ANALYZE CPU FOR INDEX mz_internal.mz_console_cluster_utilization_overview_ind;
+operator                     total_elapsed
+-----------------------------------------
+"Arrange (#17{cluster_id})"  <XXX>
+"  Stream <XXX>"             <null>
