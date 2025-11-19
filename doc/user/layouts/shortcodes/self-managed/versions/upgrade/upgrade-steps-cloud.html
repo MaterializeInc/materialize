@@ -81,13 +81,13 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
    | `create_database`  | Set to `false`. |
    | `environmentd_version`  | New Materialize instance version. This should be the same as the operator version: `{{ $operator_version }}`.|
    | `request_rollout`  or `force_rollout` | A new UUID string.  Can be generated with `uuidgen`.<br> <ul><li>`request_rollout` triggers a rollout only if changes exist. </li><li>`force_rollout`  triggers a rollout even if no changes exist.</li></ul> |
-   | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
    | `license_key` | Required. Set to the value of your license key. If your existing deployment does not have a license key, contact [Materialize support](https://materialize.com/docs/support/). If you have a license key, substitute your license key for `<ENTER YOUR LICENSE KEY HERE>`. |
+   | `rolloutStrategy` | The mechanism to use when rolling out the new version. <br><ul><li>`WaitUntilReady` (*Default*): New instances are created and all dataflows are determined to be ready before cutover and terminating the old version, temporarily requiring twice the resources during the transition.</li><li>`ImmediatelyPromoteCausingDowntime`: Tear down the old generation of pods and promote the new generation of pods immediately. This causes downtime equal to the duration it takes for dataflows to hydrate, but does not require additional resources.</li></ul> |
+   | `inPlaceRollout` | Deprecated and ignored. Use `rolloutStrategy` instead. |
 
    For example, the following instance specifies:
 
    - a `create_database` of `false`,
-   - an `inPlaceRollout` of `false`,
    - an `environmentd_version` of `"{{ $environmentd_version }}"`,
    - a `request_rollout` of `"22222222-2222-2222-2222-222222222222"`, and
    - a `license_key` (substituting your license key for `<ENTER YOUR LICENSE KEY HERE>`).
@@ -104,19 +104,10 @@ site.Data.self_managed.latest_versions.operator_helm_chart_version }}
          create_database = false
          license_key    = "<ENTER YOUR LICENSE KEY HERE>"        # Required.
          environmentd_version = "{{ $environmentd_version }}"
-         inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
          requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
        }
    ]
    ```
-
-   <div class="warning">
-      <strong class="gutter">WARNING!</strong> Please consult the Materialize team before setting inPlaceRollout to true and performing an in-place rollout. In almost all cases a rolling upgrade is preferred.
-   </div>
-
-
-
-
 
 1. Run `terraform plan` with both the `terraform.tfvars` and your
    `mz_instances.tfvars` files and review the changes to be made.
