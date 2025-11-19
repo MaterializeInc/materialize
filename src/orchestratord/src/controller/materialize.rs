@@ -655,6 +655,14 @@ impl k8s_controller::Context for Context {
                         Ok(Some(action))
                     }
                     Ok(None) => {
+                        if mz.spec.rollout_strategy == MaterializeRolloutStrategy::ManuallyPromote
+                            && !mz.should_force_promote()
+                        {
+                            trace!(
+                                "Ready to promote, but not promoting because the instance is configured with ManuallyPromote rollout strategy."
+                            );
+                            return Ok(None);
+                        }
                         // do this last, so that we keep traffic pointing at
                         // the previous environmentd until the new one is
                         // fully ready
