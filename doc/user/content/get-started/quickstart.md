@@ -55,7 +55,7 @@ Emulator does not provide the full experience of using Materialize.
 
 - You can run against your [Self-managed Materialize].
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
+[Self-managed Materialize]: https://materialize.com/docs/installation/
 
 ## Step 0. Open the SQL Shell
 

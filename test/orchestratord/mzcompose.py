@@ -133,7 +133,7 @@ def retry(fn: Callable, timeout: int) -> None:
 
 
 # TODO: Cover src/cloud-resources/src/crd/materialize.rs
-# TODO: Cover https://materialize.com/docs/self-managed/v25.2/installation/configuration/
+# TODO: Cover https://materialize.com/docs/installation/configuration/
 
 
 class Modification:
@@ -1218,7 +1218,7 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     current_version = get_tag(args.tag)
 
-    # Following https://materialize.com/docs/self-managed/v25.2/installation/install-on-local-kind/
+    # Following https://materialize.com/docs/installation/install-on-local-kind/
     for version in reversed(get_self_managed_versions() + [current_version]):
         dir = "my-local-mz"
         if os.path.exists(dir):

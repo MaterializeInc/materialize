@@ -101,7 +101,7 @@ not suitable for full feature set evaluations or production workloads.
   The full experience of Materialize is also available as a self-managed
   offering. See [Self-managed Materialize].
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
+[Self-managed Materialize]: https://materialize.com/docs/installation/
 
 ### Technical Support
 

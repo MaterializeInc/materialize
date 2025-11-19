@@ -350,10 +350,10 @@ pub struct Args {
     )]
     metadata_backend_url: Option<SensitiveUrl>,
 
-    /// Helm chart version for self-hosted Materialize. This version does not correspond to the
-    /// Materialize (core) version (v0.125.0), but is time-based for our twice-a-year helm chart
-    /// releases: v25.1.Z, v25.2.Z in 2025, then v26.1.Z, v26.2.Z in 2026, and so on. This version
-    /// is displayed in addition in `SELECT mz_version()` if set.
+    /// Helm chart version for self-hosted Materialize. This version is supposed to correspond to
+    /// the Materialize (core) version. This version is displayed in addition in `SELECT
+    /// mz_version()` if set and if it differs from the Materialize (core) version (which it should
+    /// not!).
     #[clap(long, env = "HELM_CHART_VERSION")]
     helm_chart_version: Option<String>,
 
