@@ -731,7 +731,7 @@ class AWS(State):
 
     def upgrade(self, tag: str) -> None:
         print(f"--- Upgrading to {tag}")
-        # Following https://materialize.com/docs/self-managed/v25.1/installation/install-on-aws/upgrade-on-aws/
+        # Following https://materialize.com/docs/installation/install-on-aws/upgrade-on-aws/
         self.materialize_environment = {
             "apiVersion": "materialize.cloud/v1alpha1",
             "kind": "Materialize",
