@@ -18,11 +18,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Context;
-use domain::resolv::StubResolver;
 use jsonwebtoken::DecodingKey;
 use mz_balancerd::{
-    BUILD_INFO, BalancerConfig, BalancerService, CancellationResolver, FronteggResolver, Resolver,
-    SniResolver,
+    BUILD_INFO, BalancerConfig, BalancerResolver, BalancerService, CancellationResolver,
+    FronteggResolver, SniResolver,
 };
 use mz_frontegg_auth::{
     Authenticator, AuthenticatorConfig, DEFAULT_REFRESH_DROP_FACTOR,
@@ -240,8 +239,10 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
             if !cancellation_resolver_dir.is_dir() {
                 anyhow::bail!("{cancellation_resolver_dir:?} is not a directory");
             }
+
             (
-                Resolver::MultiTenant(
+                BalancerResolver::MultiTenant(
+                    mz_balancerd::TenantDnsResolver::new(),
                     FronteggResolver {
                         auth,
                         addr_template,
@@ -260,11 +261,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
                                     )
                                 })
                                 .expect("invalid port for pgwire_sni_resolver_template");
-                            Some(SniResolver {
-                                resolver: StubResolver::new(),
-                                template,
-                                port,
-                            })
+                            Some(SniResolver { template, port })
                         }
                     },
                 ),
@@ -284,7 +281,7 @@ pub async fn run(args: ServiceArgs, tracing_handle: TracingHandle) -> Result<(),
             drop(addrs);
 
             (
-                Resolver::Static(addr.clone()),
+                BalancerResolver::Static(addr.clone()),
                 CancellationResolver::Static(addr),
             )
         }
