@@ -242,6 +242,9 @@ steps:
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
+        env:
+          # TODO(def-) Investigate test failures with GHCR, might just need to wait for more recent tags to be uploaded
+          MZ_GHCR: 0
         plugins:
           - ./ci/plugins/mzcompose:
               composition: parallel-benchmark
