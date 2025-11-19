@@ -6174,7 +6174,7 @@ pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         ("global_id", "The global ID of the object."),
     ]),
     sql: "
-SELECT (CASE WHEN md.name IS NOT NULL THEN quote_ident(md.name) || '.' ELSE '' END) || quote_ident(ms.name) || '.' || quote_ident(mo.name) AS name, mgi.global_id AS global_id
+SELECT COALESCE(quote_ident(md.name) || '.', '') || quote_ident(ms.name) || '.' || quote_ident(mo.name) AS name, mgi.global_id AS global_id
 FROM      mz_catalog.mz_objects mo
           JOIN mz_introspection.mz_compute_exports mce ON (mo.id = mce.export_id)
           JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
