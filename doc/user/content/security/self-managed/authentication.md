@@ -20,13 +20,17 @@ used:
 
 {{% yaml-table data="self_managed/authentication_setting" %}}
 
+{{< include-md file="shared-content/auth-kind-warning.md" >}}
+
+
+
 ## Configuring password authentication
 
 {{< public-preview >}}This feature{{</ public-preview >}}
 
 Password authentication requires users to log in with a password.
 
-To configure Self-Managed Materialize for password authentication, update the following fields in the [Materialize CR](/installation/appendix-materialize-crd-field-descriptions/):
+To configure Self-Managed Materialize for password authentication, update the following fields in the Materialize CR. For all Materialize CR settings, see [here](/installation/appendix-materialize-crd-field-descriptions/).
 
  Configuration | Description
 ---------------| ------------
@@ -92,7 +96,7 @@ SASL/SCRAM-SHA-256 authentication is a challenge-response authentication mechani
 that provides security for **PostgreSQL wire protocol connections**. It is
 compatible with PostgreSQL clients that support SCRAM-SHA-256.
 
-To configure Self-Managed Materialize for SASL/SCRAM authentication, update the following fields in the [Materialize CR](/installation/appendix-materialize-crd-field-descriptions/):
+To configure Self-Managed Materialize for SASL/SCRAM authentication, update the following fields in the Materialize CR. For all Materialize CR settings, see [here](/installation/appendix-materialize-crd-field-descriptions/).
 
 | Configuration | Description
 |---------------| ------------
@@ -162,10 +166,7 @@ spec:
 
 For more information on rollout configuration, view our [installation overview](/installation/#rollout-configuration).
 
-{{< warning >}}
-Ensure that the `authenticatorKind` field is set for any future version upgrades or rollouts of the Materialize CR. Having it undefined will reset `authenticationKind` to `None`.
-{{< /warning >}}
-
+{{< include-md file="shared-content/auth-kind-warning.md" >}}
 
 ## Enabling RBAC
 
