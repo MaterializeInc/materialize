@@ -15,7 +15,7 @@
 # deployed to production, but the version needs to be bumped whenever features
 # that the console depends upon are removed (to a version of the console that
 # doesn't depend on those features).
-FROM materialize/console:26.0.0-dev.2 AS console
+FROM materialize/console:26.0.0 AS console
 
 MZFROM ubuntu-base
 

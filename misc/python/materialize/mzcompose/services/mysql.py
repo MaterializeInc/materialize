@@ -32,7 +32,7 @@ def create_mysql_server_args(server_id: str, is_master: bool) -> list[str]:
 
 class MySql(Service):
     DEFAULT_ROOT_PASSWORD = "p@ssw0rd"
-    DEFAULT_VERSION = "9.4.0"
+    DEFAULT_VERSION = "9.5.0"
 
     DEFAULT_ADDITIONAL_ARGS = create_mysql_server_args(server_id="1", is_master=True)
 

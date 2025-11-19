@@ -9,7 +9,7 @@
 
 MZFROM test-certs as certs
 
-FROM postgres:17.4
+FROM postgres:17.7
 
 ENV POSTGRES_PASSWORD=postgres
 

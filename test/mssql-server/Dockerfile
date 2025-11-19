@@ -9,5 +9,4 @@
 
 # Mirrored to DockerHub
 
-# 2017 mssql images core on OSx, 2019 is the earliest that has passed
-FROM mcr.microsoft.com/mssql/server:2019-CU32-ubuntu-20.04
+FROM mcr.microsoft.com/mssql/server:2022-CU21-ubuntu-22.04
