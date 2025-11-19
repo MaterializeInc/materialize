@@ -345,8 +345,8 @@ table.inline-headings {
     flex: 1;
     position: sticky;
     top: 90px;
-    height: 100vh;
     overflow-y: auto;
+    height: 100vh;
 
     @media(max-width: 1050px) {
         display: none;
@@ -363,10 +363,10 @@ table.inline-headings {
     padding: var(--x-small) rem(2);
     position: sticky;
     top: 0;
-    height: 100vh;
     overflow-y: auto;
     font-size: var(--sm);
     padding-bottom: 8.5rem;
+    height: 100vh;
 
     &-top {
         margin-top: var(--pico);

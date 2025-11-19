@@ -908,9 +908,17 @@ p+p {
     }
 }
 
+.highlight {
+    position: relative;
+
+}
+
 .copy_button {
     display: none;
     position: absolute;
+    right: 10px;
+    top: 10px;
+
     font-size: rem(1.2);
     font-weight: 300;
     border: none;
@@ -921,8 +929,6 @@ p+p {
     cursor: pointer;
     border-radius: $border-radius;
     white-space: nowrap;
-    top: 10px;
-    right: 10px;
     line-height: 2;
     font-family: 'Inter', sans-serif;
 
@@ -1149,7 +1155,7 @@ td span.copyableCode pre:hover .copy_button {
     display: inline-block !important;
 }
 
-pre {
+.highlight {
     position: relative;
 
     &:hover {
