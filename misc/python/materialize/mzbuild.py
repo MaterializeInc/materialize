@@ -1471,6 +1471,31 @@ def publish_multiarch_images(
                 ]
             )
             spawn.runv(["docker", "manifest", "push", name])
+
+            if token := os.getenv("GITHUB_GHCR_TOKEN"):
+                spawn.runv(
+                    [
+                        "docker",
+                        "login",
+                        "ghcr.io",
+                        "-u",
+                        "materialize-bot",
+                        "--password-stdin",
+                    ],
+                    stdin=token.encode(),
+                )
+                ghcr_prefix = "ghcr.io/materializeinc"
+                ghcr_name = f"{ghcr_prefix}/{name}"
+                spawn.runv(
+                    [
+                        "docker",
+                        "manifest",
+                        "create",
+                        ghcr_name,
+                        *(f"{ghcr_prefix}/{image.spec()}" for image in images),
+                    ]
+                )
+                spawn.runv(["docker", "manifest", "push", ghcr_name])
     print(f"--- Nofifying for tag {tag}")
     markdown = f"""Pushed images with Docker tag `{tag}`"""
     spawn.runv(
