@@ -12,9 +12,9 @@ menu:
 
 As a general guideline, we recommend:
 
-- Processor Type: ARM-based CPU
-
-- Sizing: 2:1 disk-to-RAM ratio with spill-to-disk enabled.
+- ARM-based CPU
+- A 1:8 ratio of vCPU to GiB memory is recommended.
+- When using swap, it is recommended to use a 8:1 ratio of GiB local instance storage to GiB Ram.
 
 When operating on GCP in production, we recommend the following machine types
 that support local SSD attachment:
@@ -24,20 +24,16 @@ that support local SSD attachment:
 | [N2 high-memory series] | `n2-highmem-16` or `n2-highmem-32` with local NVMe SSDs |
 | [N2D  high-memory series] | `n2d-highmem-16` or `n2d-highmem-32` with local NVMe SSDs |
 
-To maintain the recommended 2:1 disk-to-RAM ratio for your machine type, see
+To maintain the recommended 8:1 disk-to-RAM ratio for your machine type, see
 [Number of local SSDs](#number-of-local-ssds) to determine the number of local
-SSDs
-([`disk_support_config.local_ssd_count`](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/README.md#input_disk_support_config))
-to use.
+SSDs to use.
 
 See also [Locally attached NVMe storage](#locally-attached-nvme-storage).
 
 ## Number of local SSDs
 
 Each local NVMe SSD in GCP provides 375GB of storage. Use the appropriate number
-of local SSDs
-([`disk_support_config.local_ssd_count`](https://github.com/MaterializeInc/terraform-google-materialize/blob/main/README.md#input_disk_support_config))
-to ensure your total disk space is at least twice the amount of RAM in your
+of local SSDs to ensure your total disk space is at least twice the amount of RAM in your
 machine type for optimal Materialize performance.
 
 {{< note >}}
@@ -65,31 +61,35 @@ type](https://cloud.google.com/compute/docs/disks/local-ssd#lssd_disk_options).
 
 [N2D high-memory series]: https://cloud.google.com/compute/docs/general-purpose-machines#n2d_machine_types
 
-[enables spill-to-disk]: https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#disk-support-for-materialize-on-gcp
 
 ## Locally-attached NVMe storage
 
-For optimal performance, Materialize requires fast, locally-attached NVMe
-storage. Having a locally-attached storage allows Materialize to spill to disk
-when operating on datasets larger than main memory as well as allows for a more
-graceful degradation rather than OOMing. Network-attached storage (like EBS
-volumes) can significantly degrade performance and is not supported.
+Configuring swap on nodes to using locally-attached NVMe storage allows
+Materialize to spill to disk when operating on datasets larger than main memory.
+This setup can provide significant cost savings and provides a more graceful
+degradation rather than OOMing. Network-attached storage (like EBS volumes) can
+significantly degrade performance and is not supported.
 
 ### Swap support
 
-Starting in v0.6.1 of Materialize on Google Cloud PRovider (GCP) Terraform,
-disk support (using swap on NVMe instance storage) may be enabled for
-Materialize. With this change, the Terraform:
+***New Unified Terraform***
 
-- Creates a node group for Materialize.
-- Configures NVMe instance store volumes as swap using a daemonset.
-- Enables swap at the Kubelet.
+The unified Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp/examples/simple) supports configuring swap out of the box.
 
-For swap support, the following configuration options are available:
+***Legacy Terraform***
 
-- [`swap_enabled`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_swap_enabled)
+The Legacy Terraform provider, adds preliminary swap support in v0.6.1, via the [`swap_enabled`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_swap_enabled) variable.
+With this change, the Terraform:
+  - Creates a node group for Materialize.
+  - Configures NVMe instance store volumes as swap using a daemonset.
+  - Enables swap at the Kubelet.
 
 See [Upgrade Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061).
+
+{{< note >}}
+If deploying `v25.2` Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26` this will be handled automatically.
+{{< /note >}}
+
 
 ## CPU affinity
 
@@ -102,15 +102,6 @@ to substantially improve the performance of compute-bound workloads.
 When running with TLS in production, run with certificates from an official
 Certificate Authority (CA) rather than self-signed certificates.
 
-## Storage bucket versioning
-
-Starting in v0.3.1 of Materialize on GCP Terraform, storage bucket versioning is
-disabled (i.e.,
-[`storage_bucket_versioning`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_storage_bucket_versioning)
-is set to `false` by default) to facilitate cleanup of resources during testing.
-When running in production, versioning should be turned on with a sufficient TTL
-([`storage_bucket_version_ttl`](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#input_storage_bucket_version_ttl))
-to meet any data-recovery requirements.
 
 ## See also
 

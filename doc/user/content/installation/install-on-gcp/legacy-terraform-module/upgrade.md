@@ -1,11 +1,13 @@
 ---
-title: "Upgrade on GCP (Terraform)"
+title: "Upgrade"
 description: "Procedure to upgrade your Materialize operator and instances running on GCP"
 menu:
   main:
-    parent: "install-on-gcp"
-    identifier: "upgrade-on-gcp"
+    parent: "install-on-gcp-legacy-terraform-module"
+    identifier: "legacy-terraform-module-upgrade"
     weight: 10
+aliases:
+  - /installation/install-on-gcp/upgrade-on-gcp
 ---
 
 {{< annotation type="Disambiguation" >}}
