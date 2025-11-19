@@ -30,7 +30,6 @@ rows:
       - `roles/{namespace}/*.yaml`
       - `rolebinding/{namespace}/*.yaml`
       - `configmaps/{namespace}/*.yaml`
-      - `secrets/{namespace}/*.yaml`
       - `serviceaccounts/{namespace}/*.yaml`
 
   - "Resource Type": "Cluster-level"
