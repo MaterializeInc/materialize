@@ -44,7 +44,8 @@ INSERT INTO T (A) VALUES
 
 ### Connect your source database to Materialize
 
-{{< include-md file="shared-content/postgres-source-prereq.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-source-prereq" %}}
 
 ## Create a source using the new syntax
 

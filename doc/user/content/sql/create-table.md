@@ -94,9 +94,9 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Supported data types
 
-{{< include-md file="shared-content/postgres-supported-types.md" >}}
+{{% include-from-yaml data="postgres_source_details" name="postgres-supported-types" %}}
 
-{{< include-md file="shared-content/postgres-unsupported-types.md" >}}
+{{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
 
 ### Handling table schema changes
 
@@ -118,11 +118,13 @@ updated schema from the corresponding upstream table.
 
 ### Upstream table truncation restrictions
 
-{{< include-md file="shared-content/postgres-truncation-restriction.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-truncation-restriction" %}}
 
 ### Inherited tables
 
-{{< include-md file="shared-content/postgres-inherited-tables.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables" %}}
 
 ## Privileges
 

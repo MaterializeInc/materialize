@@ -144,9 +144,8 @@ same source across multiple materializations.
 
 {{< tip >}}
 
-- {{< include-md file="shared-content/postgres-wal.md" >}}
-
-{{< include-md file="shared-content/postgres-remove-unused-replication-slots.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-replication-slots-tip-list" %}}
 
 {{</ tip >}}
 
