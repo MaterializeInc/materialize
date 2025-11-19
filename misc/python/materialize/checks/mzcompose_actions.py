@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from materialize import MZ_ROOT
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
+from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
@@ -67,7 +68,11 @@ class StartMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
+        image = (
+            f"{image_registry()}/materialized:{self.tag}"
+            if self.tag is not None
+            else None
+        )
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
 
         listeners_config_path = (

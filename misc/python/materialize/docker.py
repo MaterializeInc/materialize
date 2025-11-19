@@ -43,8 +43,29 @@ def image_of_commit_exists(commit_hash: str) -> bool:
     return mz_image_tag_exists(commit_to_image_tag(commit_hash))
 
 
+def mz_image_tag_exists_cmdline(image_name: str) -> bool:
+    command = [
+        "docker",
+        "manifest",
+        "inspect",
+        image_name,
+    ]
+    try:
+        subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
+        EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
+        return True
+    except subprocess.CalledProcessError as e:
+        if "no such manifest:" in e.output:
+            print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
+            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
+        else:
+            print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
+            # do not cache the result of unknown error messages
+        return False
+
+
 def mz_image_tag_exists(image_tag: str) -> bool:
-    image_name = f"materialize/materialized:{image_tag}"
+    image_name = f"{image_registry()}/materialized:{image_tag}"
 
     if image_name in EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK:
         image_exists = EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name]
@@ -67,30 +88,16 @@ def mz_image_tag_exists(image_tag: str) -> bool:
     # when the image doesn't exist, see https://www.docker.com/increase-rate-limits/,
     # so use the API instead.
 
+    if image_registry() != "materialize":
+        return mz_image_tag_exists_cmdline(image_name)
+
     try:
         response = requests.get(
             f"https://hub.docker.com/v2/repositories/materialize/materialized/tags/{image_tag}"
         )
         result = response.json()
     except (requests.exceptions.ConnectionError, requests.exceptions.JSONDecodeError):
-        command = [
-            "docker",
-            "manifest",
-            "inspect",
-            image_name,
-        ]
-        try:
-            subprocess.check_output(command, stderr=subprocess.STDOUT, text=True)
-            EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
-            return True
-        except subprocess.CalledProcessError as e:
-            if "no such manifest:" in e.output:
-                print(f"Failed to fetch image manifest '{image_name}' (does not exist)")
-                EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
-            else:
-                print(f"Failed to fetch image manifest '{image_name}' ({e.output})")
-                # do not cache the result of unknown error messages
-            return False
+        return mz_image_tag_exists_cmdline(image_name)
 
     if result.get("images"):
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = True
@@ -198,3 +205,11 @@ def _select_image_name_from_candidates(
         )
 
     return image_name_candidates[0]
+
+
+def image_registry() -> str:
+    return (
+        "ghcr.io/materializeinc/materialize"
+        if ui.env_is_truthy("MZ_GHCR", "1")
+        else "materialize"
+    )

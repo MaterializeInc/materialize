@@ -24,19 +24,13 @@ from uuid import uuid4
 import yaml
 
 from materialize import MZ_ROOT, ui
-from materialize.docker import MZ_GHCR_DEFAULT
+from materialize.docker import image_registry
 
 DEV_IMAGE_TAG = "local-dev"
 DEFAULT_POSTGRES = (
     "postgres://root@postgres.materialize.svc.cluster.local:5432/materialize"
 )
 DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
-
-IMAGE_REGISTRY = (
-    "ghcr.io/materializeinc/materialize"
-    if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
-    else "materialize"
-)
 
 
 def main():
@@ -120,7 +114,7 @@ def run(args: argparse.Namespace):
         "misc/helm-charts/operator",
         "--atomic",
         f"--set=operator.image.tag={DEV_IMAGE_TAG}",
-        f"--set=operator.image.repository={IMAGE_REGISTRY}/orchestratord",
+        f"--set=operator.image.repository={image_registry()}/orchestratord",
         "--create-namespace",
         f"--namespace={args.namespace}",
     ]
@@ -198,7 +192,7 @@ def environment(args: argparse.Namespace):
                 cluster=args.kind_cluster_name,
             )
         image_tag = DEV_IMAGE_TAG
-    environmentd_image_ref = f"{IMAGE_REGISTRY}/environmentd:{image_tag}"
+    environmentd_image_ref = f"{image_registry()}/environmentd:{image_tag}"
 
     try:
         kubectl(
@@ -445,14 +439,14 @@ def acquire(image: str, dev: bool, cluster: str):
         [
             "docker",
             "tag",
-            f"{IMAGE_REGISTRY}/{image}:mzbuild-{fingerprint}",
-            f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
+            f"{image_registry()}/{image}:mzbuild-{fingerprint}",
+            f"{image_registry()}/{image}:{DEV_IMAGE_TAG}",
         ]
     )
     kind(
         "load",
         "docker-image",
-        f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
+        f"{image_registry()}/{image}:{DEV_IMAGE_TAG}",
         cluster=cluster,
     )
 

@@ -45,6 +45,7 @@ import yaml
 from psycopg import Connection, Cursor
 
 from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
+from materialize.docker import image_registry
 from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import (
@@ -1124,7 +1125,7 @@ class Composition:
             self.kill("materialized")
             with self.override(
                 Materialized(
-                    image=f"materialize/materialized:{version}",
+                    image=f"{image_registry()}/materialized:{version}",
                     environment_extra=["MZ_DEPLOY_GENERATION=1"],
                     healthcheck=LEADER_STATUS_HEALTHCHECK,
                 )
