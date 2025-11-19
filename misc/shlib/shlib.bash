@@ -243,6 +243,7 @@ trufflehog_jq_filter_common() {
   jq -c '
     select(
       (.Raw | contains("user1:password") | not) and
+      (.Raw | contains("infra+nightly-canary@materialize.com:XXX") | not) and
       .Raw != "postgres://mz_system:materialize@materialized:5432" and
       .Raw != "postgres://materialize:materialize@materialized:6875" and
       .Raw != "postgres://mz_system:materialize@materialized:6877" and

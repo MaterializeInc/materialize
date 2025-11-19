@@ -26,6 +26,7 @@ from materialize.test_analytics.data.build_annotation.build_annotation_storage i
     BuildAnnotationStorage,
 )
 from materialize.test_analytics.data.cluster_spec_sheet.cluster_spec_sheet_result_storage import (
+    ClusterSpecSheetEnvironmentdResultStorage,
     ClusterSpecSheetResultStorage,
 )
 from materialize.test_analytics.data.feature_benchmark.feature_benchmark_result_storage import (
@@ -78,6 +79,9 @@ class TestAnalyticsDb:
         )
         self.cluster_spec_sheet_results = ClusterSpecSheetResultStorage(
             self.database_connector
+        )
+        self.cluster_spec_sheet_environmentd_results = (
+            ClusterSpecSheetEnvironmentdResultStorage(self.database_connector)
         )
 
     def _create_database_connector(self, config: MzDbConfig) -> DatabaseConnector:

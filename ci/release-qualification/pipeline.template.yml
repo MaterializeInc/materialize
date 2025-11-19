@@ -530,16 +530,33 @@ steps:
         agents:
           queue: hetzner-x86-64-dedi-48cpu-192gb # 1 TB disk
 
-  - id: cluster-spec-sheet
-    label: Cluster spec sheet
-    depends_on: build-aarch64
-    timeout_in_minutes: 3600
-    concurrency: 1
-    concurrency_group: 'cluster-spec-sheet'
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster-spec-sheet
-          run: default
-          args: [--cleanup]
-    agents:
-      queue: linux-aarch64-small
+  - group: Cluster spec sheet
+    key: cluster-spec-sheet
+    steps:
+      - id: cluster-spec-sheet-cluster
+        label: "Cluster spec sheet: Cluster (against Production)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cluster-spec-sheet'
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster-spec-sheet
+              run: default
+              args: [--cleanup, --target=cloud-production, cluster]
+        agents:
+          queue: linux-aarch64-small
+
+      - id: cluster-spec-sheet-environmentd
+        label: "Cluster spec sheet: Environmentd (against Staging)"
+        depends_on: build-aarch64
+        timeout_in_minutes: 3600
+        concurrency: 1
+        concurrency_group: 'cluster-spec-sheet-cluster'
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: cluster-spec-sheet
+              run: default
+              args: [--cleanup, --target=cloud-staging, environmentd]
+        agents:
+          queue: linux-aarch64-small
