@@ -637,6 +637,7 @@ impl TryFrom<CatalogItemId> for SystemCatalogItemId {
             CatalogItemId::IntrospectionSourceIndex(_) => Err("introspection_source_index"),
             CatalogItemId::User(_) => Err("user"),
             CatalogItemId::Transient(_) => Err("transient"),
+            CatalogItemId::Explain => Err("explain"),
         }
     }
 }
@@ -662,6 +663,7 @@ impl TryFrom<CatalogItemId> for IntrospectionSourceIndexCatalogItemId {
             }
             CatalogItemId::User(_) => Err("user"),
             CatalogItemId::Transient(_) => Err("transient"),
+            CatalogItemId::Explain => Err("explain"),
         }
     }
 }
