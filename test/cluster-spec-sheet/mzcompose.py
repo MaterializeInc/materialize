@@ -2326,8 +2326,8 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
 
         if args.analyze:
             # Analyze both files separately (each has its own schema)
-            analyze_results_file(cluster_path)
-            analyze_results_file(envd_path)
+            analyze_cluster_results_file(cluster_path)
+            analyze_envd_results_file(envd_path)
 
 
 class BenchTarget:
@@ -2666,13 +2666,51 @@ def run_scenario_weak(
         scenario.run(runner)
 
 
+def workflow_plot_cluster(
+    composition: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Analyze cluster-focused results."""
+
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default="results_*.cluster.csv",
+        type=str,
+        help="Glob pattern of cluster result files to plot.",
+    )
+
+    args = parser.parse_args()
+
+    for file in itertools.chain(*map(glob.iglob, args.files)):
+        analyze_cluster_results_file(str(file))
+
+
+def workflow_plot_envd(
+    composition: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Analyze environmentd-focused results."""
+
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default="results_*.envd.csv",
+        type=str,
+        help="Glob pattern of envd result files to plot.",
+    )
+
+    args = parser.parse_args()
+
+    for file in itertools.chain(*map(glob.iglob, args.files)):
+        analyze_envd_results_file(str(file))
+
+
 def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> None:
     """Analyze the results of the workflow."""
 
     parser.add_argument(
         "files",
         nargs="*",
-        default="results_*.csv",
+        default=["results_*.cluster.csv", "results_*.envd.csv"],
         type=str,
         help="Glob pattern of result files to plot.",
     )
@@ -2680,26 +2718,21 @@ def workflow_plot(composition: Composition, parser: WorkflowArgumentParser) -> N
     args = parser.parse_args()
 
     for file in itertools.chain(*map(glob.iglob, args.files)):
-        analyze_results_file(str(file))
-
-
-def analyze_results_file(file: str):
-    print(f"--- Analyzing file {file} ...")
-
-    base_name = os.path.basename(file)
-    if base_name.endswith(".cluster.csv"):
-        analyze_cluster_results_file(file)
-    elif base_name.endswith(".envd.csv"):
-        analyze_envd_results_file(file)
-    else:
-        # Backward compatibility: fall back to cluster analyzer for legacy filenames
-        print(
-            f"Warning: Legacy analyzer fallback: treating {file} as cluster results (no .cluster/.envd suffix)"
-        )
-        analyze_cluster_results_file(file)
+        file_str = str(file)
+        base_name = os.path.basename(file_str)
+        if base_name.endswith(".cluster.csv"):
+            analyze_cluster_results_file(file_str)
+        elif base_name.endswith(".envd.csv"):
+            analyze_envd_results_file(file_str)
+        else:
+            raise UIError(
+                f"Error: Filename '{file_str}' doesn't indicate whether it's a cluster or an envd results file (no .cluster/.envd suffix). Please use the explicit `plot-envd` or `plot-cluster` targets for such files."
+            )
 
 
 def analyze_cluster_results_file(file: str) -> None:
+    print(f"--- Analyzing cluster results file {file} ...")
+
     def extract_cluster_size(s: str) -> float:
         match = re.search(r"(\d+)(?:(cc)|(C))", s)
         if match:
@@ -2783,6 +2816,7 @@ def analyze_cluster_results_file(file: str) -> None:
 
 
 def analyze_envd_results_file(file: str) -> None:
+    print(f"--- Analyzing envd results file {file} ...")
     df = pd.read_csv(file)
     if df.empty:
         print(f"^^^ +++ File {file} is empty, skipping")
