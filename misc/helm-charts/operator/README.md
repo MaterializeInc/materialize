@@ -406,12 +406,6 @@ Materialize has been vetted to work on instances with the following properties:
 When operating in AWS, we recommend using the `r7gd` and `r6gd` families of instances (and `r8gd` once available)
 when running with local disk, and the `r8g`, `r7g`, and `r6g` families when running without local disk.
 
-## CPU Affinity
-
-It is strongly recommended to enable the Kubernetes `static` [CPU management policy](https://kubernetes.io/docs/tasks/administer-cluster/cpu-management-policies/#static-policy).
-This ensures that each worker thread of Materialize is given exclusively access to a vCPU. Our benchmarks have shown this
-to substantially improve the performance of compute-bound workloads.
-
 ## Learn More
 
 - [Materialize Documentation](https://materialize.com/docs)

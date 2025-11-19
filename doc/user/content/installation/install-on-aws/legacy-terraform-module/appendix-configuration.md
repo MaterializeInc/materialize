@@ -3,7 +3,7 @@ title: "Appendix: Required configuration"
 description: "Required configuration for Materialize on AWS Terraform."
 menu:
   main:
-    parent: "install-on-aws"
+    parent: "install-on-aws-legacy-terraform-module"
     identifier: "appendix-aws-provider-config"
     weight: 50
 aliases:
@@ -60,3 +60,19 @@ provider "helm" {
   }
 }
 ```
+
+## Swap support
+
+Starting in v0.6.1 of Materialize on AWS Terraform,
+disk support (using swap on NVMe instance storage) may be enabled for
+Materialize. With this change, the Terraform:
+
+- Creates a node group for Materialize.
+- Configures NVMe instance store volumes as swap using a daemonset.
+- Enables swap at the Kubelet.
+
+For swap support, the following configuration option is available:
+
+- [`swap_enabled`](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_swap_enabled)
+
+See [Upgrade Notes](https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#v061).
