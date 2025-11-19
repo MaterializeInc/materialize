@@ -888,7 +888,7 @@ mod tests {
 
         // Record the walltime and execution time of an async sleep.
         let async_sleep_future = async {
-            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         };
         runtime.block_on(
             async_sleep_future
