@@ -5143,7 +5143,7 @@ impl Coordinator {
 
         self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
             Box::pin(async move {
-                let entry = coord.catalog().get_entry(&relation_id);
+                let entry = coord.catalog().get_entry(&new_global_id);
                 let CatalogItem::Table(table) = &entry.item else {
                     panic!("programming error, expected table found {:?}", entry.item);
                 };
