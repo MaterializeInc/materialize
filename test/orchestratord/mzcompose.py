@@ -73,6 +73,42 @@ def get_image(image: str, tag: str | None) -> str:
     return f'{image.rsplit(":", 1)[0]}:{get_tag(tag)}'
 
 
+def get_upgrade_target(
+    rng: random.Random, current_version: MzVersion, versions: list[MzVersion]
+) -> MzVersion:
+    for version in rng.sample(versions, k=len(versions)):
+        if version <= current_version:
+            continue
+        if (
+            current_version.major == 0
+            and current_version.minor == 130
+            and version.major == 0
+            and version.minor == 147
+        ):
+            return version
+        if (
+            current_version.major == 0
+            and current_version.minor == 147
+            and current_version.patch < 20
+            and version.major == 0
+            and version.minor == 147
+        ):
+            return version
+        if (
+            current_version.major == 0
+            and current_version.minor == 147
+            and current_version.patch >= 20
+            and version.major == 26
+            and version.minor == 0
+        ):
+            return version
+        if current_version.major >= 26 and current_version.major + 1 <= version.major:
+            return version
+    raise ValueError(
+        f"No potential upgrade target for {current_version} found in {versions}"
+    )
+
+
 def get_pod_data(
     labels: dict[str, str], namespace="materialize-environment"
 ) -> dict[str, Any]:
@@ -1219,7 +1255,7 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
     current_version = get_tag(args.tag)
 
     # Following https://materialize.com/docs/installation/install-on-local-kind/
-    for version in reversed(get_self_managed_versions() + [current_version]):
+    for version in reversed(get_self_managed_versions() + [get_version(args.tag)]):
         dir = "my-local-mz"
         if os.path.exists(dir):
             shutil.rmtree(dir)
@@ -1295,7 +1331,7 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "--namespace=materialize",
                 "--create-namespace",
                 "--version",
-                "v25.3.0",
+                "v26.0.0",
                 "--set",
                 "observability.podMetrics.enabled=true",
                 "-f",
@@ -1356,10 +1392,14 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
             materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
         assert len(materialize_setup) == 3
 
+        print(version)
+        print(current_version)
+        print(version == current_version)
         if version == current_version:
             materialize_setup[2]["spec"][
                 "environmentdImageRef"
             ] = f"materialize/environmentd:{version}"
+        if version >= MzVersion.parse_mz("v26.0.0"):
             # Self-managed v25.1/2 don't require a license key yet
             materialize_setup[1]["stringData"]["license_key"] = os.environ[
                 "MZ_CI_LICENSE_KEY"
@@ -1627,8 +1667,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ).timestamp()
             versions = get_all_self_managed_versions()
             while time.time() < end_time:
-                selected_versions = sorted(list(rng.sample(versions, 2)))
-                current_version = selected_versions[0]
+                current_version = rng.choice(versions[:-1])
+                selected_versions = [
+                    current_version,
+                    get_upgrade_target(rng, current_version, versions),
+                ]
                 try:
                     mod = next(mods_it)
                 except StopIteration:
@@ -1649,9 +1692,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
             ).timestamp()
             versions = get_all_self_managed_versions()
             while time.time() < end_time:
-                random.randint(2, len(versions))
-                selected_versions = sorted(list(rng.sample(versions, 2)))
-                current_version = selected_versions[0]
+                current_version = rng.choice(versions)
+                selected_versions = [current_version]
+                next_version = current_version
+                try:
+                    for i in range(len(versions)):
+                        next_version = get_upgrade_target(rng, next_version, versions)
+                        selected_versions.append(next_version)
+                except ValueError:
+                    # We can't upgrade any further, just run the test as far as it goes now
+                    pass
                 try:
                     mod = next(mods_it)
                 except StopIteration:
@@ -1807,7 +1857,7 @@ def init(definition: dict[str, Any]) -> None:
             "--namespace=materialize",
             "--create-namespace",
             "--version",
-            "v25.3.0",
+            "v26.0.0",
             "-f",
             "-",
         ],
@@ -1849,7 +1899,7 @@ def upgrade(definition: dict[str, Any], expect_fail: bool) -> None:
             MZ_ROOT / "misc" / "helm-charts" / "operator",
             "--namespace=materialize",
             "--version",
-            "v25.3.0",
+            "v26.0.0",
             "-f",
             "-",
         ],
