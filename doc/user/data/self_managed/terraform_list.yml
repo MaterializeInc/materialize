@@ -1,29 +1,22 @@
 columns:
-  - column: "Sample Module"
+  - column: "Module"
   - column: "Description"
 
 rows:
-- "Sample Module": |
-    [terraform-helm-materialize](https://github.com/MaterializeInc/terraform-helm-materialize)
+- "Module": |
+    [Amazon Web Services (AWS)](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws)
   "Description": |
-    A sample Terraform module for installing the Materialize Helm chart into a Kubernetes cluster.
+    An example Terraform module for deploying Materialize on AWS
+    See [Install on Azure](/installation/install-on-gcp/) for detailed instructions usage.
 
-- "Sample Module": |
-    [Materialize on AWS](https://github.com/MaterializeInc/terraform-aws-materialize)
+- "Module": |
+    [Azure](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure)
   "Description": |
-    A sample Terraform module for deploying Materialize on AWS Cloud Platform
-    with all required infrastructure components.
-    See [Install on AWS](/installation/install-on-aws/) for an example usage.
+    An example Terraform module for deploying Materialize on Azure
+    See [Install on Azure](/installation/install-on-azure/) for detailed instructions usage.
 
-- "Sample Module": |
-    [Materialize on Azure](https://github.com/MaterializeInc/terraform-azurerm-materialize)
+- "Module": |
+    [Google Cloud Platform (GCP)](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp)
   "Description": |
-    A sample Terraform module for deploying Materialize on Azure with all
-    required infrastructure components. See [Install on
-    Azure](/installation/install-on-azure/) for an example usage.
-
-- "Sample Module": |
-    [Materialize on Google Cloud Platform (GCP)](https://github.com/MaterializeInc/terraform-google-materialize)
-  "Description": |
-    A sample Terraform module for deploying Materialize on Google Cloud Platform
-    (GCP) with all required infrastructure components. See [Install on GCP](/installation/install-on-gcp/) for an example usage.
+    An example Terraform module for deploying Materialize on GCP
+    See [Install on Azure](/installation/install-on-gcp/) for detailed instructions usage.
