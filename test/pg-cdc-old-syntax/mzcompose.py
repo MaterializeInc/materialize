@@ -379,7 +379,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
-        if name in ("default", "migration"):
+        if name in ("default", "migration", "migration-multi-version-upgrade"):
             return
 
         # TODO: Flaky, reenable when database-issues#8447 is fixed
@@ -399,7 +399,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         [
             w
             for w in c.workflows
-            if w not in workflows_with_internal_sharding and w != "migration"
+            if w not in workflows_with_internal_sharding
+            and w not in ("migration", "migration-multi-version-upgrade")
         ],
         lambda w: w,
     )
@@ -508,7 +509,7 @@ def workflow_migration_multi_version_upgrade(
 
     parser.add_argument(
         "--seed",
-        type=int,
+        type=str,
         default=None,
         help="Random seed to use for upgrade path selection",
     )
