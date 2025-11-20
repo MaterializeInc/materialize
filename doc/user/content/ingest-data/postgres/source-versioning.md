@@ -11,10 +11,13 @@ menu:
 
 {{< private-preview />}}
 {{< note >}}
-Changing column types is currently unsupported.
+- Changing column types is currently unsupported.
+
+- {{% include-example file="examples/create_table/example_postgres_table"
+example="syntax-version-requirement" %}}
 {{< /note >}}
 
-Starting in v26.0.0, Materialize allows you to handle certain types of upstream
+Materialize allows you to handle certain types of upstream
 table schema changes seamlessly, specifically:
 
 - Adding a column in the upstream database.
@@ -44,7 +47,8 @@ INSERT INTO T (A) VALUES
 
 ### Connect your source database to Materialize
 
-{{< include-md file="shared-content/postgres-source-prereq.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-source-prereq" %}}
 
 ## Create a source using the new syntax
 

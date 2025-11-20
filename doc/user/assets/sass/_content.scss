@@ -397,12 +397,13 @@ p+p {
         background: var(--code-simple-bg);
     }
 
+    // TODO: This common pattern will be removed.
     // Merge a highlighted code block followed by a non-highlighted code block,
     // since this is a common pattern in our docs to indicate a (highlighted)
     // shell or SQL snippet followed by its (unhighlighted) output.
     .highlight+pre {
         border-top: 0;
-        margin-top: -16px;
+        margin-top: -8px;
         padding-top: 0;
     }
 

@@ -19,7 +19,8 @@ create_table="/sql/create-table/" %}}
 
 ## Prerequisites
 
-{{< include-md file="shared-content/postgres-source-prereq.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-source-prereq" %}}
 
 ## Syntax
 
@@ -42,9 +43,11 @@ See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for details.
 #### Handling table schema changes
 
 The use of the `CREATE SOURCE` with the new [`CREATE TABLE FROM
-SOURCE`](/sql/create-table/) allows for the handling of upstream DDL changes without downtime.
+SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
+changes without downtime.
 
-See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for details.
+See [`CREATE TABLE FROM
+SOURCE`](/sql/create-table/#handling-table-schema-changes) for details.
 
 #### Supported types
 
@@ -52,20 +55,26 @@ With the new syntax, after a PostgreSQL source is created, you [`CREATE TABLE
 FROM SOURCE`](/sql/create-table/) to create a corresponding table in
 Matererialize and start ingesting data.
 
-{{< include-md file="shared-content/postgres-supported-types.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-supported-types" %}}
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
 
 #### Upstream table truncation restrictions
 
-{{< include-md file="shared-content/postgres-truncation-restriction.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-truncation-restriction" %}}
 
 For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 
 ### Publication membership
 
-{{< include-md file="shared-content/postgres-publication-membership.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership-mitigation-legacy" %}}
 
 ### PostgreSQL replication slots
 
@@ -94,9 +103,8 @@ SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
 
 {{< tip >}}
 
-- {{< include-md file="shared-content/postgres-wal.md" >}}
-
-{{< include-md file="shared-content/postgres-remove-unused-replication-slots.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-replication-slots-tip-list" %}}
 
 {{</ tip >}}
 
@@ -104,7 +112,8 @@ SELECT id, replication_slot FROM mz_internal.mz_postgres_sources;
 
 ### Prerequisites
 
-{{< include-md file="shared-content/postgres-source-prereq.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-source-prereq" %}}
 
 
 ### Create a source {#create-source-example}

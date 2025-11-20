@@ -267,4 +267,5 @@ your networking configuration.
 
 ## Considerations
 
-{{< include-md file="shared-content/postgres-considerations.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-considerations" %}}

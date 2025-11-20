@@ -144,9 +144,8 @@ same source across multiple materializations.
 
 {{< tip >}}
 
-- {{< include-md file="shared-content/postgres-wal.md" >}}
-
-{{< include-md file="shared-content/postgres-remove-unused-replication-slots.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-replication-slots-tip-list" %}}
 
 {{</ tip >}}
 
@@ -190,7 +189,48 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-{{% include-md file="shared-content/postgres-known-limitations.md" %}}
+### Schema changes
+
+Materialize supports schema changes in the upstream database as follows:
+
+#### Compatible schema changes (Legacy syntax)
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-compatible-schema-changes-legacy" %}}
+
+#### Incompatible schema changes
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-incompatible-schema-changes-legacy" %}}
+
+### Publication membership
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership-mitigation-legacy" %}}
+
+### Supported types
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-supported-types" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-unsupported-types" %}}
+
+### Truncation
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-truncation-restriction" %}}
+
+### Inherited tables
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables-action-legacy" %}}
 
 ## Examples
 

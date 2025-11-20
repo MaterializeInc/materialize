@@ -45,6 +45,6 @@ column values in change events. If for your trial/POC (Proof-of-concept) you can
 
 ## What if my table contains data types that are unsupported in Materialize?
 
-{{< include-md file="shared-content/postgres-unsupported-types.md" >}}
+{{% include-from-yaml data="postgres_source_details" name="postgres-unsupported-types" %}}
 
 See also: [PostgreSQL considerations](/ingest-data/postgres/#considerations).

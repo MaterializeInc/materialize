@@ -48,4 +48,5 @@ The following integration guides are available:
 
 ## Considerations
 
-{{% include-md file="shared-content/postgres-considerations.md" %}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-considerations" %}}

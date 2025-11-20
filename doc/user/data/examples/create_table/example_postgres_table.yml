@@ -22,7 +22,13 @@
 
     {{% yaml-table data="syntax_options/create_table/create_table_options_source_populated_postgres" %}}
 
-    For examples, see [Create a table (PostgreSQL source)](/sql/create-table/#create-a-table-postgresql-source).
+    For examples, see [Create a table (PostgreSQL
+    source)](/sql/create-table/#create-a-table-postgresql-source).
+
+- name: "syntax-version-requirement"
+  description: |
+    You must be on **v26+** to use the new syntax.
+
 - name: "create-table"
   description: |
 
@@ -39,8 +45,6 @@
 
     - For supported PostgreSQL data types, refer to [supported
     types](/sql/create-table/#supported-data-types).
-
-    - You can create multiple tables that reference the same upstream table.
 
     {{< /note >}}
 
@@ -77,6 +81,10 @@
     FROM SOURCE pg_source(REFERENCE public.orders)
     ;
   results: |
+
+    {{< include-md
+    file="shared-content/create-table-from-source-snapshotting.md" >}}
+
     {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
 - name: "show-tables"
   description: |
