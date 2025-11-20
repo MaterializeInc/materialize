@@ -10,7 +10,6 @@ aliases:
   - /self-managed/v25.1/release-notes/
 ---
 
-
 ## Self-Managed v26.0.0
 
 *Released: 2025-11-18*
@@ -152,11 +151,15 @@ See also Upgrade Notes for release specific notes.
 
 {{</ tab >}} {{</ tabs >}}
 
-### Upgrade notes for v26.0.0
+#### Upgrade notes for v26.0.0
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
 
 See also [General notes for upgrades](/installation/#general-notes-for-upgrades).
+
+## Self-managed release versions
+
+{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
 
 
 ## See also
