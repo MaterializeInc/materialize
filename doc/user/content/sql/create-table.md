@@ -15,10 +15,12 @@ In Materialize, you can create:
 - Read-write tables. With read-write tables, users can read ([`SELECT`]) and
   write to the tables ([`INSERT`], [`UPDATE`], [`DELETE`]).
 
--  *Private Preview*. Read-only tables from [PostgreSQL sources (new
+-  ***Private Preview***. Read-only tables from [PostgreSQL sources (new
   syntax)](/sql/create-source/postgres-v2/). Users cannot be write ([`INSERT`],
   [`UPDATE`], [`DELETE`]) to these tables. These tables are populated by [data
-  ingestion from a source](/ingest-data/postgres/).
+  ingestion from a source](/ingest-data/postgres/). {{% include-example file="examples/create_table/example_postgres_table"
+example="syntax-self-managed-version-requirement" %}}
+
 
 Tables in Materialize are similar to tables in standard relational databases:
 they consist of rows and columns where the columns are fixed when the table is
@@ -46,6 +48,12 @@ clarity around best practices."
 ### PostgreSQL source table
 
 {{< private-preview />}}
+
+{{< note >}}
+{{% include-example file="examples/create_table/example_postgres_table"
+example="syntax-self-managed-version-requirement" %}}
+{{< /note >}}
+
 {{% include-example file="examples/create_table/example_postgres_table" example="syntax" %}}
 
 {{% include-example file="examples/create_table/example_postgres_table" example="syntax-options" %}}
@@ -76,6 +84,11 @@ See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 
 {{< private-preview />}}
 
+{{< note >}}
+{{% include-example file="examples/create_table/example_postgres_table"
+example="syntax-self-managed-version-requirement" %}}
+{{< /note >}}
+
 ### Table names and column names
 
 Names for tables and column(s) must follow the [naming
@@ -100,21 +113,13 @@ guidelines](/sql/identifiers/#naming-restrictions).
 
 ### Handling table schema changes
 
-The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE TABLE
-FROM SOURCE` allows for the handling of the upstream DDL changes, specifically
-adding or dropping columns, without downtime.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-compatible-schema-changes" %}}
 
 #### Incompatible schema changes
 
-All other schema changes to upstream tables (such as changing types) will set
-the corresponding subsource into an error state, which prevents you from reading
-from the source.
-
-To handle incompatible schema changes, use [`DROP
-SOURCE`](/sql/alter-source/#context) and [`ALTER SOURCE...ADD
-SUBSOURCE`](/sql/alter-source/) to first drop the affected subsource, and then
-add the table back to the source. When you add the subsource, it will have the
-updated schema from the corresponding upstream table.
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-incompatible-schema-changes" %}}
 
 ### Upstream table truncation restrictions
 
@@ -125,6 +130,9 @@ name="postgres-truncation-restriction" %}}
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-inherited-tables" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables-action" %}}
 
 ## Privileges
 
@@ -154,6 +162,9 @@ Once a user-populated table is created, you can perform CRUD
 
 {{< note >}}
 
+{{% include-example file="examples/create_table/example_postgres_table"
+example="syntax-self-managed-version-requirement" %}}
+
 The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
 enabled logical replication, created the publication for the various tables and
 replication user, and updated the network configuration).
@@ -168,8 +179,6 @@ integration guides](/ingest-data/postgres/#supported-versions-and-services).
 
 {{< include-md file="shared-content/create-table-from-source-readonly.md" >}}
 
-{{< include-md file="shared-content/create-table-from-source-snapshotting.md"
->}}
 
 {{% include-example file="examples/create_table/example_postgres_table"
  example="read-from-table" %}}

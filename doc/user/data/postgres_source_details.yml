@@ -124,12 +124,32 @@
     table, i.e. in Materialize, the data will not be returned when serving
     `SELECT`s from the inherited table.
 
+- name: postgres-inherited-tables-action-legacy
+  content: |
     You can mimic PostgreSQL's `SELECT` behavior with inherited tables by
     creating a materialized view that unions data from the inherited and
     inheriting tables (using `UNION ALL`). However, if new tables inherit from
     the table, data from the inheriting tables will not be available in the
     view. You will need to add the inheriting tables via `ADD SUBSOURCE` and
     create a new view (materialized or non-) that unions the new table.
+
+- name: postgres-inherited-tables-action
+  content: |
+    You can mimic PostgreSQL's `SELECT` behavior with inherited tables by
+    creating a materialized view that unions data from the inherited and
+    inheriting tables (using `UNION ALL`). However, if new tables inherit from
+    the table, data from the inheriting tables will not be available in the
+    view. You will need to add the inheriting tables via `CREATE TABLE .. FROM
+    SOURCE` and create a new view (materialized or non-) that unions the new
+    table.
+
+- name: postgres-compatible-schema-changes
+  content: |
+    The use of [`CREATE SOURCE`](/sql/create-source/postgres-v2/) with `CREATE
+    TABLE FROM SOURCE` allows for the handling of the upstream DDL changes,
+    specifically adding or dropping columns in the upstream tables, without
+    downtime. See [Handling upstream schema changes with zero
+    downtime](/ingest-data/postgres/source-versioning/) for more details.
 
 - name: postgres-compatible-schema-changes-legacy
   content: |
@@ -156,28 +176,107 @@
     - Adding or removing `NOT NULL` constraints to tables that were nullable
     when the source was created.
 
-- name: postgres-incompatible-schema-changes
+- name: postgres-incompatible-schema-changes-legacy
   content: |
     All other schema changes to upstream tables will set the corresponding
     subsource into an error state, which prevents you from reading from the
     source.
 
-- name: postgres-incompatible-schema-changes-handling-legacy
-  content: |
     To handle incompatible [schema changes](#schema-changes), use [`DROP
     SOURCE`](/sql/alter-source/#context) and [`ALTER SOURCE...ADD
     SUBSOURCE`](/sql/alter-source/) to first drop the affected subsource, and
     then add the table back to the source. When you add the subsource, it will
     have the updated schema from the corresponding upstream table.
 
+- name: postgres-incompatible-schema-changes
+  content: |
+    All other schema changes to upstream tables will set the corresponding
+    Materialize tables into an error state, preventing reads from these tables.
+
+    To handle [incompatible schema changes](#incompatible-schema-changes), drop
+    the affected table [`DROP TABLE`](/sql/drop-table/) , and then, [`CREATE
+    TABLE FROM SOURCE`](/sql/create-table/) to recreate the table with the
+    updated schema.
+
 - name: postgres-truncation-restriction
   content: |
-    Upstream tables replicated into Materialize should not be truncated. If an
-    upstream table is truncated while replicated, the whole source becomes
-    inaccessible and will not produce any data until it is recreated. Instead of
-    truncating, you can use an unqualified `DELETE` to remove all rows from the
-    table:
+    Avoid truncating upstream tables that are being replicated into Materialize.
+    If a replicated upstream table is truncated, the corresponding
+    subsource(s)/table(s) in Materialize becomes inaccessible and will not
+    produce any data until it is recreated.
+
+    Instead of truncating, use an unqualified `DELETE` to remove all rows from
+    the upstream table:
 
     ```mzsql
     DELETE FROM t;
     ```
+
+- name: postgres-considerations
+  content: |
+    ### Schema changes
+
+    Materialize supports schema changes in the upstream database as follows:
+
+    #### Compatible schema changes (Legacy syntax)
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-compatible-schema-changes-legacy" %}}
+
+    #### Incompatible schema changes
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-incompatible-schema-changes" %}}
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-incompatible-schema-changes-handling-legacy" %}}
+
+    ### Publication membership
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-publication-membership" %}}
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-publication-membership-mitigation-legacy" %}}
+
+    ### Supported types
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-supported-types" %}}
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-unsupported-types" %}}
+
+    ### Truncation
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-truncation-restriction" %}}
+
+    ### Inherited tables
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-inherited-tables" %}}
+
+    - If using legacy syntax [`CREATE SOURCE ... FOR
+      ...`](/sql/create-source/postgres/):
+
+      {{% include-from-yaml data="postgres_source_details"
+    name="postgres-inherited-tables-action-legacy" %}}
+
+    - If using new [`CREATE TABLE FROM SOURCE`](/sql/create-table/) syntax:
+
+      {{% include-from-yaml data="postgres_source_details"
+    name="postgres-inherited-tables-action" %}}
+
+    ### Replication slots
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-replication-slots" %}}
+
+    {{% include-from-yaml data="postgres_source_details"
+    name="postgres-replication-slots-tip-list" %}}
+
+    ### Modifying an existing source
+
+    {{< include-md
+    file="shared-content/alter-source-snapshot-blocking-behavior.md" >}}

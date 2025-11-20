@@ -43,9 +43,11 @@ See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for details.
 #### Handling table schema changes
 
 The use of the `CREATE SOURCE` with the new [`CREATE TABLE FROM
-SOURCE`](/sql/create-table/) allows for the handling of upstream DDL changes without downtime.
+SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
+changes without downtime.
 
-See [`CREATE TABLE FROM SOURCE`](/sql/create-table/) for details.
+See [`CREATE TABLE FROM
+SOURCE`](/sql/create-table/#handling-table-schema-changes) for details.
 
 #### Supported types
 

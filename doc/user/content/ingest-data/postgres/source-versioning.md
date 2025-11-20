@@ -11,10 +11,13 @@ menu:
 
 {{< private-preview />}}
 {{< note >}}
-Changing column types is currently unsupported.
+- Changing column types is currently unsupported.
+
+- {{% include-example file="examples/create_table/example_postgres_table"
+example="syntax-self-managed-version-requirement" %}}
 {{< /note >}}
 
-Starting in v26.0.0, Materialize allows you to handle certain types of upstream
+Materialize allows you to handle certain types of upstream
 table schema changes seamlessly, specifically:
 
 - Adding a column in the upstream database.
