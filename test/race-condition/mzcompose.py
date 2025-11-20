@@ -665,6 +665,40 @@ class MaterializedView(Object):
         raise NotImplementedError
 
 
+class ReplacementMaterializedView(Object):
+    def create(self) -> str:
+        select = (
+            "* FROM " + self.references.name
+            if self.references
+            else "'foo' AS a, 'bar' AS b"
+        )
+        return f"> CREATE MATERIALIZED VIEW {self.name} AS SELECT {select}"
+
+    def destroy(self) -> str:
+        return f"> DROP MATERIALIZED VIEW {self.name} CASCADE"
+
+    def manipulate(self, kind: int) -> str:
+        select = (
+            "* FROM " + self.references.name
+            if self.references
+            else "'foo' AS a, 'bar' AS b"
+        )
+        manipulations = [
+            lambda: "",
+            lambda: dedent(
+                f"""
+                > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
+                > CREATE MATERIALIZED VIEW {self.name}_replacement REPLACING {self.name} AS SELECT {select}
+                > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
+                """
+            ),
+        ]
+        return manipulations[kind % len(manipulations)]()
+
+    def verify(self) -> str:
+        raise NotImplementedError
+
+
 class DefaultIndex(Object):
     can_refer: bool = False
 
