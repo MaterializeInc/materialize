@@ -253,6 +253,7 @@ impl Plan {
             StatementKind::AlterTableAddColumn => {
                 &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
             }
+            StatementKind::AlterMaterializedViewApplyReplacement => todo!(),
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],

@@ -45,42 +45,42 @@ use mz_repr::{
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
-    AlterNetworkPolicyStatement, AlterObjectRenameStatement, AlterObjectSwapStatement,
-    AlterRetainHistoryStatement, AlterRoleOption, AlterRoleStatement, AlterSecretStatement,
-    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    AlterTableAddColumnStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName,
-    ClusterAlterOption, ClusterAlterOptionName, ClusterAlterOptionValue,
-    ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName, ClusterFeature,
-    ClusterFeatureName, ClusterOption, ClusterOptionName, ClusterScheduleOptionValue, ColumnDef,
-    ColumnOption, CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
-    ContinualTaskOption, ContinualTaskOptionName, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateConnectionStatement, CreateConnectionType, CreateContinualTaskStatement,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
-    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
-    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, FormatSpecifier, IcebergSinkConfigOption, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
-    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
-    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
-    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    AlterMaterializedViewApplyReplacementStatement, AlterNetworkPolicyStatement,
+    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
+    AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
+    ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
+    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
+    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
+    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
+    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -7326,6 +7326,20 @@ pub fn plan_alter_table_add_column(
         column_type,
         raw_sql_type,
     }))
+}
+
+pub fn describe_alter_materialized_view_apply_replacement(
+    _: &StatementContext,
+    _: AlterMaterializedViewApplyReplacementStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_materialized_view_apply_replacement(
+    scx: &StatementContext,
+    stmt: AlterMaterializedViewApplyReplacementStatement,
+) -> Result<Plan, PlanError> {
+    todo!()
 }
 
 pub fn describe_comment(

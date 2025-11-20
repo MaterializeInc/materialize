@@ -126,6 +126,9 @@ pub fn describe(
         Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::describe_alter_materialized_view_apply_replacement(&scx, stmt)?
+        }
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRetainHistory(stmt) => ddl::describe_alter_retain_history(&scx, stmt)?,
@@ -322,6 +325,9 @@ pub fn plan(
         Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::plan_alter_materialized_view_apply_replacement(scx, stmt)
+        }
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRetainHistory(stmt) => ddl::plan_alter_retain_history(scx, stmt),
@@ -1049,6 +1055,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::AlterCluster(_) => DDL,
             Statement::AlterConnection(_) => DDL,
             Statement::AlterIndex(_) => DDL,
+            Statement::AlterMaterializedViewApplyReplacement(_) => DDL,
             Statement::AlterObjectRename(_) => DDL,
             Statement::AlterObjectSwap(_) => DDL,
             Statement::AlterNetworkPolicy(_) => DDL,

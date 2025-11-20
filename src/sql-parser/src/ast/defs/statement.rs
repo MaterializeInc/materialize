@@ -82,6 +82,7 @@ pub enum Statement<T: AstInfo> {
     AlterNetworkPolicy(AlterNetworkPolicyStatement<T>),
     AlterRole(AlterRoleStatement<T>),
     AlterTableAddColumn(AlterTableAddColumnStatement<T>),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementStatement),
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
     DropOwned(DropOwnedStatement<T>),
@@ -160,6 +161,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::AlterRole(stmt) => f.write_node(stmt),
             Statement::AlterTableAddColumn(stmt) => f.write_node(stmt),
+            Statement::AlterMaterializedViewApplyReplacement(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropOwned(stmt) => f.write_node(stmt),
@@ -241,6 +243,9 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterOwner => "alter_owner",
         StatementKind::AlterConnection => "alter_connection",
         StatementKind::AlterTableAddColumn => "alter_table",
+        StatementKind::AlterMaterializedViewApplyReplacement => {
+            "alter_materialized_view_apply_replacement"
+        }
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
         StatementKind::DropOwned => "drop_owned",
@@ -1382,6 +1387,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
+    pub replacing: Option<T::ItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
     pub as_of: Option<u64>,
@@ -1408,6 +1414,11 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.columns));
             f.write_str(")");
+        }
+
+        if let Some(target) = &self.replacing {
+            f.write_str(" REPLACING ");
+            f.write_node(target);
         }
 
         if let Some(cluster) = &self.in_cluster {
@@ -3198,6 +3209,32 @@ impl<T: AstInfo> AstDisplay for AlterTableAddColumnStatement<T> {
 }
 
 impl_display_t!(AlterTableAddColumnStatement);
+
+/// `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterMaterializedViewApplyReplacementStatement {
+    pub if_exists: bool,
+    pub name: UnresolvedItemName,
+    pub replacement_name: UnresolvedItemName,
+}
+
+impl AstDisplay for AlterMaterializedViewApplyReplacementStatement {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("ALTER MATERIALIZED VIEW ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+
+        f.write_str(" APPLY REPLACEMENT ");
+        f.write_node(&self.replacement_name);
+    }
+}
+
+impl_display!(AlterMaterializedViewApplyReplacementStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
