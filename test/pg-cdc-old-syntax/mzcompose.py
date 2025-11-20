@@ -544,7 +544,11 @@ def workflow_migration_multi_version_upgrade(
             Random(args.seed) if args.seed is not None else None,
         ) + [None]
     else:
-        versions = [supported_self_managed_versions[0], None]
+        versions = [
+            MzVersion.parse_mz("v0.150.0"),
+            MzVersion.parse_mz("v0.151.0"),
+            None,
+        ]
 
     materialize_service_instances = []
 
@@ -556,7 +560,8 @@ def workflow_migration_multi_version_upgrade(
         # Enable source versioning migration at the end (final version)
         enable_source_migration_arg = (
             {"force_source_table_syntax": "true"}
-            if i == len(upgrade_args_list) - 1
+            # Enable on the second last version
+            if i == len(upgrade_args_list) - 2
             else {}
         )
 
