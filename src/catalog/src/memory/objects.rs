@@ -1390,6 +1390,8 @@ pub struct MaterializedView {
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
+    /// ID of the materialized view this materialized view is intended to replace.
+    pub replacement_target: Option<CatalogItemId>,
     /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
     /// Column indexes that we assert are not `NULL`.

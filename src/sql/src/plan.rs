@@ -1816,6 +1816,7 @@ pub struct MaterializedView {
     pub dependencies: DependencyIds,
     /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,

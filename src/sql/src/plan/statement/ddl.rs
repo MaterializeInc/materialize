@@ -130,7 +130,7 @@ use crate::catalog::{
 use crate::iceberg::IcebergSinkConfigOptionExtracted;
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
-    Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
+    Aug, CommentObjectId, DatabaseId, DependencyIds, ObjectId, PartialItemName, QualifiedItemName,
     ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedItemName, ResolvedNetworkPolicyName, SchemaSpecifier, SystemObjectId,
 };
@@ -2733,6 +2733,28 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
+    // Validate the replacement target, if one is given.
+    let replacement_target = if let Some(target_name) = &stmt.replacing {
+        let target = scx.get_item_by_resolved_name(target_name)?;
+        if target.item_type() != CatalogItemType::MaterializedView {
+            return Err(PlanError::InvalidReplacement {
+                item_type: target.item_type(),
+                item_name: scx.catalog.minimal_qualification(target.name()),
+                replacement_type: CatalogItemType::MaterializedView,
+                replacement_name: partial_name,
+            });
+        }
+        if target.id().is_system() {
+            sql_bail!(
+                "cannot replace {} because it is required by the database system",
+                scx.catalog.minimal_qualification(target.name()),
+            );
+        }
+        Some(target.id())
+    } else {
+        None
+    };
+
     let query::PlannedRootQuery {
         expr,
         mut desc,
@@ -2962,11 +2984,15 @@ pub fn plan_create_materialized_view(
                 .collect()
         })
         .unwrap_or_default();
-    let dependencies = expr
+    let mut dependencies: BTreeSet<_> = expr
         .depends_on()
         .into_iter()
         .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
+
+    if let Some(id) = replacement_target {
+        dependencies.insert(id);
+    }
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2987,8 +3013,9 @@ pub fn plan_create_materialized_view(
         materialized_view: MaterializedView {
             create_sql,
             expr,
-            dependencies,
+            dependencies: DependencyIds(dependencies),
             column_names,
+            replacement_target,
             cluster_id,
             non_null_assertions,
             compaction_window,
@@ -3238,6 +3265,7 @@ pub fn plan_create_continual_task(
             expr,
             dependencies,
             column_names,
+            replacement_target: None,
             cluster_id,
             non_null_assertions: Vec::new(),
             compaction_window: None,

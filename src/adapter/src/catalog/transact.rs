@@ -1130,7 +1130,15 @@ impl Catalog {
                         storage_collections_to_create.insert(source.global_id());
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        storage_collections_to_create.insert(mv.global_id_writes());
+                        let mv_gid = mv.global_id_writes();
+                        if let Some(target_id) = mv.replacement_target {
+                            let target_gid = state.get_entry(&target_id).latest_global_id();
+                            let shard_id =
+                                state.storage_metadata().get_collection_shard(target_gid)?;
+                            storage_collections_to_register.insert(mv_gid, shard_id);
+                        } else {
+                            storage_collections_to_create.insert(mv_gid);
+                        }
                     }
                     CatalogItem::ContinualTask(ct) => {
                         storage_collections_to_create.insert(ct.global_id());
