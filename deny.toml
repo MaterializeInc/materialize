@@ -38,6 +38,7 @@ skip = [
     { name = "windows_x86_64_gnu", version = "0.48.0" },
     { name = "windows_x86_64_msvc", version = "0.48.0" },
     { name = "windows-sys", version = "0.52.0" },
+    { name = "windows-sys", version = "0.59.0" },
     # Newer versions of crates like `tempfile` are held back by crates like `atty`.
     # This is very Unfortunate as we don't actually use these platforms.
     { name = "redox_syscall", version = "0.2.10" },
@@ -163,6 +164,8 @@ skip = [
     { name = "phf_codegen", version = "0.11.3" },
     # multer
     { name = "spin", version = "0.9.8" },
+    # insta
+    { name = "console", version = "0.15.11" },
 ]
 
 [[bans.deny]]
