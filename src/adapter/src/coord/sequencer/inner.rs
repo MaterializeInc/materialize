@@ -772,6 +772,7 @@ impl Coordinator {
                                 timeline: Some(source.timeline),
                                 since: None,
                                 status_collection_id,
+                                primary: None,
                             },
                         ));
                     }
@@ -1229,8 +1230,7 @@ impl Coordinator {
                                 .desc
                                 .at_version(RelationVersionSelector::Specific(relation_version));
                             // We assert above we have a single version, and thus we are the primary.
-                            let collection_desc =
-                                CollectionDescription::for_table(relation_desc, None);
+                            let collection_desc = CollectionDescription::for_table(relation_desc);
                             let collections = vec![(global_id, collection_desc)];
 
                             let compaction_window = table
@@ -1283,6 +1283,7 @@ impl Coordinator {
                                         since: None,
                                         status_collection_id,
                                         timeline: Some(timeline.clone()),
+                                        primary: None,
                                     };
 
                                     let collections = vec![(global_id, collection_desc)];
@@ -1319,6 +1320,7 @@ impl Coordinator {
                                         since: None,
                                         status_collection_id: None,
                                         timeline: Some(timeline.clone()),
+                                        primary: None,
                                     };
                                     let collections = vec![(global_id, collection_desc)];
                                     let read_policies = coord
@@ -4492,6 +4494,7 @@ impl Coordinator {
                             since: None,
                             status_collection_id,
                             timeline: Some(source.timeline.clone()),
+                            primary: None,
                         },
                     ));
 

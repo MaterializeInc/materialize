@@ -29,7 +29,7 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::{CollectionDescription, DataSource};
+use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
@@ -696,13 +696,7 @@ impl Coordinator {
                             None,
                             vec![(
                                 global_id,
-                                CollectionDescription {
-                                    desc: output_desc,
-                                    data_source: DataSource::Other,
-                                    since: Some(storage_as_of),
-                                    status_collection_id: None,
-                                    timeline: None,
-                                },
+                                CollectionDescription::for_other(output_desc, Some(storage_as_of)),
                             )],
                         )
                         .await
