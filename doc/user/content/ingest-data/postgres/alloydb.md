@@ -251,12 +251,7 @@ your networking configuration.
 
 ### 3. Start ingesting data
 
-{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source" %}}
-
-{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="create-source-options" %}}
-
-{{% include-example file="examples/ingest_data/postgres/create_source_cloud"
-example="schema-changes" %}}
+{{% include-example file="examples/ingest_data/postgres/create_source_cloud" example="ingest-data-step" %}}
 
 ### 4. Monitor the ingestion status
 
