@@ -30,10 +30,11 @@ use serde::Serialize;
 use tracing::trace;
 
 use crate::{
-    controller::materialize::tls::{create_certificate, issuer_ref_defined},
     k8s::{apply_resource, delete_resource},
+    tls::{create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
+    ManagedResource,
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
     materialize::v1alpha1::Materialize,
 };

@@ -25,13 +25,12 @@ use maplit::btreemap;
 use tracing::trace;
 
 use crate::{
-    controller::materialize::{
-        Error, matching_image_from_environmentd_image_ref,
-        tls::{create_certificate, issuer_ref_defined},
-    },
+    controller::materialize::{Error, matching_image_from_environmentd_image_ref},
     k8s::{apply_resource, delete_resource, get_resource},
+    tls::{create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
+    ManagedResource,
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
     materialize::v1alpha1::Materialize,
 };

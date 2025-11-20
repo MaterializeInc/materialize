@@ -26,9 +26,10 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, util::create_client};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_orchestratord::{
-    controller::{self, materialize::DefaultCertificateSpecs},
+    controller,
     k8s::register_crds,
     metrics::{self, Metrics},
+    tls::DefaultCertificateSpecs,
 };
 use mz_ore::{
     cli::{self, CliConfig, KeyValueArg},

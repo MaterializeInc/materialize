@@ -9,14 +9,10 @@
 
 use std::{
     collections::BTreeSet,
-    fmt::Display,
-    future::ready,
-    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use anyhow::Context as _;
-use futures::StreamExt;
 use http::HeaderValue;
 use k8s_openapi::{
     api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
@@ -25,16 +21,18 @@ use k8s_openapi::{
 use kube::{
     Api, Client, Resource, ResourceExt,
     api::PostParams,
-    runtime::{controller::Action, reflector, watcher},
+    runtime::{controller::Action, reflector},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 use uuid::Uuid;
 
-use crate::{controller::materialize::environmentd::V161, metrics::Metrics};
+use crate::{
+    Error, controller::materialize::environmentd::V161, k8s::make_reflector,
+    matching_image_from_environmentd_image_ref, metrics::Metrics, tls::DefaultCertificateSpecs,
+};
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::{
-    Materialize, MaterializeCertSpec, MaterializeRolloutStrategy, MaterializeStatus,
+    Materialize, MaterializeRolloutStrategy, MaterializeStatus,
 };
 use mz_license_keys::validate;
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
@@ -44,7 +42,6 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 pub mod balancer;
 pub mod console;
 pub mod environmentd;
-pub mod tls;
 
 pub struct Config {
     pub cloud_provider: CloudProvider,
@@ -132,39 +129,6 @@ pub struct Config {
     pub orchestratord_namespace: String,
 }
 
-#[derive(Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DefaultCertificateSpecs {
-    balancerd_external: Option<MaterializeCertSpec>,
-    console_external: Option<MaterializeCertSpec>,
-    internal: Option<MaterializeCertSpec>,
-}
-
-impl FromStr for DefaultCertificateSpecs {
-    type Err = serde_json::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(s)
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    Anyhow(#[from] anyhow::Error),
-    Kube(#[from] kube::Error),
-    Reqwest(#[from] reqwest::Error),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Anyhow(e) => write!(f, "{e}"),
-            Self::Kube(e) => write!(f, "{e}"),
-            Self::Reqwest(e) => write!(f, "{e}"),
-        }
-    }
-}
-
 pub struct Context {
     config: Config,
     metrics: Arc<Metrics>,
@@ -184,7 +148,7 @@ impl Context {
         Self {
             config,
             metrics,
-            materializes: Self::make_reflector(client.clone()).await,
+            materializes: make_reflector(client.clone()).await,
             needs_update: Default::default(),
         }
     }
@@ -298,40 +262,6 @@ impl Context {
         }
 
         Ok(())
-    }
-
-    async fn make_reflector<K>(client: Client) -> reflector::Store<K>
-    where
-        K: kube::Resource<DynamicType = ()>
-            + Clone
-            + Send
-            + Sync
-            + DeserializeOwned
-            + Serialize
-            + std::fmt::Debug
-            + 'static,
-    {
-        let api = kube::Api::all(client);
-        let (store, writer) = reflector::store();
-        let reflector =
-            reflector::reflector(writer, watcher(api, watcher::Config::default().timeout(29)));
-        mz_ore::task::spawn(
-            || format!("{} reflector", K::kind(&Default::default())),
-            async {
-                reflector
-                    .for_each(|res| {
-                        if let Err(e) = res {
-                            warn!("error in {} reflector: {}", K::kind(&Default::default()), e);
-                        }
-                        ready(())
-                    })
-                    .await
-            },
-        );
-        // the only way this can return an error is if we drop the writer,
-        // which we do not ever do, so unwrap is fine
-        store.wait_until_ready().await.unwrap();
-        store
     }
 }
 
@@ -798,22 +728,4 @@ impl k8s_controller::Context for Context {
 
         Ok(None)
     }
-}
-
-fn matching_image_from_environmentd_image_ref(
-    environmentd_image_ref: &str,
-    image_name: &str,
-    image_tag: Option<&str>,
-) -> String {
-    let namespace = environmentd_image_ref
-        .rsplit_once('/')
-        .unwrap_or(("materialize", ""))
-        .0;
-    let tag = image_tag.unwrap_or_else(|| {
-        environmentd_image_ref
-            .rsplit_once(':')
-            .unwrap_or(("", "unstable"))
-            .1
-    });
-    format!("{namespace}/{image_name}:{tag}")
 }

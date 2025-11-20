@@ -46,13 +46,14 @@ use tracing::{error, trace, warn};
 
 use super::Error;
 use super::matching_image_from_environmentd_image_ref;
-use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
+use crate::tls::{create_certificate, issuer_ref_defined};
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::generated::cert_manager::certificates::{
-    Certificate, CertificatePrivateKeyAlgorithm,
-};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
+use mz_cloud_resources::crd::{
+    ManagedResource,
+    generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
+};
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
