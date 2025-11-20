@@ -14,7 +14,7 @@ menu:
 - Changing column types is currently unsupported.
 
 - {{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-self-managed-version-requirement" %}}
+example="syntax-version-requirement" %}}
 {{< /note >}}
 
 Materialize allows you to handle certain types of upstream

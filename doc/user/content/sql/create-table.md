@@ -19,7 +19,7 @@ In Materialize, you can create:
   syntax)](/sql/create-source/postgres-v2/). Users cannot be write ([`INSERT`],
   [`UPDATE`], [`DELETE`]) to these tables. These tables are populated by [data
   ingestion from a source](/ingest-data/postgres/). {{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-self-managed-version-requirement" %}}
+example="syntax-version-requirement" %}}
 
 
 Tables in Materialize are similar to tables in standard relational databases:
@@ -51,7 +51,7 @@ clarity around best practices."
 
 {{< note >}}
 {{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-self-managed-version-requirement" %}}
+example="syntax-version-requirement" %}}
 {{< /note >}}
 
 {{% include-example file="examples/create_table/example_postgres_table" example="syntax" %}}
@@ -86,7 +86,7 @@ See also the known limitations for [`INSERT`](/sql/insert#known-limitations),
 
 {{< note >}}
 {{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-self-managed-version-requirement" %}}
+example="syntax-version-requirement" %}}
 {{< /note >}}
 
 ### Table names and column names
@@ -163,7 +163,7 @@ Once a user-populated table is created, you can perform CRUD
 {{< note >}}
 
 {{% include-example file="examples/create_table/example_postgres_table"
-example="syntax-self-managed-version-requirement" %}}
+example="syntax-version-requirement" %}}
 
 The example assumes you have configured your upstream PostgreSQL 11+ (i.e.,
 enabled logical replication, created the publication for the various tables and
