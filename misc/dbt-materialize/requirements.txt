@@ -2,14 +2,14 @@ agate==1.9.1
 annotated-types==0.7.0
 attrs==25.4.0
 babel==2.17.0
-certifi==2025.10.5
+certifi==2025.11.12
 charset-normalizer==3.4.4
-click==8.3.0
+click==8.3.1
 colorama==0.4.6
 daff==1.4.2
-dbt-adapters==1.17.3
-dbt-common==1.33.0
-dbt-core==1.10.13
+dbt-adapters==1.20.0
+dbt-common==1.36.0
+dbt-core==1.10.15
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.9.1
@@ -27,7 +27,7 @@ jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 leather==0.4.0
 MarkupSafe==3.0.3
-mashumaro==3.14
+mashumaro==3.17
 more-itertools==10.8.0
 msgpack==1.1.2
 networkx==3.4.2
@@ -36,10 +36,10 @@ packaging==25.0
 parsedatetime==2.6
 pathspec==0.12.1
 pluggy==1.6.0
-protobuf==6.33.0
+protobuf==6.33.1
 psycopg2-binary==2.9.11
-pydantic==2.12.3
-pydantic_core==2.41.4
+pydantic==2.12.4
+pydantic_core==2.41.5
 Pygments==2.19.2
 pytest==8.4.2
 pytest-split==0.10.0
@@ -50,7 +50,7 @@ pytz==2025.2
 PyYAML==6.0.3
 referencing==0.37.0
 requests==2.32.5
-rpds-py==0.28.0
+rpds-py==0.29.0
 six==1.17.0
 snowplow-tracker==1.1.0
 sqlparse==0.5.3
