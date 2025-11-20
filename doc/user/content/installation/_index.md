@@ -175,6 +175,29 @@ kubectl get materialize -n materialize-environment -w
 # Check the logs of the operator
 kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
+
+### Cancelling the Upgrade
+To cancel an in-progress rollout and revert to the last completed rollout state, first retrieve the last rollout request ID from your Materialize CR. You can do this with the following command:
+
+```shell
+kubectl get materialize <instance-name> -n materialize-environment -o jsonpath='{.status.lastCompletedRolloutRequest}'
+```
+
+Next, get the previous `environmentdImageRef` from the `last-applied-configuration` annotation:
+```shell
+kubectl get materialize <instance-name> -n materialize-environment -o jsonpath='{.metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration}'
+```
+Finally, run the following command using the values obtained above:
+
+```shell
+kubectl patch materialize <instance-name> \
+  -n materialize-environment \
+  --type='merge' \
+  -p "{\"spec\": {\"requestRollout\": \"<lastCompletedRolloutRequest-value>\", \"environmentdImageRef\": \"<previous-environmentdImageRef>\" }}"
+```
+
+
+
 ### Version Specific Upgrade Notes
 
 #### Upgrading to `v26.0`
