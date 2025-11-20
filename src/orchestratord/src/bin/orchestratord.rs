@@ -15,11 +15,15 @@ use std::{
 
 use http::HeaderValue;
 use k8s_openapi::{
-    api::core::v1::{Affinity, ResourceRequirements, Toleration},
+    api::{
+        apps::v1::Deployment,
+        core::v1::{Affinity, ResourceRequirements, Service, Toleration},
+    },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition,
 };
-use kube::runtime::watcher;
+use kube::{Api, runtime::watcher};
 use mz_cloud_provider::CloudProvider;
+use mz_cloud_resources::crd::generated::cert_manager::certificates::Certificate;
 use tracing::info;
 
 use mz_build_info::{BuildInfo, build_info};
@@ -319,7 +323,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     aws_secrets_controller_tags: args.aws_secrets_controller_tags,
                     environmentd_availability_zones: args.environmentd_availability_zones,
                     ephemeral_volume_class: args.ephemeral_volume_class,
-                    scheduler_name: args.scheduler_name,
+                    scheduler_name: args.scheduler_name.clone(),
                     enable_security_context: args.enable_security_context,
                     enable_internal_statement_logging: args.enable_internal_statement_logging,
                     disable_statement_logging: args.disable_statement_logging,
@@ -331,10 +335,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     clusterd_node_selector: args.clusterd_node_selector,
                     clusterd_affinity: args.clusterd_affinity,
                     clusterd_tolerations: args.clusterd_tolerations,
-                    balancerd_node_selector: args.balancerd_node_selector,
-                    balancerd_affinity: args.balancerd_affinity,
-                    balancerd_tolerations: args.balancerd_tolerations,
-                    balancerd_default_resources: args.balancerd_default_resources,
+                    balancerd_node_selector: args.balancerd_node_selector.clone(),
+                    balancerd_affinity: args.balancerd_affinity.clone(),
+                    balancerd_tolerations: args.balancerd_tolerations.clone(),
+                    balancerd_default_resources: args.balancerd_default_resources.clone(),
                     console_node_selector: args.console_node_selector,
                     console_affinity: args.console_affinity,
                     console_tolerations: args.console_tolerations,
@@ -378,7 +382,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     balancerd_http_port: args.balancerd_http_port,
                     balancerd_internal_http_port: args.balancerd_internal_http_port,
                     console_http_port: args.console_http_port,
-                    default_certificate_specs: args.default_certificate_specs,
+                    default_certificate_specs: args.default_certificate_specs.clone(),
                     disable_license_key_checks: args.disable_license_key_checks,
                     tracing: args.tracing,
                     orchestratord_namespace: namespace,
@@ -389,6 +393,56 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .await,
             watcher::Config::default().timeout(29),
         )
+        .run(),
+    );
+
+    mz_ore::task::spawn(
+        || "balancer controller",
+        k8s_controller::Controller::namespaced_all(
+            client.clone(),
+            controller::balancer::Context::new(
+                controller::balancer::Config {
+                    enable_security_context: args.enable_security_context,
+                    enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
+                    image_pull_policy: args.image_pull_policy,
+                    scheduler_name: args.scheduler_name,
+                    balancerd_node_selector: args.balancerd_node_selector,
+                    balancerd_affinity: args.balancerd_affinity,
+                    balancerd_tolerations: args.balancerd_tolerations,
+                    balancerd_default_resources: args.balancerd_default_resources,
+                    default_certificate_specs: args.default_certificate_specs,
+                    environmentd_sql_port: args.environmentd_sql_port,
+                    environmentd_http_port: args.environmentd_http_port,
+                    balancerd_sql_port: args.balancerd_sql_port,
+                    balancerd_http_port: args.balancerd_http_port,
+                    balancerd_internal_http_port: args.balancerd_internal_http_port,
+                },
+                client.clone(),
+            )
+            .await,
+            watcher::Config::default().timeout(29),
+        )
+        .with_controller(|controller| {
+            controller
+                .owns(
+                    Api::<Deployment>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<Service>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<Certificate>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+        })
         .run(),
     );
 

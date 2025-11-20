@@ -95,6 +95,10 @@ pub async fn register_crds(
                     stored_version: String::from("v1alpha1"),
                 },
                 VersionedCrd {
+                    crds: vec![crd::balancer::v1alpha1::Balancer::crd()],
+                    stored_version: String::from("v1alpha1"),
+                },
+                VersionedCrd {
                     crds: vec![crd::vpc_endpoint::v1::VpcEndpoint::crd()],
                     stored_version: String::from("v1"),
                 },
