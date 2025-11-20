@@ -21,6 +21,7 @@
 <td><code>{{ .name }}</code></td>
 <td>{{ if .required }}✅{{ end }}</td>
 <td>
+<!-- Type -->
   {{- $matches := findRESubmatch `(Array<|Map<String, )*([^>]+)(>*)` .type 1 -}}
   {{- $captures := index $matches 0 -}}
 
@@ -38,11 +39,16 @@
   {{- end -}}
   {{- $typeSuffix -}}
 </strong></em>
-<br>
-  {{- .description | markdownify }}{{ if .default }}
-<br>
-<br>
-<strong>Default:</strong> <code>{{ .default }}</code>{{ end }}</td>
+
+<!-- Description -->
+<p>{{- .description | markdownify -}}</p>
+
+<!-- Default value -->
+  {{- if .default -}}
+<p><strong>Default:</strong> <code>{{ .default }}</code></p>
+  {{- end -}}
+
+</td>
 </tr>
   {{- end }}
 {{- end }}
