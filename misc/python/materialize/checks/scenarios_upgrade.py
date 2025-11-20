@@ -29,9 +29,9 @@ from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
 from materialize.version_list import (
+    get_compatible_upgrade_from_versions,
     get_published_minor_mz_versions,
     get_self_managed_versions,
-    get_supported_self_managed_versions,
 )
 
 # late initialization
@@ -588,7 +588,7 @@ class SelfManagedLinearUpgradePathManipulateBeforeUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
@@ -644,7 +644,7 @@ class SelfManagedLinearUpgradePathManipulateDuringUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:
@@ -710,7 +710,7 @@ class SelfManagedRandomUpgradePath(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def _generate_random_upgrade_path(
@@ -829,7 +829,7 @@ class SelfManagedEarliestToLatestDirectUpgrade(Scenario):
         features: Features,
         seed: str | None = None,
     ):
-        self.self_managed_versions = get_supported_self_managed_versions()
+        self.self_managed_versions = get_compatible_upgrade_from_versions()
         super().__init__(checks, executor, features, seed)
 
     def base_version(self) -> MzVersion:

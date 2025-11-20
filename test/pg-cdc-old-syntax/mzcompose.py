@@ -47,7 +47,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
-from materialize.version_list import get_supported_self_managed_versions
+from materialize.version_list import get_compatible_upgrade_from_versions
 
 # Set the max slot WAL keep size to 10MB
 DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
@@ -535,7 +535,7 @@ def workflow_migration_multi_version_upgrade(
         testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
     )
 
-    supported_self_managed_versions = get_supported_self_managed_versions()
+    supported_self_managed_versions = get_compatible_upgrade_from_versions()
 
     if args.mode == "random":
         versions = generate_random_upgrade_path(
