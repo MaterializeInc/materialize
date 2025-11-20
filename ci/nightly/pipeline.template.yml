@@ -2367,6 +2367,7 @@ steps:
     steps:
       - id: orchestratord-defaults
         label: "Orchestratord test (defaults from documentation)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2379,6 +2380,7 @@ steps:
 
       - id: orchestratord-default-properties
         label: "Orchestratord test (defaults for properties)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2391,6 +2393,7 @@ steps:
 
       - id: orchestratord-individual
         label: "Orchestratord test (individual properties)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2403,76 +2406,65 @@ steps:
 
       - id: orchestratord-combine
         label: "Orchestratord test (combine properties)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: build-aarch64
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=noop, --properties=combine, --runtime=3600, --recreate-cluster]
+              args: [--action=noop, --properties=combine, --runtime=1800, --recreate-cluster]
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-individual
         label: "Orchestratord test (upgrade, individual props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade, --properties=individual, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade, --properties=individual, --runtime=1800, --recreate-cluster]
               ci-builder: stable
-        env:
-          # Old versions are not on GHCR yet
-          MZ_GHCR: 0
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/materialize/pull/34214"
+          queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-combine
         label: "Orchestratord test (upgrade, combine props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade, --properties=combine, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade, --properties=combine, --runtime=1800, --recreate-cluster]
               ci-builder: stable
-        env:
-          # Old versions are not on GHCR yet
-          MZ_GHCR: 0
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/materialize/pull/34214"
+          queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade-chain, --properties=individual, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade-chain, --properties=individual, --runtime=1800, --recreate-cluster]
               ci-builder: stable
-        env:
-          # Old versions are not on GHCR yet
-          MZ_GHCR: 0
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
-        skip: "https://github.com/MaterializeInc/materialize/pull/34214"
+          queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-chain-combine
         label: "Orchestratord test (upgrade chain, combine props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              args: [--action=upgrade-chain, --properties=combine, --runtime=3600, --recreate-cluster]
+              args: [--action=upgrade-chain, --properties=combine, --runtime=1800, --recreate-cluster]
               ci-builder: stable
-        env:
-          # Old versions are not on GHCR yet
-          MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-16cpu-32gb
-        skip: "https://github.com/MaterializeInc/materialize/pull/34214"
