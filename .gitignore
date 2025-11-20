@@ -60,3 +60,5 @@ flake.lock
 /known-docker-images.txt
 /test/sqllogictest/sqlite
 my-local-mz/
+/test/orchestratord/cluster.yaml
+uv.lock
