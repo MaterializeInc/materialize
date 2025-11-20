@@ -74,18 +74,34 @@ def get_self_managed_versions() -> list[MzVersion]:
     return sorted(result)
 
 
-# Gets the supported self managed versions relative to the current version
-def get_supported_self_managed_versions() -> list[MzVersion]:
-    self_managed_versions = fetch_self_managed_versions()
-    # TODO (multiversion2): Change this to filter on versions between the next and previous unskippable major release
-    # when unskippable versions are implemented.
-    return sorted(
-        {
+# Gets the range of versions we can "upgrade from" to the current version, sorted in ascending order.
+def get_compatible_upgrade_from_versions() -> list[MzVersion]:
+
+    # Determine the current MzVersion from the environment, or from a version constant
+    current_version = MzVersion.parse_cargo()
+
+    published_versions_within_one_major_version = {
+        v
+        for v in get_published_mz_versions_within_one_major_version()
+        if abs(v.major - current_version.major) <= 1 and v <= current_version
+    }
+
+    if current_version.major <= 26:
+        # For versions <= 26, we can only upgrade from 25.2 self-managed versions
+        self_managed_25_2_versions = {
             v.version
-            for v in self_managed_versions
+            for v in fetch_self_managed_versions()
             if v.helm_version.major == 25 and v.helm_version.minor == 2
         }
-    )
+
+        return sorted(
+            self_managed_25_2_versions.union(
+                published_versions_within_one_major_version
+            )
+        )
+    else:
+        # For versions > 26, get all mz versions within 1 major version of current_version
+        return sorted(published_versions_within_one_major_version)
 
 
 BAD_SELF_MANAGED_VERSIONS = {
@@ -439,6 +455,8 @@ def get_all_mz_versions(
             version_type=MzVersion, newest_first=newest_first
         )
         if version not in INVALID_VERSIONS
+        # Exclude release candidates
+        and not version.prerelease
     ]
 
 
@@ -457,9 +475,24 @@ def get_all_published_mz_versions(
     newest_first: bool = True, limit: int | None = None
 ) -> list[MzVersion]:
     """Get all mz versions based on git tags. This method ensures that images of the versions exist."""
-    return limit_to_published_versions(
-        get_all_mz_versions(newest_first=newest_first), limit
-    )
+    all_versions = get_all_mz_versions(newest_first=newest_first)
+    print(f"all_versions: {all_versions}")
+    return limit_to_published_versions(all_versions, limit)
+
+
+def get_published_mz_versions_within_one_major_version(
+    newest_first: bool = True,
+) -> list[MzVersion]:
+    """Get all previous mz versions within one major version of the current version. Ensure that images of the versions exist."""
+    current_version = MzVersion.parse_cargo()
+    all_versions = get_all_mz_versions(newest_first=newest_first)
+    versions_within_one_major_version = {
+        v
+        for v in all_versions
+        if abs(v.major - current_version.major) <= 1 and v <= current_version
+    }
+
+    return limit_to_published_versions(list(versions_within_one_major_version))
 
 
 def limit_to_published_versions(
