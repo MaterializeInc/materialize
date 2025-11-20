@@ -19,6 +19,7 @@ struct DocsField {
     description: String,
     default: Option<serde_json::Value>,
     required: bool,
+    deprecated: bool,
 }
 
 impl DocsField {
@@ -48,6 +49,7 @@ impl DocsField {
                     .to_owned();
                 let default = field_props.get("default").cloned();
                 let required = required_fields.contains(name);
+                let deprecated = description.to_lowercase().contains("deprecated");
 
                 // Get the field type (without nested fields)
                 let r#type = DocsField::extract_field_type(
@@ -68,6 +70,7 @@ impl DocsField {
                     description,
                     default,
                     required,
+                    deprecated,
                 });
             }
             types_map.insert(type_name.to_owned(), fields);

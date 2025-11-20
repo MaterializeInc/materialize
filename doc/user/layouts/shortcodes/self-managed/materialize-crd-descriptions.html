@@ -10,11 +10,13 @@
 </thead>
 <tbody>
 {{ range (index . 1) }}
+{{- if not .deprecated }}
 <tr>
 <td><code>{{ .name }}</code></td>
 <td>{{ if .required }}✅{{ end }}</td>
-<td><em><strong>{{ .type }}</strong></em><br>{{ .description | markdownify }} {{ if .default }}<br><br><strong>Default:</strong> <code>{{ .default }}</code>{{ end }}</td>
+<td><em><strong>{{ .type }}</strong></em><br>{{ .description | markdownify }}{{ if .default }}<br><br><strong>Default:</strong> <code>{{ .default }}</code>{{ end }}</td>
 </tr>
+{{- end }}
 {{ end }}
 </tbody>
 </table>
