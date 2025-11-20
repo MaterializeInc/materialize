@@ -30,8 +30,7 @@ import requests
 import yaml
 from semver.version import Version
 
-from materialize import MZ_ROOT, ci_util, git, spawn, ui
-from materialize.docker import MZ_GHCR_DEFAULT
+from materialize import MZ_ROOT, ci_util, git, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -41,6 +40,7 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.environmentd import Environmentd
+from materialize.mzcompose.services.mz_debug import MzDebug
 from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.util import all_subclasses
@@ -55,7 +55,24 @@ SERVICES = [
     Environmentd(),
     Clusterd(),
     Balancerd(),
+    MzDebug(),
 ]
+
+
+def run_mz_debug() -> None:
+    # TODO: Hangs a lot in CI
+    # Only using capture because it's too noisy
+    # spawn.capture(
+    #     [
+    #         "./mz-debug",
+    #         "self-managed",
+    #         "--k8s-namespace",
+    #         "materialize-environment",
+    #         "--mz-instance-name",
+    #         "12345678-1234-1234-1234-123456789012",
+    #     ]
+    # )
+    pass
 
 
 def get_tag(tag: str | None = None) -> str:
@@ -498,14 +515,9 @@ class EnvironmentdImageRef(Modification):
         def check() -> None:
             environmentd = get_environmentd_data()
             image = environmentd["items"][0]["spec"]["containers"][0]["image"]
-            image_registry = (
-                "ghcr.io/materializeinc/materialize"
-                if ui.env_is_truthy("MZ_GHCR", MZ_GHCR_DEFAULT)
-                else "materialize"
-            )
-            expected = f"{image_registry}/environmentd:{self.value}"
+            expected = f"materialize/environmentd:{self.value}"
             assert (
-                image == expected
+                image == expected or f"ghcr.io/materializeinc/{image}" == expected
             ), f"Expected environmentd image {expected}, but found {image}"
 
         retry(check, 240)
@@ -1070,11 +1082,11 @@ class ConsoleResources(Modification):
 class AuthenticatorKind(Modification):
     @classmethod
     def values(cls, version: MzVersion) -> list[Any]:
-        # Test None, Password (v0.147.7+), and Sasl (v0.147.16+)
+        # Test None, Password (v0.147.7+), and Sasl
         result = ["None"]
         if version >= MzVersion.parse_mz("v0.147.7"):
             result.append("Password")
-        if version >= MzVersion.parse_mz("v0.147.16"):
+        if version >= MzVersion.parse_mz("v26.0.0"):
             result.append("Sasl")
         return result
 
@@ -1100,13 +1112,13 @@ class AuthenticatorKind(Modification):
         if self.value == "Password" and version <= MzVersion.parse_mz("v0.147.6"):
             return
 
-        if self.value == "Sasl" and version < MzVersion.parse_mz("v0.147.16"):
+        if self.value == "Sasl" and version < MzVersion.parse_mz("v26.0.0"):
             return
 
         port = (
             6875
             if (version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password")
-            or (version >= MzVersion.parse_mz("v0.147.16") and self.value == "Sasl")
+            or (version >= MzVersion.parse_mz("v26.0.0") and self.value == "Sasl")
             else 6877
         )
         for i in range(120):
@@ -1252,10 +1264,23 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    current_version = get_tag(args.tag)
+    c.up(Service("mz-debug", idle=True))
+    c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
+
+    current_version = get_version(args.tag)
 
     # Following https://materialize.com/docs/installation/install-on-local-kind/
-    for version in reversed(get_self_managed_versions() + [get_version(args.tag)]):
+    # orchestratord test can't run against future versions, so ignore those
+    versions = reversed(
+        [
+            version
+            for version in get_self_managed_versions()
+            if version < current_version
+        ]
+        + [current_version]
+    )
+    for version in versions:
+        print(f"--- Running with defaults against {version}")
         dir = "my-local-mz"
         if os.path.exists(dir):
             shutil.rmtree(dir)
@@ -1392,9 +1417,6 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
             materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
         assert len(materialize_setup) == 3
 
-        print(version)
-        print(current_version)
-        print(version == current_version)
         if version == current_version:
             materialize_setup[2]["spec"][
                 "environmentdImageRef"
@@ -1493,6 +1515,7 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ]
             )
             raise ValueError("Never completed")
+        run_mz_debug()
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1534,7 +1557,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "0.29.0"
     ), f"kind >= v0.29.0 required, while you are on {kind_version}"
 
-    c.up(Service("testdrive", idle=True))
+    c.up(Service("testdrive", idle=True), Service("mz-debug", idle=True))
+    c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
 
     cluster = "kind"
     clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
@@ -1658,9 +1682,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     mods.append(EnvironmentdImageRef(str(args.tag)))
                 run_scenario([mods], definition)
         elif action == Action.Upgrade:
-            assert not ui.env_is_truthy(
-                "MZ_GHCR", MZ_GHCR_DEFAULT
-            ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
                 datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
@@ -1683,9 +1704,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ]
                 run_scenario(scenario, definition)
         elif action == Action.UpgradeChain:
-            assert not ui.env_is_truthy(
-                "MZ_GHCR", MZ_GHCR_DEFAULT
-            ), "Manually set MZ_GHCR=0 as an environment variable for upgrade testing"
             assert args.runtime
             end_time = (
                 datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
@@ -1806,18 +1824,14 @@ def run_scenario(
                 mod.modify(definition)
                 if mod.value in mod.failed_reconciliation_values():
                     expect_fail = True
-        if not initialize:
-            definition["materialize"]["spec"][
-                "rolloutStrategy"
-            ] = "ImmediatelyPromoteCausingDowntime"
-            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
-            run(definition, expect_fail)
         if initialize:
             init(definition)
             run(definition, expect_fail)
             initialize = False  # only initialize once
         else:
             upgrade(definition, expect_fail)
+            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+            run(definition, expect_fail)
         mod_dict = {mod.__class__: mod.value for mod in mods}
         for subclass in all_subclasses(Modification):
             if subclass not in mod_dict:
@@ -1831,6 +1845,9 @@ def run_scenario(
                 f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
             )
             raise
+        finally:
+            if not expect_fail:
+                run_mz_debug()
 
 
 def init(definition: dict[str, Any]) -> None:
@@ -2006,4 +2023,4 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
         )
         raise ValueError("Never completed")
     # Wait a bit for the status to stabilize
-    time.sleep(60)
+    time.sleep(180)
