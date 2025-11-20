@@ -7,18 +7,46 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::cmp::Ordering;
+
 use indexmap::{IndexMap, IndexSet};
 use mz_cloud_resources::crd::materialize::v1alpha1::MaterializeSpec;
 use schemars::schema_for;
 use serde::Serialize;
 
-#[derive(Serialize)]
+#[derive(Serialize, PartialEq, Eq)]
 struct DocsField {
     name: String,
     r#type: String,
     description: String,
     default: Option<serde_json::Value>,
     required: bool,
+    deprecated: bool,
+}
+impl PartialOrd for DocsField {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for DocsField {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (
+            self.required,
+            other.required,
+            self.deprecated,
+            other.deprecated,
+        ) {
+            // required before other stuff
+            (true, false, _, _) => Ordering::Less,
+            (false, true, _, _) => Ordering::Greater,
+            // deprecated after other stuff
+            (_, _, true, false) => Ordering::Greater,
+            (_, _, false, true) => Ordering::Less,
+            // alphabetical otherwise
+            (_, _, _, _) => self.name.cmp(&other.name),
+        }
+    }
 }
 
 impl DocsField {
@@ -48,6 +76,7 @@ impl DocsField {
                     .to_owned();
                 let default = field_props.get("default").cloned();
                 let required = required_fields.contains(name);
+                let deprecated = description.to_lowercase().contains("deprecated");
 
                 // Get the field type (without nested fields)
                 let r#type = DocsField::extract_field_type(
@@ -68,6 +97,7 @@ impl DocsField {
                     description,
                     default,
                     required,
+                    deprecated,
                 });
             }
             types_map.insert(type_name.to_owned(), fields);
@@ -317,6 +347,13 @@ fn main() {
         &mut processed_types,
     );
 
-    let types_vec: Vec<(String, Vec<DocsField>)> = types_map.into_iter().rev().collect();
+    let types_vec: Vec<(String, Vec<DocsField>)> = types_map
+        .into_iter()
+        .rev()
+        .map(|(name, mut fields)| {
+            fields.sort();
+            (name, fields)
+        })
+        .collect();
     println!("{}", serde_json::to_string_pretty(&types_vec).unwrap());
 }

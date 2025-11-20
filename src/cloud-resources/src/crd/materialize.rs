@@ -102,11 +102,15 @@ pub mod v1alpha1 {
         pub environmentd_extra_args: Option<Vec<String>>,
         /// Extra environment variables to pass to the environmentd binary.
         pub environmentd_extra_env: Option<Vec<EnvVar>>,
-        /// DEPRECATED
+        /// {{<warning>}}
+        /// Deprecated.
+        ///
+        /// Use `service_account_annotations` to set "eks.amazonaws.com/role-arn" instead.
+        /// {{</warning>}}
+        ///
         /// If running in AWS, override the IAM role to use to give
         /// environmentd access to the persist S3 bucket.
-        /// DEPRECATED
-        /// Use `service_account_annotations` to set "eks.amazonaws.com/role-arn" instead.
+        #[kube(deprecated)]
         pub environmentd_iam_role_arn: Option<String>,
         /// If running in AWS, override the IAM role to use to support
         /// the CREATE CONNECTION feature.
@@ -168,7 +172,10 @@ pub mod v1alpha1 {
         /// same value as `requestRollout`.
         #[serde(default)]
         pub force_rollout: Uuid,
+        /// {{<warning>}}
         /// Deprecated and ignored. Use `rolloutStrategy` instead.
+        /// {{</warning>}}
+        #[kube(deprecated)]
         #[serde(default)]
         pub in_place_rollout: bool,
         /// Rollout strategy to use when upgrading this Materialize instance.

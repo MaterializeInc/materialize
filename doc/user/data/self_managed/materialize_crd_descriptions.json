@@ -3,200 +3,228 @@
     "MaterializeSpec",
     [
       {
-        "name": "environmentdImageRef",
-        "type": "String",
-        "description": "The environmentd image to run.",
-        "default": null,
-        "required": true
-      },
-      {
-        "name": "environmentdExtraArgs",
-        "type": "Array<String>",
-        "description": "Extra args to pass to the environmentd binary.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "environmentdExtraEnv",
-        "type": "Array<io.k8s.api.core.v1.EnvVar>",
-        "description": "Extra environment variables to pass to the environmentd binary.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "environmentdIamRoleArn",
-        "type": "String",
-        "description": "DEPRECATED\nIf running in AWS, override the IAM role to use to give\nenvironmentd access to the persist S3 bucket.\nDEPRECATED\nUse `service_account_annotations` to set \"eks.amazonaws.com/role-arn\" instead.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "environmentdConnectionRoleArn",
-        "type": "String",
-        "description": "If running in AWS, override the IAM role to use to support\nthe CREATE CONNECTION feature.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "environmentdResourceRequirements",
-        "type": "io.k8s.api.core.v1.ResourceRequirements",
-        "description": "Resource requirements for the environmentd pod.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "environmentdScratchVolumeStorageRequirement",
-        "type": "io.k8s.apimachinery.pkg.api.resource.Quantity",
-        "description": "Amount of disk to allocate, if a storage class is provided.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "balancerdResourceRequirements",
-        "type": "io.k8s.api.core.v1.ResourceRequirements",
-        "description": "Resource requirements for the balancerd pod.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "consoleResourceRequirements",
-        "type": "io.k8s.api.core.v1.ResourceRequirements",
-        "description": "Resource requirements for the console pod.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "balancerdReplicas",
-        "type": "Integer",
-        "description": "Number of balancerd pods to create.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "consoleReplicas",
-        "type": "Integer",
-        "description": "Number of console pods to create.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "serviceAccountName",
-        "type": "String",
-        "description": "Name of the kubernetes service account to use.\nIf not set, we will create one with the same name as this Materialize object.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "serviceAccountAnnotations",
-        "type": "Map<String, String>",
-        "description": "Annotations to apply to the service account.\n\nAnnotations on service accounts are commonly used by cloud providers for IAM.\nAWS uses \"eks.amazonaws.com/role-arn\".\nAzure uses \"azure.workload.identity/client-id\", but\nadditionally requires \"azure.workload.identity/use\": \"true\" on the pods.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "serviceAccountLabels",
-        "type": "Map<String, String>",
-        "description": "Labels to apply to the service account.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "podAnnotations",
-        "type": "Map<String, String>",
-        "description": "Annotations to apply to the pods.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "podLabels",
-        "type": "Map<String, String>",
-        "description": "Labels to apply to the pods.",
-        "default": null,
-        "required": false
-      },
-      {
-        "name": "requestRollout",
-        "type": "Uuid",
-        "description": "When changes are made to the environmentd resources (either via\nmodifying fields in the spec here or by deploying a new\norchestratord version which changes how resources are generated),\nexisting environmentd processes won't be automatically restarted.\nIn order to trigger a restart, the request_rollout field should be\nset to a new (random) value. Once the rollout completes, the value\nof `status.lastCompletedRolloutRequest` will be set to this value\nto indicate completion.\n\nDefaults to a random value in order to ensure that the first\ngeneration rollout is automatically triggered.",
-        "default": "00000000-0000-0000-0000-000000000000",
-        "required": false
-      },
-      {
-        "name": "forcePromote",
-        "type": "Uuid",
-        "description": "If `forcePromote` is set to the same value as `requestRollout`, the\ncurrent rollout will skip waiting for clusters in the new\ngeneration to rehydrate before promoting the new environmentd to\nleader.",
-        "default": "00000000-0000-0000-0000-000000000000",
-        "required": false
-      },
-      {
-        "name": "forceRollout",
-        "type": "Uuid",
-        "description": "This value will be written to an annotation in the generated\nenvironmentd statefulset, in order to force the controller to\ndetect the generated resources as changed even if no other changes\nhappened. This can be used to force a rollout to a new generation\neven without making any meaningful changes, by setting it to the\nsame value as `requestRollout`.",
-        "default": "00000000-0000-0000-0000-000000000000",
-        "required": false
-      },
-      {
-        "name": "inPlaceRollout",
-        "type": "Bool",
-        "description": "Deprecated and ignored. Use `rolloutStrategy` instead.",
-        "default": false,
-        "required": false
-      },
-      {
-        "name": "rolloutStrategy",
-        "type": "Enum",
-        "description": "Rollout strategy to use when upgrading this Materialize instance.\n\nValid values:\n- `WaitUntilReady` (default):<br>  Create a new generation of pods, leaving the old generation around until the\n  new ones are ready to take over.\n  This minimizes downtime, and is what almost everyone should use.\n- `ImmediatelyPromoteCausingDowntime`:<br>  {{<warning>}}\n  THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!\n  \n  This strategy should ONLY be used by customers with physical hardware who do not have\n  enough hardware for the `WaitUntilReady` strategy. If you think you want this, please\n  consult with Materialize engineering to discuss your situation.\n  {{</warning>}}\n  \n  Tear down the old generation of pods and promote the new generation of pods immediately,\n  without waiting for the new generation of pods to be ready.",
-        "default": "WaitUntilReady",
-        "required": false
-      },
-      {
         "name": "backendSecretName",
         "type": "String",
         "description": "The name of a secret containing `metadata_backend_url` and `persist_backend_url`.\nIt may also contain `external_login_password_mz_system`, which will be used as\nthe password for the `mz_system` user if `authenticatorKind` is `Password`.",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
+      },
+      {
+        "name": "environmentdImageRef",
+        "type": "String",
+        "description": "The environmentd image to run.",
+        "default": null,
+        "required": true,
+        "deprecated": false
       },
       {
         "name": "authenticatorKind",
         "type": "Enum",
         "description": "How to authenticate with Materialize.\n\nValid values:\n- `Frontegg`:<br>  Authenticate users using Frontegg.\n- `Password`:<br>  Authenticate users using internally stored password hashes.\n  The backend secret must contain external_login_password_mz_system.\n- `Sasl`:<br>  Authenticate users using SASL.\n- `None` (default):<br>  Do not authenticate users. Trust they are who they say they are without verification.",
         "default": "None",
-        "required": false
-      },
-      {
-        "name": "enableRbac",
-        "type": "Bool",
-        "description": "Whether to enable role based access control. Defaults to false.",
-        "default": false,
-        "required": false
-      },
-      {
-        "name": "environmentId",
-        "type": "Uuid",
-        "description": "The value used by environmentd (via the --environment-id flag) to\nuniquely identify this instance. Must be globally unique, and\nis required if a license key is not provided.\nNOTE: This value MUST NOT be changed in an existing instance,\nsince it affects things like the way data is stored in the persist\nbackend.",
-        "default": "00000000-0000-0000-0000-000000000000",
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "balancerdExternalCertificateSpec",
         "type": "MaterializeCertSpec",
         "description": "The configuration for generating an x509 certificate using cert-manager for balancerd\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "balancerdReplicas",
+        "type": "Integer",
+        "description": "Number of balancerd pods to create.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "balancerdResourceRequirements",
+        "type": "io.k8s.api.core.v1.ResourceRequirements",
+        "description": "Resource requirements for the balancerd pod.",
+        "default": null,
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "consoleExternalCertificateSpec",
         "type": "MaterializeCertSpec",
         "description": "The configuration for generating an x509 certificate using cert-manager for the console\nto present to incoming connections.\nThe `dnsNames` and `issuerRef` fields are required.\nNot yet implemented.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "consoleReplicas",
+        "type": "Integer",
+        "description": "Number of console pods to create.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "consoleResourceRequirements",
+        "type": "io.k8s.api.core.v1.ResourceRequirements",
+        "description": "Resource requirements for the console pod.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "enableRbac",
+        "type": "Bool",
+        "description": "Whether to enable role based access control. Defaults to false.",
+        "default": false,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "environmentId",
+        "type": "Uuid",
+        "description": "The value used by environmentd (via the --environment-id flag) to\nuniquely identify this instance. Must be globally unique, and\nis required if a license key is not provided.\nNOTE: This value MUST NOT be changed in an existing instance,\nsince it affects things like the way data is stored in the persist\nbackend.",
+        "default": "00000000-0000-0000-0000-000000000000",
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "environmentdConnectionRoleArn",
+        "type": "String",
+        "description": "If running in AWS, override the IAM role to use to support\nthe CREATE CONNECTION feature.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "environmentdExtraArgs",
+        "type": "Array<String>",
+        "description": "Extra args to pass to the environmentd binary.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "environmentdExtraEnv",
+        "type": "Array<io.k8s.api.core.v1.EnvVar>",
+        "description": "Extra environment variables to pass to the environmentd binary.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "environmentdResourceRequirements",
+        "type": "io.k8s.api.core.v1.ResourceRequirements",
+        "description": "Resource requirements for the environmentd pod.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "environmentdScratchVolumeStorageRequirement",
+        "type": "io.k8s.apimachinery.pkg.api.resource.Quantity",
+        "description": "Amount of disk to allocate, if a storage class is provided.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "forcePromote",
+        "type": "Uuid",
+        "description": "If `forcePromote` is set to the same value as `requestRollout`, the\ncurrent rollout will skip waiting for clusters in the new\ngeneration to rehydrate before promoting the new environmentd to\nleader.",
+        "default": "00000000-0000-0000-0000-000000000000",
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "forceRollout",
+        "type": "Uuid",
+        "description": "This value will be written to an annotation in the generated\nenvironmentd statefulset, in order to force the controller to\ndetect the generated resources as changed even if no other changes\nhappened. This can be used to force a rollout to a new generation\neven without making any meaningful changes, by setting it to the\nsame value as `requestRollout`.",
+        "default": "00000000-0000-0000-0000-000000000000",
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "internalCertificateSpec",
         "type": "MaterializeCertSpec",
         "description": "The cert-manager Issuer or ClusterIssuer to use for database internal communication.\nThe `issuerRef` field is required.\nThis currently is only used for environmentd, but will eventually support clusterd.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "podAnnotations",
+        "type": "Map<String, String>",
+        "description": "Annotations to apply to the pods.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "podLabels",
+        "type": "Map<String, String>",
+        "description": "Labels to apply to the pods.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "requestRollout",
+        "type": "Uuid",
+        "description": "When changes are made to the environmentd resources (either via\nmodifying fields in the spec here or by deploying a new\norchestratord version which changes how resources are generated),\nexisting environmentd processes won't be automatically restarted.\nIn order to trigger a restart, the request_rollout field should be\nset to a new (random) value. Once the rollout completes, the value\nof `status.lastCompletedRolloutRequest` will be set to this value\nto indicate completion.\n\nDefaults to a random value in order to ensure that the first\ngeneration rollout is automatically triggered.",
+        "default": "00000000-0000-0000-0000-000000000000",
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "rolloutStrategy",
+        "type": "Enum",
+        "description": "Rollout strategy to use when upgrading this Materialize instance.\n\nValid values:\n- `WaitUntilReady` (default):<br>  Create a new generation of pods, leaving the old generation around until the\n  new ones are ready to take over.\n  This minimizes downtime, and is what almost everyone should use.\n- `ImmediatelyPromoteCausingDowntime`:<br>  {{<warning>}}\n  THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!\n  \n  This strategy should ONLY be used by customers with physical hardware who do not have\n  enough hardware for the `WaitUntilReady` strategy. If you think you want this, please\n  consult with Materialize engineering to discuss your situation.\n  {{</warning>}}\n  \n  Tear down the old generation of pods and promote the new generation of pods immediately,\n  without waiting for the new generation of pods to be ready.",
+        "default": "WaitUntilReady",
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "serviceAccountAnnotations",
+        "type": "Map<String, String>",
+        "description": "Annotations to apply to the service account.\n\nAnnotations on service accounts are commonly used by cloud providers for IAM.\nAWS uses \"eks.amazonaws.com/role-arn\".\nAzure uses \"azure.workload.identity/client-id\", but\nadditionally requires \"azure.workload.identity/use\": \"true\" on the pods.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "serviceAccountLabels",
+        "type": "Map<String, String>",
+        "description": "Labels to apply to the service account.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "serviceAccountName",
+        "type": "String",
+        "description": "Name of the kubernetes service account to use.\nIf not set, we will create one with the same name as this Materialize object.",
+        "default": null,
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "environmentdIamRoleArn",
+        "type": "String",
+        "description": "{{<warning>}}\nDeprecated.\n\nUse `service_account_annotations` to set \"eks.amazonaws.com/role-arn\" instead.\n{{</warning>}}\n\nIf running in AWS, override the IAM role to use to give\nenvironmentd access to the persist S3 bucket.",
+        "default": null,
+        "required": false,
+        "deprecated": true
+      },
+      {
+        "name": "inPlaceRollout",
+        "type": "Bool",
+        "description": "{{<warning>}}\nDeprecated and ignored. Use `rolloutStrategy` instead.\n{{</warning>}}",
+        "default": false,
+        "required": false,
+        "deprecated": true
       }
     ]
   ],
@@ -208,35 +236,40 @@
         "type": "Array<String>",
         "description": "Additional DNS names the certificate will be valid for.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "duration",
         "type": "String",
         "description": "Duration the certificate will be requested for.\nValue must be in units accepted by Go\n[`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).",
         "default": null,
-        "required": false
-      },
-      {
-        "name": "renewBefore",
-        "type": "String",
-        "description": "Duration before expiration the certificate will be renewed.\nValue must be in units accepted by Go\n[`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).",
-        "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "issuerRef",
         "type": "CertificateIssuerRef",
         "description": "Reference to an `Issuer` or `ClusterIssuer` that will generate the certificate.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
+      },
+      {
+        "name": "renewBefore",
+        "type": "String",
+        "description": "Duration before expiration the certificate will be renewed.\nValue must be in units accepted by Go\n[`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).",
+        "default": null,
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "secretTemplate",
         "type": "CertificateSecretTemplate",
         "description": "Additional annotations and labels to include in the Certificate object.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -248,14 +281,16 @@
         "type": "Map<String, String>",
         "description": "Annotations is a key value map to be copied to the target Kubernetes Secret.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "labels",
         "type": "Map<String, String>",
         "description": "Labels is a key value map to be copied to the target Kubernetes Secret.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -263,25 +298,28 @@
     "CertificateIssuerRef",
     [
       {
+        "name": "name",
+        "type": "String",
+        "description": "Name of the resource being referred to.",
+        "default": null,
+        "required": true,
+        "deprecated": false
+      },
+      {
         "name": "group",
         "type": "String",
         "description": "Group of the resource being referred to.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "kind",
         "type": "String",
         "description": "Kind of the resource being referred to.",
         "default": null,
-        "required": false
-      },
-      {
-        "name": "name",
-        "type": "String",
-        "description": "Name of the resource being referred to.",
-        "default": null,
-        "required": true
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -293,21 +331,24 @@
         "type": "Array<io.k8s.api.core.v1.ResourceClaim>",
         "description": "Claims lists the names of resources, defined in spec.resourceClaims, that are used by this container.\n\nThis is an alpha field and requires enabling the DynamicResourceAllocation feature gate.\n\nThis field is immutable. It can only be set for containers.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "limits",
         "type": "Map<String, io.k8s.apimachinery.pkg.api.resource.Quantity>",
         "description": "Limits describes the maximum amount of compute resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "requests",
         "type": "Map<String, io.k8s.apimachinery.pkg.api.resource.Quantity>",
         "description": "Requests describes the minimum amount of compute resources required. If Requests is omitted for a container, it defaults to Limits if that is explicitly specified, otherwise to an implementation-defined value. Requests cannot exceed Limits. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -319,14 +360,16 @@
         "type": "String",
         "description": "Name must match the name of one entry in pod.spec.resourceClaims of the Pod where this field is used. It makes that resource available inside a container.",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
       },
       {
         "name": "request",
         "type": "String",
         "description": "Request is the name chosen for a request in the referenced claim. If empty, everything from the claim is made available, otherwise only the result of this request.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -338,21 +381,24 @@
         "type": "String",
         "description": "Name of the environment variable. Must be a C_IDENTIFIER.",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
       },
       {
         "name": "value",
         "type": "String",
         "description": "Variable references $(VAR_NAME) are expanded using the previously defined environment variables in the container and any service environment variables. If a variable cannot be resolved, the reference in the input string will be unchanged. Double $$ are reduced to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e. \"$$(VAR_NAME)\" will produce the string literal \"$(VAR_NAME)\". Escaped references will never be expanded, regardless of whether the variable exists or not. Defaults to \"\".",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "valueFrom",
         "type": "io.k8s.api.core.v1.EnvVarSource",
         "description": "Source for the environment variable's value. Cannot be used if value is not empty.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -364,28 +410,32 @@
         "type": "io.k8s.api.core.v1.ConfigMapKeySelector",
         "description": "Selects a key of a ConfigMap.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "fieldRef",
         "type": "io.k8s.api.core.v1.ObjectFieldSelector",
         "description": "Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`, spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "resourceFieldRef",
         "type": "io.k8s.api.core.v1.ResourceFieldSelector",
         "description": "Selects a resource of the container: only resources limits and requests (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "secretKeyRef",
         "type": "io.k8s.api.core.v1.SecretKeySelector",
         "description": "Selects a key of a secret in the pod's namespace",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -397,21 +447,24 @@
         "type": "String",
         "description": "The key of the secret to select from.  Must be a valid secret key.",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
       },
       {
         "name": "name",
         "type": "String",
         "description": "Name of the referent. This field is effectively required, but due to backwards compatibility is allowed to be empty. Instances of this type with an empty value here are almost certainly wrong. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
       },
       {
         "name": "optional",
         "type": "Bool",
         "description": "Specify whether the Secret or its key must be defined",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -419,25 +472,28 @@
     "io.k8s.api.core.v1.ResourceFieldSelector",
     [
       {
+        "name": "resource",
+        "type": "String",
+        "description": "Required: resource to select",
+        "default": null,
+        "required": true,
+        "deprecated": false
+      },
+      {
         "name": "containerName",
         "type": "String",
         "description": "Container name: required for volumes, optional for env vars",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       },
       {
         "name": "divisor",
         "type": "io.k8s.apimachinery.pkg.api.resource.Quantity",
         "description": "Specifies the output format of the exposed resources, defaults to \"1\"",
         "default": null,
-        "required": false
-      },
-      {
-        "name": "resource",
-        "type": "String",
-        "description": "Required: resource to select",
-        "default": null,
-        "required": true
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -445,18 +501,20 @@
     "io.k8s.api.core.v1.ObjectFieldSelector",
     [
       {
-        "name": "apiVersion",
-        "type": "String",
-        "description": "Version of the schema the FieldPath is written in terms of, defaults to \"v1\".",
-        "default": null,
-        "required": false
-      },
-      {
         "name": "fieldPath",
         "type": "String",
         "description": "Path of the field to select in the specified API version.",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
+      },
+      {
+        "name": "apiVersion",
+        "type": "String",
+        "description": "Version of the schema the FieldPath is written in terms of, defaults to \"v1\".",
+        "default": null,
+        "required": false,
+        "deprecated": false
       }
     ]
   ],
@@ -468,21 +526,24 @@
         "type": "String",
         "description": "The key to select.",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
       },
       {
         "name": "name",
         "type": "String",
         "description": "Name of the referent. This field is effectively required, but due to backwards compatibility is allowed to be empty. Instances of this type with an empty value here are almost certainly wrong. More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names",
         "default": null,
-        "required": true
+        "required": true,
+        "deprecated": false
       },
       {
         "name": "optional",
         "type": "Bool",
         "description": "Specify whether the ConfigMap or its key must be defined",
         "default": null,
-        "required": false
+        "required": false,
+        "deprecated": false
       }
     ]
   ]
