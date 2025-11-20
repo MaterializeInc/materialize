@@ -75,6 +75,15 @@ impl IsolatedRuntime {
         IsolatedRuntime::new(&MetricsRegistry::new(), Some(TEST_THREADS))
     }
 
+    #[cfg(feature = "turmoil")]
+    /// Create a no-op shim that spawns tasks on the current tokio runtime.
+    ///
+    /// This is useful for simulation tests where we don't want to spawn additional threads and/or
+    /// tokio runtimes.
+    pub fn new_disabled() -> Self {
+        IsolatedRuntime { inner: None }
+    }
+
     /// Spawns a task onto this runtime.
     ///
     /// Note: We purposefully do not use the [`tokio::task::spawn_blocking`] API here, see the doc
@@ -86,10 +95,11 @@ impl IsolatedRuntime {
         F: Future + Send + 'static,
         F::Output: Send + 'static,
     {
-        self.inner
-            .as_ref()
-            .expect("exists until drop")
-            .spawn_named(name, fut)
+        if let Some(runtime) = &self.inner {
+            runtime.spawn_named(name, fut)
+        } else {
+            mz_ore::task::spawn(name, fut)
+        }
     }
 }
 
@@ -98,9 +108,8 @@ impl Drop for IsolatedRuntime {
         // We don't need to worry about `shutdown_background` leaking
         // blocking tasks (i.e., tasks spawned with `spawn_blocking`) because
         // the `IsolatedRuntime` wrapper prevents access to `spawn_blocking`.
-        self.inner
-            .take()
-            .expect("cannot drop twice")
-            .shutdown_background()
+        if let Some(runtime) = self.inner.take() {
+            runtime.shutdown_background();
+        }
     }
 }
