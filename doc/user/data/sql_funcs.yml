@@ -350,11 +350,11 @@
 
   - signature: 'lpad(s: str, len: int) -> str'
     description: "Prepend `s` with spaces up to length `len`,
-      or right truncate if `len` is less than the length of `s`."
+      or right truncate if `len` is less than the length of `s`. The maximum length of the result string is 100 MiB."
 
   - signature: 'lpad(s: str, len: int, p: str) -> str'
     description: "Prepend `s` with characters pulled from `p` up to length `len`,
-      or right truncate if `len` is less than the length of `s`."
+      or right truncate if `len` is less than the length of `s`. The maximum length of the result string is 100 MiB."
 
   - signature: 'ltrim(s: str) -> str'
     description: Trim all spaces from the left side of `s`.
@@ -422,7 +422,7 @@
       If `flags` is set to `i`, matches case-insensitively.
 
   - signature: 'repeat(s: str, n: int) -> str'
-    description: Replicate the string `n` times.
+    description: Replicate the string `n` times. The maximum length of the result string is 100 MiB.
 
   - signature: 'replace(s: str, f: str, r: str) -> str'
     description: "`s` with all instances of `f` replaced with `r`."

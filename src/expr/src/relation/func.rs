@@ -27,7 +27,7 @@ use mz_repr::adt::array::ArrayDimension;
 use mz_repr::adt::date::Date;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
-use mz_repr::adt::regex::Regex as ReprRegex;
+use mz_repr::adt::regex::{Regex as ReprRegex, RegexCompilationError};
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
     ColumnName, Datum, Diff, Row, RowArena, RowPacker, SharedRow, SqlColumnType, SqlRelationType,
@@ -3122,7 +3122,7 @@ impl FromStr for AnalyzedRegexOpts {
 pub struct AnalyzedRegex(ReprRegex, Vec<CaptureGroupDesc>, AnalyzedRegexOpts);
 
 impl AnalyzedRegex {
-    pub fn new(s: &str, opts: AnalyzedRegexOpts) -> Result<Self, regex::Error> {
+    pub fn new(s: &str, opts: AnalyzedRegexOpts) -> Result<Self, RegexCompilationError> {
         let r = ReprRegex::new(s, opts.case_insensitive)?;
         // TODO(benesch): remove potentially dangerous usage of `as`.
         #[allow(clippy::as_conversions)]
