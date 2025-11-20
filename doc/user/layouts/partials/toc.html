@@ -141,7 +141,7 @@
       const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
       return {
         id: h.id,
-        offset: rect.top + scrollTop - 80,  // 75 if banner is displayed (80 if 2 lines), 65 otherwise
+        offset: rect.top + scrollTop - 125,  // 65px banner + 60px menubar = 125px total
       };
     });
     const cutoff = $(document).height() - $(window).height() - SLOP;
@@ -183,7 +183,25 @@
   // Scroll to our massaged offsets on a hashchange event, to override the
   // browser's automatic scroll to the unmassaged offset.
   $(window).on("hashchange", function () {
-   $(window).trigger("scroll");
+    const hash = window.location.hash;
+    if (hash) {
+      const targetId = hash.substring(1);
+      const targetElement = document.getElementById(targetId);
+      if (targetElement) {
+        // Wait a bit for any tab switching to complete
+        setTimeout(() => {
+          const rect = targetElement.getBoundingClientRect();
+          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const targetOffset = rect.top + scrollTop - 125; // 65px banner + 60px menubar = 125px total
+          window.scrollTo({ top: targetOffset, behavior: 'smooth' });
+
+          // Update TOC highlighting after scrolling
+          setTimeout(() => {
+            $(window).trigger('scroll');
+          }, 50);
+        }, 100);
+      }
+    }
   });
 
   // Trigger an initial hash change event to handle scrolling to the page's
@@ -194,17 +212,13 @@
     }
   });
 
-  // Prevent double clicking on a TOC link from scrolling the page if we're
-  // already on that TOC link's section, as we won't get a hashchange event
-  // to fix up the scroll offset.
-  $(".toc a").click(function (e) {
-    if ($(this).attr("href") == window.location.hash) e.preventDefault();
-  });
-
-  // Activate tab when clicking on a TOC link that points to content within a tab
+  // Handle TOC link clicks - prevent default and scroll manually to account for fixed header
   $(document).on("click", ".toc a", function(e) {
     const $clickedLink = $(this);
-    const targetId = $clickedLink.attr("href").substring(1); // Remove the # from href
+    const href = $clickedLink.attr("href");
+    if (!href || !href.startsWith("#")) return;
+
+    const targetId = href.substring(1); // Remove the # from href
     const targetElement = document.getElementById(targetId);
 
     if (targetElement) {
@@ -245,9 +259,9 @@
             setTimeout(() => {
               const rect = targetElement.getBoundingClientRect();
               const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
-              // Add extra offset (80px) to ensure this heading is clearly the active one
+              // Add extra offset (125px: 65px banner + 60px menubar) to ensure this heading is clearly the active one
               // when there are multiple headings close together (e.g., h2 followed by h3)
-              const targetOffset = rect.top + scrollTop - 80;
+              const targetOffset = rect.top + scrollTop - 125;
               window.scrollTo({ top: targetOffset, behavior: 'smooth' });
 
               // Update TOC highlighting after scrolling
@@ -257,6 +271,21 @@
             }, 50);
           }
         }
+      } else {
+        // Regular TOC link (not in a tab) - prevent default and scroll manually
+        e.preventDefault();
+        const rect = targetElement.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const targetOffset = rect.top + scrollTop - 125; // 65px banner + 60px menubar = 125px total
+        window.scrollTo({ top: targetOffset, behavior: 'smooth' });
+
+        // Update URL hash without triggering hashchange
+        history.pushState(null, null, href);
+
+        // Update TOC highlighting after scrolling
+        setTimeout(() => {
+          $(window).trigger('scroll');
+        }, 50);
       }
     }
   });
