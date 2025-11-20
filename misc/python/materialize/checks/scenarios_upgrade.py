@@ -24,6 +24,7 @@ from materialize.checks.mzcompose_actions import (
     WaitReadyMz,
 )
 from materialize.checks.scenarios import Scenario
+from materialize.mz_0dt_upgrader import generate_random_upgrade_path
 from materialize.mz_version import MzVersion
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.services.materialized import LEADER_STATUS_HEALTHCHECK
@@ -721,17 +722,7 @@ class SelfManagedRandomUpgradePath(Scenario):
         if self.rng is None or len(versions) == 0:
             return versions
 
-        selected_versions = []
-        # For each version in the input list, randomly select it with a 50% chance.
-        for v in versions:
-            if self.rng.random() < 0.5:
-                selected_versions.append(v)
-
-        # Always include at least one version to avoid empty paths.
-        if len(selected_versions) == 0:
-            selected_versions.append(self.rng.choice(versions))
-
-        return selected_versions
+        return generate_random_upgrade_path(versions, self.rng)
 
     def base_version(self) -> MzVersion:
         return self.self_managed_versions[0]
