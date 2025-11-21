@@ -22,13 +22,15 @@ A self-managed Materialize deployment is organized into the following layers:
 Layer | Component | Description
 ------|-----------|------------
 **Infrastructure** | [Helm Chart](#helm-chart) | Package manager component that bootstraps the Kubernetes deployment
-**Orchestration** | [Materialize Operator](#materialize-operator) | Kubernetes operator that manages Materialize environments
-**Database** | [Materialize Environment](#materialize-environment) | The Materialize database instance itself
+**Orchestration** | [Materialize Operator](#materialize-operator) | Kubernetes operator that manages Materialize instances
+**Database** | [Materialize Instance](#materialize-instance) | The Materialize database instance itself
 **Compute** | [Clusters and Replicas](#clusters-and-replicas) | Isolated compute resources for workloads
 
 ## Helm chart
 
 The Helm chart is the entry point for deploying Materialize in a self-managed Kubernetes environment. It serves as a package manager component that defines and deploys the Materialize Operator.
+
+For configuration options for the the help chart and operator, consulte the [Materialize Operator Configuration page](/installation/configuration/).
 
 ### What gets installed
 
@@ -53,58 +55,74 @@ helm upgrade materialize materialize/materialize-operator
 helm uninstall materialize
 ```
 
-The Helm chart installation is typically a one-time operation per Kubernetes cluster. Once installed, the operator handles the deployment and management of Materialize environments.
+Once installed, the operator handles the deployment and management of Materialize instances.
 
 ## Materialize Operator
 
-The Materialize Operator is a Kubernetes operator that automates the deployment and lifecycle management of Materialize environments. It implements the [Kubernetes operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/) to extend Kubernetes with domain-specific knowledge about Materialize.
+The Materialize Operator (implemented as `orchestratord`) is a Kubernetes operator that automates the deployment and lifecycle management of Materialize instances. It implements the [Kubernetes operator pattern](https://kubernetes.io/docs/concepts/extend-kubernetes/operator/) to extend Kubernetes with domain-specific knowledge about Materialize.
 
 ### Managed resources
 
-The operator watches for Materialize custom resources and creates/manages all the Kubernetes resources required to run a Materialize environment, including:
+The operator watches for Materialize custom resources and creates/manages all the Kubernetes resources required to run a Materialize instance, including:
 
-- **Namespaces**: Isolated Kubernetes namespaces for each environment
+- **Namespaces**: Isolated Kubernetes namespaces for each instance
 - **Services**: Network services for connecting to Materialize
 - **Network Policies**: Network isolation and security rules
 - **Certificates**: TLS certificates for secure connections
 - **ConfigMaps and Secrets**: Configuration and sensitive data
-- **Deployments**: The `environmentd` pod and other components
-- **StatefulSets**: Cluster replicas for compute workloads
-
-The operator continuously reconciles the actual state of these resources with the desired state defined in the Materialize custom resource.
+- **Deployments**: These support the `Balancerd` and `Consoled` pod used as the ingress layer for materialize.
+- **StatefulSets**: `Environmentd` and `Clusterd` which are the database control plane and compute resources respectively.
 
 ### Working with the operator
 
-You interact with the operator indirectly by creating and modifying Materialize custom resources:
+To deploy Materialize instances with the operator you must create Materialize custom resources.
 
 ```yaml
-apiVersion: v1alpha1
+apiVersion: materialize.cloud/v1alpha1
 kind: Materialize
 metadata:
   name: my-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v0.84.2
+  environmentdImageRef: materialize/environmentd:v26.0.0
   ...
 ```
 
-When you apply this resource with `kubectl apply`, the operator detects the change and automatically creates or updates all necessary Kubernetes resources.
+When you create this resource the operator detects the change and automatically creates or updates all necessary Kubernetes resources.
 
-## Materialize Environment
+Updates to the resource are watched, but only rolled out when a new `requestRollout` UUID is provided.
 
-A Materialize environment (sometimes called a Materialize instance) is the actual database that you connect to and interact with. Each environment is an isolated Materialize deployment with its own data, configuration, and compute resources.
+For detailed configuration options, see:
+- [Operator Configuration](/installation/configuration/)
+- [Materialize CRD Field Descriptions](/installation/appendix-materialize-crd-field-descriptions/)
+- [Upgrade Overview](/installation/upgrading/)
+
+## Materialize Instance
+
+A Materialize instance is the actual database that you connect to and interact with. Each instance is an isolated Materialize deployment with its own data, configuration, and compute resources.
+
+### Components
+
+When you create a Materialize instance, the operator deploys three core components as Kubernetes resources:
+
+- **environmentd**: The main database control plane, deployed as a StatefulSet
+- **balancerd**: A pgwire and http proxy used to connect to environmentd, deployed as a Deployment
+- **console**: Web-based administration interface, deployed as a Deployment
 
 ### The environmentd component
 
-The primary component of a Materialize environment is **environmentd**, which runs as a Kubernetes pod. `Environmentd` houses two critical subsystems:
+The primary component of a Materialize instance is **environmentd**, which runs as a Kubernetes pod. `Environmentd` houses the control plane and contains:
 
 - **Adapter**: The SQL interface that handles client connections, query parsing, and planning
-- **Control Plane**: Orchestrates compute resources and manages the overall system state
+- **Storage Controller**: Maintains durable metadata for storage
+- **Compute Controller**: Orchestrates compute resources and manages system state
 
 When you connect to Materialize with a SQL client (e.g., `psql`), you're connecting to `environmentd`.
 
-### Environment responsibilities
+On startup Environmentd will create several built-in clusters.
 
-A Materialize environment manages:
+### Instance responsibilities
+
+A Materialize instance manages:
 
 - **SQL objects**: Sources, views, materialized views, indexes, sinks
 - **Schemas and databases**: Logical organization of objects
@@ -112,9 +130,9 @@ A Materialize environment manages:
 - **Catalog metadata**: System information about all objects and configuration
 - **Compute orchestration**: Coordination of work across clusters and replicas
 
-### Connecting to an environment
+### Connecting to an instance
 
-You interact with a Materialize environment through standard PostgreSQL-compatible tools and drivers:
+You interact with a Materialize instance through standard PostgreSQL-compatible tools and drivers:
 
 ```bash
 # Connect with psql
@@ -150,7 +168,7 @@ Each replica contains identical compute resources and processes the same data in
 
 ### Kubernetes resources
 
-When you create a cluster with one or more replicas in Materialize, the environment coordinates with the operator to create:
+When you create a cluster with one or more replicas in Materialize, the instance coordinates with the operator to create:
 
 - One or more **StatefulSet** resources (one per replica)
 - **Pods** within each StatefulSet that execute the actual compute workload
@@ -201,9 +219,9 @@ Understanding how these components work together helps clarify the deployment pr
 
 1. **Install the Helm chart**: This deploys the Materialize Operator to your Kubernetes cluster.
 
-2. **Create a Materialize environment**: Apply a Materialize custom resource. The operator detects this and creates all necessary Kubernetes resources, including the `environmentd` pod.
+2. **Create a Materialize instance**: Apply a Materialize custom resource. The operator detects this and creates all necessary Kubernetes resources, including the `environmentd`, `balancerd`, and `console` pods.
 
-3. **Connect to the environment**: Use a SQL client to connect to the `environmentd` service endpoint.
+3. **Connect to the instance**: Use a SQL client to connect to the `environmentd` service endpoint.
 
 4. **Create clusters**: Issue SQL commands to create clusters. Materialize coordinates with the operator to provision StatefulSets for replicas.
 
@@ -223,8 +241,9 @@ The self-managed deployment model adds the Kubernetes infrastructure layer (Helm
 
 ## Related pages
 
-- [Installation guides](/self-managed/v25.2/installation/)
-- [Configuration](/self-managed/v25.2/installation/configuration/)
-- [Operational guidelines](/self-managed/v25.2/installation/operational-guidelines/)
+- [Installation guides](/installation/)
+- [Operator Configuration](/installation/configuration/)
+- [Materialize CRD Field Descriptions](/installation/appendix-materialize-crd-field-descriptions/)
+- [Operational guidelines](/installation/operational-guidelines/)
 - [Clusters concept page](/concepts/clusters/)
 - [Materialize architecture overview](/concepts/)
