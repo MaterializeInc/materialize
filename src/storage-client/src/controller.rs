@@ -42,6 +42,7 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -306,10 +307,7 @@ pub trait StorageController: Debug {
     fn config(&self) -> &StorageConfiguration;
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing>;
 
     /// Returns `true` iff the given collection/ingestion has been hydrated.
     ///
@@ -339,10 +337,7 @@ pub trait StorageController: Debug {
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<
-        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        StorageError<Self::Timestamp>,
-    >;
+    ) -> Result<(Antichain<Self::Timestamp>, Antichain<Self::Timestamp>), CollectionMissing>;
 
     /// Returns the since/upper frontiers of the identified collections.
     ///
@@ -361,14 +356,14 @@ pub trait StorageController: Debug {
             Antichain<Self::Timestamp>,
             Antichain<Self::Timestamp>,
         )>,
-        StorageError<Self::Timestamp>,
+        CollectionMissing,
     >;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
     ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
+    /// A collection is "active" when it has a non-empty frontier of read
+    /// capabilities.
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
     /// Returns the IDs of ingestion exports running on the given instance. This

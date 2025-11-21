@@ -189,7 +189,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
             &self.typecheck_ctx,
             &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
             Some(self.select_id),
         );
         let expr = optimize_mir_local(expr, &mut transform_ctx)?.into_inner();
@@ -345,7 +345,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             &self.typecheck_ctx,
             &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
 
         // Let's already try creating a fast path plan. If successful, we don't need to run the

@@ -185,7 +185,7 @@ impl Optimize<Index> for Optimizer {
             &self.typecheck_ctx,
             &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;

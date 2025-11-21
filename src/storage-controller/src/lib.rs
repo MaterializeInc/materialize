@@ -69,6 +69,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -324,10 +325,7 @@ where
         &self.config
     }
 
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing> {
         self.storage_collections.collection_metadata(id)
     }
 
@@ -450,10 +448,7 @@ where
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<
-        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        StorageError<Self::Timestamp>,
-    > {
+    ) -> Result<(Antichain<Self::Timestamp>, Antichain<Self::Timestamp>), CollectionMissing> {
         let frontiers = self.storage_collections.collection_frontiers(id)?;
         Ok((frontiers.implied_capability, frontiers.write_frontier))
     }
@@ -461,7 +456,7 @@ where
     fn collections_frontiers(
         &self,
         mut ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, CollectionMissing> {
         let mut result = vec![];
         // In theory, we could pull all our frontiers from storage collections...
         // but in practice those frontiers may not be identical. For historical reasons, we use the

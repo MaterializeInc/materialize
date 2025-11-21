@@ -237,7 +237,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                     &self.typecheck_ctx,
                     &self.repr_typecheck_ctx,
                     &mut df_meta,
-                    Some(&self.metrics),
+                    Some(&mut self.metrics),
                     Some(self.view_id),
                 );
                 let expr = optimize_mir_local(expr, &mut transform_ctx)?;
@@ -281,7 +281,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             &self.typecheck_ctx,
             &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;

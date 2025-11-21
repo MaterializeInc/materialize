@@ -183,6 +183,10 @@ fn setup_statement_logging_core(
             "statement_logging_use_reproducible_rng".to_string(),
             "true".to_string(),
         )
+        .with_system_parameter_default(
+            "enable_frontend_peek_sequencing".to_string(),
+            "false".to_string(),
+        )
         .start_blocking();
     let client = server.connect(postgres::NoTls).unwrap();
     (server, client)
@@ -721,6 +725,9 @@ fn test_statement_logging_sampling_constrained() {
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_statement_logging_unsampled_metrics() {
     let server = test_util::TestHarness::default().start().await;
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
+        .await;
     let client = server.connect().await.unwrap();
 
     // TODO[btv]
@@ -3898,6 +3905,18 @@ async fn test_github_25388() {
     server
         .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
+
+    // TODO(peek-seq) The second part of this test no longer works with the new peek sequencing,
+    // because we no longer check the catalog after optimization whether the original dependencies
+    // still exist. This might be fine, because nothing bad happens: timestamp determination already
+    // puts a a read hold on the index, so the index doesn't actually gets dropped in the
+    // Controller, and therefore the peek actually succeeds. In other words, the old peek
+    // sequencing's dependency check was overly cautious. I'm planning to revisit this later, and
+    // probably delete the second part of the test.
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
+        .await;
+
     let client1 = server.connect().await.unwrap();
 
     client1

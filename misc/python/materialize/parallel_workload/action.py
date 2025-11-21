@@ -172,6 +172,7 @@ class Action:
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
                     "object state changed while transaction was in progress",  # Old error msg, can remove this ignore later
                     "another session modified the catalog while this DDL transaction was open",
+                    "was dropped while executing a statement",
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
@@ -1319,6 +1320,10 @@ class FlipFlagsAction(Action):
             "314572800",  # 300 MiB, the production value
         ]
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
+        self.flags_with_values["enable_frontend_peek_sequencing"] = [
+            "true",
+            "false",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the

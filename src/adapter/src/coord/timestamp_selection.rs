@@ -56,7 +56,7 @@ pub enum TimestampContext<T> {
         /// the `chosen_ts`.
         oracle_ts: Option<T>,
     },
-    /// Read is execute without a timeline or timestamp.
+    /// Read is executed without a timeline or timestamp.
     NoTimestamp,
 }
 
@@ -894,6 +894,7 @@ impl Coordinator {
             && isolation_level == &IsolationLevel::StrictSerializable
             && real_time_recency_ts.is_none()
         {
+            // Note down the difference between StrictSerializable and Serializable into a metric.
             if let Some(strict) = det.timestamp_context.timestamp() {
                 let (serializable_det, _tmp_read_holds) = self.determine_timestamp_for(
                     session,

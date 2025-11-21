@@ -129,7 +129,7 @@ pub struct TransformCtx<'a> {
     /// Transforms can use this field to communicate information outside the result plans.
     pub df_meta: &'a mut DataflowMetainfo,
     /// Metrics for the optimizer.
-    pub metrics: Option<&'a OptimizerMetrics>,
+    pub metrics: Option<&'a mut OptimizerMetrics>,
     /// The last hash of the query, if known.
     pub last_hash: BTreeMap<GlobalId, u64>,
 }
@@ -148,7 +148,7 @@ impl<'a> TransformCtx<'a> {
         typecheck_ctx: &'a SharedContext,
         repr_typecheck_ctx: &'a ReprSharedContext,
         df_meta: &'a mut DataflowMetainfo,
-        metrics: Option<&'a OptimizerMetrics>,
+        metrics: Option<&'a mut OptimizerMetrics>,
         global_id: Option<GlobalId>,
     ) -> Self {
         Self {
@@ -175,7 +175,7 @@ impl<'a> TransformCtx<'a> {
         typecheck_ctx: &'a SharedContext,
         repr_typecheck_ctx: &'a ReprSharedContext,
         df_meta: &'a mut DataflowMetainfo,
-        metrics: Option<&'a OptimizerMetrics>,
+        metrics: Option<&'a mut OptimizerMetrics>,
     ) -> Self {
         Self {
             indexes,
@@ -241,7 +241,7 @@ pub trait Transform: fmt::Debug {
         let duration = start.elapsed();
 
         let hash_after = args.update_last_hash(relation);
-        if let Some(metrics) = args.metrics {
+        if let Some(metrics) = &mut args.metrics {
             let transform_name = self.name();
             metrics.observe_transform_time(transform_name, duration);
             metrics.inc_transform(hash_before != hash_after, transform_name);
