@@ -1014,33 +1014,31 @@ impl CatalogState {
                     item: name.clone(),
                 };
                 let entry = match retractions.items.remove(&key) {
-                    Some(mut retraction) => {
+                    Some(retraction) => {
                         assert_eq!(retraction.id, item.id);
-                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
-                        // item. This is a performance optimization and not needed for correctness.
-                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
-                        // is still the same as the trait.
-                        if retraction.create_sql() != create_sql {
-                            let item = self
-                                .deserialize_item(
-                                    global_id,
-                                    &create_sql,
-                                    &extra_versions,
-                                    local_expression_cache,
-                                    Some(retraction.item),
-                                )
-                                .unwrap_or_else(|e| {
-                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
-                                });
-                            retraction.item = item;
-                        }
-                        retraction.id = id;
-                        retraction.oid = oid;
-                        retraction.name = name;
-                        retraction.owner_id = owner_id;
-                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
 
-                        retraction
+                        let item = self
+                            .deserialize_item(
+                                global_id,
+                                &create_sql,
+                                &extra_versions,
+                                local_expression_cache,
+                                Some(retraction.item),
+                            )
+                            .unwrap_or_else(|e| {
+                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                            });
+
+                        CatalogEntry {
+                            item,
+                            id,
+                            oid,
+                            name,
+                            owner_id,
+                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                            referenced_by: retraction.referenced_by,
+                            used_by: retraction.used_by,
+                        }
                     }
                     None => {
                         let catalog_item = self
