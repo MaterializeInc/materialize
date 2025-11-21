@@ -10,6 +10,7 @@
 use std::{
     collections::BTreeSet,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use anyhow::Context as _;
@@ -27,19 +28,24 @@ use tracing::{debug, trace};
 use uuid::Uuid;
 
 use crate::{
-    Error, controller::materialize::environmentd::V161, k8s::make_reflector,
-    matching_image_from_environmentd_image_ref, metrics::Metrics, tls::DefaultCertificateSpecs,
+    Error,
+    controller::materialize::environmentd::V161,
+    k8s::{apply_resource, delete_resource, make_reflector},
+    matching_image_from_environmentd_image_ref,
+    metrics::Metrics,
+    tls::DefaultCertificateSpecs,
 };
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::materialize::v1alpha1::{
-    Materialize, MaterializeRolloutStrategy, MaterializeStatus,
+use mz_cloud_resources::crd::{
+    ManagedResource,
+    balancer::v1alpha1::{Balancer, BalancerSpec},
+    materialize::v1alpha1::{Materialize, MaterializeRolloutStrategy, MaterializeStatus},
 };
 use mz_license_keys::validate;
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
-pub mod balancer;
 pub mod console;
 pub mod environmentd;
 
@@ -79,10 +85,6 @@ pub struct Config {
     pub clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     pub clusterd_affinity: Option<Affinity>,
     pub clusterd_tolerations: Option<Vec<Toleration>>,
-    pub balancerd_node_selector: Vec<KeyValueArg<String, String>>,
-    pub balancerd_affinity: Option<Affinity>,
-    pub balancerd_tolerations: Option<Vec<Toleration>>,
-    pub balancerd_default_resources: Option<ResourceRequirements>,
     pub console_node_selector: Vec<KeyValueArg<String, String>>,
     pub console_affinity: Option<Affinity>,
     pub console_tolerations: Option<Vec<Toleration>>,
@@ -115,9 +117,7 @@ pub struct Config {
     pub environmentd_internal_http_port: u16,
     pub environmentd_internal_persist_pubsub_port: u16,
 
-    pub balancerd_sql_port: u16,
     pub balancerd_http_port: u16,
-    pub balancerd_internal_http_port: u16,
 
     pub console_http_port: u16,
 
@@ -280,6 +280,7 @@ impl k8s_controller::Context for Context {
         mz: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
+        let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &mz.namespace());
         let secret_api: Api<Secret> = Api::namespaced(client.clone(), &mz.namespace());
 
         let status = mz.status();
@@ -435,7 +436,7 @@ impl k8s_controller::Context for Context {
                                     .last_completed_rollout_request,
                                 last_completed_rollout_environmentd_image_ref: status
                                     .last_completed_rollout_environmentd_image_ref,
-                                resource_id: status.resource_id,
+                                resource_id: status.resource_id.clone(),
                                 resources_hash: String::new(),
                                 conditions: vec![Condition {
                                     type_: "UpToDate".into(),
@@ -637,7 +638,7 @@ impl k8s_controller::Context for Context {
                             last_completed_rollout_request: mz.requested_reconciliation_id(),
                             last_completed_rollout_environmentd_image_ref: status
                                 .last_completed_rollout_environmentd_image_ref,
-                            resource_id: status.resource_id,
+                            resource_id: status.resource_id.clone(),
                             resources_hash: status.resources_hash,
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
@@ -679,7 +680,7 @@ impl k8s_controller::Context for Context {
                             last_completed_rollout_request: mz.requested_reconciliation_id(),
                             last_completed_rollout_environmentd_image_ref: status
                                 .last_completed_rollout_environmentd_image_ref,
-                            resource_id: status.resource_id,
+                            resource_id: status.resource_id.clone(),
                             resources_hash: status.resources_hash,
                             conditions: vec![Condition {
                                 type_: "UpToDate".into(),
@@ -709,11 +710,36 @@ impl k8s_controller::Context for Context {
         // enforced by the environmentd rollout process being able to call
         // into the promotion endpoint
 
-        let balancer = balancer::Resources::new(&self.config, mz);
         if self.config.create_balancers {
-            result = balancer.apply(&client, &mz.namespace()).await?;
+            let balancer = Balancer {
+                metadata: mz.managed_resource_meta(mz.name_unchecked()),
+                spec: BalancerSpec {
+                    balancerd_image_ref: matching_image_from_environmentd_image_ref(
+                        &mz.spec.environmentd_image_ref,
+                        "balancerd",
+                        None,
+                    ),
+                    resource_requirements: mz.spec.balancerd_resource_requirements.clone(),
+                    replicas: Some(mz.balancerd_replicas()),
+                    external_certificate_spec: mz.spec.balancerd_external_certificate_spec.clone(),
+                    internal_certificate_spec: mz.spec.internal_certificate_spec.clone(),
+                    pod_annotations: mz.spec.pod_annotations.clone(),
+                    pod_labels: mz.spec.pod_labels.clone(),
+                    static_routing: Some(
+                        mz_cloud_resources::crd::balancer::v1alpha1::StaticRoutingConfig {
+                            environmentd_namespace: mz.namespace(),
+                            environmentd_service_name: mz.environmentd_service_name(),
+                        },
+                    ),
+                    frontegg_routing: None,
+                    resource_id: Some(status.resource_id),
+                },
+                status: None,
+            };
+            let balancer = apply_resource(&balancer_api, &balancer).await?;
+            result = wait_for_balancer(&balancer)?;
         } else {
-            result = balancer.cleanup(&client, &mz.namespace()).await?;
+            delete_resource(&balancer_api, &mz.name_prefixed("balancer")).await?;
         }
 
         if let Some(action) = result {
@@ -721,8 +747,7 @@ impl k8s_controller::Context for Context {
         }
 
         // and the console relies on the balancer service existing, which is
-        // enforced by balancer::Resources::apply having a check for its pods
-        // being up, and not returning successfully until they are
+        // enforced by wait_for_balancer
 
         let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
         else {
@@ -766,4 +791,21 @@ impl k8s_controller::Context for Context {
 
         Ok(None)
     }
+}
+
+fn wait_for_balancer(balancer: &Balancer) -> Result<Option<Action>, Error> {
+    if let Some(conditions) = balancer
+        .status
+        .as_ref()
+        .map(|status| status.conditions.as_slice())
+    {
+        if conditions
+            .iter()
+            .any(|condition| condition.type_ == "Ready" && condition.status == "True")
+        {
+            return Ok(None);
+        }
+    }
+
+    Ok(Some(Action::requeue(Duration::from_secs(1))))
 }
