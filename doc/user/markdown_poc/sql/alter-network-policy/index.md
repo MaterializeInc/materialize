@@ -1,0 +1,234 @@
+<div class="content" role="main">
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJpb25pY29uIiB2aWV3Ym94PSIwIDAgNTEyIDUxMiI+CiAgICAgICAgICAgIDx0aXRsZT5BcnJvdyBQb2ludGluZyB0byB0aGUgbGVmdDwvdGl0bGU+CiAgICAgICAgICAgIDxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIHN0cm9rZS13aWR0aD0iNDgiIGQ9Ik0zMjggMTEyTDE4NCAyNTZsMTQ0IDE0NCIgLz4KICAgICAgICAgIDwvc3ZnPg=="
+class="ionicon" /> All Topics
+
+<div>
+
+<div class="breadcrumb">
+
+[Home](/docs/)  /  [SQL commands](/docs/sql/)
+
+</div>
+
+# ALTER NETWORK POLICY (Cloud)
+
+*Available for Materialize Cloud only*
+
+`ALTER NETWORK POLICY` alters an existing network policy. Network
+policies are part of Materialize’s framework for [access
+control](/docs/security/cloud/).
+
+Changes to a network policy will only affect new connections and **will
+not** terminate active connections.
+
+## Syntax
+
+<div class="rr-diagram">
+
+![](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0OTUiIGhlaWdodD0iMTYzIj4KICAgPHBvbHlnb24gcG9pbnRzPSI5IDE3IDEgMTMgMSAyMSI+PC9wb2x5Z29uPgogICA8cG9seWdvbiBwb2ludHM9IjE3IDE3IDkgMTMgOSAyMSI+PC9wb2x5Z29uPgogICA8cmVjdCB4PSIzMSIgeT0iMyIgd2lkdGg9IjY2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjI5IiB5PSIxIiB3aWR0aD0iNjYiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjM5IiB5PSIyMSI+QUxURVI8L3RleHQ+CiAgIDxyZWN0IHg9IjExNyIgeT0iMyIgd2lkdGg9IjE1MCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIxMTUiIHk9IjEiIHdpZHRoPSIxNTAiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjEyNSIgeT0iMjEiPk5FVFdPUksgUE9MSUNZPC90ZXh0PgogICA8cmVjdCB4PSIyODciIHk9IjMiIHdpZHRoPSI1NiIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iMjg1IiB5PSIxIiB3aWR0aD0iNTYiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIyOTUiIHk9IjIxIj5uYW1lPC90ZXh0PgogICA8cmVjdCB4PSIzNjMiIHk9IjMiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIzNjEiIHk9IjEiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMzcxIiB5PSIyMSI+KDwvdGV4dD4KICAgPHJlY3QgeD0iNDA5IiB5PSIzIiB3aWR0aD0iNjQiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iNDA3IiB5PSIxIiB3aWR0aD0iNjQiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjQxNyIgeT0iMjEiPlJVTEVTPC90ZXh0PgogICA8cmVjdCB4PSIxMTkiIHk9IjExMyIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjExNyIgeT0iMTExIiB3aWR0aD0iMjYiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjEyNyIgeT0iMTMxIj4oPC90ZXh0PgogICA8cmVjdCB4PSIxODUiIHk9IjExMyIgd2lkdGg9IjE1MCIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iMTgzIiB5PSIxMTEiIHdpZHRoPSIxNTAiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIxOTMiIHk9IjEzMSI+bmV0d29ya19wb2xpY3lfcnVsZTwvdGV4dD4KICAgPHJlY3QgeD0iMTg1IiB5PSI2OSIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjE4MyIgeT0iNjciIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMTkzIiB5PSI4NyI+LDwvdGV4dD4KICAgPHJlY3QgeD0iMzc1IiB5PSIxMTMiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIzNzMiIHk9IjExMSIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIzODMiIHk9IjEzMSI+KTwvdGV4dD4KICAgPHJlY3QgeD0iNDQxIiB5PSIxMTMiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSI0MzkiIHk9IjExMSIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSI0NDkiIHk9IjEzMSI+KTwvdGV4dD4KICAgPHBhdGggY2xhc3M9ImxpbmUiIGQ9Im0xNyAxNyBoMiBtMCAwIGgxMCBtNjYgMCBoMTAgbTAgMCBoMTAgbTE1MCAwIGgxMCBtMCAwIGgxMCBtNTYgMCBoMTAgbTAgMCBoMTAgbTI2IDAgaDEwIG0wIDAgaDEwIG02NCAwIGgxMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0yIDAgbDIgMCBtLTQxOCAxMTAgbDIgMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0yMiAwIGgxMCBtMjYgMCBoMTAgbTIwIDAgaDEwIG0xNTAgMCBoMTAgbS0xOTAgMCBsMjAgMCBtLTEgMCBxLTkgMCAtOSAtMTAgbDAgLTI0IHEwIC0xMCAxMCAtMTAgbTE3MCA0NCBsMjAgMCBtLTIwIDAgcTEwIDAgMTAgLTEwIGwwIC0yNCBxMCAtMTAgLTEwIC0xMCBtLTE3MCAwIGgxMCBtMjQgMCBoMTAgbTAgMCBoMTI2IG0yMCA0NCBoMTAgbTI2IDAgaDEwIG0tMzIyIDAgaDIwIG0zMDIgMCBoMjAgbS0zNDIgMCBxMTAgMCAxMCAxMCBtMzIyIDAgcTAgLTEwIDEwIC0xMCBtLTMzMiAxMCB2MTQgbTMyMiAwIHYtMTQgbS0zMjIgMTQgcTAgMTAgMTAgMTAgbTMwMiAwIHExMCAwIDEwIC0xMCBtLTMxMiAxMCBoMTAgbTAgMCBoMjkyIG0yMCAtMzQgaDEwIG0yNiAwIGgxMCBtMyAwIGgtMyIgLz4KICAgPHBvbHlnb24gcG9pbnRzPSI0ODUgMTI3IDQ5MyAxMjMgNDkzIDEzMSI+PC9wb2x5Z29uPgogICA8cG9seWdvbiBwb2ludHM9IjQ4NSAxMjcgNDc3IDEyMyA0NzcgMTMxIj48L3BvbHlnb24+Cjwvc3ZnPg==)
+
+</div>
+
+### `network_policy_rule`
+
+<div class="rr-diagram">
+
+![](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzOTkiIGhlaWdodD0iOTciPgogICA8cG9seWdvbiBwb2ludHM9IjkgNjEgMSA1NyAxIDY1Ij48L3BvbHlnb24+CiAgIDxwb2x5Z29uIHBvaW50cz0iMTcgNjEgOSA1NyA5IDY1Ij48L3BvbHlnb24+CiAgIDxyZWN0IHg9IjMxIiB5PSI0NyIgd2lkdGg9IjU2IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSIyOSIgeT0iNDUiIHdpZHRoPSI1NiIgaGVpZ2h0PSIzMiIgY2xhc3M9Im5vbnRlcm1pbmFsIiAvPgogICA8dGV4dCBjbGFzcz0ibm9udGVybWluYWwiIHg9IjM5IiB5PSI2NSI+bmFtZTwvdGV4dD4KICAgPHJlY3QgeD0iMTI3IiB5PSI0NyIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjEyNSIgeT0iNDUiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMTM1IiB5PSI2NSI+KDwvdGV4dD4KICAgPHJlY3QgeD0iMTkzIiB5PSI0NyIgd2lkdGg9IjkyIiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSIxOTEiIHk9IjQ1IiB3aWR0aD0iOTIiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIyMDEiIHk9IjY1Ij5ydWxlX29wdGlvbjwvdGV4dD4KICAgPHJlY3QgeD0iMTkzIiB5PSIzIiB3aWR0aD0iMjQiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMTkxIiB5PSIxIiB3aWR0aD0iMjQiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjIwMSIgeT0iMjEiPiw8L3RleHQ+CiAgIDxyZWN0IHg9IjMyNSIgeT0iNDciIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIzMjMiIHk9IjQ1IiB3aWR0aD0iMjYiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjMzMyIgeT0iNjUiPik8L3RleHQ+CiAgIDxwYXRoIGNsYXNzPSJsaW5lIiBkPSJtMTcgNjEgaDIgbTAgMCBoMTAgbTU2IDAgaDEwIG0yMCAwIGgxMCBtMjYgMCBoMTAgbTIwIDAgaDEwIG05MiAwIGgxMCBtLTEzMiAwIGwyMCAwIG0tMSAwIHEtOSAwIC05IC0xMCBsMCAtMjQgcTAgLTEwIDEwIC0xMCBtMTEyIDQ0IGwyMCAwIG0tMjAgMCBxMTAgMCAxMCAtMTAgbDAgLTI0IHEwIC0xMCAtMTAgLTEwIG0tMTEyIDAgaDEwIG0yNCAwIGgxMCBtMCAwIGg2OCBtMjAgNDQgaDEwIG0yNiAwIGgxMCBtLTI2NCAwIGgyMCBtMjQ0IDAgaDIwIG0tMjg0IDAgcTEwIDAgMTAgMTAgbTI2NCAwIHEwIC0xMCAxMCAtMTAgbS0yNzQgMTAgdjE0IG0yNjQgMCB2LTE0IG0tMjY0IDE0IHEwIDEwIDEwIDEwIG0yNDQgMCBxMTAgMCAxMCAtMTAgbS0yNTQgMTAgaDEwIG0wIDAgaDIzNCBtMjMgLTM0IGgtMyIgLz4KICAgPHBvbHlnb24gcG9pbnRzPSIzODkgNjEgMzk3IDU3IDM5NyA2NSI+PC9wb2x5Z29uPgogICA8cG9seWdvbiBwb2ludHM9IjM4OSA2MSAzODEgNTcgMzgxIDY1Ij48L3BvbHlnb24+Cjwvc3ZnPg==)
+
+</div>
+
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th><div style="min-width:240px">
+Field
+</div></th>
+<th>Value</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>name</em></td>
+<td><code>text</code></td>
+<td>A name for the Network Policy.</td>
+</tr>
+<tr>
+<td><code>RULES</code></td>
+<td><code>text[]</code></td>
+<td>A comma-separated list of Network Policy Rules.</td>
+</tr>
+</tbody>
+</table>
+
+#### Network policy rule options
+
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th><div style="min-width:240px">
+Field
+</div></th>
+<th>Value</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>name</em></td>
+<td><code>text</code></td>
+<td>A name for the network policy rule. Must be unique within the
+network policy.</td>
+</tr>
+<tr>
+<td><code>ACTION</code></td>
+<td><code>text</code></td>
+<td>The action to take for this rule. <code>ALLOW</code> is the only
+valid option.</td>
+</tr>
+<tr>
+<td><code>DIRECTION</code></td>
+<td><code>text</code></td>
+<td>The direction of traffic the rule applies to. <code>INGRESS</code>
+is the only valid option.</td>
+</tr>
+<tr>
+<td><code>ADDRESS</code></td>
+<td><code>text</code></td>
+<td>The Classless Inter-Domain Routing (CIDR) block the rule will be
+applied to.</td>
+</tr>
+</tbody>
+</table>
+
+## Details
+
+### Pre-installed network policy
+
+When you enable a Materialize region, a default network policy named
+`default` will be pre-installed. This policy has a wide open ingress
+rule `allow 0.0.0.0/0`. You can modify or drop this network policy at
+any time.
+
+<div class="note">
+
+**NOTE:** The default value for the `network_policy` session parameter
+is `default`. Before dropping the `default` network policy, a
+*superuser* (i.e. `Organization Admin`) must run
+[`ALTER SYSTEM SET network_policy`](/docs/sql/alter-system-set) to
+change the default value.
+
+</div>
+
+### Lockout prevention
+
+To prevent lockout, the IP of the active user is validated against the
+policy changes requested. This prevents users from modifying network
+policies in a way that could lock them out of the system.
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- Ownership of the network policy.
+
+## Examples
+
+<div class="highlight">
+
+``` chroma
+CREATE NETWORK POLICY office_access_policy (
+  RULES (
+    new_york (action='allow', direction='ingress',address='1.2.3.4/28'),
+    minnesota (action='allow',direction='ingress',address='2.3.4.5/32')
+  )
+);
+```
+
+</div>
+
+<div class="highlight">
+
+``` chroma
+ALTER NETWORK POLICY office_access_policy SET (
+  RULES (
+    new_york (action='allow', direction='ingress',address='1.2.3.4/28'),
+    minnesota (action='allow',direction='ingress',address='2.3.4.5/32'),
+    boston (action='allow',direction='ingress',address='4.5.6.7/32')
+  )
+);
+```
+
+</div>
+
+<div class="highlight">
+
+``` chroma
+ALTER SYSTEM SET network_policy = office_access_policy;
+```
+
+</div>
+
+## Related pages
+
+- [`CREATE NETWORK POLICY`](../create-network-policy)
+- [`DROP NETWORK POLICY`](../drop-network-policy)
+
+</div>
+
+<a href="#top" class="back-to-top">Back to top ↑</a>
+
+<div class="theme-switcher">
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzeXN0ZW0iIHZpZXdib3g9IjAgMCA1MTIgNTEyIj4KICAgICAgICA8dGl0bGU+U3lzdGVtIFRoZW1lPC90aXRsZT4KICAgICAgICA8cGF0aCBkPSJNMjU2IDE3NmE4MCA4MCAwIDEwODAgODAgODAuMjQgODAuMjQgMCAwMC04MC04MHptMTcyLjcyIDgwYTE2NS41MyAxNjUuNTMgMCAwMS0xLjY0IDIyLjM0bDQ4LjY5IDM4LjEyYTExLjU5IDExLjU5IDAgMDEyLjYzIDE0Ljc4bC00Ni4wNiA3OS41MmExMS42NCAxMS42NCAwIDAxLTE0LjE0IDQuOTNsLTU3LjI1LTIzYTE3Ni41NiAxNzYuNTYgMCAwMS0zOC44MiAyMi42N2wtOC41NiA2MC43OGExMS45MyAxMS45MyAwIDAxLTExLjUxIDkuODZoLTkyLjEyYTEyIDEyIDAgMDEtMTEuNTEtOS41M2wtOC41Ni02MC43OEExNjkuMyAxNjkuMyAwIDAxMTUxLjA1IDM5M0w5My44IDQxNmExMS42NCAxMS42NCAwIDAxLTE0LjE0LTQuOTJMMzMuNiAzMzEuNTdhMTEuNTkgMTEuNTkgMCAwMTIuNjMtMTQuNzhsNDguNjktMzguMTJBMTc0LjU4IDE3NC41OCAwIDAxODMuMjggMjU2YTE2NS41MyAxNjUuNTMgMCAwMTEuNjQtMjIuMzRsLTQ4LjY5LTM4LjEyYTExLjU5IDExLjU5IDAgMDEtMi42My0xNC43OGw0Ni4wNi03OS41MmExMS42NCAxMS42NCAwIDAxMTQuMTQtNC45M2w1Ny4yNSAyM2ExNzYuNTYgMTc2LjU2IDAgMDEzOC44Mi0yMi42N2w4LjU2LTYwLjc4QTExLjkzIDExLjkzIDAgMDEyMDkuOTQgMjZoOTIuMTJhMTIgMTIgMCAwMTExLjUxIDkuNTNsOC41NiA2MC43OEExNjkuMyAxNjkuMyAwIDAxMzYxIDExOWw1Ny4yLTIzYTExLjY0IDExLjY0IDAgMDExNC4xNCA0LjkybDQ2LjA2IDc5LjUyYTExLjU5IDExLjU5IDAgMDEtMi42MyAxNC43OGwtNDguNjkgMzguMTJhMTc0LjU4IDE3NC41OCAwIDAxMS42NCAyMi42NnoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="system" />
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzdW4iIHZpZXdib3g9IjAgMCA1MTIgNTEyIj4KICAgICAgICA8dGl0bGU+TGlnaHQgVGhlbWU8L3RpdGxlPgogICAgICAgIDxwYXRoIGQ9Ik0yMzQgMjZoNDR2OTJoLTQ0ek0yMzQgMzk0aDQ0djkyaC00NHpNMzM4LjAyNSAxNDIuODU3bDY1LjA1NC02NS4wNTQgMzEuMTEzIDMxLjExMy02NS4wNTQgNjUuMDU0ek03Ny44MTUgNDAzLjA3NGw2NS4wNTQtNjUuMDU0IDMxLjExMyAzMS4xMTMtNjUuMDU0IDY1LjA1NHpNMzk0IDIzNGg5MnY0NGgtOTJ6TTI2IDIzNGg5MnY0NEgyNnpNMzM4LjAyOSAzNjkuMTRsMzEuMTEyLTMxLjExMyA2NS4wNTQgNjUuMDU0LTMxLjExMiAzMS4xMTJ6TTc3LjgwMiAxMDguOTJsMzEuMTEzLTMxLjExMyA2NS4wNTQgNjUuMDU0LTMxLjExMyAzMS4xMTJ6TTI1NiAzNThhMTAyIDEwMiAwIDExMTAyLTEwMiAxMDIuMTIgMTAyLjEyIDAgMDEtMTAyIDEwMnoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="sun" />
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJtb29uIiB2aWV3Ym94PSIwIDAgNTEyIDUxMiI+CiAgICAgICAgPHRpdGxlPkRhcmsgVGhlbWU8L3RpdGxlPgogICAgICAgIDxwYXRoIGQ9Ik0xNTIuNjIgMTI2Ljc3YzAtMzMgNC44NS02Ni4zNSAxNy4yMy05NC43N0M4Ny41NCA2Ny44MyAzMiAxNTEuODkgMzIgMjQ3LjM4IDMyIDM3NS44NSAxMzYuMTUgNDgwIDI2NC42MiA0ODBjOTUuNDkgMCAxNzkuNTUtNTUuNTQgMjE1LjM4LTEzNy44NS0yOC40MiAxMi4zOC02MS44IDE3LjIzLTk0Ljc3IDE3LjIzLTEyOC40NyAwLTIzMi42MS0xMDQuMTQtMjMyLjYxLTIzMi42MXoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="moon" />
+
+</div>
+
+<div>
+
+<a
+href="//github.com/MaterializeInc/materialize/edit/main/doc/user/content/sql/alter-network-policy.md"
+class="btn-ghost"><img
+src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHZpZXdib3g9IjAgMCAyMyAyMyIgZmlsbD0iY3VycmVudENvbG9yIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogICAgICAgIDxwYXRoIGQ9Ik0yMC44OTQ1IDExLjQ5NjhDMjAuODk0NSAxMC4yMzk0IDIwLjYxNTEgOS4wNTE5IDIwLjEyNjEgNy44NjQzN0MxOS42MzcxIDYuNzQ2NjkgMTguOTM4NSA1LjY5ODg4IDE4LjE3MDEgNC45MzA0N0MxNy40MDE3IDQuMTYyMDcgMTYuMzUzOSAzLjQ2MzUgMTUuMjM2MiAyLjk3NDUyQzE0LjExODUgMi40ODU1MyAxMi44NjExIDIuMjA2MTMgMTEuNjAzOCAyLjIwNjEzQzEwLjM0NjQgMi4yMDYxMyA5LjE1ODg0IDIuNDg1NTMgNy45NzEzIDIuOTc0NTJDNi44NTM2MiAzLjQ2MzUgNS44MDU3OSA0LjE2MjA3IDUuMDM3MzggNC45MzA0N0M0LjI2ODk4IDUuNjk4ODggMy41NzA0NCA2Ljc0NjY5IDMuMDgxNDUgNy44NjQzN0MyLjU5MjQ3IDguOTgyMDUgMi4zMTMwNCAxMC4yMzk0IDIuMzEzMDQgMTEuNDk2OEMyLjMxMzA0IDEzLjUyMjYgMi45NDE3NCAxNS4zMzg5IDQuMTI5MjggMTcuMDE1NEM1LjMxNjgxIDE4LjY5MTkgNi45MjM0NyAxOS44MDk2IDguODA5NTYgMjAuMzY4NFYxNy45MjM1QzguMjUwNzIgMTcuOTkzNCA3Ljk3MTI5IDE3Ljk5MzMgNy44MzE1OCAxNy45OTMzQzYuNzgzNzYgMTcuOTkzMyA2LjAxNTM1IDE3LjUwNDQgNS41OTYyMiAxNi41MjY0QzUuNDU2NTEgMTYuMTc3MSA1LjI0Njk1IDE1LjgyNzggNS4wMzczOCAxNS42MTgzQzQuOTY3NTMgMTUuNTQ4NCA0Ljg5NzY4IDE1LjQ3ODYgNC43NTc5NyAxNS4zMzg5QzQuNjE4MjYgMTUuMTk5MiA0LjQ3ODU0IDE1LjEyOTMgNC4zMzg4MyAxNC45ODk2QzQuMTk5MTIgMTQuODQ5OSA0LjEyOTI4IDE0Ljc4IDQuMTI5MjggMTQuNzhDNC4xMjkyOCAxNC42NDAzIDQuMjY4OTggMTQuNjQwMyA0LjU0ODQgMTQuNjQwM0M0LjgyNzgyIDE0LjY0MDMgNS4xMDcyNCAxNC43MTAyIDUuMzE2ODEgMTQuODQ5OUM1LjUyNjM3IDE0Ljk4OTYgNS43MzU5NCAxNS4xMjkzIDUuODc1NjUgMTUuMzM4OUM2LjAxNTM2IDE1LjU0ODQgNi4xNTUwNyAxNS43NTggNi4zNjQ2MyAxNS45Njc2QzYuNTA0MzQgMTYuMTc3MSA2LjcxMzkxIDE2LjMxNjggNi45MjM0OCAxNi40NTY1QzcuMTMzMDQgMTYuNTk2MyA3LjQxMjQ2IDE2LjY2NjEgNy43NjE3MyAxNi42NjYxQzguMTgwODYgMTYuNjY2MSA4LjUzMDE0IDE2LjU5NjMgOC45NDkyNyAxNi40NTY1QzkuMDg4OTggMTUuODk3NyA5LjQzODI1IDE1LjQ3ODYgOS44NTczOCAxNS4xMjkzQzguMjUwNzIgMTQuOTg5NiA3LjA2MzE4IDE0LjU3MDUgNi4yOTQ3NyAxMy45NDE4QzUuNTI2MzcgMTMuMzEzMSA1LjEwNzI0IDEyLjE5NTQgNS4xMDcyNCAxMC42NTg2QzUuMTA3MjQgOS41NDA4OSA1LjQ1NjUyIDguNTYyOTQgNi4xNTUwNyA3Ljc5NDUzQzYuMDE1MzYgNy4zNzU0IDUuOTQ1NSA2Ljk1NjI2IDUuOTQ1NSA2LjUzNzEzQzUuOTQ1NSA1Ljk3ODI5IDYuMDg1MjEgNS40MTk0NiA2LjM2NDYzIDQuOTMwNDdDNi45MjM0NyA0LjkzMDQ3IDcuNDEyNDUgNS4wMDAzMiA3LjgzMTU4IDUuMjA5ODlDOC4yNTA3MSA1LjQxOTQ1IDguNzM5NyA1LjY5ODg2IDkuMjk4NTQgNi4xMTc5OUMxMC4wNjY5IDUuOTc4MjggMTAuODM1NCA1LjgzODU4IDExLjc0MzUgNS44Mzg1OEMxMi41MTE5IDUuODM4NTggMTMuMjgwMyA1LjkwODQ1IDEzLjk3ODggNi4wNDgxNkMxNC41Mzc3IDUuNjI5MDMgMTUuMDI2NyA1LjM0OTYgMTUuNDQ1OCA1LjIwOTg5QzE1Ljg2NDkgNS4wMDAzMiAxNi4zNTM5IDQuOTMwNDcgMTYuOTEyNyA0LjkzMDQ3QzE3LjE5MjIgNS40MTk0NiAxNy4zMzE5IDUuOTc4MjkgMTcuMzMxOSA2LjUzNzEzQzE3LjMzMTkgNi45NTYyNiAxNy4yNjIgNy4zNzU0IDE3LjEyMjMgNy43MjQ2N0MxNy44MjA5IDguNDkzMDggMTguMTcwMSA5LjQ3MTA1IDE4LjE3MDEgMTAuNTg4N0MxOC4xNzAxIDEyLjEyNTUgMTcuNzUxIDEzLjE3MzQgMTYuOTgyNiAxMy44NzE5QzE2LjIxNDIgMTQuNTcwNSAxNS4wMjY2IDE0LjkxOTcgMTMuNDIgMTUuMDU5NEMxNC4xMTg1IDE1LjU0ODQgMTQuMzk4IDE2LjE3NzEgMTQuMzk4IDE2Ljk0NTVWMjAuMjI4N0MxNi4zNTM5IDE5LjYgMTcuODkwNyAxOC40ODIzIDE5LjA3ODIgMTYuODc1N0MyMC4yNjU4IDE1LjMzODkgMjAuODk0NSAxMy41MjI2IDIwLjg5NDUgMTEuNDk2OFpNMjIuNzEwNyAxMS40OTY4QzIyLjcxMDcgMTMuNTIyNiAyMi4yMjE3IDE1LjQwODcgMjEuMjQzOCAxNy4wODUyQzIwLjI2NTggMTguODMxNiAxOC44Njg3IDIwLjE1ODggMTcuMTkyMiAyMS4xMzY4QzE1LjQ0NTggMjIuMTE0OCAxMy42Mjk2IDIyLjYwMzggMTEuNjAzOCAyMi42MDM4QzkuNTc3OTYgMjIuNjAzOCA3LjY5MTg4IDIyLjExNDggNi4wMTUzNiAyMS4xMzY4QzQuMjY4OTggMjAuMTU4OCAyLjk0MTc0IDE4Ljc2MTggMS45NjM3NyAxNy4wODUyQzAuOTg1Nzk2IDE1LjMzODkgMC40OTY4MDcgMTMuNTIyNiAwLjQ5NjgwNyAxMS40OTY4QzAuNDk2ODA3IDkuNDcxMDQgMC45ODU3OTYgNy41ODQ5NiAxLjk2Mzc3IDUuOTA4NDRDMi45NDE3NCA0LjE2MjA2IDQuMzM4ODQgMi44MzQ4MyA2LjAxNTM2IDEuODU2ODZDNy43NjE3MyAwLjg3ODg4NiA5LjU3Nzk2IDAuMzg5ODk3IDExLjYwMzggMC4zODk4OTdDMTMuNjI5NiAwLjM4OTg5NyAxNS41MTU2IDAuODc4ODg2IDE3LjE5MjIgMS44NTY4NkMxOC45Mzg1IDIuODM0ODMgMjAuMjY1OCA0LjIzMTkyIDIxLjI0MzggNS45MDg0NEMyMi4yMjE3IDcuNTg0OTYgMjIuNzEwNyA5LjQ3MTA0IDIyLjcxMDcgMTEuNDk2OFoiIC8+CiAgICAgIDwvc3ZnPg==" />
+Edit this page</a>
+
+</div>
+
+<div class="footer-links">
+
+[Home](https://materialize.com) [Status](https://status.materialize.com)
+[GitHub](https://github.com/MaterializeInc/materialize)
+[Blog](https://materialize.com/blog)
+[Contact](https://materialize.com/contact)
+
+Cookie Preferences
+
+[Privacy Policy](https://materialize.com/privacy-policy/)
+
+</div>
+
+© 2025 Materialize Inc.
+
+</div>

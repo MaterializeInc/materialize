@@ -1,0 +1,361 @@
+<div class="content" role="main">
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJpb25pY29uIiB2aWV3Ym94PSIwIDAgNTEyIDUxMiI+CiAgICAgICAgICAgIDx0aXRsZT5BcnJvdyBQb2ludGluZyB0byB0aGUgbGVmdDwvdGl0bGU+CiAgICAgICAgICAgIDxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIHN0cm9rZS13aWR0aD0iNDgiIGQ9Ik0zMjggMTEyTDE4NCAyNTZsMTQ0IDE0NCIgLz4KICAgICAgICAgIDwvc3ZnPg=="
+class="ionicon" /> All Topics
+
+<div>
+
+<div class="breadcrumb">
+
+[Home](/docs/)  /  [Materialize console](/docs/console/)
+
+</div>
+
+# Create new
+
+From the Console, you can create new
+[clusters](/docs/concepts/clusters/ "Isolated
+pools of compute resources (CPU, memory, and scratch disk space)"),
+[sources](/docs/concepts/sources/ "Upstream (i.e., external) systems you want
+Materialize to read data from"), and, for Materialize Cloud, application
+passwords.
+
+### Create new cluster
+
+![Image of the Create New Cluster
+flow](/docs/images/console/console-create-new/postgresql/create-new-cluster-flow.png "Create New Cluster flow")
+
+From the Materialize Console:
+
+1.  Click **+ Create New** and select **Cluster** to open the **New
+    cluster** screen.
+
+2.  In the **New cluster** screen,
+
+    1.  Specify the following cluster information:
+
+        <table>
+        <colgroup>
+        <col style="width: 50%" />
+        <col style="width: 50%" />
+        </colgroup>
+        <thead>
+        <tr>
+        <th>Field</th>
+        <th>Description</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr>
+        <td><strong>Name</strong></td>
+        <td>A name for the cluster.</td>
+        </tr>
+        <tr>
+        <td><strong>Size</strong></td>
+        <td>The <a href="/docs/sql/create-cluster/#size">size</a> of the
+        cluster.</td>
+        </tr>
+        <tr>
+        <td><strong>Replica</strong></td>
+        <td>The <a
+        href="/docs/sql/create-cluster/#replication-factor">replication
+        factor</a> of the cluster. Default: <code>1</code><br />
+        Clusters that contain sources or sinks cannot have a replication factor
+        greater than 1.</td>
+        </tr>
+        </tbody>
+        </table>
+
+    2.  Click **Create cluster** to create the cluster.
+
+3.  Upon successful creation, you’ll be redirected to the **Overview**
+    page of the newly created cluster.
+
+### Create new source
+
+<div class="tip">
+
+**💡 Tip:**
+
+- For PostgreSQL and MySQL, you must configure your upstream database
+  first. Refer to the [Ingest data](/docs/ingest-data/) section for your
+  data source.
+
+- For information about the snapshotting process that occurs when a new
+  source is created as well as some best practice guidelines, see
+  [Ingest data](/docs/ingest-data/).
+
+</div>
+
+![Image of the Create New Source start for
+PostgreSQL](/docs/images/console/console-create-new/postgresql/create-new-source-start.png "Create New Source start for PostgreSQL")
+
+From the Materialize Console:
+
+1.  Click **+ Create New** and select **Source** to open the **New
+    source** screen.
+
+2.  Choose the source type and follow the instructions to configure a
+    new source.
+
+    <div class="tip">
+
+    **💡 Tip:** For PostgreSQL and MySQL, you must configure your
+    upstream database first. Refer to the [Ingest
+    data](/docs/ingest-data/) section for your data source.
+
+    </div>
+
+### Create new app password (Cloud-only)
+
+![Image of the Create application
+password](/docs/images/console/console-create-new/create-app-password.png "Create
+application password")
+
+1.  Click **+ Create New** and select **App Password** to open the **New
+    app password** modal.
+
+2.  In the **New app password** modal, specify the **Type** (either
+    **Personal** or **Service**) and the associated details:
+
+    <div class="note">
+
+    **NOTE:**
+    - Only **Organization admins** can create a service account.
+    - **Personal** apps are run under your user account.
+    - **Service** apps are run under a Service account user. If the
+      specified Service account user does not exist, it will be
+      automatically created the **first time** the app password is used.
+
+    </div>
+
+    <div class="code-tabs">
+
+    <div class="tab-content">
+
+    <div id="tab-personal" class="tab-pane" title="Personal">
+
+    For a personal app that you will run under your user account,
+    specify the type and required field(s):
+
+    | Type     | Details                     |
+    |----------|-----------------------------|
+    | **Type** | Select **Personal**         |
+    | **Name** | Specify a descriptive name. |
+
+    </div>
+
+    <div id="tab-service-account" class="tab-pane"
+    title="Service account">
+
+    For an app that you will run under a Service account, specify the
+    type and required field(s):
+
+    <table>
+    <colgroup>
+    <col style="width: 50%" />
+    <col style="width: 50%" />
+    </colgroup>
+    <thead>
+    <tr>
+    <th>Field</th>
+    <th>Details</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+    <td><strong>Type</strong></td>
+    <td>Select <strong>Service</strong></td>
+    </tr>
+    <tr>
+    <td><strong>Name</strong></td>
+    <td>Specify a descriptive name.</td>
+    </tr>
+    <tr>
+    <td><strong>User</strong></td>
+    <td>Specify a service account user name. If the specified account user
+    does not exist, it will be automatically created the <strong>first
+    time</strong> the application connects with the user name and
+    password.</td>
+    </tr>
+    <tr>
+    <td><strong>Roles</strong></td>
+    <td><p>Select the organization role:</p>
+    <table>
+    <colgroup>
+    <col style="width: 50%" />
+    <col style="width: 50%" />
+    </colgroup>
+    <thead>
+    <tr>
+    <th>Organization role</th>
+    <th>Description</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+    <td><strong>Organization Admin</strong></td>
+    <td><ul>
+    <li><p><strong>Console access</strong>: Has access to all Materialize
+    console features, including administrative features (e.g., invite users,
+    create service accounts, manage billing, and organization
+    settings).</p></li>
+    <li><p><strong>Database access</strong>: Has <strong>superuser</strong>
+    privileges in the database.</p></li>
+    </ul></td>
+    </tr>
+    <tr>
+    <td><strong>Organization Member</strong></td>
+    <td><ul>
+    <li><p><strong>Console access</strong>: Has no access to Materialize
+    console administrative features.</p></li>
+    <li><p><strong>Database access</strong>: Inherits role-level privileges
+    defined by the <code>PUBLIC</code> role; may also have additional
+    privileges via grants or default privileges. See <a
+    href="/docs/security/cloud/access-control/#roles-and-privileges">Access
+    control control</a>.</p></li>
+    </ul></td>
+    </tr>
+    </tbody>
+    </table>
+    <div class="note">
+    <strong>NOTE:</strong>
+    <ul>
+    <li><p>The first user for an organization is automatically assigned the
+    <strong>Organization Admin</strong> role.</p></li>
+    <li><p>An <a
+    href="/docs/security/cloud/users-service-accounts/#organization-roles">Organization
+    Admin</a> has <strong>superuser</strong> privileges in the database.
+    Following the principle of least privilege, only assign
+    <strong>Organization Admin</strong> role to those users who require
+    superuser privileges.</p></li>
+    <li><p>Users/service accounts can be granted additional database roles
+    and privileges as needed.</p></li>
+    </ul>
+    </div></td>
+    </tr>
+    </tbody>
+    </table>
+
+    See also [Create service
+    accounts](/docs/security/cloud/users-service-accounts/create-service-accounts/)
+    for creating service accounts via Terraform.
+
+    </div>
+
+    </div>
+
+    </div>
+
+3.  Click **Create password** to generate the app password.
+
+4.  Store the new password securely.
+
+    <div class="note">
+
+    **NOTE:** Do not reload or navigate away from the screen before
+    storing the password. This information is not displayed again.
+
+    </div>
+
+5.  **For a new service account only**.
+
+    For a new service account, after creating the new app password, you
+    must connect with the service account to complete the account
+    creation. The first time the account connects, a database role with
+    the same name as the specified service account **User** is created,
+    and the service account creation is complete.
+
+    To connect:
+
+    1.  Find your new service account in the **App Passwords** table.
+
+    2.  Click on the **Connect** button to get details on connecting
+        with the new account.
+
+        <div class="code-tabs">
+
+        <div class="tab-content">
+
+        <div id="tab-psql" class="tab-pane" title="psql">
+
+        If you have `psql` installed:
+
+        1.  Click on the **Terminal** tab.
+        2.  From a terminal, connect using the psql command displayed.
+        3.  When prompted for the password, enter the app’s password.
+
+        Once connected, the service account creation is complete and you
+        can grant roles to the new service account.
+
+        </div>
+
+        <div id="tab-other-clients" class="tab-pane"
+        title="Other clients">
+
+        To use a non-psql client to connect,
+
+        1.  Click on the **External tools** tab to get the connection
+            details.
+
+        2.  Update the client to use these details and connect.
+
+        Once connected, the service account creation is complete and you
+        can grant roles to the new service account.
+
+        </div>
+
+        </div>
+
+        </div>
+
+To view the created app accounts, go to [Admin \> App
+Passwords](/docs/console/admin/).
+
+</div>
+
+<a href="#top" class="back-to-top">Back to top ↑</a>
+
+<div class="theme-switcher">
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzeXN0ZW0iIHZpZXdib3g9IjAgMCA1MTIgNTEyIj4KICAgICAgICA8dGl0bGU+U3lzdGVtIFRoZW1lPC90aXRsZT4KICAgICAgICA8cGF0aCBkPSJNMjU2IDE3NmE4MCA4MCAwIDEwODAgODAgODAuMjQgODAuMjQgMCAwMC04MC04MHptMTcyLjcyIDgwYTE2NS41MyAxNjUuNTMgMCAwMS0xLjY0IDIyLjM0bDQ4LjY5IDM4LjEyYTExLjU5IDExLjU5IDAgMDEyLjYzIDE0Ljc4bC00Ni4wNiA3OS41MmExMS42NCAxMS42NCAwIDAxLTE0LjE0IDQuOTNsLTU3LjI1LTIzYTE3Ni41NiAxNzYuNTYgMCAwMS0zOC44MiAyMi42N2wtOC41NiA2MC43OGExMS45MyAxMS45MyAwIDAxLTExLjUxIDkuODZoLTkyLjEyYTEyIDEyIDAgMDEtMTEuNTEtOS41M2wtOC41Ni02MC43OEExNjkuMyAxNjkuMyAwIDAxMTUxLjA1IDM5M0w5My44IDQxNmExMS42NCAxMS42NCAwIDAxLTE0LjE0LTQuOTJMMzMuNiAzMzEuNTdhMTEuNTkgMTEuNTkgMCAwMTIuNjMtMTQuNzhsNDguNjktMzguMTJBMTc0LjU4IDE3NC41OCAwIDAxODMuMjggMjU2YTE2NS41MyAxNjUuNTMgMCAwMTEuNjQtMjIuMzRsLTQ4LjY5LTM4LjEyYTExLjU5IDExLjU5IDAgMDEtMi42My0xNC43OGw0Ni4wNi03OS41MmExMS42NCAxMS42NCAwIDAxMTQuMTQtNC45M2w1Ny4yNSAyM2ExNzYuNTYgMTc2LjU2IDAgMDEzOC44Mi0yMi42N2w4LjU2LTYwLjc4QTExLjkzIDExLjkzIDAgMDEyMDkuOTQgMjZoOTIuMTJhMTIgMTIgMCAwMTExLjUxIDkuNTNsOC41NiA2MC43OEExNjkuMyAxNjkuMyAwIDAxMzYxIDExOWw1Ny4yLTIzYTExLjY0IDExLjY0IDAgMDExNC4xNCA0LjkybDQ2LjA2IDc5LjUyYTExLjU5IDExLjU5IDAgMDEtMi42MyAxNC43OGwtNDguNjkgMzguMTJhMTc0LjU4IDE3NC41OCAwIDAxMS42NCAyMi42NnoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="system" />
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzdW4iIHZpZXdib3g9IjAgMCA1MTIgNTEyIj4KICAgICAgICA8dGl0bGU+TGlnaHQgVGhlbWU8L3RpdGxlPgogICAgICAgIDxwYXRoIGQ9Ik0yMzQgMjZoNDR2OTJoLTQ0ek0yMzQgMzk0aDQ0djkyaC00NHpNMzM4LjAyNSAxNDIuODU3bDY1LjA1NC02NS4wNTQgMzEuMTEzIDMxLjExMy02NS4wNTQgNjUuMDU0ek03Ny44MTUgNDAzLjA3NGw2NS4wNTQtNjUuMDU0IDMxLjExMyAzMS4xMTMtNjUuMDU0IDY1LjA1NHpNMzk0IDIzNGg5MnY0NGgtOTJ6TTI2IDIzNGg5MnY0NEgyNnpNMzM4LjAyOSAzNjkuMTRsMzEuMTEyLTMxLjExMyA2NS4wNTQgNjUuMDU0LTMxLjExMiAzMS4xMTJ6TTc3LjgwMiAxMDguOTJsMzEuMTEzLTMxLjExMyA2NS4wNTQgNjUuMDU0LTMxLjExMyAzMS4xMTJ6TTI1NiAzNThhMTAyIDEwMiAwIDExMTAyLTEwMiAxMDIuMTIgMTAyLjEyIDAgMDEtMTAyIDEwMnoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="sun" />
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJtb29uIiB2aWV3Ym94PSIwIDAgNTEyIDUxMiI+CiAgICAgICAgPHRpdGxlPkRhcmsgVGhlbWU8L3RpdGxlPgogICAgICAgIDxwYXRoIGQ9Ik0xNTIuNjIgMTI2Ljc3YzAtMzMgNC44NS02Ni4zNSAxNy4yMy05NC43N0M4Ny41NCA2Ny44MyAzMiAxNTEuODkgMzIgMjQ3LjM4IDMyIDM3NS44NSAxMzYuMTUgNDgwIDI2NC42MiA0ODBjOTUuNDkgMCAxNzkuNTUtNTUuNTQgMjE1LjM4LTEzNy44NS0yOC40MiAxMi4zOC02MS44IDE3LjIzLTk0Ljc3IDE3LjIzLTEyOC40NyAwLTIzMi42MS0xMDQuMTQtMjMyLjYxLTIzMi42MXoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="moon" />
+
+</div>
+
+<div>
+
+<a
+href="//github.com/MaterializeInc/materialize/edit/main/doc/user/content/console/create-new.md"
+class="btn-ghost"><img
+src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHZpZXdib3g9IjAgMCAyMyAyMyIgZmlsbD0iY3VycmVudENvbG9yIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogICAgICAgIDxwYXRoIGQ9Ik0yMC44OTQ1IDExLjQ5NjhDMjAuODk0NSAxMC4yMzk0IDIwLjYxNTEgOS4wNTE5IDIwLjEyNjEgNy44NjQzN0MxOS42MzcxIDYuNzQ2NjkgMTguOTM4NSA1LjY5ODg4IDE4LjE3MDEgNC45MzA0N0MxNy40MDE3IDQuMTYyMDcgMTYuMzUzOSAzLjQ2MzUgMTUuMjM2MiAyLjk3NDUyQzE0LjExODUgMi40ODU1MyAxMi44NjExIDIuMjA2MTMgMTEuNjAzOCAyLjIwNjEzQzEwLjM0NjQgMi4yMDYxMyA5LjE1ODg0IDIuNDg1NTMgNy45NzEzIDIuOTc0NTJDNi44NTM2MiAzLjQ2MzUgNS44MDU3OSA0LjE2MjA3IDUuMDM3MzggNC45MzA0N0M0LjI2ODk4IDUuNjk4ODggMy41NzA0NCA2Ljc0NjY5IDMuMDgxNDUgNy44NjQzN0MyLjU5MjQ3IDguOTgyMDUgMi4zMTMwNCAxMC4yMzk0IDIuMzEzMDQgMTEuNDk2OEMyLjMxMzA0IDEzLjUyMjYgMi45NDE3NCAxNS4zMzg5IDQuMTI5MjggMTcuMDE1NEM1LjMxNjgxIDE4LjY5MTkgNi45MjM0NyAxOS44MDk2IDguODA5NTYgMjAuMzY4NFYxNy45MjM1QzguMjUwNzIgMTcuOTkzNCA3Ljk3MTI5IDE3Ljk5MzMgNy44MzE1OCAxNy45OTMzQzYuNzgzNzYgMTcuOTkzMyA2LjAxNTM1IDE3LjUwNDQgNS41OTYyMiAxNi41MjY0QzUuNDU2NTEgMTYuMTc3MSA1LjI0Njk1IDE1LjgyNzggNS4wMzczOCAxNS42MTgzQzQuOTY3NTMgMTUuNTQ4NCA0Ljg5NzY4IDE1LjQ3ODYgNC43NTc5NyAxNS4zMzg5QzQuNjE4MjYgMTUuMTk5MiA0LjQ3ODU0IDE1LjEyOTMgNC4zMzg4MyAxNC45ODk2QzQuMTk5MTIgMTQuODQ5OSA0LjEyOTI4IDE0Ljc4IDQuMTI5MjggMTQuNzhDNC4xMjkyOCAxNC42NDAzIDQuMjY4OTggMTQuNjQwMyA0LjU0ODQgMTQuNjQwM0M0LjgyNzgyIDE0LjY0MDMgNS4xMDcyNCAxNC43MTAyIDUuMzE2ODEgMTQuODQ5OUM1LjUyNjM3IDE0Ljk4OTYgNS43MzU5NCAxNS4xMjkzIDUuODc1NjUgMTUuMzM4OUM2LjAxNTM2IDE1LjU0ODQgNi4xNTUwNyAxNS43NTggNi4zNjQ2MyAxNS45Njc2QzYuNTA0MzQgMTYuMTc3MSA2LjcxMzkxIDE2LjMxNjggNi45MjM0OCAxNi40NTY1QzcuMTMzMDQgMTYuNTk2MyA3LjQxMjQ2IDE2LjY2NjEgNy43NjE3MyAxNi42NjYxQzguMTgwODYgMTYuNjY2MSA4LjUzMDE0IDE2LjU5NjMgOC45NDkyNyAxNi40NTY1QzkuMDg4OTggMTUuODk3NyA5LjQzODI1IDE1LjQ3ODYgOS44NTczOCAxNS4xMjkzQzguMjUwNzIgMTQuOTg5NiA3LjA2MzE4IDE0LjU3MDUgNi4yOTQ3NyAxMy45NDE4QzUuNTI2MzcgMTMuMzEzMSA1LjEwNzI0IDEyLjE5NTQgNS4xMDcyNCAxMC42NTg2QzUuMTA3MjQgOS41NDA4OSA1LjQ1NjUyIDguNTYyOTQgNi4xNTUwNyA3Ljc5NDUzQzYuMDE1MzYgNy4zNzU0IDUuOTQ1NSA2Ljk1NjI2IDUuOTQ1NSA2LjUzNzEzQzUuOTQ1NSA1Ljk3ODI5IDYuMDg1MjEgNS40MTk0NiA2LjM2NDYzIDQuOTMwNDdDNi45MjM0NyA0LjkzMDQ3IDcuNDEyNDUgNS4wMDAzMiA3LjgzMTU4IDUuMjA5ODlDOC4yNTA3MSA1LjQxOTQ1IDguNzM5NyA1LjY5ODg2IDkuMjk4NTQgNi4xMTc5OUMxMC4wNjY5IDUuOTc4MjggMTAuODM1NCA1LjgzODU4IDExLjc0MzUgNS44Mzg1OEMxMi41MTE5IDUuODM4NTggMTMuMjgwMyA1LjkwODQ1IDEzLjk3ODggNi4wNDgxNkMxNC41Mzc3IDUuNjI5MDMgMTUuMDI2NyA1LjM0OTYgMTUuNDQ1OCA1LjIwOTg5QzE1Ljg2NDkgNS4wMDAzMiAxNi4zNTM5IDQuOTMwNDcgMTYuOTEyNyA0LjkzMDQ3QzE3LjE5MjIgNS40MTk0NiAxNy4zMzE5IDUuOTc4MjkgMTcuMzMxOSA2LjUzNzEzQzE3LjMzMTkgNi45NTYyNiAxNy4yNjIgNy4zNzU0IDE3LjEyMjMgNy43MjQ2N0MxNy44MjA5IDguNDkzMDggMTguMTcwMSA5LjQ3MTA1IDE4LjE3MDEgMTAuNTg4N0MxOC4xNzAxIDEyLjEyNTUgMTcuNzUxIDEzLjE3MzQgMTYuOTgyNiAxMy44NzE5QzE2LjIxNDIgMTQuNTcwNSAxNS4wMjY2IDE0LjkxOTcgMTMuNDIgMTUuMDU5NEMxNC4xMTg1IDE1LjU0ODQgMTQuMzk4IDE2LjE3NzEgMTQuMzk4IDE2Ljk0NTVWMjAuMjI4N0MxNi4zNTM5IDE5LjYgMTcuODkwNyAxOC40ODIzIDE5LjA3ODIgMTYuODc1N0MyMC4yNjU4IDE1LjMzODkgMjAuODk0NSAxMy41MjI2IDIwLjg5NDUgMTEuNDk2OFpNMjIuNzEwNyAxMS40OTY4QzIyLjcxMDcgMTMuNTIyNiAyMi4yMjE3IDE1LjQwODcgMjEuMjQzOCAxNy4wODUyQzIwLjI2NTggMTguODMxNiAxOC44Njg3IDIwLjE1ODggMTcuMTkyMiAyMS4xMzY4QzE1LjQ0NTggMjIuMTE0OCAxMy42Mjk2IDIyLjYwMzggMTEuNjAzOCAyMi42MDM4QzkuNTc3OTYgMjIuNjAzOCA3LjY5MTg4IDIyLjExNDggNi4wMTUzNiAyMS4xMzY4QzQuMjY4OTggMjAuMTU4OCAyLjk0MTc0IDE4Ljc2MTggMS45NjM3NyAxNy4wODUyQzAuOTg1Nzk2IDE1LjMzODkgMC40OTY4MDcgMTMuNTIyNiAwLjQ5NjgwNyAxMS40OTY4QzAuNDk2ODA3IDkuNDcxMDQgMC45ODU3OTYgNy41ODQ5NiAxLjk2Mzc3IDUuOTA4NDRDMi45NDE3NCA0LjE2MjA2IDQuMzM4ODQgMi44MzQ4MyA2LjAxNTM2IDEuODU2ODZDNy43NjE3MyAwLjg3ODg4NiA5LjU3Nzk2IDAuMzg5ODk3IDExLjYwMzggMC4zODk4OTdDMTMuNjI5NiAwLjM4OTg5NyAxNS41MTU2IDAuODc4ODg2IDE3LjE5MjIgMS44NTY4NkMxOC45Mzg1IDIuODM0ODMgMjAuMjY1OCA0LjIzMTkyIDIxLjI0MzggNS45MDg0NEMyMi4yMjE3IDcuNTg0OTYgMjIuNzEwNyA5LjQ3MTA0IDIyLjcxMDcgMTEuNDk2OFoiIC8+CiAgICAgIDwvc3ZnPg==" />
+Edit this page</a>
+
+</div>
+
+<div class="footer-links">
+
+[Home](https://materialize.com) [Status](https://status.materialize.com)
+[GitHub](https://github.com/MaterializeInc/materialize)
+[Blog](https://materialize.com/blog)
+[Contact](https://materialize.com/contact)
+
+Cookie Preferences
+
+[Privacy Policy](https://materialize.com/privacy-policy/)
+
+</div>
+
+© 2025 Materialize Inc.
+
+</div>
