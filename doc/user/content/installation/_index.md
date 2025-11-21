@@ -183,7 +183,7 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 
 #### Upgrading between minor versions less than `v26`
  - Prior to `v26`, you must upgrade at most one minor version at a time. For
-   example, upgrading from `v25.1.5` to `v25.2.15` is permitted.
+   example, upgrading from `v25.1.5` to `v25.2.16` is permitted.
 
 ## See also
 
