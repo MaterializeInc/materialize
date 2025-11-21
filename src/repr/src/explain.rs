@@ -426,7 +426,7 @@ impl<'a, T> AsRef<&'a dyn ExprHumanizer> for PlanRenderingContext<'a, T> {
 ///
 /// This will be most often used as part of the rendering context
 /// type for various `Display$Format` implementation.
-pub trait ExprHumanizer: fmt::Debug {
+pub trait ExprHumanizer: fmt::Debug + Sync {
     /// Attempts to return a human-readable string for the relation
     /// identified by `id`.
     fn humanize_id(&self, id: GlobalId) -> Option<String>;
