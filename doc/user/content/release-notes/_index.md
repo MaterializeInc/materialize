@@ -8,11 +8,11 @@ menu:
     identifier: "release-notes"
 ---
 
-## v25.2.15
+## v25.2.16
 
 ### Bug fixes
 - Fixes potential issue with where environmentd crash during an upgrade can fence out environmentd.
-- **You must upgrade at to least version 25.2.15 (environmentd 0.147.20) prior to upgrading to the next major version.**:
+- **You must upgrade at to least version 25.2.16 (environmentd 0.147.20) prior to upgrading to the next major version.**:
 
   - If you are using the Materialize-provided Terraforms, upgrade to version
     `v0.6.1` of the Terraform:

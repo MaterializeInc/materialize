@@ -10,8 +10,8 @@ menu:
 
 {{< annotation type="Disambiguation" >}}
 
-This page outlines the general steps for upgrading to v25.2.15 (the minimum
-version needed to upgrade to v25.2.15) if you are <red>**not**</red> using
+This page outlines the general steps for upgrading to v25.2.16 (the minimum
+version needed to upgrade to v26.0) if you are <red>**not**</red> using
 Materialize provided Terraforms.
 
 If you are using Materialize-provided Terraforms, `v0.6.1` of the Terraforms
@@ -34,7 +34,7 @@ See also [General notes for upgrades](/installation/#upgrade).
 {{< include-md file="shared-content/self-managed/prepare-nodes-and-upgrade.md"
 >}}
 
-Starting in v25.2.15, Self-Managed Materialize enables swap by default. Swap
+Starting in v25.2.16, Self-Managed Materialize enables swap by default. Swap
 allows for infrequently accessed data to be moved from memory to disk. Enabling
 swap reduces the memory required to operate Materialize and improves cost
 efficiency.
@@ -42,10 +42,10 @@ efficiency.
 To facilitate upgrades, Self-Managed Materialize added new labels to the node
 selectors for `clusterd` pods. To upgrade, you must prepare your nodes with the
 new labels. This guide provides general instructions for preparing for swap and
-upgrading to v25.2.15 if you are <red>**not**</red> using the
+upgrading to v25.2.16 if you are <red>**not**</red> using the
 Materialize-provided Terraforms.
 
-## Upgrade to v25.2.15 without Materialize-provided Terraforms
+## Upgrade to v25.2.16 without Materialize-provided Terraforms
 
 {{< tip >}}
 {{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
@@ -135,13 +135,13 @@ See also [General notes for upgrades](/installation/#general-notes-for-upgrades)
 
     Swap is enabled by default for clusterd, but not for environmentd. If you'd like to enable swap for environmentd, add `"materialize.cloud/swap": "true"` to the `environmentd.node_selector` helm value.
 
-1. Upgrade the Materialize operator helm chart to v25.2.15.
+1. Upgrade the Materialize operator helm chart to v25.2.16.
 
     The cluster size definitions for existing Materialize instances will not be changed at this point, but any newly created Materialize instances, or upgraded Materialize instances will pick up the new sizes.
 
-    Do not create any new Materialize instances at versions less than v25.2.15
+    Do not create any new Materialize instances at versions less than v25.2.16
    (`environmentd` 0.147.20) or perform any rollouts to existing Materialize
-   instances to versions less than v25.2.15(`environmentd` 0.147.20).
+   instances to versions less than v25.2.16 (`environmentd` 0.147.20).
 
 1. Upgrade existing Materialize instances to `v0.147.20`.
 
