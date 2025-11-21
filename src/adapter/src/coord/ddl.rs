@@ -739,9 +739,9 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
-    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
+    pub(crate) fn drop_compute_collections(&mut self, collections: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (cluster_id, gid) in indexes {
+        for (cluster_id, gid) in collections {
             by_cluster.entry(cluster_id).or_default().push(gid);
         }
         for (cluster_id, gids) in by_cluster {
@@ -753,58 +753,6 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
-    }
-
-    /// A convenience method for dropping materialized views.
-    pub(crate) fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut mv_gids = Vec::new();
-        for (cluster_id, gid) in mviews {
-            by_cluster.entry(cluster_id).or_default().push(gid);
-            mv_gids.push(gid);
-        }
-
-        // Drop compute sinks.
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-
-        // Drop storage resources.
-        let storage_metadata = self.catalog.state().storage_metadata();
-        self.controller
-            .storage
-            .drop_sources(storage_metadata, mv_gids)
-            .unwrap_or_terminate("cannot fail to drop sources");
-    }
-
-    /// A convenience method for dropping continual tasks.
-    pub(crate) fn drop_continual_tasks(&mut self, cts: Vec<(CatalogItemId, ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut source_ids = Vec::new();
-        for (item_id, cluster_id, gid) in cts {
-            by_cluster.entry(cluster_id).or_default().push(gid);
-            source_ids.push((item_id, gid));
-        }
-
-        // Drop compute sinks.
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-
-        // Drop storage sources.
-        self.drop_sources(source_ids)
     }
 
     pub(crate) fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
