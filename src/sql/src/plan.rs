@@ -193,6 +193,7 @@ pub enum Plan {
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
     AlterTableAddColumn(AlterTablePlan),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementPlan),
     AlterNetworkPolicy(AlterNetworkPolicyPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
@@ -253,7 +254,10 @@ impl Plan {
             StatementKind::AlterTableAddColumn => {
                 &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
             }
-            StatementKind::AlterMaterializedViewApplyReplacement => todo!(),
+            StatementKind::AlterMaterializedViewApplyReplacement => &[
+                PlanKind::AlterNoop,
+                PlanKind::AlterMaterializedViewApplyReplacement,
+            ],
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
@@ -446,6 +450,9 @@ impl Plan {
                 ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
+            Plan::AlterMaterializedViewApplyReplacement(_) => {
+                "alter materialized view apply replacement"
+            }
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -1327,6 +1334,12 @@ pub struct AlterTablePlan {
     pub column_name: ColumnName,
     pub column_type: SqlColumnType,
     pub raw_sql_type: RawDataType,
+}
+
+#[derive(Debug)]
+pub struct AlterMaterializedViewApplyReplacementPlan {
+    pub id: CatalogItemId,
+    pub replacement_id: CatalogItemId,
 }
 
 #[derive(Debug)]

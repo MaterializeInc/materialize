@@ -57,7 +57,10 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
+use mz_sql::plan::{
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
+    StatementContext,
+};
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::GenericSourceConnection;
@@ -4695,6 +4698,63 @@ impl Coordinator {
             .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_materialized_view_apply_replacement(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: AlterMaterializedViewApplyReplacementPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        const ERROR_CONTEXT: &str = "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT";
+
+        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan;
+
+        // TODO(alter-mv): Wait until there is overlap between the old MV's write frontier and the
+        // new MV's as-of, to ensure no times are skipped.
+
+        let Some(old) = self.catalog().get_entry(&id).materialized_view() else {
+            return Err(AdapterError::internal(
+                ERROR_CONTEXT,
+                "id must refer to a materialized view",
+            ));
+        };
+        let Some(new) = self
+            .catalog()
+            .get_entry(&replacement_id)
+            .materialized_view()
+        else {
+            return Err(AdapterError::internal(
+                ERROR_CONTEXT,
+                "replacement_id must refer to a materialized view",
+            ));
+        };
+
+        let old_cluster_id = old.cluster_id;
+        let new_cluster_id = new.cluster_id;
+
+        let old_gid = old.global_id_writes();
+        let new_gid = new.global_id_writes();
+
+        let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
+
+        self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+            Box::pin(async move {
+                // Cut over the MV computation, by shutting down the old dataflow and allowing the
+                // new dataflow to start writing.
+                //
+                // Both commands are applied to their respective clusters asynchronously and they
+                // race, so it is possible that we allow writes by the replacement before having
+                // dropped the old dataflow. Thus there might be a period where the two dataflows
+                // are competing in trying to commit conflicting outputs. Eventually the old
+                // dataflow will be dropped and the replacement takes over.
+                coord.drop_compute_collections(vec![(old_cluster_id, old_gid)]);
+                coord.allow_writes(new_cluster_id, new_gid);
+            })
+        })
+        .await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::MaterializedView))
     }
 
     pub(super) async fn statistics_oracle(
