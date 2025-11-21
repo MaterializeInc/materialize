@@ -5356,6 +5356,7 @@ impl Coordinator {
                 OptimizerNoticeKind::IndexKeyEmpty => {
                     system_vars.enable_notices_for_index_empty_key()
                 }
+                OptimizerNoticeKind::CrossJoin => system_vars.enable_notices_for_cross_joins(),
             };
             if notice_enabled {
                 // We don't need to redact the notice parts because
