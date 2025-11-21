@@ -848,6 +848,7 @@ mod tests {
             )
             .await
         })
+        .into_tokio_handle()
         .await;
         assert_err!(res);
         assert_eq!(states.initialized_count(), 0);

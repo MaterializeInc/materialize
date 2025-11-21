@@ -274,7 +274,7 @@ where
                     )
                     .instrument(write_span),
                 );
-                let part = handle.await.expect("part write task failed");
+                let part = handle.await;
                 parts.push(RunPart::Single(part));
             }
         }
@@ -1254,8 +1254,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 )
             })
             .instrument(debug_span!("batch::encode_part"))
-            .await
-            .expect("part encode task failed");
+            .await;
         // Can't use the `CodecMetrics::encode` helper because of async.
         metrics.codecs.batch.encode_count.inc();
         metrics

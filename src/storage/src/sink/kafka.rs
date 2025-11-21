@@ -433,7 +433,6 @@ impl TransactionalProducer {
         let producer = self.producer.clone();
         task::spawn_blocking(|| &self.task_name, move || f(producer))
             .await
-            .unwrap()
             .check_ssh_status(self.producer.context())
     }
 
@@ -1069,7 +1068,7 @@ async fn determine_sink_progress(
             }
         }
         Ok(None)
-    }).await.unwrap().check_ssh_status(&ctx);
+    }).await.check_ssh_status(&ctx);
     // Express interest to the computation until after we've received its result
     drop(parent_token);
     result
@@ -1311,7 +1310,6 @@ async fn fetch_partition_count(
         }
     })
     .await
-    .expect("spawning blocking task cannot fail")
     .check_ssh_status(producer.context())?;
 
     match meta.topics().iter().find(|t| t.name() == topic_name) {

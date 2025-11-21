@@ -1548,11 +1548,10 @@ impl WebhookValidation {
         );
 
         match tokio::time::timeout(Self::MAX_REDUCE_TIME, reduce_task).await {
-            Ok(Ok(reduced_expr)) => {
+            Ok(reduced_expr) => {
                 *expression = reduced_expr;
                 Ok(())
             }
-            Ok(Err(_)) => Err("joining task"),
             Err(_) => Err("timeout"),
         }
     }

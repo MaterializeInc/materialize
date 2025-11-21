@@ -22,7 +22,6 @@ use futures::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
-use mz_ore::task::JoinHandleExt;
 use mz_repr::{CatalogItemId, Diff, GlobalId, Row, Timestamp};
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::aws::AwsConnection;
@@ -272,7 +271,6 @@ where
                         .await?;
                     Ok::<(), anyhow::Error>(())
                 })
-                .wait_and_assert_finished()
                 .await?;
             }
             Ok::<u64, anyhow::Error>(row_count)

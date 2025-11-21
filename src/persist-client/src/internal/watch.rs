@@ -143,9 +143,9 @@ mod tests {
     use futures_task::noop_waker;
     use mz_build_info::DUMMY_BUILD_INFO;
     use mz_dyncfg::ConfigUpdates;
+    use mz_ore::assert_none;
     use mz_ore::cast::CastFrom;
     use mz_ore::metrics::MetricsRegistry;
-    use mz_ore::{assert_none, assert_ok};
     use timely::progress::Antichain;
 
     use crate::cache::StateCache;
@@ -272,10 +272,10 @@ mod tests {
             })
             .collect::<Vec<_>>();
         for watch in watches {
-            assert_ok!(watch.await);
+            watch.await;
         }
         for write in writes {
-            assert_ok!(write.await);
+            write.await;
         }
     }
 

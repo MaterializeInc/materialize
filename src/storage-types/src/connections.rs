@@ -1077,7 +1077,7 @@ impl KafkaConnection {
             let consumer = Arc::clone(&consumer);
             move || consumer.fetch_metadata(None, timeout)
         })
-        .await?;
+        .await;
         match result {
             Ok(_) => Ok(()),
             // The error returned by `fetch_metadata` does not provide any details which makes for

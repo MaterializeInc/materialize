@@ -34,7 +34,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::now::{EpochMillis, NOW_ZERO, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{assert_contains, assert_err, assert_ok};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
@@ -194,7 +194,7 @@ async fn test_no_block() {
             .expect("server unexpectedly closed channel");
 
         println!("test_no_block: joining task");
-        slow_task.await.unwrap();
+        slow_task.await;
     };
 
     tokio::time::timeout(Duration::from_secs(120), test_case)
@@ -297,7 +297,7 @@ async fn test_drop_connection_race() {
         .expect("server unexpectedly closed channel");
 
     info!("test_drop_connection_race: asserting response");
-    let source_res = source_task.await.unwrap();
+    let source_res = source_task.into_tokio_handle().await.unwrap();
     assert_contains!(
         source_res.unwrap_err().to_string(),
         "unknown catalog item 'conn'"
@@ -3746,7 +3746,7 @@ async fn test_cancel_linearize_read_then_writes() {
         )
         .await;
     res.unwrap();
-    handle.await.unwrap();
+    handle.await;
 }
 
 // Test that builtin objects are created in the schemas they advertise in builtin.rs.
@@ -3817,7 +3817,7 @@ async fn test_serialized_ddl_serial() {
     let mut successes = 0;
     let mut errors = 0;
     for handle in handles {
-        let result = handle.await.unwrap();
+        let result = handle.await;
         match result {
             Ok(_) => {
                 successes += 1;
@@ -3869,11 +3869,11 @@ async fn test_serialized_ddl_cancel() {
     // Cancel the pending statement (this uses different cancellation logic and is the actual thing
     // we are trying to test here).
     cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
-    let err = handle2.await.unwrap();
+    let err = handle2.await;
     assert_contains!(err.to_string(), "canceling statement due to user request");
     // Cancel the in-progress statement.
     cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
-    let err = handle1.await.unwrap();
+    let err = handle1.await;
     assert_contains!(err.to_string(), "canceling statement due to user request");
 
     // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully

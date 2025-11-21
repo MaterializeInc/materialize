@@ -4406,6 +4406,7 @@ pub(crate) mod tests {
                     .expect_compare_and_append_batch(&mut [], current, current + 1)
                     .await;
             })
+            .into_tokio_handle()
             .await
         }
 

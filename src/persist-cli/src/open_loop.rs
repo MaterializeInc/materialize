@@ -252,8 +252,7 @@ where
                                 .in_scope(|| data_generator.gen_batch(usize::cast_from(batch_idx)))
                         },
                     )
-                    .await
-                    .expect("task failed");
+                    .await;
                     trace!("data generator {} made a batch", idx);
                     let batch = match batch {
                         Some(x) => x,
@@ -432,19 +431,19 @@ where
     }
 
     for handle in generator_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
     }
     for handle in write_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
     }
     for handle in read_handles {
-        match handle.await? {
+        match handle.await {
             Ok((finished, _)) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
@@ -661,7 +660,7 @@ mod raw_persist_benchmark {
             self.tx.take().expect("already finished");
 
             for handle in self.handles.drain(..) {
-                let () = handle.await?;
+                let () = handle.await;
             }
 
             Ok(())

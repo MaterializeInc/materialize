@@ -449,8 +449,7 @@ async fn run_benchmark(
                                         .in_scope(|| data_generator_cloned.gen_batch(usize::cast_from(batch_idx)))
                                 },
                             )
-                            .await
-                            .expect("task failed");
+                            .await;
                             trace!("data generator {} made a batch", source_id);
                             let batch = match batch {
                                 Some(x) => x,
@@ -752,7 +751,7 @@ async fn run_benchmark(
     }
 
     for handle in generator_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }

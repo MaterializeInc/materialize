@@ -35,7 +35,7 @@ use pin_project::pin_project;
 use tokio::task::futures::TaskLocalFuture;
 use tokio::time::{self, Duration, Instant};
 
-use crate::task::{self, JoinHandleExt};
+use crate::task;
 
 /// Whether or not to run the future in `run_in_task_if` in a task.
 #[derive(Clone, Copy, Debug)]
@@ -126,7 +126,7 @@ where
         T: Send + 'static,
         T::Output: Send + 'static,
     {
-        task::spawn(nc, self).wait_and_assert_finished().await
+        task::spawn(nc, self).await
     }
 
     async fn run_in_task_if<Name, NameClosure>(self, in_task: InTask, nc: NameClosure) -> T::Output

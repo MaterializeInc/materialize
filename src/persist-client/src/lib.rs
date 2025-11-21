@@ -1919,7 +1919,7 @@ mod tests {
         }
 
         for handle in handles {
-            let () = handle.await.expect("task failed");
+            let () = handle.await;
         }
 
         let expected = data.records().collect::<Vec<_>>();
@@ -2028,9 +2028,7 @@ mod tests {
             .expect("handle should have unexpired state");
         read.expire().await;
         for read_heartbeat_task in mem::take(&mut read_unexpired_state._heartbeat_tasks) {
-            let () = read_heartbeat_task
-                .await
-                .expect("task should shutdown cleanly");
+            let () = read_heartbeat_task.await;
         }
     }
 

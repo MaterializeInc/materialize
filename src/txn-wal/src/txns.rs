@@ -1620,7 +1620,7 @@ mod tests {
         let mut max_ts = 0;
         let mut reads = Vec::new();
         for worker in workers {
-            let (t, mut r) = worker.await.unwrap();
+            let (t, mut r) = worker.await;
             max_ts = std::cmp::max(max_ts, t);
             reads.append(&mut r);
         }
@@ -1638,7 +1638,7 @@ mod tests {
             info!("now waiting for reads {}", max_ts);
             for (tx, data_id, as_of, subscribe) in reads {
                 let _ = tx.send(max_ts + 1);
-                let output = subscribe.await.unwrap();
+                let output = subscribe.await;
                 log.assert_eq(data_id, as_of, max_ts + 1, output);
             }
         })
@@ -1705,7 +1705,8 @@ mod tests {
             txn.write(&d0, "bar".into(), (), 1).await;
             // This panics.
             let _ = txn.commit_at(&mut txns1, 3).await;
-        });
+        })
+        .into_tokio_handle();
         assert!(res.await.is_err());
 
         // Forgetting the data shard removes it, so we don't leave the schema

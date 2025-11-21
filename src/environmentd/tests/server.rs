@@ -3343,14 +3343,10 @@ async fn webhook_concurrent_actions() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     // Stop the threads.
     keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
-    let results = poster.await.expect("thread panicked!");
+    let results = poster.await;
 
     // Inspect the results.
-    let mut results = results
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("no join failures")
-        .into_iter();
+    let mut results = results.into_iter().collect::<Vec<_>>().into_iter();
 
     for _ in 0..num_requests_before_drop {
         let response = results.next().expect("element");
@@ -3463,8 +3459,7 @@ fn webhook_concurrency_limit() {
     }
     let results = server
         .runtime()
-        .block_on(futures::future::try_join_all(handles))
-        .expect("failed to wait for requests");
+        .block_on(futures::future::join_all(handles));
 
     let successes = results
         .iter()

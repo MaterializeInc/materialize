@@ -3372,7 +3372,7 @@ mod tests {
 
         let handles = Catalog::with_debug(|catalog| async { inner(catalog) }).await;
         for handle in handles {
-            handle.await.expect("must succeed");
+            handle.await;
         }
     }
 

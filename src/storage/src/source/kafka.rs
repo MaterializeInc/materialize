@@ -1018,7 +1018,7 @@ impl KafkaResumeUpperProcessor {
                 || format!("source({}) kafka offset commit", self.config.id),
                 move || consumer.commit(&tpl, CommitMode::Sync),
             )
-            .await??;
+            .await?;
         }
         Ok(())
     }

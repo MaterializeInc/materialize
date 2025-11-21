@@ -120,7 +120,7 @@ fn bench_consensus_compare_and_set_all_iters(
             handles.push(handle);
         }
         for handle in handles.into_iter() {
-            runtime.block_on(handle).expect("task failed");
+            runtime.block_on(handle);
         }
 
         start.elapsed()

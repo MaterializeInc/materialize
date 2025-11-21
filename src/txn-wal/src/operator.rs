@@ -22,7 +22,6 @@ use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
-use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
@@ -696,7 +695,7 @@ impl DataSubscribeTask {
     pub async fn finish(self) -> Vec<(String, u64, i64)> {
         // Closing the channel signals the task to exit.
         drop(self.tx);
-        self.task.wait_and_assert_finished().await
+        self.task.await
     }
 
     fn task(

@@ -20,7 +20,7 @@ use bytes::{Bytes, BytesMut};
 use bytesize::ByteSize;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
-use mz_ore::task::{JoinHandle, JoinHandleExt, spawn};
+use mz_ore::task::{JoinHandle, spawn};
 
 /// A multi part uploader which can upload a single object across multiple parts
 /// and keeps track of state to eventually finish the upload process.
@@ -226,7 +226,7 @@ impl S3MultiPartUploader {
 
         let mut parts: Vec<CompletedPart> = Vec::with_capacity(self.upload_handles.len());
         for handle in self.upload_handles {
-            let (etag, part_num) = handle.wait_and_assert_finished().await?;
+            let (etag, part_num) = handle.await?;
             match etag {
                 Some(etag) => {
                     parts.push(

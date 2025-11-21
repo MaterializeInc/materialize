@@ -2553,15 +2553,12 @@ impl Coordinator {
 
         let retractions_res = futures::future::join_all(retraction_tasks).await;
         for retractions in retractions_res {
-            let retractions = retractions.expect("cannot fail to fetch snapshot");
             builtin_table_updates.push(retractions);
         }
 
         let audit_join_start = Instant::now();
         info!("startup: coordinator init: bootstrap: join audit log deserialization beginning");
-        let audit_log_updates = audit_log_task
-            .await
-            .expect("cannot fail to fetch audit log updates");
+        let audit_log_updates = audit_log_task.await;
         let audit_log_builtin_table_updates = self
             .catalog()
             .state()

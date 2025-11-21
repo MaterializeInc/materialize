@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::task::{JoinHandle, JoinHandleExt};
+use mz_ore::task::JoinHandle;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::ops::{Deref, DerefMut};
@@ -178,7 +178,7 @@ impl<T: Send + 'static> Pending<T> {
 
     pub async fn into_result(self) -> T {
         match self {
-            Pending::Writing(h) => h.wait_and_assert_finished().await,
+            Pending::Writing(h) => h.await,
             Pending::Blocking => panic!("block_until_ready cancelled?"),
             Pending::Finished(t) => t,
         }

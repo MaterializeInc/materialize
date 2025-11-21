@@ -970,7 +970,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .0;
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     // Open again to ensure that we didn't commit an invalid retraction.
     let _state = state_builder

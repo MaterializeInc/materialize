@@ -967,10 +967,8 @@ pub async fn create_state(
         })
         .await?;
 
-    let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
-        join.expect("pgconn_task unexpectedly canceled")
-            .context("running SQL connection")
-    });
+    let pgconn_task =
+        task::spawn(|| "pgconn_task", pgconn).map(|join| join.context("running SQL connection"));
 
     let materialize_state =
         create_materialize_state(&config, materialize_catalog_config, pgclient).await?;
