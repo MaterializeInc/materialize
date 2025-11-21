@@ -668,6 +668,28 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::CreateReplacementMaterializedView(plan::CreateReplacementMaterializedViewPlan {
+            name,
+            materialized_view,
+            replaces,
+            ..
+        }) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*replaces)],
+            privileges: vec![
+                (
+                    SystemObjectId::Object(name.qualifiers.clone().into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+                (
+                    SystemObjectId::Object(materialized_view.cluster_id.into()),
+                    AclMode::CREATE,
+                    role_id,
+                ),
+            ],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::Comment(plan::CommentPlan {
             object_id,
             sub_component: _,
@@ -1052,6 +1074,13 @@ fn generate_rbac_requirements(
         },
         Plan::AlterConnection(plan::AlterConnectionPlan { id, action: _ }) => RbacRequirements {
             ownership: vec![ObjectId::Item(*id)],
+            ..Default::default()
+        },
+        Plan::AlterMaterializedViewApplyReplacement(
+            plan::AlterMaterializedViewApplyReplacementPlan { id, replacement_id },
+        ) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id), ObjectId::Item(*replacement_id)],
+            item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
         Plan::AlterSource(plan::AlterSourcePlan {
@@ -1671,6 +1700,8 @@ fn generate_read_privileges_inner(
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
                 CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                // TODO(alter-mv): Revisit if we want to read from replacement MVs.
+                CatalogItemType::ReplacementMaterializedView => {}
             }
         }
     }
@@ -1792,6 +1823,8 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::Schema) => USAGE_CREATE_ACL_MODE,
         SystemObjectType::Object(ObjectType::Func) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::ContinualTask) => AclMode::SELECT,
+        // TODO(alter-mv): Check if this is correct for replacement MVs.
+        SystemObjectType::Object(ObjectType::ReplacementMaterializedView) => EMPTY_ACL_MODE,
         SystemObjectType::System => ALL_SYSTEM_PRIVILEGES,
     }
 }
@@ -1821,7 +1854,8 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Connection
         | ObjectType::Database
         | ObjectType::Func
-        | ObjectType::NetworkPolicy => AclMode::empty(),
+        | ObjectType::NetworkPolicy
+        | ObjectType::ReplacementMaterializedView => AclMode::empty(),
     }
 }
 

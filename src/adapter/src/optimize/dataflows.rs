@@ -401,7 +401,8 @@ impl<'a> DataflowBuilder<'a> {
                 | CatalogItem::MaterializedView(_)
                 | CatalogItem::Sink(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::ContinualTask(_) => Ok(false),
+                | CatalogItem::ContinualTask(_)
+                | CatalogItem::ReplacementMaterializedView(_) => Ok(false),
             }
         })?;
 

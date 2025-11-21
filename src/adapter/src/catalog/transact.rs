@@ -100,6 +100,12 @@ pub enum Op {
         typ: SqlColumnType,
         sql: RawDataType,
     },
+    AlterMaterializedViewApplyReplacement {
+        id: CatalogItemId,
+        replacement_id: CatalogItemId,
+        cluster_id: ClusterId,
+        replaced_id: GlobalId,
+    },
     CreateDatabase {
         name: String,
         owner_id: RoleId,
@@ -391,18 +397,17 @@ impl Catalog {
 
         let drop_ids: BTreeSet<CatalogItemId> = ops
             .iter()
-            .filter_map(|op| match op {
+            .flat_map(|op| match op {
                 Op::DropObjects(drop_object_infos) => {
                     let ids = drop_object_infos.iter().map(|info| info.to_object_id());
-                    let item_ids = ids.filter_map(|id| match id {
+                    ids.filter_map(|id| match id {
                         ObjectId::Item(id) => Some(id),
                         _ => None,
-                    });
-                    Some(item_ids)
+                    })
+                    .collect::<Vec<_>>()
                 }
-                _ => None,
+                _ => vec![],
             })
-            .flatten()
             .collect();
         let temporary_drops = drop_ids
             .iter()
@@ -769,6 +774,58 @@ impl Catalog {
                 tx.update_item(id, new_entry.into())?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
             }
+            Op::AlterMaterializedViewApplyReplacement {
+                id,
+                replacement_id,
+                replaced_id: _,
+                cluster_id: _,
+            } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let replacement = state.get_entry(&replacement_id);
+
+                let CatalogItem::MaterializedView(mv) = &mut new_entry.item else {
+                    return Err(AdapterError::Unsupported(
+                        "applying replacements non-Materialized views",
+                    ));
+                };
+                let CatalogItem::ReplacementMaterializedView(rmv) = &replacement.item else {
+                    return Err(AdapterError::Unsupported(
+                        "applying replacements non-Materialized views",
+                    ));
+                };
+
+                *mv = rmv.merge_into(mv);
+
+                tx.update_item(id, new_entry.clone().into())?;
+                tx.remove_items(&BTreeSet::from([replacement_id]))?;
+                if Self::should_audit_log_item(replacement.item()) {
+                    CatalogState::add_to_audit_log(
+                        &state.system_configuration,
+                        oracle_write_ts,
+                        session,
+                        tx,
+                        audit_events,
+                        EventType::Drop,
+                        catalog_type_to_audit_object_type(replacement.item().typ()),
+                        EventDetails::IdFullNameV1(IdFullNameV1 {
+                            id: replacement_id.to_string(),
+                            name: Self::full_name_detail(&state.resolve_full_name(
+                                replacement.name(),
+                                session.map(|session| session.conn_id()),
+                            )),
+                        }),
+                    )?;
+                }
+                info!(
+                    "applied {} {} ({}) on {} {} ({})",
+                    replacement.item_type(),
+                    state.resolve_full_name(replacement.name(), replacement.conn_id()),
+                    replacement_id,
+                    new_entry.item_type(),
+                    state.resolve_full_name(new_entry.name(), new_entry.conn_id()),
+                    id
+                );
+            }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Database,
@@ -1087,6 +1144,22 @@ impl Catalog {
                     }
                     CatalogItem::Sink(sink) => {
                         storage_collections_to_create.insert(sink.global_id());
+                    }
+                    CatalogItem::ReplacementMaterializedView(rmv) => {
+                        let mut mv = state.get_entry(&rmv.replaces).clone();
+                        // All versions of a table share the same shard, so it shouldn't matter what
+                        // GlobalId we use here.
+                        let shard_id = state
+                            .storage_metadata()
+                            .get_collection_shard(mv.latest_global_id())?;
+
+                        // TODO(alter-mv): Support adding columns to materialized views.
+                        let CatalogItem::MaterializedView(_target_mv) = &mut mv.item else {
+                            return Err(AdapterError::Unsupported(
+                                "replacing materialized view with different type",
+                            ));
+                        };
+                        storage_collections_to_register.insert(rmv.global_id(), shard_id);
                     }
                     CatalogItem::Log(_)
                     | CatalogItem::View(_)

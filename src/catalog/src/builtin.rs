@@ -2850,6 +2850,76 @@ pub static MZ_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| Buil
     is_retained_metrics_object: false,
     access: vec![PUBLIC_SELECT],
 });
+pub static MZ_REPLACEMENT_MATERIALIZED_VIEWS: LazyLock<BuiltinTable> = LazyLock::new(|| {
+    BuiltinTable {
+        name: "mz_replacement_materialized_views",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::TABLE_MZ_REPLACEMENT_MATERIALIZED_VIEWS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("replaces", SqlScalarType::String.nullable(false))
+            .with_column("schema_id", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("cluster_id", SqlScalarType::String.nullable(false))
+            .with_column("definition", SqlScalarType::String.nullable(false))
+            .with_column("owner_id", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .with_column("redacted_create_sql", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .with_key(vec![1])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            (
+                "id",
+                "Materialize's unique ID for the replacement materialized view.",
+            ),
+            (
+                "oid",
+                "A [PostgreSQL-compatible OID][`oid`] for the replacement materialized view.",
+            ),
+            (
+                "replaces",
+                "The catalog item ID of the materialized view this one replaces.",
+            ),
+            (
+                "schema_id",
+                "The ID of the schema to which the materialized view belongs. Corresponds to `mz_schemas.id`.",
+            ),
+            ("name", "The name of the replacement materialized view."),
+            (
+                "cluster_id",
+                "The ID of the cluster maintaining the materialized view. Corresponds to `mz_clusters.id`.",
+            ),
+            (
+                "definition",
+                "The materialized view definition (a `SELECT` query).",
+            ),
+            (
+                "owner_id",
+                "The role ID of the owner of the materialized view. Corresponds to `mz_roles.id`.",
+            ),
+            (
+                "privileges",
+                "The privileges belonging to the materialized view.",
+            ),
+            (
+                "create_sql",
+                "The `CREATE` SQL statement for the materialized view.",
+            ),
+            (
+                "redacted_create_sql",
+                "The redacted `CREATE` SQL statement for the materialized view.",
+            ),
+        ]),
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+    }
+});
 pub static MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES: LazyLock<BuiltinTable> = LazyLock::new(|| {
     BuiltinTable {
         name: "mz_materialized_view_refresh_strategies",
@@ -3750,7 +3820,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
         ),
         (
             "object_type",
-            "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, or `view`.",
+            "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `database`, `function`, `index`, `materialized-view`, `role`, `schema`, `secret`, `sink`, `source`, `table`, `type`, `view`, or `replacement`.",
         ),
         (
             "details",
@@ -5730,7 +5800,8 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
             ('connection'),
             ('type'),
             ('function'),
-            ('secret')
+            ('secret'),
+            ('replacement')
     )
     AS _ (object_type)"#,
     access: vec![PUBLIC_SELECT],
@@ -5756,6 +5827,7 @@ pub static MZ_OBJECT_OID_ALIAS: LazyLock<BuiltinView> = LazyLock::new(|| Builtin
             ('source', 'regclass'),
             ('view', 'regclass'),
             ('materialized-view', 'regclass'),
+            ('replacement', 'regclass'),
             ('index', 'regclass'),
             ('type', 'regtype'),
             ('function', 'regproc')
@@ -11127,6 +11199,41 @@ FROM
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_SHOW_REPLACEMENTS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_show_replacements",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_SHOW_REPLACEMENTS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("name", SqlScalarType::String.nullable(false))
+        .with_column("replaces", SqlScalarType::String.nullable(false))
+        .with_column("cluster", SqlScalarType::String.nullable(false))
+        .with_column("schema_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("comment", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: "
+WITH comments AS (
+    SELECT id, comment
+    FROM mz_internal.mz_comments
+    WHERE object_type = 'replacement' AND object_sub_id IS NULL
+)
+SELECT
+    mviews.id as id,
+    mviews.name,
+    mviews.replaces,
+    clusters.name AS cluster,
+    schema_id,
+    cluster_id,
+    COALESCE(comments.comment, '') as comment
+FROM
+    mz_internal.mz_replacement_materialized_views AS mviews
+    JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
+    LEFT JOIN comments ON mviews.id = comments.id",
+    access: vec![PUBLIC_SELECT],
+});
+
 pub static MZ_SHOW_INDEXES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_show_indexes",
     schema: MZ_INTERNAL_SCHEMA,
@@ -12739,6 +12846,15 @@ ON mz_internal.mz_show_materialized_views (schema_id)",
     is_retained_metrics_object: false,
 };
 
+pub const MZ_SHOW_REPLACEMENTS_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_show_replacements_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_SHOW_REPLACEMENTS_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_show_replacements (schema_id)",
+    is_retained_metrics_object: false,
+};
+
 pub const MZ_SHOW_SINKS_IND: BuiltinIndex = BuiltinIndex {
     name: "mz_show_sinks_ind",
     schema: MZ_INTERNAL_SCHEMA,
@@ -13795,6 +13911,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
+        Builtin::Table(&MZ_REPLACEMENT_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_TYPES),
         Builtin::Table(&MZ_TYPE_PG_METADATA),
         Builtin::Table(&MZ_ARRAY_TYPES),
@@ -13905,6 +14022,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_SHOW_SOURCES),
         Builtin::View(&MZ_SHOW_SINKS),
         Builtin::View(&MZ_SHOW_MATERIALIZED_VIEWS),
+        Builtin::View(&MZ_SHOW_REPLACEMENTS),
         Builtin::View(&MZ_SHOW_INDEXES),
         Builtin::View(&MZ_SHOW_CONTINUAL_TASKS),
         Builtin::View(&MZ_CLUSTER_REPLICA_HISTORY),
@@ -14055,6 +14173,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_SHOW_SOURCES_IND),
         Builtin::Index(&MZ_SHOW_VIEWS_IND),
         Builtin::Index(&MZ_SHOW_MATERIALIZED_VIEWS_IND),
+        Builtin::Index(&MZ_SHOW_REPLACEMENTS_IND),
         Builtin::Index(&MZ_SHOW_SINKS_IND),
         Builtin::Index(&MZ_SHOW_TYPES_IND),
         Builtin::Index(&MZ_SHOW_ALL_OBJECTS_IND),

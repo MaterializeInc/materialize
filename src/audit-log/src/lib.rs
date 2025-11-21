@@ -123,6 +123,7 @@ pub enum ObjectType {
     Table,
     Type,
     View,
+    ReplacementMaterializedView,
 }
 
 impl ObjectType {
@@ -146,6 +147,7 @@ impl ObjectType {
             ObjectType::Table => "Table",
             ObjectType::Type => "Type",
             ObjectType::View => "View",
+            Self::ReplacementMaterializedView => "Replacement Materialized View",
         }
     }
 }

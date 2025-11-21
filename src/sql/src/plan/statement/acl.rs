@@ -629,7 +629,8 @@ pub fn plan_alter_default_privileges(
         ObjectType::View
         | ObjectType::MaterializedView
         | ObjectType::Source
-        | ObjectType::ContinualTask => sql_bail!(
+        | ObjectType::ContinualTask
+        | ObjectType::ReplacementMaterializedView => sql_bail!(
             "{object_type}S is not valid for ALTER DEFAULT PRIVILEGES, use TABLES instead"
         ),
         ObjectType::Sink | ObjectType::ClusterReplica | ObjectType::Role | ObjectType::Func => {

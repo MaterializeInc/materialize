@@ -376,6 +376,7 @@ def compileFastSltConfig() -> SltRunConfig:
         "test/sqllogictest/managed_cluster.slt",
         "test/sqllogictest/map.slt",
         "test/sqllogictest/materialized_views.slt",
+        "test/sqllogictest/replacement_materialized_views.slt",
         "test/sqllogictest/mz_catalog_server_index_accounting.slt",
         "test/sqllogictest/mztimestamp.slt",
         "test/sqllogictest/name_resolution.slt",

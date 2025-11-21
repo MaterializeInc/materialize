@@ -128,6 +128,7 @@ mod create_materialized_view;
 mod create_view;
 mod explain_timestamp;
 mod peek;
+mod replace_materialized_view;
 mod secret;
 mod subscribe;
 
@@ -3022,7 +3023,11 @@ impl Coordinator {
                         }
                     }
                     match entry.item().typ() {
-                        typ @ (Func | View | MaterializedView | ContinualTask) => {
+                        typ @ (Func
+                        | View
+                        | MaterializedView
+                        | ContinualTask
+                        | ReplacementMaterializedView) => {
                             ids_to_check.extend(entry.uses());
                             let valid_id = id.is_user() || matches!(typ, Func);
                             valid_id
@@ -3408,7 +3413,8 @@ impl Coordinator {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => unreachable!(),
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::ReplacementMaterializedView(_) => unreachable!(),
                 };
                 match cluster {
                     Some(cluster) => {

@@ -683,6 +683,7 @@ async fn upgrade_check(
             CatalogItem::Source(source) => Some((source.global_id(), source.desc.clone())),
             CatalogItem::ContinualTask(ct) => Some((ct.global_id(), ct.desc.clone())),
             CatalogItem::MaterializedView(mv) => Some((mv.global_id_writes(), mv.desc.latest())),
+            CatalogItem::ReplacementMaterializedView(mv) => Some((mv.global_id(), mv.desc.clone())),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)

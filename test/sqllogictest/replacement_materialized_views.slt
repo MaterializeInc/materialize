@@ -1,0 +1,116 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Setup
+
+statement ok
+CREATE TABLE t (a int, b int)
+
+statement ok
+INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
+
+statement ok
+CREATE CLUSTER other REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'))
+
+
+# Test: Materialized view can be created.
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t;
+
+
+query II
+SELECT * FROM mv
+----
+1 2
+3 4
+5 6
+
+
+statement ok
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv AS SELECT a + b as a, b FROM t;
+
+query II
+SELECT * FROM mv
+----
+1 2
+3 4
+5 6
+
+query TTT colnames,rowsort
+SHOW REPLACEMENTS
+----
+name cluster comment
+rp1  quickstart  (empty)
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp1;
+
+query TTT colnames,rowsort
+SHOW REPLACEMENTS
+----
+name cluster comment
+
+
+
+query II
+SELECT * FROM mv
+----
+3 2
+7 4
+11 6
+
+statement ok
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv AS SELECT a, b FROM t;
+
+statement error db error: ERROR: replacement materialized view "materialize\.public\.rp1" already exists
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv AS SELECT a, b FROM t;
+
+statement ok
+DROP REPLACEMENT rp1;
+
+statement error db error: ERROR: Schemas are incompatible
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv AS SELECT a, b, 1 FROM t;
+
+
+
+# Test: Explicit column names must have the right cardinality.
+
+statement error db error: ERROR: Schemas are incompatible
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv (a, b) AS SELECT a, b, 1 FROM t;
+
+# Test: Materialized view can be created in another cluster.
+
+statement ok
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv IN CLUSTER other AS SELECT a, b FROM t;
+
+query TTT colnames,rowsort
+SHOW REPLACEMENTS
+----
+name cluster comment
+rp1  other  (empty)
+
+statement ok
+DROP REPLACEMENT rp1;
+
+# Test: Materialized view can not be created in a non-existing cluster.
+
+statement error unknown cluster 'doesnotexist'
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv IN CLUSTER doesnotexist AS SELECT a, b FROM t;
+
+statement ok
+CREATE REPLACEMENT rp1 FOR MATERIALIZED VIEW mv IN CLUSTER other AS SELECT a, b FROM t;
+
+statement error db error: ERROR: cannot drop materialized view "mv": still depended upon by replacement materialized view "rp1"
+DROP MATERIALIZED VIEW mv;
+
+statement ok
+DROP MATERIALIZED VIEW mv CASCADE;
