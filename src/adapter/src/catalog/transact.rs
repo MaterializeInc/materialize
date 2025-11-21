@@ -100,6 +100,10 @@ pub enum Op {
         typ: SqlColumnType,
         sql: RawDataType,
     },
+    AlterMaterializedViewApplyReplacement {
+        id: CatalogItemId,
+        replacement_id: CatalogItemId,
+    },
     CreateDatabase {
         name: String,
         owner_id: RoleId,
@@ -768,6 +772,28 @@ impl Catalog {
 
                 tx.update_item(id, new_entry.into())?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
+            }
+            Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let replacement = state.get_entry(&replacement_id);
+
+                let CatalogItem::MaterializedView(mv) = &mut new_entry.item else {
+                    return Err(AdapterError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "id must refer to a materialized view",
+                    ));
+                };
+                let CatalogItem::MaterializedView(replacement_mv) = &replacement.item else {
+                    return Err(AdapterError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "replacement_id must refer to a materialized view",
+                    ));
+                };
+
+                mv.apply_replacement(replacement_mv.clone());
+
+                tx.remove_item(replacement_id)?;
+                tx.update_item(id, new_entry.into())?;
             }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(

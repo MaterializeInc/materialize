@@ -1355,8 +1355,6 @@ impl VersionedRelationDesc {
     /// Returns this [`RelationDesc`] at the specified version.
     pub fn at_version(&self, version: RelationVersionSelector) -> RelationDesc {
         // Get all of the changes from the start, up to whatever version was requested.
-        //
-        // TODO(parkmycar): We should probably panic on unknown verisons?
         let up_to_version = match version {
             RelationVersionSelector::Latest => RelationVersion(u64::MAX),
             RelationVersionSelector::Specific(v) => v,
