@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 use http::Uri;
 use itertools::Either;
-use maplit::btreemap;
 use mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::sinks::ComputeSinkConnection;
@@ -21,7 +20,6 @@ use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
 use mz_sql::ast::{ExplainStage, Statement};
@@ -1052,54 +1050,19 @@ impl Coordinator {
             optimizer,
             insights_ctx,
             df_meta,
-            explain_ctx:
-                ExplainPlanContext {
-                    config,
-                    format,
-                    stage,
-                    desc,
-                    optimizer_trace,
-                    ..
-                },
+            explain_ctx,
             ..
         }: PeekStageExplainPlan,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
-        let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
-
-        let session_catalog = self.catalog().for_session(session);
-        let expr_humanizer = {
-            let transient_items = btreemap! {
-                optimizer.select_id() => TransientItem::new(
-                    Some(vec![GlobalId::Explain.to_string()]),
-                    Some(desc.iter_names().map(|c| c.to_string()).collect()),
-                )
-            };
-            ExprHumanizerExt::new(transient_items, &session_catalog)
-        };
-
-        let finishing = if optimizer.finishing().is_trivial(desc.arity()) {
-            None
-        } else {
-            Some(optimizer.finishing().clone())
-        };
-
-        let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
-        let features = optimizer.config().features.clone();
-
-        let rows = optimizer_trace
-            .into_rows(
-                format,
-                &config,
-                &features,
-                &expr_humanizer,
-                finishing,
-                Some(target_cluster),
-                df_meta,
-                stage,
-                plan::ExplaineeStatementKind::Select,
-                insights_ctx,
-            )
-            .await?;
+        let rows = super::super::explain_plan_inner(
+            session,
+            self.catalog(),
+            df_meta,
+            explain_ctx,
+            optimizer,
+            insights_ctx,
+        )
+        .await?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }
@@ -1118,7 +1081,7 @@ impl Coordinator {
             .map(|t| ResultSpec::value(Datum::MzTimestamp(*t)))
             .unwrap_or_else(ResultSpec::value_all);
         let fut = self
-            .render_explain_pushdown_prepare(session, as_of, mz_now, stage.imports)
+            .explain_pushdown_future(session, as_of, mz_now, stage.imports)
             .await;
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(

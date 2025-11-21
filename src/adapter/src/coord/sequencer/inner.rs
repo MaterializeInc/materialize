@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
-use futures::stream::FuturesOrdered;
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use maplit::btreeset;
@@ -35,15 +34,14 @@ use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::task::{self, JoinHandle, spawn};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
-use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
 use mz_repr::explain::json::json_string;
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, RelationVersion,
-    RelationVersionSelector, Row, RowArena, RowIterator, Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, RelationVersion, RelationVersionSelector, Row, RowArena,
+    RowIterator, Timestamp,
 };
 use mz_sql::ast::{
     AlterSourceAddSubsourceOption, CreateSinkOption, CreateSinkOptionName, CreateSourceOptionName,
@@ -88,7 +86,6 @@ use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDes
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::stats::RelationPartStats;
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use smallvec::SmallVec;
@@ -2677,7 +2674,8 @@ impl Coordinator {
         };
     }
 
-    async fn render_explain_pushdown(
+    /// Executes an EXPLAIN FILTER PUSHDOWN, with read holds passed in.
+    async fn execute_explain_pushdown_with_read_holds(
         &self,
         ctx: ExecuteContext,
         as_of: Antichain<Timestamp>,
@@ -2686,7 +2684,7 @@ impl Coordinator {
         imports: impl IntoIterator<Item = (GlobalId, MapFilterProject)> + 'static,
     ) {
         let fut = self
-            .render_explain_pushdown_prepare(ctx.session(), as_of, mz_now, imports)
+            .explain_pushdown_future(ctx.session(), as_of, mz_now, imports)
             .await;
         task::spawn(|| "render explain pushdown", async move {
             // Transfer the necessary read holds over to the background task
@@ -2696,98 +2694,24 @@ impl Coordinator {
         });
     }
 
-    async fn render_explain_pushdown_prepare<
-        I: IntoIterator<Item = (GlobalId, MapFilterProject)>,
-    >(
+    /// Returns a future that will execute EXPLAIN FILTER PUSHDOWN.
+    async fn explain_pushdown_future<I: IntoIterator<Item = (GlobalId, MapFilterProject)>>(
         &self,
         session: &Session,
         as_of: Antichain<Timestamp>,
         mz_now: ResultSpec<'static>,
         imports: I,
     ) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> + use<I> {
-        let explain_timeout = *session.vars().statement_timeout();
-        let mut futures = FuturesOrdered::new();
-        for (id, mfp) in imports {
-            let catalog_entry = self.catalog.get_entry_by_global_id(&id);
-            let full_name = self
-                .catalog
-                .for_session(session)
-                .resolve_full_name(&catalog_entry.name);
-            let name = format!("{}", full_name);
-            let relation_desc = catalog_entry
-                .desc_opt()
-                .expect("source should have a proper desc")
-                .into_owned();
-            let stats_future = self
-                .controller
-                .storage_collections
-                .snapshot_parts_stats(id, as_of.clone())
-                .await;
-
-            let mz_now = mz_now.clone();
-            // These futures may block if the source is not yet readable at the as-of;
-            // stash them in `futures` and only block on them in a separate task.
-            futures.push_back(async move {
-                let snapshot_stats = match stats_future.await {
-                    Ok(stats) => stats,
-                    Err(e) => return Err(e),
-                };
-                let mut total_bytes = 0;
-                let mut total_parts = 0;
-                let mut selected_bytes = 0;
-                let mut selected_parts = 0;
-                for SnapshotPartStats {
-                    encoded_size_bytes: bytes,
-                    stats,
-                } in &snapshot_stats.parts
-                {
-                    let bytes = u64::cast_from(*bytes);
-                    total_bytes += bytes;
-                    total_parts += 1u64;
-                    let selected = match stats {
-                        None => true,
-                        Some(stats) => {
-                            let stats = stats.decode();
-                            let stats = RelationPartStats::new(
-                                name.as_str(),
-                                &snapshot_stats.metrics.pushdown.part_stats,
-                                &relation_desc,
-                                &stats,
-                            );
-                            stats.may_match_mfp(mz_now.clone(), &mfp)
-                        }
-                    };
-
-                    if selected {
-                        selected_bytes += bytes;
-                        selected_parts += 1u64;
-                    }
-                }
-                Ok(Row::pack_slice(&[
-                    name.as_str().into(),
-                    total_bytes.into(),
-                    selected_bytes.into(),
-                    total_parts.into(),
-                    selected_parts.into(),
-                ]))
-            });
-        }
-
-        let fut = async move {
-            match tokio::time::timeout(
-                explain_timeout,
-                futures::TryStreamExt::try_collect::<Vec<_>>(futures),
-            )
-            .await
-            {
-                Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
-                    rows: Box::new(rows.into_row_iter()),
-                }),
-                Ok(Err(err)) => Err(err.into()),
-                Err(_) => Err(AdapterError::StatementTimeout),
-            }
-        };
-        fut
+        // Get the needed Coordinator stuff and call the freestanding, shared helper.
+        super::explain_pushdown_future_inner(
+            session,
+            &self.catalog,
+            &self.controller.storage_collections,
+            as_of,
+            mz_now,
+            imports,
+        )
+        .await
     }
 
     #[instrument]

@@ -17,14 +17,19 @@ use std::sync::Arc;
 
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
+use futures::stream::FuturesOrdered;
 use inner::return_if_err;
+use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
 use mz_controller_types::ReplicaId;
 use mz_expr::row::RowCollection;
-use mz_expr::{MirRelationExpr, RowSetFinishing};
+use mz_expr::{MapFilterProject, MirRelationExpr, ResultSpec, RowSetFinishing};
+use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
-use mz_repr::{CatalogItemId, Diff, GlobalId};
-use mz_sql::catalog::CatalogError;
+use mz_persist_client::stats::SnapshotPartStats;
+use mz_repr::explain::{ExprHumanizerExt, TransientItem};
+use mz_repr::{CatalogItemId, Diff, GlobalId, IntoRowIterator, Row, Timestamp};
+use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
@@ -35,8 +40,12 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_client::client::TableData;
+use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::stats::RelationPartStats;
+use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
+use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tracing::{Instrument, Level, Span, event};
 
@@ -46,10 +55,13 @@ use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{DeferredOp, DeferredPlan};
 use crate::coord::validity::PlanValidity;
 use crate::coord::{
-    Coordinator, DeferredPlanStatement, Message, PlanStatement, TargetCluster, catalog_serving,
+    Coordinator, DeferredPlanStatement, ExplainPlanContext, Message, PlanStatement, TargetCluster,
+    catalog_serving,
 };
 use crate::error::AdapterError;
+use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
+use crate::optimize::peek;
 use crate::session::{
     EndTransactionAction, Session, StateRevision, TransactionOps, TransactionStatus, WriteOp,
 };
@@ -996,4 +1008,163 @@ pub(crate) fn emit_optimizer_notices(
             .optimization_notices(&[kind.metric_label()])
             .inc_by(1);
     }
+}
+
+/// Returns a future that will execute EXPLAIN FILTER PUSHDOWN, i.e., compute the filter pushdown
+/// statistics for the given collections with the given MFPs.
+///
+/// (Shared helper fn between the old and new sequencing. This doesn't take the Coordinator as a
+/// parameter, but instead just the specifically necessary things are passed in, so that the
+/// frontend peek sequencing can also call it.)
+pub(crate) async fn explain_pushdown_future_inner<
+    I: IntoIterator<Item = (GlobalId, MapFilterProject)>,
+>(
+    session: &Session,
+    catalog: &Catalog,
+    storage_collections: &Arc<dyn StorageCollections<Timestamp = Timestamp> + Send + Sync>,
+    as_of: Antichain<Timestamp>,
+    mz_now: ResultSpec<'static>,
+    imports: I,
+) -> impl Future<Output = Result<ExecuteResponse, AdapterError>> + use<I> {
+    let explain_timeout = *session.vars().statement_timeout();
+    let mut futures = FuturesOrdered::new();
+    for (id, mfp) in imports {
+        let catalog_entry = catalog.get_entry_by_global_id(&id);
+        let full_name = catalog
+            .for_session(session)
+            .resolve_full_name(&catalog_entry.name);
+        let name = format!("{}", full_name);
+        let relation_desc = catalog_entry
+            .desc_opt()
+            .expect("source should have a proper desc")
+            .into_owned();
+        let stats_future = storage_collections
+            .snapshot_parts_stats(id, as_of.clone())
+            .await;
+
+        let mz_now = mz_now.clone();
+        // These futures may block if the source is not yet readable at the as-of;
+        // stash them in `futures` and only block on them in a separate task.
+        // TODO(peek-seq): This complication won't be needed once this function will only be called
+        // from the new peek sequencing, in which case it will be fine to block the current task.
+        futures.push_back(async move {
+            let snapshot_stats = match stats_future.await {
+                Ok(stats) => stats,
+                Err(e) => return Err(e),
+            };
+            let mut total_bytes = 0;
+            let mut total_parts = 0;
+            let mut selected_bytes = 0;
+            let mut selected_parts = 0;
+            for SnapshotPartStats {
+                encoded_size_bytes: bytes,
+                stats,
+            } in &snapshot_stats.parts
+            {
+                let bytes = u64::cast_from(*bytes);
+                total_bytes += bytes;
+                total_parts += 1u64;
+                let selected = match stats {
+                    None => true,
+                    Some(stats) => {
+                        let stats = stats.decode();
+                        let stats = RelationPartStats::new(
+                            name.as_str(),
+                            &snapshot_stats.metrics.pushdown.part_stats,
+                            &relation_desc,
+                            &stats,
+                        );
+                        stats.may_match_mfp(mz_now.clone(), &mfp)
+                    }
+                };
+
+                if selected {
+                    selected_bytes += bytes;
+                    selected_parts += 1u64;
+                }
+            }
+            Ok(Row::pack_slice(&[
+                name.as_str().into(),
+                total_bytes.into(),
+                selected_bytes.into(),
+                total_parts.into(),
+                selected_parts.into(),
+            ]))
+        });
+    }
+
+    let fut = async move {
+        match tokio::time::timeout(
+            explain_timeout,
+            futures::TryStreamExt::try_collect::<Vec<_>>(futures),
+        )
+        .await
+        {
+            Ok(Ok(rows)) => Ok(ExecuteResponse::SendingRowsImmediate {
+                rows: Box::new(rows.into_row_iter()),
+            }),
+            Ok(Err(err)) => Err(err.into()),
+            Err(_) => Err(AdapterError::StatementTimeout),
+        }
+    };
+    fut
+}
+
+/// Generates EXPLAIN PLAN output.
+/// (Shared helper fn between the old and new sequencing.)
+pub(crate) async fn explain_plan_inner(
+    session: &Session,
+    catalog: &Catalog,
+    df_meta: DataflowMetainfo,
+    explain_ctx: ExplainPlanContext,
+    optimizer: peek::Optimizer,
+    insights_ctx: Option<Box<PlanInsightsContext>>,
+) -> Result<Vec<Row>, AdapterError> {
+    let ExplainPlanContext {
+        config,
+        format,
+        stage,
+        desc,
+        optimizer_trace,
+        ..
+    } = explain_ctx;
+
+    let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
+
+    let session_catalog = catalog.for_session(session);
+    let expr_humanizer = {
+        let transient_items = btreemap! {
+            optimizer.select_id() => TransientItem::new(
+                Some(vec![GlobalId::Explain.to_string()]),
+                Some(desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        };
+        ExprHumanizerExt::new(transient_items, &session_catalog)
+    };
+
+    let finishing = if optimizer.finishing().is_trivial(desc.arity()) {
+        None
+    } else {
+        Some(optimizer.finishing().clone())
+    };
+
+    let target_cluster = catalog.get_cluster(optimizer.cluster_id());
+    let features = optimizer.config().features.clone();
+
+    let rows = optimizer_trace
+        .into_rows(
+            format,
+            &config,
+            &features,
+            &expr_humanizer,
+            finishing,
+            Some(target_cluster),
+            df_meta,
+            stage,
+            plan::ExplaineeStatementKind::Select,
+            insights_ctx,
+        )
+        .await?;
+
+    Ok(rows)
 }

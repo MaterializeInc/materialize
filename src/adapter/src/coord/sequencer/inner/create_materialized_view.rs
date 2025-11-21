@@ -922,7 +922,7 @@ impl Coordinator {
             None => ResultSpec::value_all(),
         };
 
-        self.render_explain_pushdown(
+        self.execute_explain_pushdown_with_read_holds(
             ctx,
             as_of,
             mz_now,

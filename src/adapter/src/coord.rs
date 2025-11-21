@@ -760,7 +760,7 @@ impl ExplainContext {
     /// If available for this context, wrap the [`OptimizerTrace`] into a
     /// [`tracing::Dispatch`] and set it as default, returning the resulting
     /// guard in a `Some(guard)` option.
-    fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
+    pub(crate) fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
         let optimizer_trace = match self {
             ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
             ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
@@ -769,7 +769,7 @@ impl ExplainContext {
         optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
 
-    fn needs_cluster(&self) -> bool {
+    pub(crate) fn needs_cluster(&self) -> bool {
         match self {
             ExplainContext::None => true,
             ExplainContext::Plan(..) => false,
@@ -778,7 +778,7 @@ impl ExplainContext {
         }
     }
 
-    fn needs_plan_insights(&self) -> bool {
+    pub(crate) fn needs_plan_insights(&self) -> bool {
         matches!(
             self,
             ExplainContext::Plan(ExplainPlanContext {
@@ -791,6 +791,10 @@ impl ExplainContext {
 
 #[derive(Debug)]
 pub struct ExplainPlanContext {
+    /// EXPLAIN BROKEN is internal syntax for showing EXPLAIN output despite an internal error in
+    /// the optimizer: we don't immediately bail out from peek sequencing when an internal optimizer
+    /// error happens, but go on with trying to show the requested EXPLAIN stage. This can still
+    /// succeed if the requested EXPLAIN stage is before the point where the error happened.
     pub broken: bool,
     pub config: ExplainConfig,
     pub format: ExplainFormat,
