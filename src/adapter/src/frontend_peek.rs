@@ -28,6 +28,7 @@ use tracing::{Span, debug};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::catalog::CatalogState;
+use crate::command::Command;
 use crate::coord::peek::PeekPlan;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, ExplainContext, TargetCluster};
@@ -286,17 +287,21 @@ impl PeekClient {
 
         // # From peek_real_time_recency
 
-        // TODO(peek-seq): Real-time recency is slow anyhow, so we don't handle it in frontend peek
-        // sequencing for now.
         let vars = session.vars();
-        if vars.real_time_recency()
+        let real_time_recency_ts: Option<Timestamp> = if vars.real_time_recency()
             && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
-            debug!("Bailing out from try_frontend_peek_inner, because of real time recency");
-            return Ok(None);
-        }
-        let real_time_recency_ts: Option<mz_repr::Timestamp> = None;
+            // Only call the coordinator when we actually need real-time recency
+            self.call_coordinator(|tx| Command::DetermineRealTimeRecentTimestamp {
+                source_ids: source_ids.clone(),
+                real_time_recency_timeout: *vars.real_time_recency_timeout(),
+                tx,
+            })
+            .await?
+        } else {
+            None
+        };
 
         // # From peek_timestamp_read_hold
 

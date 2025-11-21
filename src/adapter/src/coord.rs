@@ -363,6 +363,9 @@ impl Message {
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
                 Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
                 Command::GetOracle { .. } => "get-oracle",
+                Command::DetermineRealTimeRecentTimestamp { .. } => {
+                    "determine-real-time-recent-timestamp"
+                }
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
