@@ -203,7 +203,7 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ### Version Specific Upgrade Notes
 
 When upgrading v25 versions, you can upgrade at most one minor version at a
-time. For example, upgrading from `v25.1.5` to `v25.2.15` is permitted.
+time. For example, upgrading from `v25.1.5` to `v25.2.16` is permitted.
 
 ## See also
 

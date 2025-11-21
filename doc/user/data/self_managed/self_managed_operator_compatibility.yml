@@ -6,11 +6,17 @@ columns:
   - column: "Notes"
 
 rows:
+  - "Materialize Operator": "v25.2.16"
+    "orchestratord version": "v0.163.1"
+    "environmentd version": "v0.147.20"
+    "Release date": "2025-11-21"
+    "Notes": "Fixes potential issue with where environmentd crash during an upgrade can fence out environmentd."
+
   - "Materialize Operator": "v25.2.15"
-    "orchestratord version": "v0.164.0"
+    "orchestratord version": "v0.164.1"
     "environmentd version": "v0.147.20"
     "Release date": "2025-11-11"
-    "Notes": "Fixes potential issue with where environmentd crash during an upgrade can fence out environmentd."
+    "Notes": "DO NOT USE"
 
   - "Materialize Operator": "v25.2.12"
     "orchestratord version": "v0.161.0"
