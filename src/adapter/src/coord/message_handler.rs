@@ -262,7 +262,12 @@ impl Coordinator {
             .collect();
 
         match self.catalog_transact_inner(None, ops).await {
-            Ok(table_updates) => {
+            Ok((table_updates, controller_state_updates)) => {
+                assert!(
+                    controller_state_updates.is_empty(),
+                    "applying builtin table updates does not produce controller commands"
+                );
+
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let task_span =
                     info_span!(parent: None, "coord::storage_usage_update::table_updates");
