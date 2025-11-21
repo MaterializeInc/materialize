@@ -324,7 +324,7 @@ $ ps ax | grep <FAULTY-PROCESS-NAME>
 $ gdb -p <FAULTY-PROCESS-PID>
 ```
 
-[autouseradd]: https://github.com/benesch/autouseradd
+[autouseradd]: https://github.com/MaterializeInc/autouseradd
 [Buildkite]: https://buildkite.com
 [Docker Compose]: https://docs.docker.com/compose/
 [MacStadium]: https://www.macstadium.com

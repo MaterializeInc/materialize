@@ -19,7 +19,7 @@ class Grafana(Service):
         super().__init__(
             name=name,
             config={
-                "image": "grafana/grafana:9.3.2",
+                "image": "grafana/grafana:12.2.0",
                 "ports": ["3000"],
                 "environment": [
                     "GF_AUTH_ANONYMOUS_ENABLED=true",

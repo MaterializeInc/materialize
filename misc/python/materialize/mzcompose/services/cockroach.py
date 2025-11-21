@@ -21,6 +21,7 @@ from materialize.mzcompose.service import (
 
 
 class Cockroach(Service):
+    # TODO(def-): Bump when https://github.com/cockroachdb/cockroach/issues/158051 is fixed
     DEFAULT_COCKROACH_TAG = "v24.2.0"
 
     def __init__(
