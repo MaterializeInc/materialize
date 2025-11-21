@@ -209,4 +209,5 @@ your networking configuration.
 
 ## Considerations
 
-{{% include-md file="shared-content/mysql-considerations.md" %}}
+{{% include-from-yaml data="mysql_source_details"
+name="mysql-considerations" %}}

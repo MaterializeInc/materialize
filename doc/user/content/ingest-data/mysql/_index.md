@@ -52,4 +52,5 @@ or reach out in the Materialize [Community Slack](https://materialize.com/s/chat
 
 ## Considerations
 
-{{% include-md file="shared-content/mysql-considerations.md" %}}
+{{% include-from-yaml data="mysql_source_details"
+name="mysql-considerations" %}}
