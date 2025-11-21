@@ -1,7 +1,7 @@
 [package]
 name = "mz-catalog-debug"
 description = "Durable metadata storage debug tool."
-version = "26.1.0-dev.0"
+version = "26.1.0-rc.1"
 edition.workspace = true
 rust-version.workspace = true
 publish = false

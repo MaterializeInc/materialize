@@ -626,7 +626,7 @@
   type: string
   notationtype: ""
   autodefault: ""
-  default: '`"v26.0.0-dev.0--pr.gfa8ba620176a7d0f9abcc64f89f5d21db80c6d94"`'
+  default: '`"v26.1.0-rc.1"`'
   autodescription: The tag/version of the operator image to be used
   description: ""
   section: ""
