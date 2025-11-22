@@ -105,6 +105,13 @@ impl RawItemName {
             RawItemName::Id(_, name, _) => name,
         }
     }
+
+    pub fn id_mut(&mut self) -> Option<&mut String> {
+        match self {
+            RawItemName::Name(_) => None,
+            RawItemName::Id(id, _, _) => Some(id),
+        }
+    }
 }
 
 impl AstDisplay for RawItemName {

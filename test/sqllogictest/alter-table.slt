@@ -413,15 +413,15 @@ DROP TABLE t1 CASCADE;
 query TT
 SELECT id, name FROM mz_tables WHERE id LIKE 'u%';
 ----
-u1 t2
+u16 t2
 
 statement ok
 COMMENT ON COLUMN t2.a IS 'this column existed originally';
 
 query TTIT
-SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u16';
 ----
-u1  table  1  this␠column␠existed␠originally
+u16  table  1  this␠column␠existed␠originally
 
 statement ok
 ALTER TABLE t2 ADD COLUMN c timestamp;
@@ -430,14 +430,14 @@ statement ok
 COMMENT ON COLUMN t2.c IS 'added later';
 
 query TTIT rowsort
-SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u17';
 ----
-u1  table  3  added␠later
-u1  table  1  this␠column␠existed␠originally
+u17  table  3  added␠later
+u17  table  1  this␠column␠existed␠originally
 
 statement ok
 DROP TABLE t2 CASCADE;
 
 query TTIT
-SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u17';
 ----

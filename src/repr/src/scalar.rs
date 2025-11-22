@@ -48,7 +48,7 @@ pub use crate::relation_and_scalar::ProtoScalarType;
 pub use crate::relation_and_scalar::proto_scalar_type::ProtoRecordField;
 use crate::role_id::RoleId;
 use crate::row::DatumNested;
-use crate::{CatalogItemId, ColumnName, DatumList, DatumMap, Row, RowArena, SqlColumnType};
+use crate::{ColumnName, DatumList, DatumMap, GlobalId, Row, RowArena, SqlColumnType};
 
 /// A single value.
 ///
@@ -1691,7 +1691,7 @@ pub enum SqlScalarType {
     /// always be [`Datum::Null`].
     List {
         element_type: Box<SqlScalarType>,
-        custom_id: Option<CatalogItemId>,
+        custom_id: Option<GlobalId>,
     },
     /// An ordered and named sequence of datums.
     Record {
@@ -1700,7 +1700,7 @@ pub enum SqlScalarType {
         ///
         /// Boxed slice to reduce the size of the enum variant.
         fields: Box<[(ColumnName, SqlColumnType)]>,
-        custom_id: Option<CatalogItemId>,
+        custom_id: Option<GlobalId>,
     },
     /// A PostgreSQL object identifier.
     Oid,
@@ -1711,7 +1711,7 @@ pub enum SqlScalarType {
     /// be [`Datum::Null`].
     Map {
         value_type: Box<SqlScalarType>,
-        custom_id: Option<CatalogItemId>,
+        custom_id: Option<GlobalId>,
     },
     /// A PostgreSQL function name.
     RegProc,
@@ -3906,14 +3906,14 @@ impl Arbitrary for SqlScalarType {
         leaf.prop_recursive(2, 3, 5, |inner| {
             Union::new(vec![
                 // List
-                (inner.clone(), any::<Option<CatalogItemId>>())
+                (inner.clone(), any::<Option<GlobalId>>())
                     .prop_map(|(x, id)| SqlScalarType::List {
                         element_type: Box::new(x),
                         custom_id: id,
                     })
                     .boxed(),
                 // Map
-                (inner.clone(), any::<Option<CatalogItemId>>())
+                (inner.clone(), any::<Option<GlobalId>>())
                     .prop_map(|(x, id)| SqlScalarType::Map {
                         value_type: Box::new(x),
                         custom_id: id,
@@ -3935,7 +3935,7 @@ impl Arbitrary for SqlScalarType {
                         prop::collection::vec((any::<ColumnName>(), column_type_strat), 0..10);
 
                     // Now we combine it with the default strategies to get Records.
-                    (fields_strat, any::<Option<CatalogItemId>>())
+                    (fields_strat, any::<Option<GlobalId>>())
                         .prop_map(|(fields, custom_id)| SqlScalarType::Record {
                             fields: fields.into(),
                             custom_id,
