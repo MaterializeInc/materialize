@@ -18,7 +18,7 @@ use k8s_openapi::{
 };
 use kube::{CustomResource, Resource, ResourceExt, api::ObjectMeta};
 use rand::Rng;
-use rand::distributions::Uniform;
+use rand::distr::Uniform;
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
@@ -497,8 +497,8 @@ pub mod v1alpha1 {
                 // built-in Alphanumeric distribution from rand, which
                 // includes both upper and lowercase letters.
                 const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-                status.resource_id = rand::thread_rng()
-                    .sample_iter(Uniform::new(0, CHARSET.len()))
+                status.resource_id = rand::rng()
+                    .sample_iter(Uniform::new(0, CHARSET.len()).expect("valid range"))
                     .take(10)
                     .map(|i| char::from(CHARSET[i]))
                     .collect();
