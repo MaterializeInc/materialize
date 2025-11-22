@@ -1386,6 +1386,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub query: Query<T>,
     pub as_of: Option<u64>,
     pub with_options: Vec<MaterializedViewOption<T>>,
+    pub replacing: Option<T::ItemName>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {

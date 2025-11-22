@@ -1817,6 +1817,7 @@ pub struct MaterializedView {
     pub compaction_window: Option<CompactionWindow>,
     pub refresh_schedule: Option<RefreshSchedule>,
     pub as_of: Option<Timestamp>,
+    pub replacing: Option<CatalogItemId>,
 }
 
 #[derive(Clone, Debug)]

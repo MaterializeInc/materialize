@@ -150,7 +150,7 @@ impl Coordinator {
                                 global_id,
                                 CollectionDescription {
                                     desc,
-                                    data_source: DataSource::Other,
+                                    data_source: DataSource::Other { primary: None },
                                     since: Some(as_of),
                                     status_collection_id: None,
                                     timeline: None,
