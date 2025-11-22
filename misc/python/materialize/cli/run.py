@@ -338,6 +338,8 @@ def main() -> int:
             # Common stack overflows in Debug mode
             if not args.release and not args.optimized:
                 env["RUST_MIN_STACK"] = RUST_MIN_STACK
+            # Always enable soft assertions in SLTs for un-redacted debug formatting and additional testing.
+            env["MZ_SOFT_ASSERTIONS"] = "1"
     elif args.program == "test":
         (build_retcode, _) = _cargo_build(args)
         if args.build_only:
