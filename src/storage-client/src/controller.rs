@@ -125,12 +125,7 @@ pub enum DataSource<T> {
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
     /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
-    Table {
-        /// This table has had columns added or dropped to it, so we're now a
-        /// "view" over the "primary" Table/collection. Within the
-        /// `storage-controller` we the primary as a dependency.
-        primary: Option<GlobalId>,
-    },
+    Table,
     /// This source's data does not need to be managed by the storage
     /// controller, e.g. it's a materialized view or the catalog collection.
     Other,
@@ -152,6 +147,13 @@ pub struct CollectionDescription<T> {
     pub status_collection_id: Option<GlobalId>,
     /// The timeline of the source. Absent for materialized views, continual tasks, etc.
     pub timeline: Option<Timeline>,
+    /// The primary of this collections.
+    ///
+    /// Multiple storage collections can point to the same persist shard,
+    /// possibly with different schemas. In such a configuration, we select one
+    /// of the involved collections as the primary, who "owns" the persist
+    /// shard. All other involved collections have a dependency on the primary.
+    pub primary: Option<GlobalId>,
 }
 
 impl<T> CollectionDescription<T> {
@@ -163,17 +165,19 @@ impl<T> CollectionDescription<T> {
             since,
             status_collection_id: None,
             timeline: None,
+            primary: None,
         }
     }
 
     /// Create a CollectionDescription for a table.
-    pub fn for_table(desc: RelationDesc, primary: Option<GlobalId>) -> Self {
+    pub fn for_table(desc: RelationDesc) -> Self {
         Self {
             desc,
-            data_source: DataSource::Table { primary },
+            data_source: DataSource::Table,
             since: None,
             status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
+            primary: None,
         }
     }
 }
@@ -731,7 +735,7 @@ impl<T> DataSource<T> {
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
         match self {
-            DataSource::Table { .. } => true,
+            DataSource::Table => true,
             DataSource::Other
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }
