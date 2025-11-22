@@ -147,7 +147,7 @@ else
   git config user.name "Buildkite"
   git add variables.tf README.md
   git commit -m "Bump to helm-chart $BUILDKITE_TAG"
-# Bump the patch version by one (v0.1.12 -> v0.1.13)
+  # Bump the patch version by one (v0.1.12 -> v0.1.13)
   TERRAFORM_HELM_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
   git tag "$TERRAFORM_HELM_VERSION"
   git --no-pager diff HEAD~
@@ -175,13 +175,32 @@ else
     git config user.name "Buildkite"
     git add main.tf README.md .terraform.lock.hcl
     git commit -m "Bump to terraform-helm-materialize $TERRAFORM_HELM_VERSION"
-# Bump the patch version by one (v0.1.12 -> v0.1.13)
+    # Bump the patch version by one (v0.1.12 -> v0.1.13)
     TERRAFORM_VERSION[$repo]=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
     git tag "${TERRAFORM_VERSION[$repo]}"
     git --no-pager diff HEAD~
     run_if_not_dry git push origin main "${TERRAFORM_VERSION[$repo]}"
     cd ..
   done
+
+  echo "--- Bumping new terraform repository"
+  rm -rf materialize-terraform-self-managed
+  git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
+  cd materialize-terraform-self-managed
+  sed -i "s/\".*\"\(.*\) # META: helm-chart version/\"$BUILDKITE_TAG\"\\1 # META: helm-chart version/" aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf
+  sed -i "s/\".*\"\(.*\) # META: mz version/\"$BUILDKITE_TAG\"\\1 # META: mz version/" kubernetes/modules/materialize-instance/variables.tf
+  for dir in aws/modules/operator azure/modules/operator gcp/modules/operator kubernetes/modules/materialize-instance; do
+    terraform-docs --config .terraform-docs.yml $dir > $dir/README.md
+  done
+  git config user.email "noreply@materialize.com"
+  git config user.name "Buildkite"
+  git add aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf kubernetes/modules/materialize-instance/variables.tf aws/modules/operator/README.md azure/modules/operator/README.md gcp/modules/operator/README.md kubernetes/modules/materialize-instance/README.md
+  git commit -m "Bump to helm-chart $BUILDKITE_TAG"
+  # Bump the patch version by one (v0.1.12 -> v0.1.13)
+  TERRAFORM_SELF_MANAGED_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
+  git tag "$TERRAFORM_SELF_MANAGED_VERSION"
+  git --no-pager diff HEAD~
+  run_if_not_dry git push origin main "$TERRAFORM_SELF_MANAGED_VERSION"
 fi
 
 if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
