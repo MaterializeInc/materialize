@@ -214,9 +214,7 @@ impl Coordinator {
         let mut webhook_sources_to_restart = BTreeSet::new();
         let mut table_gids_to_drop = vec![];
         let mut storage_sink_gids_to_drop = vec![];
-        let mut indexes_to_drop = vec![];
-        let mut materialized_views_to_drop = vec![];
-        let mut continual_tasks_to_drop = vec![];
+        let mut compute_gids_to_drop = vec![];
         let mut views_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut secrets_to_drop = vec![];
@@ -275,21 +273,21 @@ impl Coordinator {
                                         storage_sink_gids_to_drop.push(sink.global_id());
                                     }
                                     CatalogItem::Index(index) => {
-                                        indexes_to_drop.push((index.cluster_id, index.global_id()));
+                                        compute_gids_to_drop
+                                            .push((index.cluster_id, index.global_id()));
                                     }
                                     CatalogItem::MaterializedView(mv) => {
-                                        materialized_views_to_drop
+                                        compute_gids_to_drop
                                             .push((mv.cluster_id, mv.global_id_writes()));
+                                        sources_to_drop
+                                            .extend(mv.global_ids().map(|gid| (*id, gid)));
                                     }
                                     CatalogItem::View(view) => {
                                         views_to_drop.push((*id, view.clone()))
                                     }
                                     CatalogItem::ContinualTask(ct) => {
-                                        continual_tasks_to_drop.push((
-                                            *id,
-                                            ct.cluster_id,
-                                            ct.global_id(),
-                                        ));
+                                        compute_gids_to_drop.push((ct.cluster_id, ct.global_id()));
+                                        sources_to_drop.push((*id, ct.global_id()));
                                     }
                                     CatalogItem::Secret(_) => {
                                         secrets_to_drop.push(*id);
@@ -422,9 +420,7 @@ impl Coordinator {
             .map(|(_, gid)| *gid)
             .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid))
             .chain(storage_sink_gids_to_drop.iter().copied())
-            .chain(indexes_to_drop.iter().map(|(_, gid)| *gid))
-            .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
-            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid))
+            .chain(compute_gids_to_drop.iter().map(|(_, gid)| *gid))
             .chain(views_to_drop.iter().map(|(_id, view)| view.global_id()))
             .collect();
 
@@ -494,30 +490,19 @@ impl Coordinator {
             }
         }
 
-        let storage_ids_to_drop = sources_to_drop
+        let storage_gids_to_drop = sources_to_drop
             .iter()
             .map(|(_, gid)| *gid)
             .chain(storage_sink_gids_to_drop.iter().copied())
-            .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid))
-            .chain(materialized_views_to_drop.iter().map(|(_, gid)| *gid))
-            .chain(continual_tasks_to_drop.iter().map(|(_, _, gid)| *gid));
-        let compute_ids_to_drop = indexes_to_drop
-            .iter()
-            .copied()
-            .chain(materialized_views_to_drop.iter().copied())
-            .chain(
-                continual_tasks_to_drop
-                    .iter()
-                    .map(|(_, cluster_id, gid)| (*cluster_id, *gid)),
-            );
+            .chain(table_gids_to_drop.iter().map(|(_, gid)| *gid));
 
         // Check if any Timelines would become empty, if we dropped the specified storage or
         // compute resources.
         //
         // Note: only after a Transaction succeeds do we actually drop the timeline
         let collection_id_bundle = self.build_collection_id_bundle(
-            storage_ids_to_drop,
-            compute_ids_to_drop,
+            storage_gids_to_drop,
+            compute_gids_to_drop.clone(),
             clusters_to_drop.clone(),
         );
         let timeline_associations: BTreeMap<_, _> = self
@@ -655,14 +640,8 @@ impl Coordinator {
                     self.cancel_pending_copy(&conn_id);
                 }
             }
-            if !indexes_to_drop.is_empty() {
-                self.drop_indexes(indexes_to_drop);
-            }
-            if !materialized_views_to_drop.is_empty() {
-                self.drop_materialized_views(materialized_views_to_drop);
-            }
-            if !continual_tasks_to_drop.is_empty() {
-                self.drop_continual_tasks(continual_tasks_to_drop);
+            if !compute_gids_to_drop.is_empty() {
+                self.drop_compute_collections(compute_gids_to_drop);
             }
             if !vpc_endpoints_to_drop.is_empty() {
                 self.drop_vpc_endpoints_in_background(vpc_endpoints_to_drop)
@@ -1030,7 +1009,7 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
-    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
+    pub(crate) fn drop_compute_collections(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for (cluster_id, gid) in indexes {
             by_cluster.entry(cluster_id).or_default().push(gid);
@@ -1044,58 +1023,6 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
-    }
-
-    /// A convenience method for dropping materialized views.
-    fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut mv_gids = Vec::new();
-        for (cluster_id, gid) in mviews {
-            by_cluster.entry(cluster_id).or_default().push(gid);
-            mv_gids.push(gid);
-        }
-
-        // Drop compute sinks.
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-
-        // Drop storage resources.
-        let storage_metadata = self.catalog.state().storage_metadata();
-        self.controller
-            .storage
-            .drop_sources(storage_metadata, mv_gids)
-            .unwrap_or_terminate("cannot fail to drop sources");
-    }
-
-    /// A convenience method for dropping continual tasks.
-    fn drop_continual_tasks(&mut self, cts: Vec<(CatalogItemId, ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut source_ids = Vec::new();
-        for (item_id, cluster_id, gid) in cts {
-            by_cluster.entry(cluster_id).or_default().push(gid);
-            source_ids.push((item_id, gid));
-        }
-
-        // Drop compute sinks.
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-
-        // Drop storage sources.
-        self.drop_sources(source_ids)
     }
 
     fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
@@ -1308,6 +1235,7 @@ impl Coordinator {
             since: None,
             status_collection_id: None,
             timeline: None,
+            primary: None,
         };
         let collections = vec![(id, collection_desc)];
 
@@ -1552,6 +1480,7 @@ impl Coordinator {
                 | Op::AlterRetainHistory { .. }
                 | Op::AlterNetworkPolicy { .. }
                 | Op::AlterAddColumn { .. }
+                | Op::AlterMaterializedViewApplyReplacement { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }

@@ -885,7 +885,7 @@ where
         // easier to reason about it this way.
         let (tables_to_register, collections_to_register): (Vec<_>, Vec<_>) = to_register
             .into_iter()
-            .partition(|(_id, desc, ..)| matches!(desc.data_source, DataSource::Table { .. }));
+            .partition(|(_id, desc, ..)| desc.data_source == DataSource::Table);
         let to_register = tables_to_register
             .into_iter()
             .rev()
@@ -904,15 +904,13 @@ where
                     && !(self.read_only && migrated_storage_collections.contains(&id))
             };
 
-            let data_source = description.data_source;
-
             to_execute.insert(id);
             new_collections.insert(id);
 
             let write_frontier = write.upper();
 
             // Determine if this collection has another dependency.
-            let storage_dependencies = self.determine_collection_dependencies(id, &data_source)?;
+            let storage_dependencies = self.determine_collection_dependencies(id, &description)?;
 
             let dependency_read_holds = self
                 .storage_collections
@@ -923,6 +921,8 @@ where
             for read_hold in dependency_read_holds.iter() {
                 dependency_since.join_assign(read_hold.since());
             }
+
+            let data_source = description.data_source;
 
             // Assert some invariants.
             //
@@ -1076,7 +1076,7 @@ where
 
                     new_source_statistic_entries.insert(id);
                 }
-                DataSource::Table { .. } => {
+                DataSource::Table => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "registering {id} with persist table worker",
@@ -1207,7 +1207,7 @@ where
                 ),
                 DataSource::Introspection(_)
                 | DataSource::Webhook
-                | DataSource::Table { .. }
+                | DataSource::Table
                 | DataSource::Progress
                 | DataSource::Other => {}
                 DataSource::Sink { .. } => {
@@ -1383,7 +1383,7 @@ where
             let existing = collections
                 .get(&existing_collection)
                 .ok_or(StorageError::IdentifierMissing(existing_collection))?;
-            if !matches!(existing.data_source, DataSource::Table { .. }) {
+            if existing.data_source != DataSource::Table {
                 return Err(StorageError::IdentifierInvalid(existing_collection));
             }
 
@@ -1414,8 +1414,6 @@ where
             )
             .await;
 
-        // Note: The new collection is now the "primary collection" so we specify `None` here.
-        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), None);
         let collection_meta = CollectionMetadata {
             persist_location: self.persist_location.clone(),
             data_shard,
@@ -1426,7 +1424,7 @@ where
         // TODO(alter_table): Support schema evolution on sources.
         let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(new_collection, None);
         let collection_state = CollectionState::new(
-            collection_desc.data_source.clone(),
+            DataSource::Table,
             collection_meta,
             CollectionStateExtra::None,
             wallclock_lag_metrics,
@@ -1435,17 +1433,6 @@ where
         // Great! We have successfully evolved the schema of our Table, now we need to update our
         // in-memory data structures.
         self.collections.insert(new_collection, collection_state);
-        let existing = self
-            .collections
-            .get_mut(&existing_collection)
-            .expect("missing existing collection");
-        assert!(matches!(
-            existing.data_source,
-            DataSource::Table { primary: None }
-        ));
-        existing.data_source = DataSource::Table {
-            primary: Some(new_collection),
-        };
 
         self.persist_table_worker
             .register(register_ts, vec![(new_collection, write_handle)])
@@ -1761,7 +1748,7 @@ where
         let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
-                DataSource::Table { .. } => true,
+                DataSource::Table => true,
                 DataSource::IngestionExport { .. } | DataSource::Webhook => false,
                 _ => panic!("identifier is not a table: {}", id),
             });
@@ -1879,7 +1866,7 @@ where
                         ingestions_to_drop.insert(*id);
                         source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Progress | DataSource::Table { .. } | DataSource::Other => {
+                    DataSource::Progress | DataSource::Table | DataSource::Other => {
                         collections_to_drop.push(*id);
                     }
                     DataSource::Introspection(_) | DataSource::Sink { .. } => {
@@ -3209,17 +3196,20 @@ where
     fn determine_collection_dependencies(
         &self,
         self_id: GlobalId,
-        data_source: &DataSource<T>,
+        collection_desc: &CollectionDescription<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
-        let dependency = match &data_source {
+        let mut dependencies = Vec::new();
+
+        if let Some(id) = collection_desc.primary {
+            dependencies.push(id);
+        }
+
+        match &collection_desc.data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table { primary: None }
+            | DataSource::Table
             | DataSource::Progress
-            | DataSource::Other => vec![],
-            DataSource::Table {
-                primary: Some(primary),
-            } => vec![*primary],
+            | DataSource::Other => (),
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.
@@ -3236,7 +3226,7 @@ where
                 // and, 2) that the remap shard's since stays one step behind
                 // their upper. Hence they track themselves and the remap shard
                 // as dependencies.
-                vec![self_id, ingestion_remap_collection_id]
+                dependencies.extend([self_id, ingestion_remap_collection_id]);
             }
             // Ingestions depend on their remap collection.
             DataSource::Ingestion(ingestion) => {
@@ -3244,19 +3234,18 @@ where
                 // since stays one step behind the upper, and, 2) that the remap
                 // shard's since stays one step behind their upper. Hence they
                 // track themselves and the remap shard as dependencies.
-                let mut dependencies = vec![self_id];
+                dependencies.push(self_id);
                 if self_id != ingestion.remap_collection_id {
                     dependencies.push(ingestion.remap_collection_id);
                 }
-                dependencies
             }
             DataSource::Sink { desc } => {
                 // Sinks hold back their own frontier and the frontier of their input.
-                vec![self_id, desc.sink.from]
+                dependencies.extend([self_id, desc.sink.from]);
             }
         };
 
-        Ok(dependency)
+        Ok(dependencies)
     }
 
     async fn read_handle_for_snapshot(

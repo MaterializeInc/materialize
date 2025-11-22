@@ -679,6 +679,7 @@ impl ExecuteResponse {
             | AlterSource
             | AlterSink
             | AlterTableAddColumn
+            | AlterMaterializedViewApplyReplacement
             | AlterNetworkPolicy => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],

@@ -1006,6 +1006,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::AlterRole(_)
         | Plan::AlterOwner(_)
         | Plan::AlterTableAddColumn(_)
+        | Plan::AlterMaterializedViewApplyReplacement(_)
         | Plan::Declare(_)
         | Plan::Fetch(_)
         | Plan::Close(_)

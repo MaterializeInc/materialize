@@ -60,7 +60,10 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
+use mz_sql::plan::{
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
+    StatementContext,
+};
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{GenericSourceConnection, IngestionDescription, SourceExport};
@@ -762,6 +765,7 @@ impl Coordinator {
                                 timeline: Some(source.timeline),
                                 since: None,
                                 status_collection_id,
+                                primary: None,
                             },
                         ));
                     }
@@ -1219,8 +1223,7 @@ impl Coordinator {
                                 .desc
                                 .at_version(RelationVersionSelector::Specific(relation_version));
                             // We assert above we have a single version, and thus we are the primary.
-                            let collection_desc =
-                                CollectionDescription::for_table(relation_desc, None);
+                            let collection_desc = CollectionDescription::for_table(relation_desc);
                             let collections = vec![(global_id, collection_desc)];
 
                             let compaction_window = table
@@ -1273,6 +1276,7 @@ impl Coordinator {
                                         since: None,
                                         status_collection_id,
                                         timeline: Some(timeline.clone()),
+                                        primary: None,
                                     };
 
                                     let collections = vec![(global_id, collection_desc)];
@@ -1309,6 +1313,7 @@ impl Coordinator {
                                         since: None,
                                         status_collection_id: None,
                                         timeline: Some(timeline.clone()),
+                                        primary: None,
                                     };
                                     let collections = vec![(global_id, collection_desc)];
                                     let read_policies = coord
@@ -4482,6 +4487,7 @@ impl Coordinator {
                             since: None,
                             status_collection_id,
                             timeline: Some(source.timeline.clone()),
+                            primary: None,
                         },
                     ));
 
@@ -5190,6 +5196,57 @@ impl Coordinator {
         .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_materialized_view_apply_replacement(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: AlterMaterializedViewApplyReplacementPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        const ERROR_CONTEXT: &str = "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT";
+
+        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan;
+
+        // TODO(alter-mv): Wait until there is overlap between the old MV's write frontier and the
+        // new MV's as-of, to ensure no times are skipped.
+
+        let Some(old) = self.catalog().get_entry(&id).materialized_view() else {
+            return Err(AdapterError::internal(
+                ERROR_CONTEXT,
+                "id must refer to a materialized view",
+            ));
+        };
+        let Some(new) = self
+            .catalog()
+            .get_entry(&replacement_id)
+            .materialized_view()
+        else {
+            return Err(AdapterError::internal(
+                ERROR_CONTEXT,
+                "replacement_id must refer to a materialized view",
+            ));
+        };
+
+        let old_cluster_id = old.cluster_id;
+        let new_cluster_id = new.cluster_id;
+
+        let old_gid = old.global_id_writes();
+        let new_gid = new.global_id_writes();
+
+        let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
+
+        self.catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
+            Box::pin(async move {
+                // Cut over the MV computation, by shutting down the old dataflow and allowing the
+                // new dataflow to start writing.
+                coord.drop_compute_collections(vec![(old_cluster_id, old_gid)]);
+                coord.allow_writes(new_cluster_id, new_gid);
+            })
+        })
+        .await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::MaterializedView))
     }
 }
 

@@ -234,14 +234,14 @@ EXPLAIN WITH (humanized expressions) CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
 EXPLAIN WITH (HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], replacing: None, in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
 
 parse-statement
 EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 ----
 EXPLAIN BROKEN CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, true) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], replacing: None, in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, true) })
 
 parse-statement
 EXPLAIN BROKEN CREATE DEFAULT INDEX ON q1
@@ -318,7 +318,7 @@ EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VI
 ----
 EXPLAIN WITH (ARITY, EQUIVALENCES, HUMANIZED EXPRESSIONS) CREATE MATERIALIZED VIEW mv AS SELECT 665
 =>
-ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Equivalences, value: None }, ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
+ExplainPlan(ExplainPlanStatement { stage: None, with_options: [ExplainPlanOption { name: Arity, value: None }, ExplainPlanOption { name: Equivalences, value: None }, ExplainPlanOption { name: HumanizedExpressions, value: None }], format: None, explainee: CreateMaterializedView(CreateMaterializedViewStatement { if_exists: Error, name: UnresolvedItemName([Ident("mv")]), columns: [], replacing: None, in_cluster: None, query: Query { ctes: Simple([]), body: Select(Select { distinct: None, projection: [Expr { expr: Value(Number("665")), alias: None }], from: [], selection: None, group_by: [], having: None, qualify: None, options: [] }), order_by: [], limit: None, offset: None }, as_of: None, with_options: [] }, false) })
 
 parse-statement
 EXPLAIN ANALYZE MEMORY FOR INDEX i AS SQL

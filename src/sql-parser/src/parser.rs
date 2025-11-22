@@ -3862,6 +3862,10 @@ impl<'a> Parser<'a> {
 
         let name = self.parse_item_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
+        let replacing = self
+            .parse_keyword(REPLACING)
+            .then(|| self.parse_raw_name())
+            .transpose()?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
         let with_options = if self.parse_keyword(WITH) {
@@ -3882,6 +3886,7 @@ impl<'a> Parser<'a> {
                 if_exists,
                 name,
                 columns,
+                replacing,
                 in_cluster,
                 query,
                 as_of,
@@ -6432,10 +6437,10 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_item_name().map_no_statement_parser_err()?;
-        let keywords = if object_type == ObjectType::Table {
-            [SET, RENAME, OWNER, RESET, ADD].as_slice()
-        } else {
-            [SET, RENAME, OWNER, RESET].as_slice()
+        let keywords: &[_] = match object_type {
+            ObjectType::Table => &[SET, RENAME, OWNER, RESET, ADD],
+            ObjectType::MaterializedView => &[SET, RENAME, OWNER, RESET, APPLY],
+            _ => &[SET, RENAME, OWNER, RESET],
         };
 
         let action = self
@@ -6523,6 +6528,28 @@ impl<'a> Parser<'a> {
                         if_col_not_exist,
                         column_name,
                         data_type,
+                    },
+                ))
+            }
+            APPLY => {
+                assert_eq!(
+                    object_type,
+                    ObjectType::MaterializedView,
+                    "checked object_type above",
+                );
+
+                self.expect_keyword(REPLACEMENT)
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                let replacement_name = self
+                    .parse_item_name()
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                Ok(Statement::AlterMaterializedViewApplyReplacement(
+                    AlterMaterializedViewApplyReplacementStatement {
+                        if_exists,
+                        name,
+                        replacement_name,
                     },
                 ))
             }
