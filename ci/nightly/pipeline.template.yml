@@ -2367,6 +2367,7 @@ steps:
     steps:
       - id: orchestratord-defaults
         label: "Orchestratord test (defaults from documentation)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2379,6 +2380,7 @@ steps:
 
       - id: orchestratord-default-properties
         label: "Orchestratord test (defaults for properties)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2391,6 +2393,7 @@ steps:
 
       - id: orchestratord-individual
         label: "Orchestratord test (individual properties)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2403,6 +2406,7 @@ steps:
 
       - id: orchestratord-combine
         label: "Orchestratord test (combine properties)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: build-aarch64
         timeout_in_minutes: 120
         plugins:
@@ -2415,6 +2419,7 @@ steps:
 
       - id: orchestratord-upgrade-individual
         label: "Orchestratord test (upgrade, individual props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2430,6 +2435,7 @@ steps:
 
       - id: orchestratord-upgrade-combine
         label: "Orchestratord test (upgrade, combine props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2445,6 +2451,7 @@ steps:
 
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
@@ -2460,6 +2467,7 @@ steps:
 
       - id: orchestratord-upgrade-chain-combine
         label: "Orchestratord test (upgrade chain, combine props)"
+        artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
