@@ -66,6 +66,23 @@ pub mod v1alpha1 {
         #[default]
         WaitUntilReady,
 
+        /// Create a new generation of pods, leaving the old generation as the serving generation
+        /// until the user manually promotes the new generation.
+        ///
+        /// Users can promote the new generation at any time, even if the new generation pods are
+        /// not fully caught up, by setting `forcePromote` to the same value as `requestRollout` in
+        /// the Materialize spec.
+        ///
+        /// {{<warning>}}
+        /// Do not leave new generations unpromoted indefinitely.
+        ///
+        /// The new generation keeps open read holds which prevent compaction. Once promoted or
+        /// cancelled, those read holds are released. If left unpromoted for an extended time, this
+        /// data can build up, and can cause extreme deletion load on the metadata backend database
+        /// when finally promoted or cancelled.
+        /// {{</warning>}}
+        ManuallyPromote,
+
         /// {{<warning>}}
         /// THIS WILL CAUSE YOUR MATERIALIZE INSTANCE TO BE UNAVAILABLE FOR SOME TIME!!!
         ///
