@@ -11,6 +11,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
@@ -25,7 +26,7 @@ use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
+use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -175,6 +176,12 @@ pub enum Command {
             Result<Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>, AdapterError>,
         >,
     },
+
+    DetermineRealTimeRecentTimestamp {
+        source_ids: BTreeSet<GlobalId>,
+        real_time_recency_timeout: Duration,
+        tx: oneshot::Sender<Result<Option<mz_repr::Timestamp>, AdapterError>>,
+    },
 }
 
 impl Command {
@@ -196,7 +203,8 @@ impl Command {
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
-            | Command::GetOracle { .. } => None,
+            | Command::GetOracle { .. }
+            | Command::DetermineRealTimeRecentTimestamp { .. } => None,
         }
     }
 
@@ -218,7 +226,8 @@ impl Command {
             | Command::CheckConsistency { .. }
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
-            | Command::GetOracle { .. } => None,
+            | Command::GetOracle { .. }
+            | Command::DetermineRealTimeRecentTimestamp { .. } => None,
         }
     }
 }

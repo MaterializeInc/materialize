@@ -285,6 +285,34 @@ impl Coordinator {
                         ));
                     let _ = tx.send(oracle);
                 }
+
+                Command::DetermineRealTimeRecentTimestamp {
+                    source_ids,
+                    real_time_recency_timeout,
+                    tx,
+                } => {
+                    let result = self
+                        .determine_real_time_recent_timestamp(
+                            source_ids.iter().copied(),
+                            real_time_recency_timeout,
+                        )
+                        .await;
+
+                    match result {
+                        Ok(Some(fut)) => {
+                            task::spawn(|| "determine real time recent timestamp", async move {
+                                let result = fut.await.map(Some).map_err(AdapterError::from);
+                                let _ = tx.send(result);
+                            });
+                        }
+                        Ok(None) => {
+                            let _ = tx.send(Ok(None));
+                        }
+                        Err(e) => {
+                            let _ = tx.send(Err(e));
+                        }
+                    }
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
