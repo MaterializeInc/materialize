@@ -756,12 +756,8 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageRealTimeRecency,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
-        let item_ids: Vec<_> = source_ids
-            .iter()
-            .map(|gid| self.catalog.resolve_item_id(gid))
-            .collect();
         let fut = self
-            .determine_real_time_recent_timestamp(session, item_ids.into_iter())
+            .determine_real_time_recent_timestamp_if_needed(session, source_ids.iter().copied())
             .await?;
 
         match fut {

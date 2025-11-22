@@ -363,6 +363,9 @@ impl Message {
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
                 Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
                 Command::GetOracle { .. } => "get-oracle",
+                Command::DetermineRealTimeRecentTimestamp { .. } => {
+                    "determine-real-time-recent-timestamp"
+                }
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -757,7 +760,7 @@ impl ExplainContext {
     /// If available for this context, wrap the [`OptimizerTrace`] into a
     /// [`tracing::Dispatch`] and set it as default, returning the resulting
     /// guard in a `Some(guard)` option.
-    fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
+    pub(crate) fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
         let optimizer_trace = match self {
             ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
             ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
@@ -766,7 +769,7 @@ impl ExplainContext {
         optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
 
-    fn needs_cluster(&self) -> bool {
+    pub(crate) fn needs_cluster(&self) -> bool {
         match self {
             ExplainContext::None => true,
             ExplainContext::Plan(..) => false,
@@ -775,7 +778,7 @@ impl ExplainContext {
         }
     }
 
-    fn needs_plan_insights(&self) -> bool {
+    pub(crate) fn needs_plan_insights(&self) -> bool {
         matches!(
             self,
             ExplainContext::Plan(ExplainPlanContext {

@@ -1014,7 +1014,8 @@ impl SessionClient {
                 | Command::CheckConsistency { .. }
                 | Command::Dump { .. }
                 | Command::GetComputeInstanceClient { .. }
-                | Command::GetOracle { .. } => {}
+                | Command::GetOracle { .. }
+                | Command::DetermineRealTimeRecentTimestamp { .. } => {}
             };
             cmd
         });

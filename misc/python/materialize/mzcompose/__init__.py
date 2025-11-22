@@ -196,7 +196,7 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_frontend_peek_sequencing",
-            "false",
+            "true",
             ["true", "false"],
         ),
         VariableSystemParameter(
