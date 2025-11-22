@@ -13,11 +13,16 @@ Native Postgres source tests, functional.
 
 import glob
 import time
+from random import Random
 
 import pg8000
 from pg8000 import Connection
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mz_0dt_upgrader import (
+    Materialized0dtUpgrader,
+    generate_materialized_upgrade_args,
+)
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -39,6 +44,7 @@ from materialize.mzcompose.services.toxiproxy import Toxiproxy
 from materialize.source_table_migration import (
     verify_sources_after_source_table_migration,
 )
+from materialize.version_list import get_compatible_upgrade_from_versions
 
 # Set the max slot WAL keep size to 10MB
 DEFAULT_PG_EXTRA_COMMAND = ["-c", "max_slot_wal_keep_size=10"]
@@ -96,6 +102,40 @@ def create_postgres(
     return Postgres(image=image, extra_command=extra_command)
 
 
+def get_testdrive_ssl_args(c: Composition):
+    """Extract SSL certificates from test-certs service and return testdrive arguments related to SSL."""
+    c.up(Service("test-certs", idle=True))
+    ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
+    ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
+    ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
+    ssl_wrong_cert = c.run(
+        "test-certs", "cat", "/secrets/postgres.crt", capture=True
+    ).stdout
+    ssl_wrong_key = c.run(
+        "test-certs", "cat", "/secrets/postgres.key", capture=True
+    ).stdout
+
+    testdrive_args = [
+        f"--var=ssl-ca={ssl_ca}",
+        f"--var=ssl-cert={ssl_cert}",
+        f"--var=ssl-key={ssl_key}",
+        f"--var=ssl-wrong-cert={ssl_wrong_cert}",
+        f"--var=ssl-wrong-key={ssl_wrong_key}",
+    ]
+
+    return {
+        "testdrive_args": testdrive_args,
+        "volumes_extra": ["secrets:/share/secrets"],
+    }
+
+
+def get_default_testdrive_size_args():
+    return [
+        f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
+        f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
+    ]
+
+
 SERVICES = [
     Mz(app_password=""),
     Materialized(
@@ -105,6 +145,12 @@ SERVICES = [
         },
         external_blob_store=True,
         default_replication_factor=2,
+    ),
+    Materialized(
+        name="mz_1",
+    ),
+    Materialized(
+        name="mz_2",
     ),
     Testdrive(),
     CockroachOrPostgresMetadata(),
@@ -307,39 +353,22 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    matching_files = []
-    for filter in args.filter:
-        matching_files.extend(
-            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
-        )
-    sharded_files: list[str] = buildkite.shard_list(
-        sorted(matching_files), lambda file: file
-    )
+    sharded_files = [
+        file for file in get_sharded_files(args.filter) if file != "exclude-columns.td"
+    ]
     print(f"Files: {sharded_files}")
+    ssl_args_dict = get_testdrive_ssl_args(c)
+    testdrive_ssl_args = ssl_args_dict["testdrive_args"]
 
-    c.up(Service("test-certs", idle=True))
-    ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
-    ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
-    ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
-    ssl_wrong_cert = c.run(
-        "test-certs", "cat", "/secrets/postgres.crt", capture=True
-    ).stdout
-    ssl_wrong_key = c.run(
-        "test-certs", "cat", "/secrets/postgres.key", capture=True
-    ).stdout
-
+    testdrive_args = (
+        testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
+    )
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "test-certs", "postgres")
         c.test_parts(
             sharded_files,
             lambda file: c.run_testdrive_files(
-                f"--var=ssl-ca={ssl_ca}",
-                f"--var=ssl-cert={ssl_cert}",
-                f"--var=ssl-key={ssl_key}",
-                f"--var=ssl-wrong-cert={ssl_wrong_cert}",
-                f"--var=ssl-wrong-key={ssl_wrong_key}",
-                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-                f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
+                *testdrive_args,
                 file,
             ),
         )
@@ -347,7 +376,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     def process(name: str) -> None:
-        if name in ("default", "migration"):
+        if name in ("default", "migration", "migration-multi-version-upgrade"):
             return
 
         # TODO: Flaky, reenable when database-issues#8447 is fixed
@@ -367,7 +396,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         [
             w
             for w in c.workflows
-            if w not in workflows_with_internal_sharding and w != "migration"
+            if w not in workflows_with_internal_sharding
+            and w not in ("migration", "migration-multi-version-upgrade")
         ],
         lambda w: w,
     )
@@ -375,6 +405,16 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         f"Workflows in shard with index {buildkite.get_parallelism_index()}: {sharded_workflows}"
     )
     c.test_parts(sharded_workflows, process)
+
+
+def get_sharded_files(filters: str) -> list[str]:
+    matching_files = []
+    for filter in filters:
+        matching_files.extend(
+            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
+        )
+
+    return buildkite.shard_list(sorted(matching_files), lambda file: file)
 
 
 def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -386,33 +426,23 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    matching_files = []
-    for filter in args.filter:
-        matching_files.extend(
-            glob.glob(filter, root_dir=MZ_ROOT / "test" / "pg-cdc-old-syntax")
-        )
-    sharded_files: list[str] = buildkite.shard_list(
-        sorted(matching_files), lambda file: file
-    )
+    sharded_files = get_sharded_files(args.filter)
     print(f"Files: {sharded_files}")
 
-    c.up(Service("test-certs", idle=True))
-    ssl_ca = c.run("test-certs", "cat", "/secrets/ca.crt", capture=True).stdout
-    ssl_cert = c.run("test-certs", "cat", "/secrets/certuser.crt", capture=True).stdout
-    ssl_key = c.run("test-certs", "cat", "/secrets/certuser.key", capture=True).stdout
-    ssl_wrong_cert = c.run(
-        "test-certs", "cat", "/secrets/postgres.crt", capture=True
-    ).stdout
-    ssl_wrong_key = c.run(
-        "test-certs", "cat", "/secrets/postgres.key", capture=True
-    ).stdout
+    ssl_args_dict = get_testdrive_ssl_args(c)
+    testdrive_ssl_args = ssl_args_dict["testdrive_args"]
+    volumes_extra = ssl_args_dict["volumes_extra"]
+
+    testdrive_args = (
+        testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
+    )
 
     pg_version = get_targeted_pg_version(parser)
 
     for file in sharded_files:
         mz_old = Materialized(
             name="materialized",
-            volumes_extra=["secrets:/share/secrets"],
+            volumes_extra=volumes_extra,
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
@@ -423,7 +453,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
 
         mz_new = Materialized(
             name="materialized",
-            volumes_extra=["secrets:/share/secrets"],
+            volumes_extra=volumes_extra,
             external_metadata_store=True,
             external_blob_store=True,
             additional_system_parameter_defaults={
@@ -438,14 +468,7 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
             print(f"Running {file} with mz_old")
 
             c.run_testdrive_files(
-                f"--var=ssl-ca={ssl_ca}",
-                f"--var=ssl-cert={ssl_cert}",
-                f"--var=ssl-key={ssl_key}",
-                f"--var=ssl-wrong-cert={ssl_wrong_cert}",
-                f"--var=ssl-wrong-key={ssl_wrong_key}",
-                f"--var=default-replica-size=scale={Materialized.Size.DEFAULT_SIZE},workers={Materialized.Size.DEFAULT_SIZE}",
-                f"--var=default-storage-size=scale={Materialized.Size.DEFAULT_SIZE},workers=1",
-                "--no-reset",
+                *testdrive_args,
                 file,
             )
             c.kill("materialized", wait=True)
@@ -463,3 +486,114 @@ def workflow_migration(c: Composition, parser: WorkflowArgumentParser) -> None:
                 c.rm(METADATA_STORE)
                 c.rm("postgres")
                 c.rm_volumes("mzdata")
+
+
+def workflow_migration_multi_version_upgrade(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """
+    Multiversion upgrade with the source versioning migration.
+    """
+    pg_version = get_targeted_pg_version(parser)
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=["random", "earliest-to-current"],
+        default="earliest-to-current",
+        help="Upgrade mode: 'random' for random version to upgrade from, 'earliest-to-current' for upgrading from the earliest upgradeable version to the current version.",
+    )
+
+    parser.add_argument(
+        "--seed",
+        type=str,
+        default=None,
+        help="Random seed to use for upgrade path selection",
+    )
+
+    parser.add_argument(
+        "filter",
+        nargs="*",
+        default=["*.td"],
+        help="limit to only the files matching filter",
+    )
+
+    args = parser.parse_args()
+
+    # Get matching files and apply sharding
+
+    sharded_files = get_sharded_files(args.filter)
+    print(f"Files: {sharded_files}")
+
+    ssl_args_dict = get_testdrive_ssl_args(c)
+    testdrive_ssl_args = ssl_args_dict["testdrive_args"]
+    volumes_extra = ssl_args_dict["volumes_extra"]
+
+    testdrive_args = (
+        testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
+    )
+
+    compatible_versions = get_compatible_upgrade_from_versions()
+
+    if args.mode == "random":
+        random_initial_version = Random(args.seed).choice(compatible_versions)
+        versions = [random_initial_version, None]
+    else:
+        versions = [compatible_versions[0], None]
+
+    materialize_service_instances = []
+
+    upgrade_args_list = generate_materialized_upgrade_args(versions)
+
+    for i, upgrade_args in enumerate(upgrade_args_list):
+        log_filter = "mz_storage::source::postgres=trace,debug,info,warn,error"
+
+        # Enable source versioning migration at the end (final version)
+        enable_source_migration_arg = (
+            {"force_source_table_syntax": "true"}
+            if i == len(upgrade_args_list) - 1
+            else {}
+        )
+
+        materialize_service_instances.append(
+            Materialized(
+                **upgrade_args,
+                external_blob_store=True,
+                volumes_extra=volumes_extra,
+                additional_system_parameter_defaults={
+                    log_filter: log_filter,
+                    **enable_source_migration_arg,
+                },
+            )
+        )
+
+    upgrade_path = Materialized0dtUpgrader(c, materialize_service_instances)
+
+    upgrade_path.print_upgrade_path()
+
+    for file in sharded_files:
+
+        with c.override(create_postgres(pg_version=pg_version)):
+            c.up("test-certs", "postgres")
+            initial_materialized_service, upgrade_steps = upgrade_path.initialize()
+            c.run_testdrive_files(
+                *testdrive_args,
+                file,
+                mz_service=initial_materialized_service.name,
+            )
+
+            for step in upgrade_steps:
+                step.upgrade()
+
+            # Verify the source table migration at the end.
+            last_materialized_service = upgrade_steps[-1].new_service
+            print(
+                f"Verifying source table migration for version {last_materialized_service.config.get('image')}"
+            )
+            verify_sources_after_source_table_migration(
+                c, file, service=last_materialized_service.name
+            )
+            upgrade_path.cleanup()
+            c.kill("postgres", wait=True)
+            c.rm("postgres")
+            c.rm_volumes("mzdata")
