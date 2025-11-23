@@ -22,7 +22,7 @@ mz-frontegg-client = { path = "../frontegg-client" }
 mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", features = ["async", "cli", "test"] }
-open = "5.3.2"
+open = "5.3.3"
 openssl-probe = "0.1.6"
 hyper = "1.4.1"
 reqwest = { version = "0.12", features = ["blocking", "json", "default-tls", "charset", "http2"], default-features = false }
