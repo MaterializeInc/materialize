@@ -173,6 +173,7 @@ class Action:
                     "object state changed while transaction was in progress",  # Old error msg, can remove this ignore later
                     "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
+                    "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
