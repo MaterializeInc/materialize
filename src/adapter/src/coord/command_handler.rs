@@ -344,6 +344,28 @@ impl Coordinator {
 
                     let _ = tx.send(result);
                 }
+
+                Command::ExecuteCopyTo {
+                    global_lir_plan,
+                    compute_instance,
+                    target_replica,
+                    source_ids,
+                    conn_id,
+                    tx,
+                } => {
+                    // implement_copy_to spawns a background task that sends the response
+                    // through tx when the COPY TO completes (or immediately if setup fails).
+                    // We just call it and let it handle all response sending.
+                    self.implement_copy_to(
+                        *global_lir_plan,
+                        compute_instance,
+                        target_replica,
+                        source_ids,
+                        conn_id,
+                        tx,
+                    )
+                    .await;
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
