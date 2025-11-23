@@ -731,16 +731,6 @@ impl PeekClient {
                     session.add_notice(AdapterNotice::PlanInsights(insights));
                 }
 
-                let fast_path_plan = match peek_plan {
-                    PeekPlan::SlowPath(_) => {
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because it's a slow-path peek"
-                        );
-                        return Ok(None);
-                    }
-                    PeekPlan::FastPath(p) => p,
-                };
-
                 // Warning: Do not bail out from the new peek sequencing after this point, because the
                 // following has side effects. TODO(peek-seq): remove this comment once we never
                 // bail out to the old sequencing.
@@ -798,35 +788,57 @@ impl PeekClient {
 
                 let max_result_size = catalog.system_config().max_result_size();
 
-                let row_set_finishing_seconds =
-                    session.metrics().row_set_finishing_seconds().clone();
+                match peek_plan {
+                    PeekPlan::FastPath(fast_path_plan) => {
+                        let row_set_finishing_seconds =
+                            session.metrics().row_set_finishing_seconds().clone();
 
-                let peek_stash_read_batch_size_bytes =
-                    mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
-                        .get(catalog.system_config().dyncfgs());
-                let peek_stash_read_memory_budget_bytes =
-                    mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
-                        .get(catalog.system_config().dyncfgs());
+                        let peek_stash_read_batch_size_bytes =
+                            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES
+                                .get(catalog.system_config().dyncfgs());
+                        let peek_stash_read_memory_budget_bytes =
+                            mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
+                                .get(catalog.system_config().dyncfgs());
 
-                // Implement the peek, and capture the response.
-                let resp = self
-                    .implement_fast_path_peek_plan(
-                        fast_path_plan,
-                        determination.timestamp_context.timestamp_or_default(),
-                        select_plan.finishing.clone(),
-                        target_cluster_id,
-                        target_replica,
-                        typ,
-                        max_result_size,
-                        max_query_result_size,
-                        row_set_finishing_seconds,
-                        read_holds,
-                        peek_stash_read_batch_size_bytes,
-                        peek_stash_read_memory_budget_bytes,
-                    )
-                    .await?;
+                        let resp = self
+                            .implement_fast_path_peek_plan(
+                                fast_path_plan,
+                                determination.timestamp_context.timestamp_or_default(),
+                                select_plan.finishing,
+                                target_cluster_id,
+                                target_replica,
+                                typ,
+                                max_result_size,
+                                max_query_result_size,
+                                row_set_finishing_seconds,
+                                read_holds,
+                                peek_stash_read_batch_size_bytes,
+                                peek_stash_read_memory_budget_bytes,
+                            )
+                            .await?;
 
-                Ok(Some(resp))
+                        Ok(Some(resp))
+                    }
+                    PeekPlan::SlowPath(dataflow_plan) => {
+                        let response = self
+                            .call_coordinator(|tx| Command::ExecuteSlowPathPeek {
+                                dataflow_plan: Box::new(dataflow_plan),
+                                determination,
+                                finishing: select_plan.finishing,
+                                compute_instance: target_cluster_id,
+                                target_replica,
+                                intermediate_result_type: typ,
+                                source_ids,
+                                conn_id: session.conn_id().clone(),
+                                max_result_size,
+                                max_query_result_size,
+                                tx,
+                            })
+                            .await?;
+
+                        Ok(Some(response))
+                    }
+                }
             }
         }
     }

@@ -18,7 +18,9 @@ use enum_kinds::EnumKind;
 use futures::Stream;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
+use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
+use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
@@ -26,7 +28,7 @@ use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator};
+use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator, SqlRelationType};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -43,7 +45,8 @@ use crate::catalog::Catalog;
 use crate::coord::ExecuteContextExtra;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
-use crate::coord::peek::PeekResponseUnary;
+use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
+use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -182,6 +185,20 @@ pub enum Command {
         real_time_recency_timeout: Duration,
         tx: oneshot::Sender<Result<Option<mz_repr::Timestamp>, AdapterError>>,
     },
+
+    ExecuteSlowPathPeek {
+        dataflow_plan: Box<PeekDataflowPlan<mz_repr::Timestamp>>,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
+        finishing: RowSetFinishing,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        intermediate_result_type: SqlRelationType,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        max_result_size: u64,
+        max_query_result_size: Option<u64>,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
 }
 
 impl Command {
@@ -204,7 +221,8 @@ impl Command {
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
             | Command::GetOracle { .. }
-            | Command::DetermineRealTimeRecentTimestamp { .. } => None,
+            | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::ExecuteSlowPathPeek { .. } => None,
         }
     }
 
@@ -227,7 +245,8 @@ impl Command {
             | Command::Dump { .. }
             | Command::GetComputeInstanceClient { .. }
             | Command::GetOracle { .. }
-            | Command::DetermineRealTimeRecentTimestamp { .. } => None,
+            | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::ExecuteSlowPathPeek { .. } => None,
         }
     }
 }

@@ -313,6 +313,37 @@ impl Coordinator {
                         }
                     }
                 }
+
+                Command::ExecuteSlowPathPeek {
+                    dataflow_plan,
+                    determination,
+                    finishing,
+                    compute_instance,
+                    target_replica,
+                    intermediate_result_type,
+                    source_ids,
+                    conn_id,
+                    max_result_size,
+                    max_query_result_size,
+                    tx,
+                } => {
+                    let result = self
+                        .implement_slow_path_peek(
+                            *dataflow_plan,
+                            determination,
+                            finishing,
+                            compute_instance,
+                            target_replica,
+                            intermediate_result_type,
+                            source_ids,
+                            conn_id,
+                            max_result_size,
+                            max_query_result_size,
+                        )
+                        .await;
+
+                    let _ = tx.send(result);
+                }
             }
         }
         .instrument(debug_span!("handle_command"))

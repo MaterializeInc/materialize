@@ -366,6 +366,7 @@ impl Message {
                 Command::DetermineRealTimeRecentTimestamp { .. } => {
                     "determine-real-time-recent-timestamp"
                 }
+                Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
