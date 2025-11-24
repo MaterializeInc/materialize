@@ -2735,6 +2735,7 @@ impl Coordinator {
                 since: None,
                 status_collection_id,
                 timeline: Some(timeline.clone()),
+                primary: None,
             }
         };
 
@@ -2765,10 +2766,9 @@ impl Coordinator {
                                 let next_version = version.bump();
                                 let primary_collection =
                                     versions.get(&next_version).map(|(gid, _desc)| gid).copied();
-                                let collection_desc = CollectionDescription::for_table(
-                                    desc.clone(),
-                                    primary_collection,
-                                );
+                                let mut collection_desc =
+                                    CollectionDescription::for_table(desc.clone());
+                                collection_desc.primary = primary_collection;
 
                                 (*gid, collection_desc)
                             });
@@ -2807,13 +2807,8 @@ impl Coordinator {
                     compute_collections.push((mv.global_id_writes(), mv.desc.latest()));
                 }
                 CatalogItem::ContinualTask(ct) => {
-                    let collection_desc = CollectionDescription {
-                        desc: ct.desc.clone(),
-                        data_source: DataSource::Other,
-                        since: ct.initial_as_of.clone(),
-                        status_collection_id: None,
-                        timeline: None,
-                    };
+                    let collection_desc =
+                        CollectionDescription::for_other(ct.desc.clone(), ct.initial_as_of.clone());
                     if ct.global_id().is_system() && collection_desc.since.is_none() {
                         // We need a non-0 since to make as_of selection work. Fill it in below with
                         // the `bootstrap_builtin_continual_tasks` call, which can only be run after
@@ -2858,6 +2853,7 @@ impl Coordinator {
                         since: None,
                         status_collection_id: None,
                         timeline: None,
+                        primary: None,
                     };
                     collections.push((sink.global_id, collection_desc));
                 }

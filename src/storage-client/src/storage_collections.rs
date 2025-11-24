@@ -900,24 +900,25 @@ where
         Ok(())
     }
 
-    /// Determine if this collection has another dependency.
-    ///
-    /// Currently, collections have either 0 or 1 dependencies.
+    /// Returns the given collection's dependencies.
     fn determine_collection_dependencies(
         &self,
         self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
         source_id: GlobalId,
-        data_source: &DataSource<T>,
+        collection_desc: &CollectionDescription<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
-        let dependencies = match &data_source {
+        let mut dependencies = Vec::new();
+
+        if let Some(id) = collection_desc.primary {
+            dependencies.push(id);
+        }
+
+        match &collection_desc.data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table { primary: None }
+            | DataSource::Table
             | DataSource::Progress
-            | DataSource::Other => Vec::new(),
-            DataSource::Table {
-                primary: Some(primary),
-            } => vec![*primary],
+            | DataSource::Other => (),
             DataSource::IngestionExport {
                 ingestion_id,
                 data_config,
@@ -933,20 +934,18 @@ where
                 };
 
                 match data_config.envelope {
-                    SourceEnvelope::CdcV2 => Vec::new(),
-                    _ => vec![ingestion.remap_collection_id],
+                    SourceEnvelope::CdcV2 => (),
+                    _ => dependencies.push(ingestion.remap_collection_id),
                 }
             }
             // Ingestions depend on their remap collection.
             DataSource::Ingestion(ingestion) => {
-                if ingestion.remap_collection_id == source_id {
-                    vec![]
-                } else {
-                    vec![ingestion.remap_collection_id]
+                if ingestion.remap_collection_id != source_id {
+                    dependencies.push(ingestion.remap_collection_id);
                 }
             }
-            DataSource::Sink { desc } => vec![desc.sink.from],
-        };
+            DataSource::Sink { desc } => dependencies.push(desc.sink.from),
+        }
 
         Ok(dependencies)
     }
@@ -1340,12 +1339,9 @@ where
         let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
-                // If the table has a "primary" collection, let that collection drive compaction.
+                // If the collection has a "primary" collection, let that primary drive compaction.
                 let collection = collections.get(&key).expect("must still exist");
-                let should_emit_persist_compaction = !matches!(
-                    collection.description.data_source,
-                    DataSource::Table { primary: Some(_) }
-                );
+                let should_emit_persist_compaction = collection.description.primary.is_none();
 
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
@@ -1901,7 +1897,7 @@ where
                         | DataSource::Progress
                         | DataSource::Other => {}
                         DataSource::Sink { .. } => {}
-                        DataSource::Table { .. } => {
+                        DataSource::Table => {
                             let register_ts = register_ts.expect(
                                 "caller should have provided a register_ts when creating a table",
                             );
@@ -1958,7 +1954,7 @@ where
             Sink(GlobalId),
         }
         to_register.sort_by_key(|(id, desc, ..)| match &desc.data_source {
-            DataSource::Table { .. } => DependencyOrder::Table(Reverse(*id)),
+            DataSource::Table => DependencyOrder::Table(Reverse(*id)),
             DataSource::Sink { .. } => DependencyOrder::Sink(*id),
             _ => DependencyOrder::Collection(*id),
         });
@@ -1972,11 +1968,8 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies = self.determine_collection_dependencies(
-                &*self_collections,
-                id,
-                &description.data_source,
-            )?;
+            let storage_dependencies =
+                self.determine_collection_dependencies(&*self_collections, id, &description)?;
 
             // Determine the initial since of the collection.
             let initial_since = match storage_dependencies
@@ -2083,7 +2076,7 @@ where
 
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Table { .. } => {
+                DataSource::Table => {
                     // See comment on self.initial_txn_upper on why we're doing
                     // this.
                     if is_in_txns(id, &metadata)
@@ -2260,7 +2253,7 @@ where
                 .ok_or_else(|| StorageError::IdentifierMissing(existing_collection))?;
 
             // TODO(alter_table): Support changes to sources.
-            if !matches!(&existing.description.data_source, DataSource::Table { .. }) {
+            if existing.description.data_source != DataSource::Table {
                 return Err(StorageError::IdentifierInvalid(existing_collection));
             }
 
@@ -2347,15 +2340,11 @@ where
                 .expect("existing collection missing");
 
             // A higher level should already be asserting this, but let's make sure.
-            assert!(matches!(
-                existing.description.data_source,
-                DataSource::Table { primary: None }
-            ));
+            assert_eq!(existing.description.data_source, DataSource::Table);
+            assert_none!(existing.description.primary);
 
             // The existing version of the table will depend on the new version.
-            existing.description.data_source = DataSource::Table {
-                primary: Some(new_collection),
-            };
+            existing.description.primary = Some(new_collection);
             existing.storage_dependencies.push(new_collection);
 
             // Copy over the frontiers from the previous version.
@@ -2373,8 +2362,8 @@ where
             let mut changes = ChangeBatch::new();
             changes.extend(implied_capability.iter().map(|t| (t.clone(), 1)));
 
-            // Note: The new collection is now the "primary collection" so we specify `None` here.
-            let collection_desc = CollectionDescription::for_table(new_desc.clone(), None);
+            // Note: The new collection is now the "primary collection".
+            let collection_desc = CollectionDescription::for_table(new_desc.clone());
             let collection_meta = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
                 relation_desc: collection_desc.desc.clone(),
