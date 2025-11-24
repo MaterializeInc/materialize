@@ -75,6 +75,7 @@ hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", defaul
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.18", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
+ipnet = { version = "2.11.0" }
 itertools = { version = "0.13.0" }
 libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
@@ -94,6 +95,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
+once_cell = { version = "1.21.3", features = ["critical-section"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
 parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
@@ -221,6 +223,7 @@ hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", defaul
 hyper = { version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.18", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.43.2", features = ["json"] }
+ipnet = { version = "2.11.0" }
 itertools = { version = "0.13.0" }
 libc = { version = "0.2.177", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
@@ -240,6 +243,7 @@ num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
+once_cell = { version = "1.21.3", features = ["critical-section"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
 parquet = { version = "55.2.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
