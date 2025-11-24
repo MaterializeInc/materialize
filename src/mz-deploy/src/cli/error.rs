@@ -100,6 +100,10 @@ pub enum CliError {
         plural = if *failed == 1 { "" } else { "s" })]
     TestsFailed { failed: usize, passed: usize },
 
+    /// Type check failed
+    #[error("type check failed: {0}")]
+    TypeCheckFailed(String),
+
     /// I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -225,6 +229,10 @@ impl CliError {
             )),
             Self::TestsFailed { .. } => Some(
                 "review the test output above for details on which assertions failed"
+                    .to_string(),
+            ),
+            Self::TypeCheckFailed(_) => Some(
+                "review the type checking errors above and fix any SQL syntax or dependency issues"
                     .to_string(),
             ),
             Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {

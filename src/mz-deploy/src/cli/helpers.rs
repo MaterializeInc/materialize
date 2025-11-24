@@ -20,9 +20,16 @@ use std::path::Path;
 /// # Errors
 /// Returns `CliError::Connection` if connection fails
 pub async fn connect_to_database(profile: &Profile) -> Result<Client, CliError> {
-    Client::connect_with_profile(profile.clone())
+    let client = Client::connect_with_profile(profile.clone())
         .await
-        .map_err(CliError::Connection)
+        .map_err(CliError::Connection)?;
+
+    client
+        .log_connection_info()
+        .await
+        .map_err(CliError::Connection)?;
+
+    Ok(client)
 }
 
 /// Initialize the deployment tracking infrastructure in the database.

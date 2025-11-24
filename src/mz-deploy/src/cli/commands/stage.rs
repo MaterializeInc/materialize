@@ -51,8 +51,12 @@ pub async fn run(
             .ok_or(CliError::GitShaFailed)?,
     };
 
-    // Run compile to validate and get the project
-    let mir_project = super::compile::run(profile, false, directory).await?;
+    // Run compile to validate and get the project (skip type checking for staging deployment)
+    let compile_args = super::compile::CompileArgs {
+        typecheck: false,  // Skip type checking for staging deployment
+        docker_image: None,
+    };
+    let mir_project = super::compile::run(directory, compile_args).await?;
 
     let staging_suffix = format!("_{}", stage_name);
 

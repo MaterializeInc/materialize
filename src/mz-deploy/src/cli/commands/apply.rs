@@ -38,8 +38,12 @@ pub async fn run(
     force: bool,
     staging_env: Option<&str>,
 ) -> Result<(), CliError> {
-    // Compile the project first
-    let mir_project = super::compile::run(profile, false, directory).await?;
+    // Compile the project first (skip type checking since we're deploying)
+    let compile_args = super::compile::CompileArgs {
+        typecheck: false,  // Skip type checking for apply
+        docker_image: None,
+    };
+    let mir_project = super::compile::run(directory, compile_args).await?;
 
     // If a staging environment is provided, perform blue/green deployment via ALTER SWAP
     if let Some(stage_name) = staging_env {

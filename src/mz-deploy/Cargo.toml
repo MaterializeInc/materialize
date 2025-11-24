@@ -1,0 +1,36 @@
+[package]
+name = "mz-deploy"
+description = "Deployment tool for Materialize."
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait = "0.1"
+mz-build-info = { path = "../build-info" }
+mz-sql-parser = { path = "../sql-parser", default-features = false }
+thiserror = "2.0"
+clap = { version = "4.5.23", features = ["derive", "env"] }
+owo-colors = "4.0"
+tokio = { version = "1", features = ["full"] }
+tokio-postgres = "0.7"
+toml = "0.8"
+serde = { version = "1.0", features = ["derive"] }
+dirs = "5.0"
+serde_json = "1.0.145"
+workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+
+[dev-dependencies]
+tempfile = "3.0"
+testcontainers = "0.23"
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["workspace-hack"]
+
+[features]
+default = ["workspace-hack", "docker-typecheck"]
+docker-typecheck = []
