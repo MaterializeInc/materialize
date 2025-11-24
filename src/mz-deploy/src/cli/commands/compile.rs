@@ -50,18 +50,15 @@ pub async fn run(
         None
     };
 
-    // Append src/ to the directory path
-    let src_directory = directory.join("src");
-
     // Load and plan the project
-    let mir_project = project::plan(&src_directory)?;
+    let mir_project = project::plan(directory)?;
 
-    println!("Loading project from: {}", src_directory.display());
+    println!("Loading project from: {}", directory.display());
 
     // Validate against database if connected
     if let Some(mut client) = client {
         client
-            .validate_project(&mir_project, &src_directory)
+            .validate_project(&mir_project, directory)
             .await?;
 
         // Query external types and write types.lock
