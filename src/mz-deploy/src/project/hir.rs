@@ -354,6 +354,8 @@ pub struct DatabaseObject {
     pub grants: Vec<GrantPrivilegesStatement<Raw>>,
     /// Comment statements for this object or its columns
     pub comments: Vec<CommentStatement<Raw>>,
+    /// Unit tests for this object
+    pub tests: Vec<ExecuteUnitTestStatement<Raw>>,
 }
 
 impl DatabaseObject {
@@ -406,6 +408,7 @@ impl TryFrom<super::raw::DatabaseObject> for DatabaseObject {
         let mut indexes = Vec::new();
         let mut grants = Vec::new();
         let mut comments = Vec::new();
+        let mut tests = Vec::new();
 
         for stmt in value.statements {
             match stmt {
@@ -551,6 +554,11 @@ impl TryFrom<super::raw::DatabaseObject> for DatabaseObject {
                     comments.push(s);
                 }
 
+                // Test statements are collected for later execution
+                mz_sql_parser::ast::Statement::ExecuteUnitTest(s) => {
+                    tests.push(s);
+                }
+
                 // Unsupported statements
                 other => {
                     errors.push(ValidationError::with_file(
@@ -634,6 +642,7 @@ impl TryFrom<super::raw::DatabaseObject> for DatabaseObject {
             indexes,
             grants,
             comments,
+            tests,
         })
     }
 }

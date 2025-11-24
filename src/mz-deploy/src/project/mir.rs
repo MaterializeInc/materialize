@@ -103,6 +103,8 @@ pub struct Project {
     pub external_dependencies: HashSet<ObjectId>,
     /// Cluster dependencies: clusters referenced by indexes and materialized views
     pub cluster_dependencies: HashSet<Cluster>,
+    /// Unit tests defined in the project, organized by the object they test
+    pub tests: Vec<(ObjectId, crate::unit_test::UnitTest)>,
 }
 
 impl Project {
@@ -358,6 +360,7 @@ impl From<hir::Project> for Project {
         let mut databases = Vec::new();
         let mut defined_objects = HashSet::new();
         let mut cluster_dependencies = HashSet::new();
+        let mut tests = Vec::new();
 
         // First pass: collect all objects defined in the project
         for hir_db in &hir_project.databases {
@@ -407,6 +410,15 @@ impl From<hir::Project> for Project {
 
                     dependency_graph.insert(object_id.clone(), dependencies.clone());
 
+                    // Collect tests for this object
+                    for test_stmt in &hir_obj.tests {
+                        let unit_test = crate::unit_test::UnitTest::from_execute_statement(
+                            test_stmt,
+                            &object_id,
+                        );
+                        tests.push((object_id.clone(), unit_test));
+                    }
+
                     objects.push(DatabaseObject {
                         id: object_id,
                         hir_object: hir_obj,
@@ -433,6 +445,7 @@ impl From<hir::Project> for Project {
             dependency_graph,
             external_dependencies,
             cluster_dependencies,
+            tests,
         }
     }
 }
@@ -888,6 +901,7 @@ mod tests {
             dependency_graph,
             external_dependencies: HashSet::new(),
             cluster_dependencies: HashSet::new(),
+            tests: vec![],
         };
 
         // Build reverse graph
