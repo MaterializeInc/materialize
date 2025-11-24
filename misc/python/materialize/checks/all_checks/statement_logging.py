@@ -22,7 +22,7 @@ class StatementLogging(Check):
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET statement_logging_max_sample_rate TO 1.0
 
-                $[version>=2600100] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $[version>=2600200] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
                 """
             )

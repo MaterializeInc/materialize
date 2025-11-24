@@ -2427,6 +2427,7 @@ steps:
           MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        skip: "https://github.com/MaterializeInc/materialize/pull/34214"
 
       - id: orchestratord-upgrade-combine
         label: "Orchestratord test (upgrade, combine props)"
@@ -2442,6 +2443,7 @@ steps:
           MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        skip: "https://github.com/MaterializeInc/materialize/pull/34214"
 
       - id: orchestratord-upgrade-chain-individual
         label: "Orchestratord test (upgrade chain, individual props)"
@@ -2457,6 +2459,7 @@ steps:
           MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-8cpu-16gb
+        skip: "https://github.com/MaterializeInc/materialize/pull/34214"
 
       - id: orchestratord-upgrade-chain-combine
         label: "Orchestratord test (upgrade chain, combine props)"
@@ -2472,3 +2475,4 @@ steps:
           MZ_GHCR: 0
         agents:
           queue: hetzner-aarch64-16cpu-32gb
+        skip: "https://github.com/MaterializeInc/materialize/pull/34214"

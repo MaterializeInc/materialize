@@ -1244,7 +1244,17 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
     path = MZ_ROOT / "test" / "terraform" / "azure-temporary"
     state = State(path)
 
-    spawn.runv(["bin/ci-builder", "run", "stable", "uv", "venv", str(path / "venv")])
+    spawn.runv(
+        [
+            "bin/ci-builder",
+            "run",
+            "stable",
+            "uv",
+            "venv",
+            "--clear",
+            str(path / "venv"),
+        ],
+    )
     venv_env = os.environ.copy()
     venv_env["PATH"] = f"{path/'venv'/'bin'}:{os.getenv('PATH')}"
     venv_env["VIRTUAL_ENV"] = str(path / "venv")
