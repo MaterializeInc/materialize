@@ -22,11 +22,17 @@ _shtab_scratch_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
 )
 
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_defaults_added=0
+
 _shtab_scratch_completion_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
   ":print shell completion script:(bash zsh tcsh)"
   ":print shell completion script:(bash zsh tcsh)"
 )
+
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_completion_defaults_added=0
 
 _shtab_scratch_create_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
@@ -41,6 +47,9 @@ _shtab_scratch_create_options=(
   ":Use a config from \{machine\}.json in \`misc\/scratch\`. Hint\: \`dev-box\` is a good starter\!:"
 )
 
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_create_defaults_added=0
+
 _shtab_scratch_destroy_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
   "--all-mine[Destroy all of your instances (incompatible with specifying instance IDs)]"
@@ -49,15 +58,24 @@ _shtab_scratch_destroy_options=(
   "(*)::Instance IDs to destroy:"
 )
 
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_destroy_defaults_added=0
+
 _shtab_scratch_forward_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
   ":The ID of the instance to connect to, or \'mine\' to specify your only live instance:"
   "(*)::The remote ports to forward locally:"
 )
 
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_forward_defaults_added=0
+
 _shtab_scratch_login_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
 )
+
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_login_defaults_added=0
 
 _shtab_scratch_mine_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
@@ -66,16 +84,25 @@ _shtab_scratch_mine_options=(
   "(*)::Whose instances to show (defaults to yourself):"
 )
 
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_mine_defaults_added=0
+
 _shtab_scratch_push_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
   "--rev[The git rev to checkout]:rev:"
   ":The ID of the instance to connect to, or \'mine\' to specify your only live instance:"
 )
 
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_push_defaults_added=0
+
 _shtab_scratch_sftp_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
   ":The ID of the instance to connect to, or \'mine\' to specify your only live instance:"
 )
+
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_sftp_defaults_added=0
 
 _shtab_scratch_ssh_options=(
   "(- : *)"{-h,--help}"[show this help message and exit]"
@@ -83,12 +110,19 @@ _shtab_scratch_ssh_options=(
   "(*)::The command to run via SSH, if any:"
 )
 
+# guard to ensure default positional specs are added only once per session
+_shtab_scratch_ssh_defaults_added=0
+
 
 _shtab_scratch() {
-  local context state line curcontext="$curcontext" one_or_more='(-)*' remainder='(*)'
+  local context state line curcontext="$curcontext" one_or_more='(*)' remainder='(-)*' default='*::: :->scratch'
 
-  if ((${_shtab_scratch_options[(I)${(q)one_or_more}*]} + ${_shtab_scratch_options[(I)${(q)remainder}*]} == 0)); then  # noqa: E501
-    _shtab_scratch_options+=(': :_shtab_scratch_commands' '*::: :->scratch')
+  # Add default positional/remainder specs only if none exist, and only once per session
+  if (( ! _shtab_scratch_defaults_added )); then
+    if (( ${_shtab_scratch_options[(I)${(q)one_or_more}*]} +          ${_shtab_scratch_options[(I)${(q)remainder}*]} +          ${_shtab_scratch_options[(I)${(q)default}]} == 0 )); then
+      _shtab_scratch_options+=(': :_shtab_scratch_commands' '*::: :->scratch')
+    fi
+    _shtab_scratch_defaults_added=1
   fi
   _arguments -C -s $_shtab_scratch_options
 
