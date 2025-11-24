@@ -88,7 +88,7 @@ mod metrics;
 /// - Hands out [ReadHolds](ReadHold) that prevent a collection's since from
 /// advancing while it needs to be read at a specific time.
 #[async_trait]
-pub trait StorageCollections: Debug {
+pub trait StorageCollections: Debug + Sync {
     type Timestamp: TimelyTimestamp;
 
     /// On boot, reconcile this [StorageCollections] with outside state. We get

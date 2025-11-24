@@ -36,7 +36,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::catalog::CatalogState;
 use crate::command::Command;
 use crate::coord::peek::PeekPlan;
-use crate::coord::sequencer::eval_copy_to_uri;
+use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
@@ -515,14 +515,16 @@ impl PeekClient {
 
         // # From peek_optimize
 
-        if session.vars().enable_session_cardinality_estimates() {
-            debug!(
-                "Bailing out from try_frontend_peek_inner, because of enable_session_cardinality_estimates"
-            );
-            return Ok(None);
-        }
-        // TODO(peek-seq): wire up statistics
-        let stats = Box::new(EmptyStatisticsOracle);
+        let stats = statistics_oracle(
+            session,
+            &source_ids,
+            &determination.timestamp_context.antichain(),
+            true,
+            catalog.system_config(),
+            &*self.storage_collections,
+        )
+        .await
+        .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
 
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.
