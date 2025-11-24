@@ -3701,7 +3701,7 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         c.testdrive(
             input=dedent(
                 """
-                $[version>=2600100] postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
                 ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
                 """
             )

@@ -92,6 +92,9 @@ ci_uncollapsed_heading ":docker: Running \`$TEST_CMD\`"
 echo "$TEST_DESC"
 
 cleanup() {
+  # Don't run the cleanup function twice
+  trap - EXIT SIGTERM SIGINT
+
   # Buildkite exposes no way to check if a test timed out (and wasn't cancelled manually), so we have to calculate it ourselves
   START_TIME=$(date -d "$STEP_START_TIMESTAMP" +%s)
   END_TIME=$(date +%s)
@@ -351,8 +354,6 @@ cleanup() {
     bin/clear-corrupted-cargo-target-dir run.log
   fi
 
-  # Don't run the cleanup function twice
-  trap - EXIT SIGTERM SIGINT
   exit "$CI_ANNOTATE_ERRORS_RESULT"
 }
 
