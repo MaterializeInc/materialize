@@ -374,6 +374,16 @@ impl DatabaseObject {
         }
         cluster_set
     }
+
+    /// Convert the statement to a Query<Raw> for type checking purposes.
+    pub fn to_query(&self) -> Option<Query<Raw>> {
+        match &self.stmt {
+            Statement::CreateView(stmt) => Some(stmt.definition.query.clone()),
+            Statement::CreateMaterializedView(stmt) => Some(stmt.query.clone()),
+            Statement::CreateSource(_) | Statement::CreateTable(_) => None,
+            _ => None,
+        }
+    }
 }
 
 impl TryFrom<super::raw::DatabaseObject> for DatabaseObject {

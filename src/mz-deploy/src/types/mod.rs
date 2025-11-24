@@ -1,3 +1,13 @@
+mod typechecker;
+#[cfg(feature = "docker-typecheck")]
+mod docker_typechecker;
+mod noop_typechecker;
+
+pub use typechecker::{TypeChecker, TypeCheckError, ObjectTypeCheckError, TypeCheckErrors};
+#[cfg(feature = "docker-typecheck")]
+pub use docker_typechecker::DockerTypeChecker;
+pub use noop_typechecker::NoOpTypeChecker;
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;

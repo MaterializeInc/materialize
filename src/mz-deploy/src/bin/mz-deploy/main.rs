@@ -31,11 +31,15 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Compile project and verify dependencies
+    /// Compile project and verify dependencies (offline, no database connection needed)
     Compile {
-        /// Skip database connection and dependency verification
+        /// Skip type checking with Docker
         #[arg(long)]
-        offline: bool,
+        skip_typecheck: bool,
+
+        /// Docker image to use for type checking
+        #[arg(long)]
+        docker_image: Option<String>,
     },
     /// Apply project to database (compile and execute SQL)
     Apply {
@@ -71,7 +75,7 @@ enum Command {
 /// Determine if a command needs a database connection
 fn needs_connection(command: &Option<Command>) -> bool {
     match command {
-        Some(Command::Compile { offline }) => !offline,
+        Some(Command::Compile { .. }) => false,
         Some(Command::Apply { .. }) => true,
         Some(Command::Stage { .. }) => true,
         Some(Command::Debug) => true,
@@ -103,8 +107,15 @@ async fn main() {
     };
 
     let result = match args.command {
-        Some(Command::Compile { offline }) => {
-            cli::commands::compile::run(profile.as_ref(), offline, &args.directory)
+        Some(Command::Compile {
+            skip_typecheck,
+            docker_image,
+        }) => {
+            let compile_args = cli::commands::compile::CompileArgs {
+                typecheck: !skip_typecheck,
+                docker_image,
+            };
+            cli::commands::compile::run(&args.directory, compile_args)
                 .await
                 .map(|_| ())
         }

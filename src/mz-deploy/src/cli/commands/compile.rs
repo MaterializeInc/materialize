@@ -1,65 +1,54 @@
 //! Compile command - validate project and show deployment plan.
 
 use crate::cli::CliError;
-use crate::client::{Client, Profile};
-use crate::client::config::ConfigError;
 use crate::{project, verbose};
 use std::path::Path;
 use std::time::SystemTime;
+
+/// Arguments for the compile command
+#[derive(Debug, Clone)]
+pub struct CompileArgs {
+    /// Enable type checking with Docker
+    pub typecheck: bool,
+    /// Docker image to use for type checking
+    pub docker_image: Option<String>,
+}
+
+impl Default for CompileArgs {
+    fn default() -> Self {
+        Self {
+            typecheck: true,
+            docker_image: None,
+        }
+    }
+}
 
 /// Compile and validate the project, showing the deployment plan.
 ///
 /// This command:
 /// - Loads and parses SQL files from the project directory
 /// - Validates the project structure and dependencies
-/// - (Unless --offline) Connects to the database to verify external dependencies
-/// - Writes types.lock file with external type information
+/// - Performs optional type checking with Docker
 /// - Displays the deployment plan including dependencies and SQL statements
 ///
 /// # Arguments
-/// * `profile` - Optional database profile (None if offline)
-/// * `offline` - Skip database connection and dependency verification
 /// * `directory` - Project root directory
+/// * `args` - Compile command arguments
 ///
 /// # Returns
 /// Compiled MIR project ready for deployment
 ///
 /// # Errors
 /// Returns `CliError::Project` if compilation or validation fails
-/// Returns `CliError::Connection` if database connection fails (when not offline)
-pub async fn run(
-    profile: Option<&Profile>,
-    offline: bool,
-    directory: &Path,
-) -> Result<project::mir::Project, CliError> {
+pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Project, CliError> {
     let now = SystemTime::now();
-    let client = if !offline {
-        if let Some(p) = profile {
-            Some(Client::connect_with_profile(p.clone()).await?)
-        } else {
-            return Err(CliError::Connection(
-                crate::client::ConnectionError::Config(
-                    ConfigError::ProfilesNotFound {
-                        project_path: ".mz/profiles.toml".to_string(),
-                        global_path: "~/.mz/profiles.toml".to_string(),
-                    }
-                )
-            ));
-        }
-    } else {
-        None
-    };
 
-    // Load and plan the project
     let mir_project = project::plan(directory)?;
-
     println!("Loading project from: {}", directory.display());
 
-    // Validate against database if connected
-    if let Some(mut client) = client {
-        client
-            .validate_project(&mir_project, directory)
-            .await?;
+    // Type checking with Docker if enabled
+    if args.typecheck {
+        typecheck_with_docker(directory, &mir_project, args.docker_image).await?;
     }
 
     // Display external dependencies
@@ -202,3 +191,49 @@ pub async fn run(
     );
     Ok(mir_project)
 }
+
+/// Perform type checking using Docker
+async fn typecheck_with_docker(
+    directory: &Path,
+    mir_project: &project::mir::Project,
+    docker_image: Option<String>,
+) -> Result<(), CliError> {
+    use crate::types::{DockerTypeChecker, TypeChecker, TypeCheckError};
+
+    verbose!("Starting type checking with Docker...");
+
+    // Load types.lock if it exists
+    let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
+        println!("No types.lock found, assuming no external dependencies");
+        println!("See gen-data-contracts for more information");
+        crate::types::Types {
+            version: 1,
+            objects: std::collections::BTreeMap::new(),
+        }
+    });
+
+    // Create Docker type checker
+    let mut checker = DockerTypeChecker::new(types, directory);
+    if let Some(image) = docker_image {
+        checker = checker.with_image(image);
+    }
+
+    // Run type checking
+    match checker.typecheck(mir_project).await {
+        Ok(()) => {
+            verbose!("✓ Type checking passed");
+            Ok(())
+        }
+        Err(TypeCheckError::ContainerStartFailed(e)) => {
+            // Docker not available, warn but don't fail
+            println!("Warning: Docker not available for type checking: {}", e);
+            println!("  Type checking skipped. Install Docker to enable type checking.");
+            Ok(())
+        }
+        Err(e) => {
+            // Real type checking errors
+            Err(CliError::TypeCheckFailed(format!("{}", e)))
+        }
+    }
+}
+

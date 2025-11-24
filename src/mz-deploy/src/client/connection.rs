@@ -259,16 +259,11 @@ impl Client {
             }
         });
 
-        let mut client = Client { client, profile };
-
-        // Query and log connection information
-        client.log_connection_info().await?;
-
-        Ok(client)
+        Ok(Client { client, profile })
     }
 
     /// Execute the connection info query and log the results
-    async fn log_connection_info(&mut self) -> Result<(), ConnectionError> {
+    pub async fn log_connection_info(&self) -> Result<(), ConnectionError> {
         let query = "SELECT mz_version() AS version, mz_environment_id() AS environment_id, current_role() as role";
 
         let row = self.client.query_one(query, &[]).await?;
