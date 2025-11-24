@@ -68,6 +68,13 @@ macro_rules! cast_from {
             pub const fn [< $from _to_ $to >](from: $from) -> $to {
                 from as $to
             }
+
+            impl crate::cast::CastFrom<std::num::NonZero<$from>> for $to {
+                #[allow(clippy::as_conversions)]
+                fn cast_from(from: std::num::NonZero<$from>) -> $to {
+                    from.get() as $to
+                }
+            }
         }
     };
 }

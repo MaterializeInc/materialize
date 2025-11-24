@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::num::NonZero;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -34,9 +35,9 @@ use mz_orchestrator::{
     CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
     ServiceEvent, ServicePort,
 };
-use mz_ore::halt;
-use mz_ore::instrument;
+use mz_ore::cast::CastInto;
 use mz_ore::task::{self, AbortOnDropHandle};
+use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
 use mz_repr::adt::numeric::Numeric;
 use regex::Regex;
@@ -80,9 +81,9 @@ pub struct ReplicaAllocation {
     /// The disk limit for each process in the replica.
     pub disk_limit: Option<DiskLimit>,
     /// The number of processes in the replica.
-    pub scale: u16,
+    pub scale: NonZero<u16>,
     /// The number of worker threads in the replica.
-    pub workers: usize,
+    pub workers: NonZero<usize>,
     /// The number of credits per hour that the replica consumes.
     #[serde(deserialize_with = "mz_repr::adt::numeric::str_serde::deserialize")]
     pub credits_per_hour: Numeric,
@@ -113,6 +114,7 @@ fn default_true() -> bool {
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
 fn test_replica_allocation_deserialization() {
     use bytesize::ByteSize;
+    use mz_ore::{assert_err, assert_ok};
 
     let data = r#"
         {
@@ -143,8 +145,8 @@ fn test_replica_allocation_deserialization() {
             cpu_exclusive: false,
             is_cc: true,
             swap_enabled: true,
-            scale: 16,
-            workers: 1,
+            scale: NonZero::new(16).unwrap(),
+            workers: NonZero::new(1).unwrap(),
             selectors: BTreeMap::from([
                 ("key1".to_string(), "value1".to_string()),
                 ("key2".to_string(), "value2".to_string())
@@ -157,8 +159,8 @@ fn test_replica_allocation_deserialization() {
             "cpu_limit": 0,
             "memory_limit": "0GiB",
             "disk_limit": "0MiB",
-            "scale": 0,
-            "workers": 0,
+            "scale": 1,
+            "workers": 1,
             "credits_per_hour": "0",
             "cpu_exclusive": true,
             "disabled": true
@@ -178,11 +180,19 @@ fn test_replica_allocation_deserialization() {
             cpu_exclusive: true,
             is_cc: true,
             swap_enabled: false,
-            scale: 0,
-            workers: 0,
+            scale: NonZero::new(1).unwrap(),
+            workers: NonZero::new(1).unwrap(),
             selectors: Default::default(),
         }
     );
+
+    // `scale` and `workers` must be non-zero.
+    let data = r#"{"scale": 0, "workers": 1, "credits_per_hour": "0"}"#;
+    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
+    let data = r#"{"scale": 1, "workers": 0, "credits_per_hour": "0"}"#;
+    assert_err!(serde_json::from_str::<ReplicaAllocation>(data));
+    let data = r#"{"scale": 1, "workers": 1, "credits_per_hour": "0"}"#;
+    assert_ok!(serde_json::from_str::<ReplicaAllocation>(data));
 }
 
 /// Configures the location of a cluster replica.
@@ -202,7 +212,7 @@ impl ReplicaLocation {
                 computectl_addrs, ..
             }) => computectl_addrs.len(),
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                allocation.scale.into()
+                allocation.scale.cast_into()
             }
         }
     }
@@ -229,7 +239,7 @@ impl ReplicaLocation {
     pub fn workers(&self) -> Option<usize> {
         match self {
             ReplicaLocation::Managed(ManagedReplicaLocation { allocation, .. }) => {
-                Some(allocation.workers * self.num_processes())
+                Some(allocation.workers.get() * self.num_processes())
             }
             ReplicaLocation::Unmanaged(_) => None,
         }
@@ -661,12 +671,12 @@ where
                 init_container_image: self.init_container_image.clone(),
                 args: Box::new(move |assigned| {
                     let storage_timely_config = TimelyConfig {
-                        workers: location.allocation.workers,
+                        workers: location.allocation.workers.get(),
                         addresses: assigned.peer_addresses("storage"),
                         ..storage_proto_timely_config
                     };
                     let compute_timely_config = TimelyConfig {
-                        workers: location.allocation.workers,
+                        workers: location.allocation.workers.get(),
                         addresses: assigned.peer_addresses("compute"),
                         ..compute_proto_timely_config
                     };

@@ -14,6 +14,7 @@ use std::fmt::Debug;
 use std::fs::Permissions;
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
+use std::num::NonZero;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -453,7 +454,7 @@ struct EnsureServiceConfig {
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of copies of this service to run.
-    pub scale: u16,
+    pub scale: NonZero<u16>,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
@@ -599,7 +600,7 @@ impl OrchestratorWorker {
             services.get(&id).map(|states| states.len())
         };
         match old_scale {
-            Some(old) if old == usize::from(scale) => return Ok(()),
+            Some(old) if old == usize::cast_from(scale) => return Ok(()),
             Some(_) => self.drop_service(&id).await?,
             None => (),
         }
@@ -622,7 +623,7 @@ impl OrchestratorWorker {
 
             // Create the state for new processes.
             let mut process_states = vec![];
-            for i in 0..scale.into() {
+            for i in 0..usize::cast_from(scale) {
                 let listen_addrs = &peer_addrs[i];
 
                 // Fill out placeholders in the command wrapper for this process.
@@ -1174,7 +1175,7 @@ impl From<ProcessStatus> for ServiceStatus {
     }
 }
 
-fn socket_path(run_dir: &Path, port: &str, process: usize) -> String {
+fn socket_path(run_dir: &Path, port: &str, process: u16) -> String {
     let desired = run_dir
         .join(format!("{port}-{process}"))
         .to_string_lossy()
@@ -1199,13 +1200,13 @@ struct AddressedTcpListener {
 #[derive(Debug, Clone)]
 struct ProcessService {
     run_dir: PathBuf,
-    scale: u16,
+    scale: NonZero<u16>,
 }
 
 impl Service for ProcessService {
     fn addresses(&self, port: &str) -> Vec<String> {
-        (0..self.scale)
-            .map(|i| socket_path(&self.run_dir, port, i.into()))
+        (0..self.scale.get())
+            .map(|i| socket_path(&self.run_dir, port, i))
             .collect()
     }
 }

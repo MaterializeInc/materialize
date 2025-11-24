@@ -720,7 +720,7 @@ def cluster_replica_size_map() -> dict[str, dict[str, Any]]:
         "scale=1,workers=1,legacy": replica_size(1, 1, is_cc=False),
         "scale=1,workers=2,legacy": replica_size(1, 2, is_cc=False),
         # Intentionally not following the naming scheme
-        "free": replica_size(0, 0, disabled=True),
+        "free": replica_size(1, 1, disabled=True),
     }
 
     for i in range(0, 6):

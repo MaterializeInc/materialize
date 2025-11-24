@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZero;
 
 use anyhow::bail;
 use bytesize::ByteSize;
@@ -122,7 +123,7 @@ impl ClusterReplicaSizeMap {
                     bail!("No memory limit found in cluster definition for {name}");
                 };
                 replica.credits_per_hour = Numeric::from(
-                    (memory_limit.0 * replica.scale * u64::try_from(replica.workers)?).0,
+                    (memory_limit.0 * replica.scale.get() * u64::cast_from(replica.workers)).0,
                 ) / Numeric::from(1 * GIB);
             }
         }
@@ -170,7 +171,7 @@ impl ClusterReplicaSizeMap {
         // }
         let mut inner = (0..=5)
             .flat_map(|i| {
-                let workers: u8 = 1 << i;
+                let workers = 1 << i;
                 [
                     (format!("scale=1,workers={workers}"), None),
                     (format!("scale=1,workers={workers},mem=4GiB"), Some(4)),
@@ -185,8 +186,8 @@ impl ClusterReplicaSizeMap {
                             memory_limit: memory_limit.map(|gib| MemoryLimit(ByteSize::gib(gib))),
                             cpu_limit: None,
                             disk_limit: None,
-                            scale: 1,
-                            workers: workers.into(),
+                            scale: NonZero::new(1).expect("not zero"),
+                            workers: NonZero::new(workers).expect("not zero"),
                             credits_per_hour: 1.into(),
                             cpu_exclusive: false,
                             is_cc: false,
@@ -207,8 +208,8 @@ impl ClusterReplicaSizeMap {
                     memory_limit: None,
                     cpu_limit: None,
                     disk_limit: None,
-                    scale,
-                    workers: 1,
+                    scale: NonZero::new(scale).expect("not zero"),
+                    workers: NonZero::new(1).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
@@ -224,8 +225,8 @@ impl ClusterReplicaSizeMap {
                     memory_limit: None,
                     cpu_limit: None,
                     disk_limit: None,
-                    scale,
-                    workers: scale.into(),
+                    scale: NonZero::new(scale).expect("not zero"),
+                    workers: NonZero::new(scale.into()).expect("not zero"),
                     credits_per_hour: scale.into(),
                     cpu_exclusive: false,
                     is_cc: false,
@@ -241,8 +242,8 @@ impl ClusterReplicaSizeMap {
                     memory_limit: Some(MemoryLimit(ByteSize(u64::cast_from(scale) * (1 << 30)))),
                     cpu_limit: None,
                     disk_limit: None,
-                    scale: 1,
-                    workers: 8,
+                    scale: NonZero::new(1).expect("not zero"),
+                    workers: NonZero::new(8).expect("not zero"),
                     credits_per_hour: 1.into(),
                     cpu_exclusive: false,
                     is_cc: false,
@@ -259,8 +260,8 @@ impl ClusterReplicaSizeMap {
                 memory_limit: None,
                 cpu_limit: None,
                 disk_limit: None,
-                scale: 2,
-                workers: 4,
+                scale: NonZero::new(2).expect("not zero"),
+                workers: NonZero::new(4).expect("not zero"),
                 credits_per_hour: 2.into(),
                 cpu_exclusive: false,
                 is_cc: false,
@@ -276,8 +277,8 @@ impl ClusterReplicaSizeMap {
                 memory_limit: None,
                 cpu_limit: None,
                 disk_limit: None,
-                scale: 0,
-                workers: 0,
+                scale: NonZero::new(1).expect("not zero"),
+                workers: NonZero::new(1).expect("not zero"),
                 credits_per_hour: 0.into(),
                 cpu_exclusive: false,
                 is_cc: true,

@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::num::NonZero;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -211,7 +212,7 @@ pub struct ServiceConfig {
     /// An optional limit on the CPU that the service can use.
     pub cpu_limit: Option<CpuLimit>,
     /// The number of copies of this service to run.
-    pub scale: u16,
+    pub scale: NonZero<u16>,
     /// Arbitrary key–value pairs to attach to the service in the orchestrator
     /// backend.
     ///
