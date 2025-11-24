@@ -7,6 +7,7 @@ pub mod abort;
 pub mod apply;
 pub mod compile;
 pub mod debug;
+pub mod gen_data_contracts;
 pub mod stage;
 pub mod swap;
 pub mod test;

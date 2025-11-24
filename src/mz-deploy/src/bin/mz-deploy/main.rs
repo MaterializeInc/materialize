@@ -57,6 +57,8 @@ enum Command {
     },
     /// Test database connection with a profile
     Debug,
+    /// Generate data contracts (types.lock) for external dependencies
+    GenDataContracts,
     /// Run unit tests
     Test,
     /// Abort a staged deployment (drop schemas, clusters, and deployment records)
@@ -73,6 +75,7 @@ fn needs_connection(command: &Option<Command>) -> bool {
         Some(Command::Apply { .. }) => true,
         Some(Command::Stage { .. }) => true,
         Some(Command::Debug) => true,
+        Some(Command::GenDataContracts) => true,
         Some(Command::Test) => true,
         Some(Command::Abort { .. }) => true,
         None => false,
@@ -125,6 +128,9 @@ async fn main() {
         }
         Some(Command::Debug) => {
             cli::commands::debug::run(profile.as_ref(), &args.directory).await
+        }
+        Some(Command::GenDataContracts) => {
+            cli::commands::gen_data_contracts::run(profile.as_ref(), &args.directory).await
         }
         Some(Command::Test) => {
             cli::commands::test::run(profile.as_ref(), &args.directory).await
