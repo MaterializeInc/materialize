@@ -60,10 +60,6 @@ pub async fn run(
         client
             .validate_project(&mir_project, directory)
             .await?;
-
-        // Query external types and write types.lock
-        let types = client.query_external_types(&mir_project).await?;
-        types.write_types_lock(directory)?;
     }
 
     // Display external dependencies
