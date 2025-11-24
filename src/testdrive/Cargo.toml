@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.100"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
 async-trait = "0.1.89"
-aws-credential-types = { version = "1.2.9", features = ["hardcoded-credentials"] }
+aws-credential-types = { version = "1.2.10", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.3.9"
 arrow = { version = "55.2.0", default-features = false }
