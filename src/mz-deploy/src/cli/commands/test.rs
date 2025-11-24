@@ -1,6 +1,7 @@
 //! Test command - run unit tests against the database.
 
 use crate::cli::{CliError, helpers};
+use crate::client::Profile;
 use crate::project::{self, hir};
 use crate::unit_test;
 use mz_sql_parser::ast::Ident;
@@ -40,7 +41,7 @@ use std::path::Path;
 /// - Unexpected rows appear in actual results
 ///
 /// # Arguments
-/// * `profile_name` - Optional database profile name
+/// * `profile` - Database profile containing connection information
 /// * `directory` - Project root directory
 ///
 /// # Returns
@@ -50,13 +51,13 @@ use std::path::Path;
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
-pub async fn run(profile_name: Option<&str>, directory: &Path) -> Result<(), CliError> {
+pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliError> {
     // Load the project
     let src_directory = directory.join("src");
     let mir_project = project::plan(&src_directory)?;
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile_name).await?;
+    let client = helpers::connect_to_database(profile.unwrap()).await?;
 
     // Find test files
     let test_directory = directory.join("test");

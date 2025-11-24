@@ -1,6 +1,7 @@
 //! Apply command - deploy SQL to database.
 
 use crate::cli::{CliError, helpers};
+use crate::client::Profile;
 use crate::{project, verbose};
 use std::path::Path;
 
@@ -19,7 +20,7 @@ use std::path::Path;
 ///    - Updates deployment tracking records
 ///
 /// # Arguments
-/// * `profile_name` - Optional database profile name
+/// * `profile` - Database profile containing connection information
 /// * `directory` - Project root directory
 /// * `in_place_dangerous_will_cause_downtime` - Allow dropping/recreating production objects
 /// * `force` - Force promotion despite conflicts (for blue/green mode)
@@ -31,24 +32,24 @@ use std::path::Path;
 /// # Errors
 /// Returns various `CliError` variants for different failure modes
 pub async fn run(
-    profile_name: Option<&str>,
+    profile: Option<&Profile>,
     directory: &Path,
     in_place_dangerous_will_cause_downtime: bool,
     force: bool,
     staging_env: Option<&str>,
 ) -> Result<(), CliError> {
     // Compile the project first
-    let mir_project = super::compile::run(profile_name, false, directory).await?;
+    let mir_project = super::compile::run(profile, false, directory).await?;
 
     // If a staging environment is provided, perform blue/green deployment via ALTER SWAP
     if let Some(stage_name) = staging_env {
-        return super::swap::run(profile_name, directory, stage_name, force, &mir_project).await;
+        return super::swap::run(profile, directory, stage_name, force, &mir_project).await;
     }
 
     println!("Applying SQL to database");
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile_name).await?;
+    let client = helpers::connect_to_database(profile.unwrap()).await?;
 
     helpers::initialize_deployment_tracking(&client).await?;
 

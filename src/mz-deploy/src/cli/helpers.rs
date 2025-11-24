@@ -4,7 +4,7 @@
 //! to reduce code duplication and ensure consistent behavior.
 
 use crate::cli::CliError;
-use crate::client::Client;
+use crate::client::{Client, Profile};
 use crate::project::{self, hir};
 use crate::utils::git::get_git_commit;
 use std::path::Path;
@@ -12,15 +12,15 @@ use std::path::Path;
 /// Connect to the database using the specified profile.
 ///
 /// # Arguments
-/// * `profile_name` - Optional profile name (defaults to "default")
+/// * `profile` - Database profile containing connection information
 ///
 /// # Returns
 /// Connected database client
 ///
 /// # Errors
 /// Returns `CliError::Connection` if connection fails
-pub async fn connect_to_database(profile_name: Option<&str>) -> Result<Client, CliError> {
-    Client::connect(profile_name)
+pub async fn connect_to_database(profile: &Profile) -> Result<Client, CliError> {
+    Client::connect_with_profile(profile.clone())
         .await
         .map_err(CliError::Connection)
 }

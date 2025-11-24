@@ -1,7 +1,7 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
 use crate::cli::{CliError, helpers};
-use crate::client::ClusterOptions;
+use crate::client::{ClusterOptions, Profile};
 use crate::project::changeset::ChangeSet;
 use crate::project::{self, hir::FullyQualifiedName, normalize::NormalizingVisitor};
 use crate::utils::git::get_git_commit;
@@ -28,7 +28,7 @@ use std::path::Path;
 /// - Records deployment metadata for conflict detection
 ///
 /// # Arguments
-/// * `profile_name` - Optional database profile name
+/// * `profile` - Database profile containing connection information
 /// * `stage_name` - Optional staging environment name (defaults to first 5 chars of git SHA)
 /// * `directory` - Project root directory
 ///
@@ -40,7 +40,7 @@ use std::path::Path;
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Project` for project compilation errors
 pub async fn run(
-    profile_name: Option<&str>,
+    profile: Option<&Profile>,
     stage_name: Option<&str>,
     directory: &Path,
 ) -> Result<(), CliError> {
@@ -52,14 +52,14 @@ pub async fn run(
     };
 
     // Run compile to validate and get the project
-    let mir_project = super::compile::run(profile_name, false, directory).await?;
+    let mir_project = super::compile::run(profile, false, directory).await?;
 
     let staging_suffix = format!("_{}", stage_name);
 
     println!("Deploying to staging environment: {}", stage_name);
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile_name).await?;
+    let client = helpers::connect_to_database(profile.unwrap()).await?;
 
     // Initialize deployment tracking infrastructure
     helpers::initialize_deployment_tracking(&client).await?;

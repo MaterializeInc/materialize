@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
 use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
+use mz_deploy::client::config::ProfilesConfig;
 use mz_deploy::utils::log;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -65,14 +66,42 @@ enum Command {
     },
 }
 
+/// Determine if a command needs a database connection
+fn needs_connection(command: &Option<Command>) -> bool {
+    match command {
+        Some(Command::Compile { offline }) => !offline,
+        Some(Command::Apply { .. }) => true,
+        Some(Command::Stage { .. }) => true,
+        Some(Command::Debug) => true,
+        Some(Command::Test) => true,
+        Some(Command::Abort { .. }) => true,
+        None => false,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
     log::set_verbose(args.verbose);
 
+    // Load profile once if command needs database connection
+    let profile = if needs_connection(&args.command) {
+        match ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref()) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                cli::display_error(&cli::CliError::Connection(
+                    mz_deploy::client::ConnectionError::Config(e)
+                ));
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let result = match args.command {
         Some(Command::Compile { offline }) => {
-            cli::commands::compile::run(args.profile.as_deref(), offline, &args.directory)
+            cli::commands::compile::run(profile.as_ref(), offline, &args.directory)
                 .await
                 .map(|_| ())
         }
@@ -82,7 +111,7 @@ async fn main() {
             staging_env,
         }) => {
             cli::commands::apply::run(
-                args.profile.as_deref(),
+                profile.as_ref(),
                 &args.directory,
                 in_place_dangerous_will_cause_downtime,
                 force,
@@ -91,17 +120,17 @@ async fn main() {
             .await
         }
         Some(Command::Stage { name }) => {
-            cli::commands::stage::run(args.profile.as_deref(), name.as_deref(), &args.directory)
+            cli::commands::stage::run(profile.as_ref(), name.as_deref(), &args.directory)
                 .await
         }
         Some(Command::Debug) => {
-            cli::commands::debug::run(args.profile.as_deref(), &args.directory).await
+            cli::commands::debug::run(profile.as_ref(), &args.directory).await
         }
         Some(Command::Test) => {
-            cli::commands::test::run(args.profile.as_deref(), &args.directory).await
+            cli::commands::test::run(profile.as_ref(), &args.directory).await
         }
         Some(Command::Abort { name }) => {
-            cli::commands::abort::run(args.profile.as_deref(), &name).await
+            cli::commands::abort::run(profile.as_ref(), &args.directory, &name).await
         }
         None => {
             // No command provided, do nothing

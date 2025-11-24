@@ -1,7 +1,8 @@
 //! Compile command - validate project and show deployment plan.
 
 use crate::cli::CliError;
-use crate::client::Client;
+use crate::client::{Client, Profile};
+use crate::client::config::ConfigError;
 use crate::{project, verbose};
 use std::path::Path;
 use std::time::SystemTime;
@@ -16,7 +17,7 @@ use std::time::SystemTime;
 /// - Displays the deployment plan including dependencies and SQL statements
 ///
 /// # Arguments
-/// * `profile_name` - Optional database profile name
+/// * `profile` - Optional database profile (None if offline)
 /// * `offline` - Skip database connection and dependency verification
 /// * `directory` - Project root directory
 ///
@@ -27,13 +28,24 @@ use std::time::SystemTime;
 /// Returns `CliError::Project` if compilation or validation fails
 /// Returns `CliError::Connection` if database connection fails (when not offline)
 pub async fn run(
-    profile_name: Option<&str>,
+    profile: Option<&Profile>,
     offline: bool,
     directory: &Path,
 ) -> Result<project::mir::Project, CliError> {
     let now = SystemTime::now();
     let client = if !offline {
-        Some(Client::connect(profile_name).await?)
+        if let Some(p) = profile {
+            Some(Client::connect_with_profile(p.clone()).await?)
+        } else {
+            return Err(CliError::Connection(
+                crate::client::ConnectionError::Config(
+                    ConfigError::ProfilesNotFound {
+                        project_path: ".mz/profiles.toml".to_string(),
+                        global_path: "~/.mz/profiles.toml".to_string(),
+                    }
+                )
+            ));
+        }
     } else {
         None
     };

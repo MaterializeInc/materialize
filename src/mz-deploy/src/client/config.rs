@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -61,8 +61,14 @@ pub struct ProfilesConfig {
 
 impl ProfilesConfig {
     /// Load profiles configuration, checking project directory first, then global directory
-    pub fn load() -> Result<Self, ConfigError> {
-        let project_path = PathBuf::from(".mz/profiles.toml");
+    ///
+    /// # Arguments
+    /// * `project_directory` - Optional project directory to search for profiles.toml.
+    ///                        If None, uses current working directory.
+    pub fn load(project_directory: Option<&Path>) -> Result<Self, ConfigError> {
+        let project_path = project_directory
+            .map(|dir| dir.join(".mz/profiles.toml"))
+            .unwrap_or_else(|| PathBuf::from(".mz/profiles.toml"));
 
         let global_path = dirs::home_dir()
             .map(|home| home.join(".mz/profiles.toml"))
@@ -164,5 +170,23 @@ impl ProfilesConfig {
 
     pub fn source_path(&self) -> &PathBuf {
         &self.source_path
+    }
+
+    /// Convenience method to load profiles and get a specific profile in one call
+    ///
+    /// # Arguments
+    /// * `project_directory` - Optional project directory to search for profiles.toml
+    /// * `profile_name` - Optional profile name. If None, uses "default"
+    pub fn load_profile(
+        project_directory: Option<&Path>,
+        profile_name: Option<&str>,
+    ) -> Result<Profile, ConfigError> {
+        let config = Self::load(project_directory)?;
+        let profile = if let Some(name) = profile_name {
+            config.get_profile(name)?
+        } else {
+            config.get_default_profile()?
+        };
+        config.expand_env_vars(profile)
     }
 }

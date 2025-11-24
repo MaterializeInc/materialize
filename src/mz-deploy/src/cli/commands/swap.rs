@@ -1,6 +1,7 @@
 //! Swap command - promote staging environment to production via ALTER SWAP.
 
 use crate::cli::{CliError, helpers};
+use crate::client::Profile;
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
 use std::collections::HashSet;
@@ -17,7 +18,7 @@ use std::time::SystemTime;
 /// - Drops old production objects (which have staging suffix after swap)
 ///
 /// # Arguments
-/// * `profile_name` - Optional database profile name
+/// * `profile` - Database profile containing connection information
 /// * `directory` - Project directory
 /// * `stage_name` - Staging environment name
 /// * `force` - Force promotion despite conflicts
@@ -32,7 +33,7 @@ use std::time::SystemTime;
 /// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
 /// Returns `CliError::Connection` for database errors
 pub async fn run(
-    profile_name: Option<&str>,
+    profile: Option<&Profile>,
     _directory: &Path,
     stage_name: &str,
     force: bool,
@@ -41,7 +42,7 @@ pub async fn run(
     println!("Deploying '{}' to production", stage_name);
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile_name).await?;
+    let client = helpers::connect_to_database(profile.unwrap()).await?;
 
     // Initialize deployment tracking infrastructure
     helpers::initialize_deployment_tracking(&client).await?;
