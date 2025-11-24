@@ -175,7 +175,7 @@ where
     Fut::Output: Send + 'static,
 {
     #[allow(clippy::disallowed_methods)]
-    JoinHandle(tokio::spawn(future))
+    JoinHandle::new(tokio::spawn(future))
 }
 
 /// Spawns a new asynchronous task with a name.
@@ -218,7 +218,7 @@ where
     Function: FnOnce() -> Output + Send + 'static,
     Output: Send + 'static,
 {
-    JoinHandle(task::spawn_blocking(function))
+    JoinHandle::new(task::spawn_blocking(function))
 }
 
 /// Runs the provided closure with a name on a thread where blocking is
