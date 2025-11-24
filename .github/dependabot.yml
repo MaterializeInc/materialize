@@ -6,6 +6,8 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -51,6 +53,8 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -66,6 +70,8 @@ updates:
     # of releasing a new version of dbt-materialize when a new version of
     # dbt drops.
     interval: daily
+  cooldown:
+    default-days: 3
   labels: [A-dependencies]
   groups:
     simple:
@@ -79,6 +85,8 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -93,6 +101,8 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -107,6 +117,8 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -121,6 +133,8 @@ updates:
     interval: weekly
     day: sunday
     time: "22:00"
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   groups:
@@ -133,6 +147,8 @@ updates:
   directory: /test/lang/java
   schedule:
     interval: daily
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   allow:
@@ -141,6 +157,8 @@ updates:
   directory: /test/lang/csharp/csharp-npgsql.csproj
   schedule:
     interval: daily
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   allow:
@@ -149,6 +167,8 @@ updates:
   directory: /test/lang/js
   schedule:
     interval: daily
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   allow:
@@ -158,12 +178,16 @@ updates:
   directory: /test/lang/python
   schedule:
     interval: daily
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
 - package-ecosystem: bundler
   directory: /test/lang/ruby
   schedule:
     interval: daily
+  cooldown:
+    default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
   allow:
