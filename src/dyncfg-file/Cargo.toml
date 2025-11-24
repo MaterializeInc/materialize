@@ -12,7 +12,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1.0.100"
-humantime = "2.2.0"
+humantime = "2.3.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore" }
 serde_json = "1.0.145"

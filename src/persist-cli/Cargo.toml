@@ -25,7 +25,7 @@ bytes = { version = "1.10.1", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env"] }
 differential-dataflow = "0.18.0"
 futures = "0.3.31"
-humantime = "2.2.0"
+humantime = "2.3.0"
 mz-dyncfg = { path = "../dyncfg" }
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }

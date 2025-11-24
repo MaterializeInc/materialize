@@ -16,7 +16,7 @@ clap = { version = "4.5.23", features = ["env", "derive"] }
 derivative = "2.2.0"
 futures-core = "0.3.31"
 http = "1.2.0"
-humantime = { version = "2.2.0" }
+humantime = { version = "2.3.0" }
 mz-build-info = { path = "../build-info", default-features = false }
 mz-orchestrator = { path = "../orchestrator", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["tracing", "cli", "test"] }
