@@ -123,7 +123,12 @@ pub(crate) fn set_defaults(
             config_updates.add_dynamic(
                 INJECT_PROXY_PROTOCOL_HEADER_HTTP.name(),
                 mz_dyncfg::ConfigVal::Bool(bool::from_str(v)?),
-            )
+            );
+        } else if k.as_str() == LOGGING_FILTER.name() {
+            config_updates.add_dynamic(
+                LOGGING_FILTER.name(),
+                mz_dyncfg::ConfigVal::String(v.to_owned()),
+            );
         } else {
             return Err(anyhow!("Invalid default config value {k}"));
         }
