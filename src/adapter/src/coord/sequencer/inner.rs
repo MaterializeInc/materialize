@@ -2526,67 +2526,73 @@ impl Coordinator {
         }
     }
 
+    /// Inner method that performs the actual real-time recency timestamp determination.
+    /// This is called by both the old peek sequencing code (via `determine_real_time_recent_timestamp`)
+    /// and the new command handler for `Command::DetermineRealTimeRecentTimestamp`.
+    pub(crate) async fn determine_real_time_recent_timestamp(
+        &self,
+        source_ids: impl Iterator<Item = GlobalId>,
+        real_time_recency_timeout: Duration,
+    ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
+    {
+        let item_ids = source_ids.map(|gid| self.catalog.resolve_item_id(&gid));
+
+        // Find all dependencies transitively because we need to ensure that
+        // RTR queries determine the timestamp from the sources' (i.e.
+        // storage objects that ingest data from external systems) remap
+        // data. We "cheat" a little bit and filter out any IDs that aren't
+        // user objects because we know they are not a RTR source.
+        let mut to_visit = VecDeque::from_iter(item_ids.filter(CatalogItemId::is_user));
+        // If none of the sources are user objects, we don't need to provide
+        // a RTR timestamp.
+        if to_visit.is_empty() {
+            return Ok(None);
+        }
+
+        let mut timestamp_objects = BTreeSet::new();
+
+        while let Some(id) = to_visit.pop_front() {
+            timestamp_objects.insert(id);
+            to_visit.extend(
+                self.catalog()
+                    .get_entry(&id)
+                    .uses()
+                    .into_iter()
+                    .filter(|id| !timestamp_objects.contains(id) && id.is_user()),
+            );
+        }
+        let timestamp_objects = timestamp_objects
+            .into_iter()
+            .flat_map(|item_id| self.catalog().get_entry(&item_id).global_ids())
+            .collect();
+
+        let r = self
+            .controller
+            .determine_real_time_recent_timestamp(timestamp_objects, real_time_recency_timeout)
+            .await?;
+
+        Ok(Some(r))
+    }
+
     /// Checks to see if the session needs a real time recency timestamp and if so returns
     /// a future that will return the timestamp.
-    pub(super) async fn determine_real_time_recent_timestamp(
+    pub(crate) async fn determine_real_time_recent_timestamp_if_needed(
         &self,
         session: &Session,
-        source_ids: impl Iterator<Item = CatalogItemId>,
+        source_ids: impl Iterator<Item = GlobalId>,
     ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
     {
         let vars = session.vars();
 
-        // Ideally this logic belongs inside of
-        // `mz-adapter::coord::timestamp_selection::determine_timestamp`. However, including the
-        // logic in there would make it extremely difficult and inconvenient to pull the waiting off
-        // of the main coord thread.
-        let r = if vars.real_time_recency()
+        if vars.real_time_recency()
             && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
             && !session.contains_read_timestamp()
         {
-            // Find all dependencies transitively because we need to ensure that
-            // RTR queries determine the timestamp from the sources' (i.e.
-            // storage objects that ingest data from external systems) remap
-            // data. We "cheat" a little bit and filter out any IDs that aren't
-            // user objects because we know they are not a RTR source.
-            let mut to_visit = VecDeque::from_iter(source_ids.filter(CatalogItemId::is_user));
-            // If none of the sources are user objects, we don't need to provide
-            // a RTR timestamp.
-            if to_visit.is_empty() {
-                return Ok(None);
-            }
-
-            let mut timestamp_objects = BTreeSet::new();
-
-            while let Some(id) = to_visit.pop_front() {
-                timestamp_objects.insert(id);
-                to_visit.extend(
-                    self.catalog()
-                        .get_entry(&id)
-                        .uses()
-                        .into_iter()
-                        .filter(|id| !timestamp_objects.contains(id) && id.is_user()),
-                );
-            }
-            let timestamp_objects = timestamp_objects
-                .into_iter()
-                .flat_map(|item_id| self.catalog().get_entry(&item_id).global_ids())
-                .collect();
-
-            let r = self
-                .controller
-                .determine_real_time_recent_timestamp(
-                    timestamp_objects,
-                    *vars.real_time_recency_timeout(),
-                )
-                .await?;
-
-            Some(r)
+            self.determine_real_time_recent_timestamp(source_ids, *vars.real_time_recency_timeout())
+                .await
         } else {
-            None
-        };
-
-        Ok(r)
+            Ok(None)
+        }
     }
 
     #[instrument]

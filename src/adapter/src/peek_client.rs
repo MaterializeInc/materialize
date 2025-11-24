@@ -132,7 +132,7 @@ impl PeekClient {
         catalog
     }
 
-    async fn call_coordinator<T, F>(&self, f: F) -> T
+    pub(crate) async fn call_coordinator<T, F>(&self, f: F) -> T
     where
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
