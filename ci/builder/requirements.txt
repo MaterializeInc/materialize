@@ -5,8 +5,8 @@
 # wheels for a wide variety of platforms, including M1 Macs.
 
 black==24.4.2
-boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.40.74
-boto3==1.40.74
+boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.41.2
+boto3==1.41.2
 click==8.1.3
 cryptography==46.0.3
 colored==2.3.1
@@ -18,7 +18,7 @@ ipympl==0.9.8
 ipywidgets==8.1.8
 junit-xml==1.9
 junitparser==4.0.2
-jupyterlab==4.4.10
+jupyterlab==4.5.0
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
@@ -56,13 +56,13 @@ ruff==0.0.292
 # Keep on 1.15.2 for Python 3.10 compatibility
 scipy==1.15.2
 semver==3.0.4
-shtab==1.7.2
+shtab==1.8.0
 sqlparse==0.5.3
 toml==0.10.2
 twine==6.2.0
 types-Markdown==3.10.0.20251106
 types-prettytable==3.4.2.6
-types-psutil==7.0.0.20251116
+types-psutil==7.1.1.20251122
 types-PyMYSQL==1.1.0.20250916
 types-PyYAML==6.0.12.20250915
 types-requests==2.32.4.20250913
