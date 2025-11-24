@@ -1,0 +1,4 @@
+name: mz-deploy
+pre-image:
+  - type: cargo-build
+    bin: mz-deploy
