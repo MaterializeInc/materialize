@@ -19,6 +19,7 @@ use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::EpochMillis;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{self, Plan, QueryWhen};
@@ -300,11 +301,7 @@ impl PeekClient {
 
         rbac::check_plan(
             &conn_catalog,
-            |_id| {
-                // This is only used by `Plan::SideEffectingFunc`, so it is irrelevant for us here
-                // TODO(peek-seq): refactor `check_plan` to make this nicer
-                unreachable!()
-            },
+            None::<fn(u32) -> Option<RoleId>>,
             session,
             &plan,
             Some(target_cluster_id),
