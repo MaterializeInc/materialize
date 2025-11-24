@@ -11533,15 +11533,15 @@ dependencies = [
 
 [[package]]
 name = "sysctl"
-version = "0.6.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "01198a2debb237c62b6826ec7081082d951f46dbb64b0e8c7649a452230d1dfc"
+checksum = "cca424247104946a59dacd27eaad296223b7feec3d168a6dd04585183091eb0b"
 dependencies = [
  "bitflags 2.9.4",
  "byteorder",
  "enum-as-inner",
  "libc",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
  "walkdir",
 ]
 
