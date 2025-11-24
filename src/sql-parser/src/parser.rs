@@ -9248,6 +9248,12 @@ impl<'a> Parser<'a> {
     /// Parse a `EXECUTE` statement, assuming that the `EXECUTE` token
     /// has already been consumed.
     fn parse_execute(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // Check if this is EXECUTE UNIT TEST
+        if self.parse_keywords(&[UNIT, TEST]) {
+            return self.parse_execute_unit_test();
+        }
+
+        // Otherwise parse as regular EXECUTE (prepared statement)
         let name = self.parse_identifier()?;
         let params = if self.consume_token(&Token::LParen) {
             let params = self.parse_comma_separated(Parser::parse_expr)?;
@@ -9257,6 +9263,85 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
         Ok(Statement::Execute(ExecuteStatement { name, params }))
+    }
+
+    /// Parse an `EXECUTE UNIT TEST` statement, assuming that the
+    /// `EXECUTE UNIT TEST` tokens have already been consumed.
+    fn parse_execute_unit_test(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // Parse test name
+        let name = self.parse_identifier()?;
+
+        // Expect FOR keyword
+        self.expect_keyword(FOR)?;
+
+        // Parse target view name
+        let target = self.parse_raw_name()?;
+
+        // Parse MOCK definitions (0 or more)
+        let mut mocks = Vec::new();
+        while self.parse_keyword(MOCK) {
+            let mock_name = self.parse_raw_name()?;
+
+            // Parse column definitions
+            self.expect_token(&Token::LParen)?;
+            let columns = self.parse_comma_separated(|parser| {
+                Ok(ColumnDef {
+                    name: parser.parse_identifier()?,
+                    data_type: parser.parse_data_type()?,
+                    collation: None,
+                    options: vec![],
+                })
+            })?;
+            self.expect_token(&Token::RParen)?;
+
+            // Parse AS
+            self.expect_keyword(AS)?;
+
+            // Parse query
+            let query = self.parse_query()?;
+
+            mocks.push(MockViewDef {
+                name: mock_name,
+                columns,
+                query,
+            });
+
+            // Consume optional comma
+            let _ = self.consume_token(&Token::Comma);
+        }
+
+        // Parse EXPECTED definition (required, exactly 1)
+        self.expect_keyword(EXPECTED)?;
+
+        // Parse column definitions
+        self.expect_token(&Token::LParen)?;
+        let expected_columns = self.parse_comma_separated(|parser| {
+            Ok(ColumnDef {
+                name: parser.parse_identifier()?,
+                data_type: parser.parse_data_type()?,
+                collation: None,
+                options: vec![],
+            })
+        })?;
+        self.expect_token(&Token::RParen)?;
+
+        // Parse AS
+        self.expect_keyword(AS)?;
+
+        // Parse query
+        let expected_query = self.parse_query()?;
+
+        let expected = ExpectedResultDef {
+            columns: expected_columns,
+            query: expected_query,
+        };
+
+        Ok(Statement::ExecuteUnitTest(ExecuteUnitTestStatement {
+            name,
+            target,
+            mocks,
+            expected,
+        }))
     }
 
     /// Parse a `DEALLOCATE` statement, assuming that the `DEALLOCATE` token

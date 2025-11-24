@@ -21,7 +21,7 @@ pub enum CliError {
     Project(#[from] ProjectError),
 
     /// Database connection error
-    #[error("failed to connect to database")]
+    #[error(transparent)]
     Connection(#[from] ConnectionError),
 
     /// Deployment snapshot operation error

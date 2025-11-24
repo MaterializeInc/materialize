@@ -104,6 +104,7 @@ pub enum Statement<T: AstInfo> {
     Close(CloseStatement),
     Prepare(PrepareStatement<T>),
     Execute(ExecuteStatement<T>),
+    ExecuteUnitTest(ExecuteUnitTestStatement<T>),
     Deallocate(DeallocateStatement),
     Raise(RaiseStatement),
     GrantRole(GrantRoleStatement<T>),
@@ -182,6 +183,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Fetch(stmt) => f.write_node(stmt),
             Statement::Prepare(stmt) => f.write_node(stmt),
             Statement::Execute(stmt) => f.write_node(stmt),
+            Statement::ExecuteUnitTest(stmt) => f.write_node(stmt),
             Statement::Deallocate(stmt) => f.write_node(stmt),
             Statement::Raise(stmt) => f.write_node(stmt),
             Statement::GrantRole(stmt) => f.write_node(stmt),
@@ -263,6 +265,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Close => "close",
         StatementKind::Prepare => "prepare",
         StatementKind::Execute => "execute",
+        StatementKind::ExecuteUnitTest => "execute_unit_test",
         StatementKind::Deallocate => "deallocate",
         StatementKind::Raise => "raise",
         StatementKind::GrantRole => "grant_role",
@@ -5010,6 +5013,67 @@ impl<T: AstInfo> AstDisplay for ExecuteStatement<T> {
     }
 }
 impl_display_t!(ExecuteStatement);
+
+/// `EXECUTE UNIT TEST ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExecuteUnitTestStatement<T: AstInfo> {
+    pub name: Ident,
+    pub target: T::ItemName,
+    pub mocks: Vec<MockViewDef<T>>,
+    pub expected: ExpectedResultDef<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExecuteUnitTestStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXECUTE UNIT TEST ");
+        f.write_node(&self.name);
+        f.write_str(" FOR ");
+        f.write_node(&self.target);
+        for mock in &self.mocks {
+            f.write_str(" MOCK ");
+            f.write_node(mock);
+        }
+        f.write_str(" EXPECTED");
+        f.write_node(&self.expected);
+    }
+}
+impl_display_t!(ExecuteUnitTestStatement);
+
+/// Mock view definition for EXECUTE UNIT TEST
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MockViewDef<T: AstInfo> {
+    pub name: T::ItemName,
+    pub columns: Vec<ColumnDef<T>>,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for MockViewDef<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_node(&self.name);
+        f.write_str("(");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(") AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(MockViewDef);
+
+/// Expected result definition for EXECUTE UNIT TEST
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExpectedResultDef<T: AstInfo> {
+    pub columns: Vec<ColumnDef<T>>,
+    pub query: Query<T>,
+}
+
+impl<T: AstInfo> AstDisplay for ExpectedResultDef<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("(");
+        f.write_node(&display::comma_separated(&self.columns));
+        f.write_str(") AS ");
+        f.write_node(&self.query);
+    }
+}
+impl_display_t!(ExpectedResultDef);
 
 /// `DEALLOCATE ...`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

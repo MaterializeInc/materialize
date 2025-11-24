@@ -125,9 +125,7 @@ pub fn parse_test_file(content: &str) -> Result<Vec<UnitTest>, String> {
     Ok(tests)
 }
 
-/// Parse unit test SQL syntax into structured format.
-///
-/// This is a simple parser that assumes well-formed input (happy path only).
+/// Parse unit test SQL syntax into structured format using the SQL parser.
 ///
 /// # Example
 ///
@@ -144,38 +142,63 @@ pub fn parse_test_file(content: &str) -> Result<Vec<UnitTest>, String> {
 /// "#);
 /// ```
 pub fn parse_unit_test(sql: &str) -> Result<UnitTest, String> {
+    use mz_sql_parser::parser::parse_statements;
+    use mz_sql_parser::ast::{Statement, display::AstDisplay};
+
     let sql = sql.trim();
 
-    // Extract test name: EXECUTE UNIT TEST <name>
-    let name_start = sql
-        .find("EXECUTE UNIT TEST")
-        .ok_or("Missing 'EXECUTE UNIT TEST'")?
-        + "EXECUTE UNIT TEST".len();
-    let for_pos = sql.find("FOR").ok_or("Missing 'FOR' clause")?;
-    let name = sql[name_start..for_pos].trim().to_string();
+    // Parse the SQL using the SQL parser
+    let stmts = parse_statements(sql).map_err(|e| format!("Parse error: {}", e))?;
 
-    // Extract target view name: FOR <target>
-    // Find first MOCK or EXPECTED after FOR
-    let after_for = &sql[for_pos + 3..];
-    let mock_pos = after_for.find("MOCK");
-    let expected_pos = after_for.find("EXPECTED");
+    if stmts.len() != 1 {
+        return Err(format!(
+            "Expected exactly one statement, found {}",
+            stmts.len()
+        ));
+    }
 
-    let content_start = match (mock_pos, expected_pos) {
-        (Some(m), Some(e)) => m.min(e),
-        (Some(m), None) => m,
-        (None, Some(e)) => e,
-        (None, None) => return Err("Missing 'MOCK' or 'EXPECTED' clause".to_string()),
+    // Extract the ExecuteUnitTest statement
+    let stmt = &stmts[0];
+    let execute_unit_test = match &stmt.ast {
+        Statement::ExecuteUnitTest(stmt) => stmt,
+        _ => return Err("Expected EXECUTE UNIT TEST statement".to_string()),
     };
 
-    let target_view = after_for[..content_start].trim().to_string();
+    // Convert to UnitTest struct
+    use mz_sql_parser::ast::display::FormatMode;
+    let name = execute_unit_test.name.to_string();
+    let target_view = execute_unit_test.target.to_ast_string(FormatMode::Simple);
 
-    // Extract content from first MOCK/EXPECTED to semicolon
-    let content = &after_for[content_start..];
-    let semicolon_pos = content.find(';').ok_or("Missing terminating ';'")?;
-    let content = &content[..semicolon_pos];
+    // Convert mocks
+    let mocks = execute_unit_test
+        .mocks
+        .iter()
+        .map(|mock| {
+            let fqn = mock.name.to_ast_string(FormatMode::Simple);
+            let columns = mock
+                .columns
+                .iter()
+                .map(|col| (col.name.to_string(), col.data_type.to_ast_string(FormatMode::Simple)))
+                .collect();
+            let query = mock.query.to_ast_string(FormatMode::Simple);
+            MockView {
+                fqn,
+                columns,
+                query,
+            }
+        })
+        .collect();
 
-    // Parse MOCK and EXPECTED statements
-    let (mocks, expected) = parse_mock_and_expected(content)?;
+    // Convert expected
+    let expected = ExpectedResult {
+        columns: execute_unit_test
+            .expected
+            .columns
+            .iter()
+            .map(|col| (col.name.to_string(), col.data_type.to_ast_string(FormatMode::Simple)))
+            .collect(),
+        query: execute_unit_test.expected.query.to_ast_string(FormatMode::Simple),
+    };
 
     Ok(UnitTest {
         name,
