@@ -143,6 +143,10 @@ pub enum PlanError {
         name: String,
         version: String,
     },
+    InvalidSinkFrom {
+        name: String,
+        item_type: CatalogItemType,
+    },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
     Parser(ParserError),
@@ -636,6 +640,9 @@ impl fmt::Display for PlanError {
             },
             Self::InvalidVersion { name, version } => {
                 write!(f, "invalid version {} for {}", version.quoted(), name.quoted())
+            },
+            Self::InvalidSinkFrom { name, item_type } => {
+                write!(f, "{name} is a {item_type}, which cannot be exported as a sink")
             },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)

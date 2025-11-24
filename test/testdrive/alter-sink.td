@@ -133,3 +133,7 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 
 $ kafka-verify-data format=json sink=materialize.public.sink key=false
 {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
+
+> CREATE TABLE t (s text)
+> CREATE VIEW v AS SELECT s, 1 FROM t
+> ALTER SINK sink SET FROM v

@@ -3376,6 +3376,21 @@ fn plan_sink(
 
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
+
+    {
+        use CatalogItemType::*;
+        match from.item_type() {
+            Table | Source | MaterializedView | ContinualTask => {}
+            Sink | View | Index | Type | Func | Secret | Connection => {
+                let name = scx.catalog.minimal_qualification(from.name());
+                return Err(PlanError::InvalidSinkFrom {
+                    name: name.to_string(),
+                    item_type: from.item_type(),
+                });
+            }
+        }
+    }
+
     if from.id().is_system() {
         bail_unsupported!("creating a sink directly on a catalog object");
     }
