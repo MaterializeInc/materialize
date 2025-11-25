@@ -834,7 +834,7 @@ class AWS(State):
             raise ValueError("Never completed")
 
         # Wait a bit for the status to stabilize
-        print("--- Waiting and get status:")
+        print("Waiting and get status:")
         time.sleep(120)
         self._kubectl_debug_namespace("materialize-environment")
 
@@ -843,7 +843,7 @@ class AWS(State):
     def _verify_upgrade_completed(self, expected_tag: str) -> None:
         """Verify that the upgrade has completed by checking the Docker image of environmentd pods."""
         print(
-            f"--- Verifying upgrade to {expected_tag} completed by checking Docker images"
+            f"Verifying upgrade to {expected_tag} completed by checking Docker images"
         )
 
         expected_image = f"materialize/environmentd:{expected_tag}"
@@ -870,54 +870,53 @@ class AWS(State):
                     .split()
                 )
 
-                print(f"--- Found environmentd pod images: {pod_images}")
+                print(f"Found environmentd pod images: {pod_images}")
 
                 # Check if all pods are using the expected image
                 if pod_images and all(image == expected_image for image in pod_images):
                     pod_count = len(pod_images)
                     if pod_count == 1:
                         print(
-                            f"--- Upgrade verification successful: Single pod running {expected_image}"
+                            f"Upgrade verification successful: Single pod running {expected_image}"
                         )
                         return
                     else:
                         print(
-                            f"--- Still {pod_count} environmentd pods running, waiting for rollout to complete..."
+                            f"Still {pod_count} environmentd pods running, waiting for rollout to complete..."
                         )
                 else:
                     print(
-                        f"--- Pod images don't match expected {expected_image}, waiting..."
+                        f"Pod images don't match expected {expected_image}, waiting..."
                     )
 
                 time.sleep(5)
             except subprocess.CalledProcessError as e:
-                print(f"--- Failed to get pod images: {e}")
+                print(f"Failed to get pod images: {e}")
                 time.sleep(5)
         else:
-            print("--- WARNING: Upgrade verification timed out after 5 minutes")
+            print("WARNING: Upgrade verification timed out after 5 minutes")
             # Still log the final state for debugging
-            try:
-                pod_images = (
-                    spawn.capture(
-                        [
-                            "kubectl",
-                            "get",
-                            "pods",
-                            "-l",
-                            "app=environmentd",
-                            "-n",
-                            "materialize-environment",
-                            "-o",
-                            "jsonpath={.items[*].spec.containers[0].image}",
-                        ],
-                        cwd=self.path,
-                    )
-                    .strip()
-                    .split()
+            pod_images = (
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "pods",
+                        "-l",
+                        "app=environmentd",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.items[*].spec.containers[0].image}",
+                    ],
+                    cwd=self.path,
                 )
-                print(f"--- Final pod images: {pod_images}, expected: {expected_image}")
-            except:
-                pass
+                .strip()
+                .split()
+            )
+            raise ValueError(
+                f"Final pod images: {pod_images}, expected: {expected_image}"
+            )
 
 
 def workflow_aws_temporary(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -965,16 +964,17 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
     try:
         if args.run_mz_debug:
             mz_debug_build_thread = build_mz_debug_async()
-        aws.setup(
-            "aws-upgrade",
-            args.setup,
-            str(previous_tags[0]),
-            str(tag),
-            orchestratord_override=args.orchestratord_override,
-        )
-        for previous_tag in previous_tags[1:]:
-            aws.upgrade(str(previous_tag))
-        aws.upgrade(tag)
+        if args.setup:
+            aws.setup(
+                "aws-upgrade",
+                args.setup,
+                str(previous_tags[0]),
+                str(tag),
+                orchestratord_override=args.orchestratord_override,
+            )
+            for previous_tag in previous_tags[1:]:
+                aws.upgrade(str(previous_tag))
+            aws.upgrade(tag)
         if args.test:
             print("--- Running tests")
             # Try waiting a bit, otherwise connection error, should be handled better
