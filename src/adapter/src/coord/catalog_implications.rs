@@ -7,12 +7,12 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Logic related to deriving controller commands from [catalog
-//! changes](ParsedStateUpdate) and applying them to the controller(s).
+//! Logic related to deriving and applying implications from [catalog
+//! changes](ParsedStateUpdate).
 //!
-//! The flow from "raw" catalog changes to [ControllerCommand] works like this:
+//! The flow from "raw" catalog changes to [CatalogImplication] works like this:
 //!
-//! StateUpdateKind -> ParsedStateUpdate -> ControllerCommand
+//! StateUpdateKind -> ParsedStateUpdate -> CatalogImplication
 //!
 //! [ParsedStateUpdate] adds context to a "raw" catalog change
 //! ([StateUpdateKind](mz_catalog::memory::objects::StateUpdateKind)). It
@@ -21,10 +21,10 @@
 //! the other raw changes or to an in-memory Catalog, which represents a
 //! "rollup" of all the raw changes.
 //!
-//! [ControllerCommand] is both the state machine that we use for absorbing
+//! [CatalogImplication] is both the state machine that we use for absorbing
 //! multiple state updates for the same object and the final command that has to
-//! be applied to the controller(s) after absorbing all the state updates in a
-//! given batch of updates.
+//! be applied to in-memory state and or the controller(s) after absorbing all
+//! the state updates in a given batch of updates.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -57,7 +57,7 @@ use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
 use crate::coord::Coordinator;
-use crate::coord::controller_commands::parsed_state_updates::{
+use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
 use crate::coord::statement_logging::StatementLoggingId;
@@ -68,23 +68,23 @@ use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 pub mod parsed_state_updates;
 
 impl Coordinator {
-    /// Applies the given bucket of [ParsedStateUpdate] to our in-memory state
-    /// and our controllers. This will also apply implications that arise from
-    /// catalog changes. For example, peeks and subscribes will be cancelled
-    /// when referenced objects are dropped.
+    /// Applies implications from the given bucket of [ParsedStateUpdate] to our
+    /// in-memory state and our controllers. This also applies transitive
+    /// implications, for example, peeks and subscribes will be cancelled when
+    /// referenced objects are dropped.
     ///
     /// This _requires_ that the given updates are consolidated. There must be
     /// at most one addition and/or one retraction for a given item, as
     /// identified by that items ID type.
     #[instrument(level = "debug")]
-    pub async fn controller_apply_catalog_updates(
+    pub async fn apply_catalog_implications(
         &mut self,
         ctx: Option<&mut ExecuteContext>,
         catalog_updates: Vec<ParsedStateUpdate>,
     ) -> Result<(), AdapterError> {
-        let mut controller_commands: BTreeMap<CatalogItemId, ControllerCommand> = BTreeMap::new();
-        let mut cluster_commands: BTreeMap<ClusterId, ControllerCommand> = BTreeMap::new();
-        let mut cluster_replica_commands: BTreeMap<(ClusterId, ReplicaId), ControllerCommand> =
+        let mut catalog_implications: BTreeMap<CatalogItemId, CatalogImplication> = BTreeMap::new();
+        let mut cluster_commands: BTreeMap<ClusterId, CatalogImplication> = BTreeMap::new();
+        let mut cluster_replica_commands: BTreeMap<(ClusterId, ReplicaId), CatalogImplication> =
             BTreeMap::new();
 
         for update in catalog_updates {
@@ -96,9 +96,9 @@ impl Coordinator {
                     connection: _,
                     parsed_full_name: _,
                 } => {
-                    let entry = controller_commands
+                    let entry = catalog_implications
                         .entry(durable_item.id.clone())
-                        .or_insert_with(|| ControllerCommand::None);
+                        .or_insert_with(|| CatalogImplication::None);
                     entry.absorb(update);
                 }
                 ParsedStateUpdateKind::TemporaryItem {
@@ -107,9 +107,9 @@ impl Coordinator {
                     connection: _,
                     parsed_full_name: _,
                 } => {
-                    let entry = controller_commands
+                    let entry = catalog_implications
                         .entry(durable_item.id.clone())
-                        .or_insert_with(|| ControllerCommand::None);
+                        .or_insert_with(|| CatalogImplication::None);
                     entry.absorb(update);
                 }
                 ParsedStateUpdateKind::Cluster {
@@ -118,7 +118,7 @@ impl Coordinator {
                 } => {
                     let entry = cluster_commands
                         .entry(durable_cluster.id)
-                        .or_insert_with(|| ControllerCommand::None);
+                        .or_insert_with(|| CatalogImplication::None);
                     entry.absorb(update.clone());
                 }
                 ParsedStateUpdateKind::ClusterReplica {
@@ -130,15 +130,15 @@ impl Coordinator {
                             durable_cluster_replica.cluster_id,
                             durable_cluster_replica.replica_id,
                         ))
-                        .or_insert_with(|| ControllerCommand::None);
+                        .or_insert_with(|| CatalogImplication::None);
                     entry.absorb(update.clone());
                 }
             }
         }
 
-        self.controller_apply_commands(
+        self.apply_catalog_implications_inner(
             ctx,
-            controller_commands.into_iter().collect_vec(),
+            catalog_implications.into_iter().collect_vec(),
             cluster_commands.into_iter().collect_vec(),
             cluster_replica_commands.into_iter().collect_vec(),
         )
@@ -148,12 +148,12 @@ impl Coordinator {
     }
 
     #[instrument(level = "debug")]
-    async fn controller_apply_commands(
+    async fn apply_catalog_implications_inner(
         &mut self,
         mut ctx: Option<&mut ExecuteContext>,
-        commands: Vec<(CatalogItemId, ControllerCommand)>,
-        cluster_commands: Vec<(ClusterId, ControllerCommand)>,
-        cluster_replica_commands: Vec<((ClusterId, ReplicaId), ControllerCommand)>,
+        implications: Vec<(CatalogItemId, CatalogImplication)>,
+        cluster_commands: Vec<(ClusterId, CatalogImplication)>,
+        cluster_replica_commands: Vec<((ClusterId, ReplicaId), CatalogImplication)>,
     ) -> Result<(), AdapterError> {
         let mut tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
@@ -188,11 +188,11 @@ impl Coordinator {
         // just a log message. Over the next couple of PRs all of these will go
         // away.
 
-        for (catalog_id, command) in commands {
-            tracing::trace!(?command, "have to apply controller command");
+        for (catalog_id, implication) in implications {
+            tracing::trace!(?implication, "have to apply catalog implication");
 
-            match command {
-                ControllerCommand::Table(ControllerCommandKind::Added(table)) => {
+            match implication {
+                CatalogImplication::Table(CatalogImplicationKind::Added(table)) => {
                     self.handle_create_table(
                         &mut ctx,
                         &mut table_collections_to_create,
@@ -203,19 +203,22 @@ impl Coordinator {
                     )
                     .await?
                 }
-                ControllerCommand::Table(ControllerCommandKind::Altered {
+                CatalogImplication::Table(CatalogImplicationKind::Altered {
                     prev: prev_table,
                     new: new_table,
                 }) => self.handle_alter_table(prev_table, new_table).await?,
 
-                ControllerCommand::Table(ControllerCommandKind::Dropped(table, full_name)) => {
+                CatalogImplication::Table(CatalogImplicationKind::Dropped(table, full_name)) => {
                     let global_ids = table.global_ids();
                     for global_id in global_ids {
                         tables_to_drop.insert((catalog_id, global_id));
                         dropped_item_names.insert(global_id, full_name.clone());
                     }
                 }
-                ControllerCommand::Source(ControllerCommandKind::Added((source, _connection))) => {
+                CatalogImplication::Source(CatalogImplicationKind::Added((
+                    source,
+                    _connection,
+                ))) => {
                     // Get the compaction windows for all sources with this
                     // catalog_id This replicates the logic from
                     // sequence_create_source where it collects all item_ids and
@@ -234,7 +237,7 @@ impl Coordinator {
                     )
                     .await?
                 }
-                ControllerCommand::Source(ControllerCommandKind::Altered {
+                CatalogImplication::Source(CatalogImplicationKind::Altered {
                     prev: (prev_source, _prev_connection),
                     new: (new_source, _new_connection),
                 }) => {
@@ -244,7 +247,7 @@ impl Coordinator {
                         "not handling AlterSource in here yet"
                     );
                 }
-                ControllerCommand::Source(ControllerCommandKind::Dropped(
+                CatalogImplication::Source(CatalogImplicationKind::Dropped(
                     (source, connection),
                     full_name,
                 )) => {
@@ -275,23 +278,23 @@ impl Coordinator {
                         }
                     }
                 }
-                ControllerCommand::Sink(ControllerCommandKind::Added(sink)) => {
+                CatalogImplication::Sink(CatalogImplicationKind::Added(sink)) => {
                     tracing::debug!(?sink, "not handling AddSink in here yet");
                 }
-                ControllerCommand::Sink(ControllerCommandKind::Altered {
+                CatalogImplication::Sink(CatalogImplicationKind::Altered {
                     prev: prev_sink,
                     new: new_sink,
                 }) => {
                     tracing::debug!(?prev_sink, ?new_sink, "not handling AlterSink in here yet");
                 }
-                ControllerCommand::Sink(ControllerCommandKind::Dropped(sink, full_name)) => {
+                CatalogImplication::Sink(CatalogImplicationKind::Dropped(sink, full_name)) => {
                     storage_sink_gids_to_drop.push(sink.global_id());
                     dropped_item_names.insert(sink.global_id(), full_name);
                 }
-                ControllerCommand::Index(ControllerCommandKind::Added(index)) => {
+                CatalogImplication::Index(CatalogImplicationKind::Added(index)) => {
                     tracing::debug!(?index, "not handling AddIndex in here yet");
                 }
-                ControllerCommand::Index(ControllerCommandKind::Altered {
+                CatalogImplication::Index(CatalogImplicationKind::Altered {
                     prev: prev_index,
                     new: new_index,
                 }) => {
@@ -301,14 +304,14 @@ impl Coordinator {
                         "not handling AlterIndex in here yet"
                     );
                 }
-                ControllerCommand::Index(ControllerCommandKind::Dropped(index, full_name)) => {
+                CatalogImplication::Index(CatalogImplicationKind::Dropped(index, full_name)) => {
                     indexes_to_drop.push((index.cluster_id, index.global_id()));
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
-                ControllerCommand::MaterializedView(ControllerCommandKind::Added(mv)) => {
+                CatalogImplication::MaterializedView(CatalogImplicationKind::Added(mv)) => {
                     tracing::debug!(?mv, "not handling AddMaterializedView in here yet");
                 }
-                ControllerCommand::MaterializedView(ControllerCommandKind::Altered {
+                CatalogImplication::MaterializedView(CatalogImplicationKind::Altered {
                     prev: prev_mv,
                     new: new_mv,
                 }) => {
@@ -318,30 +321,30 @@ impl Coordinator {
                         "not handling AlterMaterializedView in here yet"
                     );
                 }
-                ControllerCommand::MaterializedView(ControllerCommandKind::Dropped(
+                CatalogImplication::MaterializedView(CatalogImplicationKind::Dropped(
                     mv,
                     full_name,
                 )) => {
                     materialized_views_to_drop.push((mv.cluster_id, mv.global_id_writes()));
                     dropped_item_names.insert(mv.global_id_writes(), full_name);
                 }
-                ControllerCommand::View(ControllerCommandKind::Added(view)) => {
+                CatalogImplication::View(CatalogImplicationKind::Added(view)) => {
                     tracing::debug!(?view, "not handling AddView in here yet");
                 }
-                ControllerCommand::View(ControllerCommandKind::Altered {
+                CatalogImplication::View(CatalogImplicationKind::Altered {
                     prev: prev_view,
                     new: new_view,
                 }) => {
                     tracing::debug!(?prev_view, ?new_view, "not handling AlterView in here yet");
                 }
-                ControllerCommand::View(ControllerCommandKind::Dropped(view, full_name)) => {
+                CatalogImplication::View(CatalogImplicationKind::Dropped(view, full_name)) => {
                     view_gids_to_drop.push(view.global_id());
                     dropped_item_names.insert(view.global_id(), full_name);
                 }
-                ControllerCommand::ContinualTask(ControllerCommandKind::Added(ct)) => {
+                CatalogImplication::ContinualTask(CatalogImplicationKind::Added(ct)) => {
                     tracing::debug!(?ct, "not handling AddContinualTask in here yet");
                 }
-                ControllerCommand::ContinualTask(ControllerCommandKind::Altered {
+                CatalogImplication::ContinualTask(CatalogImplicationKind::Altered {
                     prev: prev_ct,
                     new: new_ct,
                 }) => {
@@ -351,16 +354,16 @@ impl Coordinator {
                         "not handling AlterContinualTask in here yet"
                     );
                 }
-                ControllerCommand::ContinualTask(ControllerCommandKind::Dropped(
+                CatalogImplication::ContinualTask(CatalogImplicationKind::Dropped(
                     ct,
                     _full_name,
                 )) => {
                     continual_tasks_to_drop.push((catalog_id, ct.cluster_id, ct.global_id()));
                 }
-                ControllerCommand::Secret(ControllerCommandKind::Added(secret)) => {
+                CatalogImplication::Secret(CatalogImplicationKind::Added(secret)) => {
                     tracing::debug!(?secret, "not handling AddSecret in here yet");
                 }
-                ControllerCommand::Secret(ControllerCommandKind::Altered {
+                CatalogImplication::Secret(CatalogImplicationKind::Altered {
                     prev: prev_secret,
                     new: new_secret,
                 }) => {
@@ -370,13 +373,16 @@ impl Coordinator {
                         "not handling AlterSecret in here yet"
                     );
                 }
-                ControllerCommand::Secret(ControllerCommandKind::Dropped(_secret, _full_name)) => {
+                CatalogImplication::Secret(CatalogImplicationKind::Dropped(
+                    _secret,
+                    _full_name,
+                )) => {
                     secrets_to_drop.push(catalog_id);
                 }
-                ControllerCommand::Connection(ControllerCommandKind::Added(connection)) => {
+                CatalogImplication::Connection(CatalogImplicationKind::Added(connection)) => {
                     tracing::debug!(?connection, "not handling AddConnection in here yet");
                 }
-                ControllerCommand::Connection(ControllerCommandKind::Altered {
+                CatalogImplication::Connection(CatalogImplicationKind::Altered {
                     prev: prev_connection,
                     new: new_connection,
                 }) => {
@@ -386,7 +392,7 @@ impl Coordinator {
                         "not handling AlterConnection in here yet"
                     );
                 }
-                ControllerCommand::Connection(ControllerCommandKind::Dropped(
+                CatalogImplication::Connection(CatalogImplicationKind::Dropped(
                     connection,
                     _full_name,
                 )) => {
@@ -403,21 +409,21 @@ impl Coordinator {
                         _ => (),
                     }
                 }
-                ControllerCommand::None => {
+                CatalogImplication::None => {
                     // Nothing to do for None commands
                 }
-                ControllerCommand::Cluster(_) | ControllerCommand::ClusterReplica(_) => {
+                CatalogImplication::Cluster(_) | CatalogImplication::ClusterReplica(_) => {
                     unreachable!("clusters and cluster replicas are handled below")
                 }
-                ControllerCommand::Table(ControllerCommandKind::None)
-                | ControllerCommand::Source(ControllerCommandKind::None)
-                | ControllerCommand::Sink(ControllerCommandKind::None)
-                | ControllerCommand::Index(ControllerCommandKind::None)
-                | ControllerCommand::MaterializedView(ControllerCommandKind::None)
-                | ControllerCommand::View(ControllerCommandKind::None)
-                | ControllerCommand::ContinualTask(ControllerCommandKind::None)
-                | ControllerCommand::Secret(ControllerCommandKind::None)
-                | ControllerCommand::Connection(ControllerCommandKind::None) => {
+                CatalogImplication::Table(CatalogImplicationKind::None)
+                | CatalogImplication::Source(CatalogImplicationKind::None)
+                | CatalogImplication::Sink(CatalogImplicationKind::None)
+                | CatalogImplication::Index(CatalogImplicationKind::None)
+                | CatalogImplication::MaterializedView(CatalogImplicationKind::None)
+                | CatalogImplication::View(CatalogImplicationKind::None)
+                | CatalogImplication::ContinualTask(CatalogImplicationKind::None)
+                | CatalogImplication::Secret(CatalogImplicationKind::None)
+                | CatalogImplication::Connection(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
                 }
             }
@@ -427,10 +433,10 @@ impl Coordinator {
             tracing::trace!(?command, "have cluster command to apply!");
 
             match command {
-                ControllerCommand::Cluster(ControllerCommandKind::Added(cluster)) => {
+                CatalogImplication::Cluster(CatalogImplicationKind::Added(cluster)) => {
                     tracing::debug!(?cluster, "not handling AddCluster in here yet");
                 }
-                ControllerCommand::Cluster(ControllerCommandKind::Altered {
+                CatalogImplication::Cluster(CatalogImplicationKind::Altered {
                     prev: prev_cluster,
                     new: new_cluster,
                 }) => {
@@ -440,11 +446,14 @@ impl Coordinator {
                         "not handling AlterCluster in here yet"
                     );
                 }
-                ControllerCommand::Cluster(ControllerCommandKind::Dropped(cluster, _full_name)) => {
+                CatalogImplication::Cluster(CatalogImplicationKind::Dropped(
+                    cluster,
+                    _full_name,
+                )) => {
                     clusters_to_drop.push(cluster_id);
                     dropped_cluster_names.insert(cluster_id, cluster.name);
                 }
-                ControllerCommand::Cluster(ControllerCommandKind::None) => {
+                CatalogImplication::Cluster(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
                 }
                 command => {
@@ -460,10 +469,10 @@ impl Coordinator {
             tracing::trace!(?command, "have cluster replica command to apply!");
 
             match command {
-                ControllerCommand::ClusterReplica(ControllerCommandKind::Added(replica)) => {
+                CatalogImplication::ClusterReplica(CatalogImplicationKind::Added(replica)) => {
                     tracing::debug!(?replica, "not handling AddClusterReplica in here yet");
                 }
-                ControllerCommand::ClusterReplica(ControllerCommandKind::Altered {
+                CatalogImplication::ClusterReplica(CatalogImplicationKind::Altered {
                     prev: prev_replica,
                     new: new_replica,
                 }) => {
@@ -473,13 +482,13 @@ impl Coordinator {
                         "not handling AlterClusterReplica in here yet"
                     );
                 }
-                ControllerCommand::ClusterReplica(ControllerCommandKind::Dropped(
+                CatalogImplication::ClusterReplica(CatalogImplicationKind::Dropped(
                     _replica,
                     _full_name,
                 )) => {
                     cluster_replicas_to_drop.push((cluster_id, replica_id));
                 }
-                ControllerCommand::ClusterReplica(ControllerCommandKind::None) => {
+                CatalogImplication::ClusterReplica(CatalogImplicationKind::None) => {
                     unreachable!("will never leave None in place");
                 }
                 command => {
@@ -640,7 +649,7 @@ impl Coordinator {
             let TimelineState { read_holds, .. } = self
                 .global_timelines
                 .get(&timeline)
-                .expect("all timeslines have a timestamp oracle");
+                .expect("all timelines have a timestamp oracle");
 
             let empty = read_holds.id_bundle().difference(&id_bundle).is_empty();
             timeline_associations.insert(timeline, (empty, id_bundle));
@@ -805,7 +814,9 @@ impl Coordinator {
                 }
             });
         }
-        .instrument(info_span!("coord::controller_apply_updates::finalize"))
+        .instrument(info_span!(
+            "coord::apply_catalog_implications_inner::finalize"
+        ))
         .await;
 
         Ok(())
@@ -1242,28 +1253,29 @@ impl Coordinator {
     }
 }
 
-/// A state machine for building controller commands from catalog updates.
+/// A state machine for building catalog implications from catalog updates.
 ///
 /// Once all [ParsedStateUpdate] of a timestamp are ingested this is a command
-/// that has to be applied to the controller(s).
+/// that has to potentially be applied to in-memory state and/or the
+/// controller(s).
 #[derive(Debug, Clone)]
-enum ControllerCommand {
+enum CatalogImplication {
     None,
-    Table(ControllerCommandKind<Table>),
-    Source(ControllerCommandKind<(Source, Option<GenericSourceConnection>)>),
-    Sink(ControllerCommandKind<Sink>),
-    Index(ControllerCommandKind<Index>),
-    MaterializedView(ControllerCommandKind<MaterializedView>),
-    View(ControllerCommandKind<View>),
-    ContinualTask(ControllerCommandKind<ContinualTask>),
-    Secret(ControllerCommandKind<Secret>),
-    Connection(ControllerCommandKind<Connection>),
-    Cluster(ControllerCommandKind<Cluster>),
-    ClusterReplica(ControllerCommandKind<ClusterReplica>),
+    Table(CatalogImplicationKind<Table>),
+    Source(CatalogImplicationKind<(Source, Option<GenericSourceConnection>)>),
+    Sink(CatalogImplicationKind<Sink>),
+    Index(CatalogImplicationKind<Index>),
+    MaterializedView(CatalogImplicationKind<MaterializedView>),
+    View(CatalogImplicationKind<View>),
+    ContinualTask(CatalogImplicationKind<ContinualTask>),
+    Secret(CatalogImplicationKind<Secret>),
+    Connection(CatalogImplicationKind<Connection>),
+    Cluster(CatalogImplicationKind<Cluster>),
+    ClusterReplica(CatalogImplicationKind<ClusterReplica>),
 }
 
 #[derive(Debug, Clone)]
-enum ControllerCommandKind<T> {
+enum CatalogImplicationKind<T> {
     /// No operations seen yet.
     None,
     /// Item was added.
@@ -1274,11 +1286,11 @@ enum ControllerCommandKind<T> {
     Altered { prev: T, new: T },
 }
 
-impl<T: Clone> ControllerCommandKind<T> {
+impl<T: Clone> CatalogImplicationKind<T> {
     /// Apply a state transition based on a diff. Returns an error message if
     /// the transition is invalid.
     fn transition(&mut self, item: T, name: Option<String>, diff: StateDiff) -> Result<(), String> {
-        use ControllerCommandKind::*;
+        use CatalogImplicationKind::*;
         use StateDiff::*;
 
         let new_state = match (&*self, diff) {
@@ -1338,11 +1350,11 @@ macro_rules! impl_absorb_method {
             diff: StateDiff,
         ) {
             let state = match self {
-                ControllerCommand::$variant(state) => state,
-                ControllerCommand::None => {
-                    *self = ControllerCommand::$variant(ControllerCommandKind::None);
+                CatalogImplication::$variant(state) => state,
+                CatalogImplication::None => {
+                    *self = CatalogImplication::$variant(CatalogImplicationKind::None);
                     match self {
-                        ControllerCommand::$variant(state) => state,
+                        CatalogImplication::$variant(state) => state,
                         _ => unreachable!(),
                     }
                 }
@@ -1367,8 +1379,8 @@ macro_rules! impl_absorb_method {
     };
 }
 
-impl ControllerCommand {
-    /// Absorbs the given catalog update into this [ControllerCommand], causing
+impl CatalogImplication {
+    /// Absorbs the given catalog update into this [CatalogImplication], causing
     /// a state transition or error.
     fn absorb(&mut self, catalog_update: ParsedStateUpdate) {
         match catalog_update.kind {
@@ -1487,11 +1499,11 @@ impl ControllerCommand {
     // Special case for cluster which uses the cluster's name field.
     fn absorb_cluster(&mut self, cluster: Cluster, diff: StateDiff) {
         let state = match self {
-            ControllerCommand::Cluster(state) => state,
-            ControllerCommand::None => {
-                *self = ControllerCommand::Cluster(ControllerCommandKind::None);
+            CatalogImplication::Cluster(state) => state,
+            CatalogImplication::None => {
+                *self = CatalogImplication::Cluster(CatalogImplicationKind::None);
                 match self {
-                    ControllerCommand::Cluster(state) => state,
+                    CatalogImplication::Cluster(state) => state,
                     _ => unreachable!(),
                 }
             }
@@ -1508,11 +1520,11 @@ impl ControllerCommand {
     // Special case for cluster replica which uses the cluster replica's name field.
     fn absorb_cluster_replica(&mut self, cluster_replica: ClusterReplica, diff: StateDiff) {
         let state = match self {
-            ControllerCommand::ClusterReplica(state) => state,
-            ControllerCommand::None => {
-                *self = ControllerCommand::ClusterReplica(ControllerCommandKind::None);
+            CatalogImplication::ClusterReplica(state) => state,
+            CatalogImplication::None => {
+                *self = CatalogImplication::ClusterReplica(CatalogImplicationKind::None);
                 match self {
-                    ControllerCommand::ClusterReplica(state) => state,
+                    CatalogImplication::ClusterReplica(state) => state,
                     _ => unreachable!(),
                 }
             }
@@ -1558,23 +1570,23 @@ mod tests {
     #[mz_ore::test]
     fn test_item_state_transitions() {
         // Test None -> Added
-        let mut state = ControllerCommandKind::None;
+        let mut state = CatalogImplicationKind::None;
         assert!(
             state
                 .transition("item1".to_string(), None, StateDiff::Addition)
                 .is_ok()
         );
-        assert!(matches!(state, ControllerCommandKind::Added(_)));
+        assert!(matches!(state, CatalogImplicationKind::Added(_)));
 
         // Test Added -> Altered (via retraction)
-        let mut state = ControllerCommandKind::Added("new_item".to_string());
+        let mut state = CatalogImplicationKind::Added("new_item".to_string());
         assert!(
             state
                 .transition("old_item".to_string(), None, StateDiff::Retraction)
                 .is_ok()
         );
         match &state {
-            ControllerCommandKind::Altered { prev, new } => {
+            CatalogImplicationKind::Altered { prev, new } => {
                 // The retracted item is the OLD state
                 assert_eq!(prev, "old_item");
                 // The existing Added item is the NEW state
@@ -1584,7 +1596,7 @@ mod tests {
         }
 
         // Test None -> Dropped
-        let mut state = ControllerCommandKind::None;
+        let mut state = CatalogImplicationKind::None;
         assert!(
             state
                 .transition(
@@ -1594,17 +1606,17 @@ mod tests {
                 )
                 .is_ok()
         );
-        assert!(matches!(state, ControllerCommandKind::Dropped(_, _)));
+        assert!(matches!(state, CatalogImplicationKind::Dropped(_, _)));
 
         // Test Dropped -> Altered (via addition)
-        let mut state = ControllerCommandKind::Dropped("old_item".to_string(), "name".to_string());
+        let mut state = CatalogImplicationKind::Dropped("old_item".to_string(), "name".to_string());
         assert!(
             state
                 .transition("new_item".to_string(), None, StateDiff::Addition)
                 .is_ok()
         );
         match &state {
-            ControllerCommandKind::Altered { prev, new } => {
+            CatalogImplicationKind::Altered { prev, new } => {
                 // The existing Dropped item is the OLD state
                 assert_eq!(prev, "old_item");
                 // The added item is the NEW state
@@ -1614,14 +1626,14 @@ mod tests {
         }
 
         // Test invalid transitions
-        let mut state = ControllerCommandKind::Added("item".to_string());
+        let mut state = CatalogImplicationKind::Added("item".to_string());
         assert!(
             state
                 .transition("item2".to_string(), None, StateDiff::Addition)
                 .is_err()
         );
 
-        let mut state = ControllerCommandKind::Dropped("item".to_string(), "name".to_string());
+        let mut state = CatalogImplicationKind::Dropped("item".to_string(), "name".to_string());
         assert!(
             state
                 .transition("item2".to_string(), None, StateDiff::Retraction)
@@ -1635,7 +1647,7 @@ mod tests {
         let table2 = create_test_table("table2");
 
         // Test None -> AddTable
-        let mut cmd = ControllerCommand::None;
+        let mut cmd = CatalogImplication::None;
         cmd.absorb_table(
             table1.clone(),
             Some("schema.table1".to_string()),
@@ -1643,8 +1655,8 @@ mod tests {
         );
         // Check that we have an Added state
         match &cmd {
-            ControllerCommand::Table(state) => match state {
-                ControllerCommandKind::Added(t) => {
+            CatalogImplication::Table(state) => match state {
+                CatalogImplicationKind::Added(t) => {
                     assert_eq!(t.desc.latest().arity(), table1.desc.latest().arity())
                 }
                 _ => panic!("Expected Added state"),
@@ -1661,8 +1673,8 @@ mod tests {
             StateDiff::Retraction,
         );
         match &cmd {
-            ControllerCommand::Table(state) => match state {
-                ControllerCommandKind::Altered { prev, new } => {
+            CatalogImplication::Table(state) => match state {
+                CatalogImplicationKind::Altered { prev, new } => {
                     // Verify the fix: prev should be the retracted table, new should be the added table
                     assert_eq!(prev.desc.latest().arity(), table2.desc.latest().arity());
                     assert_eq!(new.desc.latest().arity(), table1.desc.latest().arity());
@@ -1673,15 +1685,15 @@ mod tests {
         }
 
         // Test None -> DropTable
-        let mut cmd = ControllerCommand::None;
+        let mut cmd = CatalogImplication::None;
         cmd.absorb_table(
             table1.clone(),
             Some("schema.table1".to_string()),
             StateDiff::Retraction,
         );
         match &cmd {
-            ControllerCommand::Table(state) => match state {
-                ControllerCommandKind::Dropped(t, name) => {
+            CatalogImplication::Table(state) => match state {
+                CatalogImplicationKind::Dropped(t, name) => {
                     assert_eq!(t.desc.latest().arity(), table1.desc.latest().arity());
                     assert_eq!(name, "schema.table1");
                 }
@@ -1697,8 +1709,8 @@ mod tests {
             StateDiff::Addition,
         );
         match &cmd {
-            ControllerCommand::Table(state) => match state {
-                ControllerCommandKind::Altered { prev, new } => {
+            CatalogImplication::Table(state) => match state {
+                CatalogImplicationKind::Altered { prev, new } => {
                     // prev should be the dropped table, new should be the added table
                     assert_eq!(prev.desc.latest().arity(), table1.desc.latest().arity());
                     assert_eq!(new.desc.latest().arity(), table2.desc.latest().arity());
@@ -1713,7 +1725,7 @@ mod tests {
     #[should_panic(expected = "Cannot add an already added object")]
     fn test_invalid_double_add() {
         let table = create_test_table("table");
-        let mut cmd = ControllerCommand::None;
+        let mut cmd = CatalogImplication::None;
 
         // First addition
         cmd.absorb_table(
@@ -1734,7 +1746,7 @@ mod tests {
     #[should_panic(expected = "Cannot drop an already dropped object")]
     fn test_invalid_double_drop() {
         let table = create_test_table("table");
-        let mut cmd = ControllerCommand::None;
+        let mut cmd = CatalogImplication::None;
 
         // First drop
         cmd.absorb_table(

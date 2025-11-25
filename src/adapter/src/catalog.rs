@@ -98,7 +98,7 @@ pub use crate::catalog::transact::{
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
 #[cfg(test)]
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
@@ -1519,9 +1519,8 @@ impl Catalog {
         CatalogError,
     > {
         let updates = self.storage().await.sync_to_current_updates().await?;
-        let (builtin_table_updates, controller_state_updates) =
-            self.state.apply_updates(updates)?;
-        Ok((builtin_table_updates, controller_state_updates))
+        let (builtin_table_updates, catalog_updates) = self.state.apply_updates(updates)?;
+        Ok((builtin_table_updates, catalog_updates))
     }
 }
 

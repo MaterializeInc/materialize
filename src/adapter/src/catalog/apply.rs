@@ -62,7 +62,7 @@ use tracing::{Instrument, info_span, warn};
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
-use crate::coord::controller_commands::parsed_state_updates::{self, ParsedStateUpdate};
+use crate::coord::catalog_implications::parsed_state_updates::{self, ParsedStateUpdate};
 use crate::util::index_sql;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
@@ -108,7 +108,7 @@ impl CatalogState {
         Vec<ParsedStateUpdate>,
     ) {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let mut controller_state_updates = Vec::with_capacity(updates.len());
+        let mut catalog_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
@@ -121,29 +121,28 @@ impl CatalogState {
 
             for update in updates {
                 let next_apply_state = BootstrapApplyState::new(update);
-                let (next_apply_state, (builtin_table_update, controller_state_update)) =
-                    apply_state
-                        .step(
-                            next_apply_state,
-                            self,
-                            &mut retractions,
-                            local_expression_cache,
-                        )
-                        .await;
+                let (next_apply_state, (builtin_table_update, catalog_update)) = apply_state
+                    .step(
+                        next_apply_state,
+                        self,
+                        &mut retractions,
+                        local_expression_cache,
+                    )
+                    .await;
                 apply_state = next_apply_state;
                 builtin_table_updates.extend(builtin_table_update);
-                controller_state_updates.extend(controller_state_update);
+                catalog_updates.extend(catalog_update);
             }
 
             // Apply remaining state.
-            let (builtin_table_update, controller_state_update) = apply_state
+            let (builtin_table_update, catalog_update) = apply_state
                 .apply(self, &mut retractions, local_expression_cache)
                 .await;
             builtin_table_updates.extend(builtin_table_update);
-            controller_state_updates.extend(controller_state_update);
+            catalog_updates.extend(catalog_update);
         }
 
-        (builtin_table_updates, controller_state_updates)
+        (builtin_table_updates, catalog_updates)
     }
 
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
@@ -161,7 +160,7 @@ impl CatalogState {
         CatalogError,
     > {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let mut controller_state_updates = Vec::with_capacity(updates.len());
+        let mut catalog_updates = Vec::with_capacity(updates.len());
 
         // First, consolidate updates. The code that applies parsed state
         // updates _requires_ that the given updates are consolidated. There
@@ -175,16 +174,16 @@ impl CatalogState {
 
         for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
-            let (builtin_table_update, parsed_catalog_updates_op) = self.apply_updates_inner(
+            let (builtin_table_update, catalog_updates_op) = self.apply_updates_inner(
                 updates.collect(),
                 &mut retractions,
                 &mut LocalExpressionCache::Closed,
             )?;
             builtin_table_updates.extend(builtin_table_update);
-            controller_state_updates.extend(parsed_catalog_updates_op);
+            catalog_updates.extend(catalog_updates_op);
         }
 
-        Ok((builtin_table_updates, controller_state_updates))
+        Ok((builtin_table_updates, catalog_updates))
     }
 
     /// It can happen that the sequencing logic creates "fluctuating" updates
@@ -236,7 +235,7 @@ impl CatalogState {
         let mut update_system_config = false;
 
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        let mut controller_state_updates = Vec::new();
+        let mut catalog_updates = Vec::new();
 
         for state_update in updates {
             if matches!(state_update.kind, StateUpdateKind::SystemConfiguration(_)) {
@@ -245,14 +244,13 @@ impl CatalogState {
 
             match state_update.diff {
                 StateDiff::Retraction => {
-                    // We want the parsed controller state updates to match the
-                    // state of the catalog _before_ applying a retraction. So
-                    // that we can still have useful in-memory state to work
-                    // with.
+                    // We want the parsed catalog updates to match the state of
+                    // the catalog _before_ applying a retraction. So that we can
+                    // still have useful in-memory state to work with.
                     if let Some(update) =
                         parsed_state_updates::parse_state_update(self, state_update.clone())
                     {
-                        controller_state_updates.push(update);
+                        catalog_updates.push(update);
                     }
 
                     // We want the builtin table retraction to match the state of the catalog
@@ -283,12 +281,12 @@ impl CatalogState {
                         state_update.diff,
                     ));
 
-                    // We want the parsed controller state updates to match the
-                    // state of the catalog _after_ applying an addition.
+                    // We want the parsed catalog updates to match the state of
+                    // the catalog _after_ applying an addition.
                     if let Some(update) =
                         parsed_state_updates::parse_state_update(self, state_update.clone())
                     {
-                        controller_state_updates.push(update);
+                        catalog_updates.push(update);
                     }
                 }
             }
@@ -298,7 +296,7 @@ impl CatalogState {
             self.system_configuration.dyncfg_updates();
         }
 
-        Ok((builtin_table_updates, controller_state_updates))
+        Ok((builtin_table_updates, catalog_updates))
     }
 
     #[instrument(level = "debug")]

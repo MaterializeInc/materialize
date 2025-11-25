@@ -70,8 +70,8 @@ use crate::catalog::{
     system_object_type_to_audit_object_type,
 };
 use crate::coord::ConnMeta;
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::coord::cluster_scheduling::SchedulingDecision;
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
 use crate::util::ResultExt;
 
 #[derive(Debug, Clone)]
@@ -328,9 +328,8 @@ impl ReplicaCreateDropReason {
 
 pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
-    /// Updates that have been derived from the catalog changes that are
-    /// relevant to controller(s).
-    pub controller_state_updates: Vec<ParsedStateUpdate>,
+    /// Parsed catalog updates from which we will derive catalog implications.
+    pub catalog_updates: Vec<ParsedStateUpdate>,
     pub audit_events: Vec<VersionedEvent>,
 }
 
@@ -425,7 +424,7 @@ impl Catalog {
 
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
-        let mut controller_state_updates = vec![];
+        let mut catalog_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
         let mut tx = storage
@@ -440,7 +439,7 @@ impl Catalog {
             ops,
             temporary_ids,
             &mut builtin_table_updates,
-            &mut controller_state_updates,
+            &mut catalog_updates,
             &mut audit_events,
             &mut tx,
             &self.state,
@@ -476,7 +475,7 @@ impl Catalog {
 
         Ok(TransactionResult {
             builtin_table_updates,
-            controller_state_updates,
+            catalog_updates,
             audit_events,
         })
     }
@@ -504,7 +503,7 @@ impl Catalog {
         state: &CatalogState,
     ) -> Result<Option<CatalogState>, AdapterError> {
         // We come up with new catalog state, builtin state updates, and parsed
-        // catalog updates (for the controller commands) in two phases:
+        // catalog updates (for deriving catalog implications) in two phases:
         //
         // 1. We (cow)-clone catalog state as `preliminary_state` and apply ops
         //    one-by-one. This will give us the full list of updates to apply to
@@ -595,21 +594,22 @@ impl Catalog {
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
             op_updates.extend(temporary_item_updates);
             if !op_updates.is_empty() {
-                let (_op_builtin_table_updates, _op_controller_state_updates) = preliminary_state
-                    .to_mut()
-                    .apply_updates(op_updates.clone())?;
+                let (_op_builtin_table_updates, _op_catalog_updates) =
+                    preliminary_state
+                        .to_mut()
+                        .apply_updates(op_updates.clone())?;
             }
             updates.append(&mut op_updates);
         }
 
         if !updates.is_empty() {
-            let (op_builtin_table_updates, op_controller_state_updates) =
+            let (op_builtin_table_updates, op_catalog_updates) =
                 state.to_mut().apply_updates(updates.clone())?;
             let op_builtin_table_updates = state
                 .to_mut()
                 .resolve_builtin_table_updates(op_builtin_table_updates);
             builtin_table_updates.extend(op_builtin_table_updates);
-            parsed_catalog_updates.extend(op_controller_state_updates);
+            parsed_catalog_updates.extend(op_catalog_updates);
         }
 
         if dry_run_ops.is_empty() {
@@ -626,13 +626,13 @@ impl Catalog {
 
             let updates = tx.get_and_commit_op_updates();
             if !updates.is_empty() {
-                let (op_builtin_table_updates, op_controller_state_updates) =
+                let (op_builtin_table_updates, op_catalog_updates) =
                     state.to_mut().apply_updates(updates.clone())?;
                 let op_builtin_table_updates = state
                     .to_mut()
                     .resolve_builtin_table_updates(op_builtin_table_updates);
                 builtin_table_updates.extend(op_builtin_table_updates);
-                parsed_catalog_updates.extend(op_controller_state_updates);
+                parsed_catalog_updates.extend(op_catalog_updates);
             }
 
             match state {

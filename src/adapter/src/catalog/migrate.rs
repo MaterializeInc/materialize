@@ -41,7 +41,7 @@ use uuid::Uuid;
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
-use crate::coord::controller_commands::parsed_state_updates::ParsedStateUpdate;
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 
 /// Catalog key of the `migration_version` setting.
 ///
@@ -118,7 +118,7 @@ where
 
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
-    pub(crate) controller_state_updates: Vec<ParsedStateUpdate>,
+    pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
     pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, Diff)>,
 }
 
@@ -194,7 +194,7 @@ pub(crate) async fn migrate(
             .expect("known parameter");
     }
 
-    let (mut ast_builtin_table_updates, mut ast_controller_state_updates) = state
+    let (mut ast_builtin_table_updates, mut ast_catalog_updates) = state
         .apply_updates_for_bootstrap(item_updates, local_expr_cache)
         .await;
 
@@ -240,12 +240,12 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     let op_item_updates = tx.get_and_commit_op_updates();
-    let (item_builtin_table_updates, item_controller_state_updates) = state
+    let (item_builtin_table_updates, item_catalog_updates) = state
         .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
         .await;
 
     ast_builtin_table_updates.extend(item_builtin_table_updates);
-    ast_controller_state_updates.extend(item_controller_state_updates);
+    ast_catalog_updates.extend(item_catalog_updates);
 
     info!(
         "migration from catalog version {:?} complete",
@@ -254,7 +254,7 @@ pub(crate) async fn migrate(
 
     Ok(MigrateResult {
         builtin_table_updates: ast_builtin_table_updates,
-        controller_state_updates: ast_controller_state_updates,
+        catalog_updates: ast_catalog_updates,
         post_item_updates,
     })
 }
