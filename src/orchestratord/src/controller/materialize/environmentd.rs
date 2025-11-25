@@ -16,7 +16,7 @@ use std::{
 
 use k8s_openapi::{
     api::{
-        apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
+        apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
             Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
             EnvVarSource, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
@@ -1597,10 +1597,6 @@ fn create_environmentd_statefulset_object(
     let statefulset_spec = StatefulSetSpec {
         replicas: Some(1),
         template: pod_template_spec,
-        update_strategy: Some(StatefulSetUpdateStrategy {
-            rolling_update: None,
-            type_: Some("OnDelete".to_owned()),
-        }),
         service_name: Some(mz.environmentd_service_name()),
         selector: LabelSelector {
             match_expressions: None,
