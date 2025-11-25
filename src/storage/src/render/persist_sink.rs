@@ -1112,7 +1112,18 @@ where
             let validate_part_bounds_on_write = write.validate_part_bounds_on_write();
             let mut todo = VecDeque::new();
 
-            if !validate_part_bounds_on_write {
+            if validate_part_bounds_on_write {
+                // Persist will expect each batch's bounds to match the append-time bounds; write them separately.
+                for done_batch_metadata in done_batches.drain(..) {
+                    in_flight_descriptions.remove(&done_batch_metadata);
+                    let batch_set = in_flight_batches
+                        .remove(&done_batch_metadata)
+                        .unwrap_or_default();
+                    todo.push_back((done_batch_metadata, batch_set));
+                }
+            } else {
+                // Persist should allow batches to be written as part of a single append even when the bounds don't
+                // match exactly; group all eligible batches together.
                 let mut combined_batch_metadata = None;
                 let mut combined_batch_set = BatchSet::default();
                 for done_batch_metadata in done_batches.drain(..) {
@@ -1129,14 +1140,6 @@ where
                 }
                 if let Some(done_batch_metadata) = combined_batch_metadata {
                     todo.push_back((done_batch_metadata, combined_batch_set))
-                }
-            } else {
-                for done_batch_metadata in done_batches.drain(..) {
-                    in_flight_descriptions.remove(&done_batch_metadata);
-                    let batch_set = in_flight_batches
-                        .remove(&done_batch_metadata)
-                        .unwrap_or_default();
-                    todo.push_back((done_batch_metadata, batch_set));
                 }
             };
 
