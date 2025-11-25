@@ -511,20 +511,28 @@ ORDER BY mseh.began_at",
     assert_none!(sl_results[3].rows_returned);
 }
 
-#[mz_ore::test]
-fn test_statement_logging_throttling() {
+fn run_throttling_test(use_prepared_statement: bool) {
     let (server, mut client) = setup_statement_logging_core(
         1.0,
         1.0,
         test_util::TestHarness::default().with_system_parameter_default(
             "statement_logging_target_data_rate".to_string(),
-            "100".to_string(),
+            "1000".to_string(),
         ),
     );
     thread::sleep(Duration::from_secs(2));
-    for _ in 0..100 {
-        client.execute("SELECT 1", &[]).unwrap();
+
+    if use_prepared_statement {
+        let statement = client.prepare("SELECT 1").unwrap();
+        for _ in 0..100 {
+            client.execute(&statement, &[]).unwrap();
+        }
+    } else {
+        for _ in 0..100 {
+            client.execute("SELECT 1", &[]).unwrap();
+        }
     }
+
     thread::sleep(Duration::from_secs(4));
     client.execute("SELECT 2", &[]).unwrap();
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
@@ -536,7 +544,9 @@ fn test_statement_logging_throttling() {
                     "SELECT
     sql,
     throttled_count
-FROM mz_internal.mz_prepared_statement_history mpsh
+FROM mz_internal.mz_statement_execution_history mseh
+JOIN mz_internal.mz_prepared_statement_history mpsh
+ON mseh.prepared_statement_id = mpsh.id
 JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
 ON mpsh.sql_hash = mst.sql_hash
 WHERE sql IN ('SELECT 1', 'SELECT 2')",
@@ -567,6 +577,16 @@ WHERE sql IN ('SELECT 1', 'SELECT 2')",
     );
 
     assert_eq!(logs.len() + usize::cast_from(throttled_count), 101);
+}
+
+#[mz_ore::test]
+fn test_statement_logging_throttling() {
+    run_throttling_test(false);
+}
+
+#[mz_ore::test]
+fn test_statement_logging_prepared_statement_throttling() {
+    run_throttling_test(true);
 }
 
 #[mz_ore::test]
