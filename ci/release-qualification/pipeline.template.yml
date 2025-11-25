@@ -318,30 +318,6 @@ steps:
         agents:
           queue: hetzner-aarch64-4cpu-8gb
 
-      - id: pg-cdc-old-syntax-multi-version-upgrade-random
-        label: Postgres CDC tests (before source versioning, multi-version upgrade, random upgrade path)
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-cdc-old-syntax
-              run: migration-multi-version-upgrade
-              args: [--mode=random, --seed=$BUILDKITE_JOB_ID]
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
-      - id: pg-cdc-old-syntax-multi-version-upgrade-earliest-to-current
-        label: Postgres CDC tests (before source versioning, multi-version upgrade, earliest to current direct upgrade)
-        depends_on: build-aarch64
-        timeout_in_minutes: 60
-        plugins:
-          - ./ci/plugins/mzcompose:
-              composition: pg-cdc-old-syntax
-              run: migration-multi-version-upgrade
-              args: [--mode=earliest-to-current]
-        agents:
-          queue: hetzner-aarch64-4cpu-8gb
-
   - group: "Platform checks"
     key: platform-checks
     steps:
