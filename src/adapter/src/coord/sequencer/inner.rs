@@ -1400,24 +1400,6 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
-        let from = self.catalog().get_entry_by_global_id(&catalog_sink.from);
-        if let Err(e) = self
-            .controller
-            .storage
-            .check_exists(sink.from)
-            .map_err(|e| match e {
-                StorageError::IdentifierMissing(_) => AdapterError::Unstructured(anyhow!(
-                    "{} is a {}, which cannot be exported as a sink",
-                    from.name().item.clone(),
-                    from.item().typ(),
-                )),
-                e => AdapterError::Storage(e),
-            })
-        {
-            ctx.retire(Err(e));
-            return;
-        }
-
         let result = self.catalog_transact(Some(ctx.session()), ops).await;
 
         match result {

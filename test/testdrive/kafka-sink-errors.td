@@ -58,7 +58,7 @@ contains:LEGACY IDs option is not supported
   INTO KAFKA CONNECTION kafka_conn (TOPIC 'testdrive-kafka-sink-errors-${testdrive.seed}')
   FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn
   ENVELOPE DEBEZIUM
-contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
+contains:s1 is a sink, which cannot be exported as a sink
 
 ! CREATE VIEW v2 AS SELECT * FROM s1
 contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
