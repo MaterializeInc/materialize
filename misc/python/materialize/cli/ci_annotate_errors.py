@@ -159,6 +159,8 @@ IGNORE_RE = re.compile(
     | restart-materialized-1\ .*relation\ "consensus"\ does\ not\ exist
     # Will print a separate panic line which will be handled and contains the relevant information (new style)
     | internal\ error:\ unexpected\ panic\ during\ query\ optimization
+    # RQG WMR optimizer soft panic, see database-issues#8741
+    | Arrangements\ depended\ on\ by\ a\ non-delta\ join\ are\ absent
     # redpanda INFO logging
     | [Ll]arger\ sizes\ prevent\ running\ out\ of\ memory
     # Old versions won't support new parameters
