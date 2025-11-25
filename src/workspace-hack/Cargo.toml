@@ -312,7 +312,7 @@ zstd-sys = { version = "2.0.16", features = ["std"] }
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.18", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-idna = { version = "1.0.3" }
+idna = { version = "1.1.0" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
@@ -328,7 +328,7 @@ tower-http = { version = "0.6.6", default-features = false, features = ["follow-
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.18", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-idna = { version = "1.0.3" }
+idna = { version = "1.1.0" }
 linux-raw-sys-274715c4dabd11b0 = { package = "linux-raw-sys", version = "0.9.4", default-features = false, features = ["elf", "errno", "general", "ioctl", "no_std", "prctl"] }
 linux-raw-sys-9fbad63c4bcf4a8f = { package = "linux-raw-sys", version = "0.4.15", default-features = false, features = ["elf", "errno", "general", "if_ether", "ioctl", "net", "netlink", "no_std", "prctl", "std", "xdp"] }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
@@ -344,7 +344,7 @@ tower-http = { version = "0.6.6", default-features = false, features = ["follow-
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.18", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-idna = { version = "1.0.3" }
+idna = { version = "1.1.0" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 ring = { version = "0.17.14", features = ["std"] }
@@ -357,7 +357,7 @@ tower-http = { version = "0.6.6", default-features = false, features = ["follow-
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
 hyper = { version = "0.14.27", default-features = false, features = ["runtime"] }
 hyper-util = { version = "0.1.18", default-features = false, features = ["client-proxy", "client-proxy-system"] }
-idna = { version = "1.0.3" }
+idna = { version = "1.1.0" }
 miniz_oxide = { version = "0.8.9", default-features = false, features = ["simd", "with-alloc"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["vendored"] }
 ring = { version = "0.17.14", features = ["std"] }
