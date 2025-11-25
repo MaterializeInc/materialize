@@ -1589,15 +1589,15 @@ async fn test_github_12546() {
     );
 }
 
+/// Regression test for database-issues#3721.
 #[mz_ore::test]
-fn test_github_12951() {
+fn test_github_3721() {
     let server = test_util::TestHarness::default().start_blocking();
 
     // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster.
     {
         let mut client1 = server.connect(postgres::NoTls).unwrap();
         let mut client2 = server.connect(postgres::NoTls).unwrap();
-        let client2_cancel = client2.cancel_token();
 
         client1
             .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size 'scale=1,workers=1'))")
@@ -1610,7 +1610,6 @@ fn test_github_12951() {
             )
             .unwrap();
         client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
-        client2_cancel.cancel_query(postgres::NoTls).unwrap();
         client2
             .batch_execute("ROLLBACK; SET CLUSTER = default")
             .unwrap();
