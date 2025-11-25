@@ -366,6 +366,10 @@ impl Message {
                 Command::DetermineRealTimeRecentTimestamp { .. } => {
                     "determine-real-time-recent-timestamp"
                 }
+                Command::GetTransactionReadHoldsBundle { .. } => {
+                    "get-transaction-read-holds-bundle"
+                }
+                Command::StoreTransactionReadHolds { .. } => "store-transaction-read-holds",
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
             },

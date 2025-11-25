@@ -31,10 +31,12 @@ use timely::progress::Timestamp as TimelyTimestamp;
 use tracing::{Instrument, debug, error, info};
 
 use crate::AdapterError;
+use crate::catalog::Catalog;
 use crate::coord::Coordinator;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::read_policy::ReadHolds;
 use crate::coord::timestamp_selection::TimestampProvider;
+use crate::optimize::dataflows::DataflowBuilder;
 
 /// An enum describing whether or not a query belongs to a timeline and whether the query can be
 /// affected by the timestamp at which it executes.
@@ -338,103 +340,6 @@ impl Coordinator {
         empty_timelines.into_iter().collect()
     }
 
-    /// Return the set of ids in a timedomain and verify timeline correctness.
-    ///
-    /// When a user starts a transaction, we need to prevent compaction of anything
-    /// they might read from. We use a heuristic of "anything in the same database
-    /// schemas with the same timeline as whatever the first query is".
-    pub(crate) fn timedomain_for<'a, I>(
-        &self,
-        uses_ids: I,
-        timeline_context: &TimelineContext,
-        conn_id: &ConnectionId,
-        compute_instance: ComputeInstanceId,
-    ) -> Result<CollectionIdBundle, AdapterError>
-    where
-        I: IntoIterator<Item = &'a GlobalId>,
-    {
-        // Gather all the used schemas.
-        let mut schemas = BTreeSet::new();
-        for id in uses_ids {
-            let entry = self.catalog().get_entry_by_global_id(id);
-            let name = entry.name();
-            schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
-        }
-
-        let pg_catalog_schema = (
-            ResolvedDatabaseSpecifier::Ambient,
-            SchemaSpecifier::Id(self.catalog().get_pg_catalog_schema_id()),
-        );
-        let system_schemas: Vec<_> = self
-            .catalog()
-            .system_schema_ids()
-            .map(|id| (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)))
-            .collect();
-
-        if system_schemas.iter().any(|s| schemas.contains(s)) {
-            // If any of the system schemas is specified, add the rest of the
-            // system schemas.
-            schemas.extend(system_schemas);
-        } else if !schemas.is_empty() {
-            // Always include the pg_catalog schema, if schemas is non-empty. The pg_catalog schemas is
-            // sometimes used by applications in followup queries.
-            schemas.insert(pg_catalog_schema);
-        }
-
-        // Gather the IDs of all items in all used schemas.
-        let mut collection_ids: BTreeSet<GlobalId> = BTreeSet::new();
-        for (db, schema) in schemas {
-            let schema = self.catalog().get_schema(&db, &schema, conn_id);
-            // Note: We include just the latest `GlobalId` instead of all `GlobalId`s associated
-            // with an object, because older versions will already get included, if there are
-            // objects the depend on them.
-            let global_ids = schema
-                .items
-                .values()
-                .map(|item_id| self.catalog().get_entry(item_id).latest_global_id());
-            collection_ids.extend(global_ids);
-        }
-
-        // Gather the dependencies of those items.
-        let mut id_bundle: CollectionIdBundle = self
-            .index_oracle(compute_instance)
-            .sufficient_collections(collection_ids);
-
-        // Filter out ids from different timelines.
-        for ids in [
-            &mut id_bundle.storage_ids,
-            &mut id_bundle.compute_ids.entry(compute_instance).or_default(),
-        ] {
-            ids.retain(|gid| {
-                let id_timeline_context = self
-                    .catalog()
-                    .validate_timeline_context(vec![*gid])
-                    .expect("single id should never fail");
-                match (&id_timeline_context, &timeline_context) {
-                    // If this id doesn't have a timeline, we can keep it.
-                    (
-                        TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
-                        _,
-                    ) => true,
-                    // If there's no source timeline, we have the option to opt into a timeline,
-                    // so optimistically choose epoch ms. This is useful when the first query in a
-                    // transaction is on a static view.
-                    (
-                        TimelineContext::TimelineDependent(id_timeline),
-                        TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
-                    ) => id_timeline == &Timeline::EpochMilliseconds,
-                    // Otherwise check if timelines are the same.
-                    (
-                        TimelineContext::TimelineDependent(id_timeline),
-                        TimelineContext::TimelineDependent(source_timeline),
-                    ) => id_timeline == source_timeline,
-                }
-            });
-        }
-
-        Ok(id_bundle)
-    }
-
     #[instrument(level = "debug")]
     pub(crate) async fn advance_timelines(&mut self) {
         let global_timelines = std::mem::take(&mut self.global_timelines);
@@ -485,4 +390,101 @@ fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
     const TIMESTAMP_INTERVAL_UPPER_BOUND: u64 = 2;
 
     now.saturating_add(TIMESTAMP_INTERVAL_MS * TIMESTAMP_INTERVAL_UPPER_BOUND)
+}
+
+/// Return the set of ids in a timedomain and verify timeline correctness.
+///
+/// When a user starts a transaction, we need to prevent compaction of anything
+/// they might read from. We use a heuristic of "anything in the same database
+/// schemas with the same timeline as whatever the first query is".
+///
+/// This is a free-standing function that can be called from both the old peek sequencing
+/// and the new frontend peek sequencing.
+pub(crate) fn timedomain_for<'a, I>(
+    catalog: &Catalog,
+    dataflow_builder: &DataflowBuilder,
+    uses_ids: I,
+    timeline_context: &TimelineContext,
+    conn_id: &ConnectionId,
+    compute_instance: ComputeInstanceId,
+) -> Result<CollectionIdBundle, AdapterError>
+where
+    I: IntoIterator<Item = &'a GlobalId>,
+{
+    // Gather all the used schemas.
+    let mut schemas = BTreeSet::new();
+    for id in uses_ids {
+        let entry = catalog.get_entry_by_global_id(id);
+        let name = entry.name();
+        schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
+    }
+
+    let pg_catalog_schema = (
+        ResolvedDatabaseSpecifier::Ambient,
+        SchemaSpecifier::Id(catalog.get_pg_catalog_schema_id()),
+    );
+    let system_schemas: Vec<_> = catalog
+        .system_schema_ids()
+        .map(|id| (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)))
+        .collect();
+
+    if system_schemas.iter().any(|s| schemas.contains(s)) {
+        // If any of the system schemas is specified, add the rest of the
+        // system schemas.
+        schemas.extend(system_schemas);
+    } else if !schemas.is_empty() {
+        // Always include the pg_catalog schema, if schemas is non-empty. The pg_catalog schemas is
+        // sometimes used by applications in followup queries.
+        schemas.insert(pg_catalog_schema);
+    }
+
+    // Gather the IDs of all items in all used schemas.
+    let mut collection_ids: BTreeSet<GlobalId> = BTreeSet::new();
+    for (db, schema) in schemas {
+        let schema = catalog.get_schema(&db, &schema, conn_id);
+        // Note: We include just the latest `GlobalId` instead of all `GlobalId`s associated
+        // with an object, because older versions will already get included, if there are
+        // objects the depend on them.
+        let global_ids = schema
+            .items
+            .values()
+            .map(|item_id| catalog.get_entry(item_id).latest_global_id());
+        collection_ids.extend(global_ids);
+    }
+
+    // Gather the dependencies of those items.
+    let mut id_bundle: CollectionIdBundle = dataflow_builder.sufficient_collections(collection_ids);
+
+    // Filter out ids from different timelines.
+    for ids in [
+        &mut id_bundle.storage_ids,
+        &mut id_bundle.compute_ids.entry(compute_instance).or_default(),
+    ] {
+        ids.retain(|gid| {
+            let id_timeline_context = catalog
+                .validate_timeline_context(vec![*gid])
+                .expect("single id should never fail");
+            match (&id_timeline_context, &timeline_context) {
+                // If this id doesn't have a timeline, we can keep it.
+                (
+                    TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
+                    _,
+                ) => true,
+                // If there's no source timeline, we have the option to opt into a timeline,
+                // so optimistically choose epoch ms. This is useful when the first query in a
+                // transaction is on a static view.
+                (
+                    TimelineContext::TimelineDependent(id_timeline),
+                    TimelineContext::TimestampIndependent | TimelineContext::TimestampDependent,
+                ) => *id_timeline == Timeline::EpochMilliseconds,
+                // Otherwise check if timelines are the same.
+                (
+                    TimelineContext::TimelineDependent(id_timeline),
+                    TimelineContext::TimelineDependent(source_timeline),
+                ) => id_timeline == source_timeline,
+            }
+        });
+    }
+
+    Ok(id_bundle)
 }

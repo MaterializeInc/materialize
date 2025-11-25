@@ -20,10 +20,10 @@ use std::fmt::Debug;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
+use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
 use mz_ore::instrument;
 use mz_repr::{CatalogItemId, GlobalId, Timestamp};
-use mz_sql::session::metadata::SessionMetadata;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::progress::Antichain;
@@ -31,7 +31,6 @@ use timely::progress::Timestamp as TimelyTimestamp;
 
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::timeline::{TimelineContext, TimelineState};
-use crate::session::Session;
 use crate::util::ResultExt;
 
 /// Read holds kept to ensure a set of collections remains readable at some
@@ -101,6 +100,29 @@ impl<T: TimelyTimestamp> ReadHolds<T> {
 
     pub fn remove_compute_collection(&mut self, instance_id: ComputeInstanceId, id: GlobalId) {
         self.compute_holds.remove(&(instance_id, id));
+    }
+
+    /// Returns a new ReadHolds containing only the holds for collections in `id_bundle`.
+    pub fn subset(&self, id_bundle: &CollectionIdBundle) -> ReadHolds<T> {
+        let mut result = ReadHolds::new();
+
+        for id in &id_bundle.storage_ids {
+            if let Some(hold) = self.storage_holds.get(id) {
+                result.storage_holds.insert(*id, hold.clone());
+            }
+        }
+
+        for (instance_id, ids) in &id_bundle.compute_ids {
+            for id in ids {
+                if let Some(hold) = self.compute_holds.get(&(*instance_id, *id)) {
+                    result
+                        .compute_holds
+                        .insert((*instance_id, *id), hold.clone());
+                }
+            }
+        }
+
+        result
     }
 }
 
@@ -394,12 +416,11 @@ impl crate::coord::Coordinator {
     /// is cleaned up.
     pub(crate) fn store_transaction_read_holds(
         &mut self,
-        session: &Session,
+        conn_id: ConnectionId,
         read_holds: ReadHolds<Timestamp>,
     ) {
         use std::collections::btree_map::Entry;
 
-        let conn_id = session.conn_id().clone();
         match self.txn_read_holds.entry(conn_id) {
             Entry::Vacant(v) => {
                 v.insert(read_holds);

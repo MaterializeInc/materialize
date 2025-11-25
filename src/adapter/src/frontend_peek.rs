@@ -37,6 +37,7 @@ use crate::catalog::CatalogState;
 use crate::command::Command;
 use crate::coord::peek::PeekPlan;
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
+use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
@@ -56,14 +57,6 @@ impl PeekClient {
         portal_name: &str,
         session: &mut Session,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        if session.transaction().is_in_multi_statement_transaction() {
-            // TODO(peek-seq): handle multi-statement transactions
-            debug!(
-                "Bailing out from try_frontend_peek_inner, because is_in_multi_statement_transaction"
-            );
-            return Ok(None);
-        }
-
         if session.vars().emit_timestamp_notice() {
             // TODO(peek-seq): implement this. See end of peek_finish
             debug!("Bailing out from try_frontend_peek_inner, because emit_timestamp_notice");
@@ -463,6 +456,16 @@ impl PeekClient {
 
         // ## From sequence_peek_timestamp
 
+        // Warning: This will be false for AS OF queries, even if we are otherwise inside a
+        // multi-statement transaction. (It's also false for FreshestTableWrite, which is currently
+        // only read-then-write queries, which can't be part of multi-statement transactions, so
+        // FreshestTableWrite doesn't matter.)
+        //
+        // TODO(peek-seq): It's not totally clear to me what the intended semantics are for AS OF
+        // queries inside a transaction: We clearly can't use the transaction timestamp, but the old
+        // peek sequencing still does a timedomain validation. The new peek sequencing does not do
+        // timedomain validation for AS OF queries, which seems more natural. But I'm thinking that
+        // it would be the cleanest to just simply disallow AS OF queries inside transactions.
         let in_immediate_multi_stmt_txn = session
             .transaction()
             .in_immediate_multi_stmt_txn(&select_plan.when);
@@ -470,26 +473,80 @@ impl PeekClient {
         // Fetch or generate a timestamp for this query and fetch or acquire read holds.
         let (determination, read_holds) = match session.get_transaction_timestamp_determination() {
             // Use the transaction's timestamp if it exists and this isn't an AS OF query.
+            // (`in_immediate_multi_stmt_txn` is false for AS OF queries.)
             Some(
-                _determination @ TimestampDetermination {
+                determination @ TimestampDetermination {
                     timestamp_context: TimestampContext::TimelineTimestamp { .. },
                     ..
                 },
             ) if in_immediate_multi_stmt_txn => {
-                // TODO(peek-seq): handle multi-statement transactions: return the above
-                // `determination` and the holds from txn_read_holds.
-                return Ok(None);
+                // This is a subsequent (non-AS OF, non-constant) query in a multi-statement
+                // transaction. We now:
+                // - Validate that the query only accesses collections within the transaction's
+                //   timedomain (which we know from the stored read holds).
+                // - Use the transaction's stored timestamp determination.
+                // - Use the (relevant subset of the) transaction's read holds.
+
+                let txn_read_holds_opt = self
+                    .call_coordinator(|tx| Command::GetTransactionReadHoldsBundle {
+                        conn_id: session.conn_id().clone(),
+                        tx,
+                    })
+                    .await;
+
+                if let Some(txn_read_holds) = txn_read_holds_opt {
+                    let allowed_id_bundle = txn_read_holds.id_bundle();
+                    let outside = input_id_bundle.difference(&allowed_id_bundle);
+
+                    // Queries without a timestamp and timeline can belong to any existing timedomain.
+                    if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
+                        let valid_names =
+                            allowed_id_bundle.resolve_names(&*catalog, session.conn_id());
+                        let invalid_names = outside.resolve_names(&*catalog, session.conn_id());
+                        return Err(AdapterError::RelationOutsideTimeDomain {
+                            relations: invalid_names,
+                            names: valid_names,
+                        });
+                    }
+
+                    // Extract the subset of read holds for the collections this query accesses.
+                    let read_holds = txn_read_holds.subset(&input_id_bundle);
+
+                    (determination, read_holds)
+                } else {
+                    // This should never happen: we're in a subsequent query of a multi-statement
+                    // transaction (we have a transaction timestamp), but the coordinator has no
+                    // transaction read holds stored. This indicates a bug in the transaction
+                    // handling.
+                    return Err(AdapterError::Internal(
+                        "Missing transaction read holds for multi-statement transaction"
+                            .to_string(),
+                    ));
+                }
             }
             _ => {
+                // There is no timestamp determination yet for this transaction. Either:
+                // - We are not in a multi-statement transaction.
+                // - This is the first (non-AS OF) query in a multi-statement transaction.
+                // - This is an AS OF query.
+                // - This is a constant query (`TimestampContext::NoTimestamp`).
+
+                let timedomain_bundle;
                 let determine_bundle = if in_immediate_multi_stmt_txn {
-                    // TODO(peek-seq): handle multi-statement transactions
-                    // needs timedomain_for, which needs DataflowBuilder / index oracle / sufficient_collections
-                    debug!(
-                        "Bailing out from try_frontend_peek_inner, because of in_immediate_multi_stmt_txn"
-                    );
-                    return Ok(None);
+                    // This is the first (non-AS OF) query in a multi-statement transaction.
+                    // Determine a timestamp that will be valid for anything in any schema
+                    // referenced by the first query.
+                    timedomain_bundle = timedomain_for(
+                        &*catalog,
+                        &dataflow_builder,
+                        &source_ids,
+                        &timeline_context,
+                        session.conn_id(),
+                        target_cluster_id,
+                    )?;
+                    &timedomain_bundle
                 } else {
-                    // If not in a transaction, use the source.
+                    // Simply use the inputs of the current query.
                     &input_id_bundle
                 };
                 let (determination, read_holds) = self
@@ -504,14 +561,52 @@ impl PeekClient {
                         real_time_recency_ts,
                     )
                     .await?;
+
+                // If this is the first (non-AS OF) query in a multi-statement transaction, store
+                // the read holds in the coordinator, so subsequent queries can validate against
+                // them.
+                if in_immediate_multi_stmt_txn {
+                    self.call_coordinator(|tx| Command::StoreTransactionReadHolds {
+                        conn_id: session.conn_id().clone(),
+                        read_holds: read_holds.clone(),
+                        tx,
+                    })
+                    .await;
+                }
+
                 (determination, read_holds)
             }
         };
 
-        // The old peek sequencing's sequence_peek_timestamp does two more things here:
-        // the txn_read_holds stuff and session.add_transaction_ops. We do these later in the new
-        // peek sequencing code, because at this point we might still bail out from the new peek
-        // sequencing, in which case we don't want the mentioned side effects to happen.
+        // (TODO(peek-seq): The below TODO is copied from the old peek sequencing. We should resolve
+        // this when we decide what to with `AS OF` in transactions.)
+        // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
+        // arbitrary and we don't recall why we did it (possibly an error!). Change this to always
+        // set the transaction ops. Decide and document what our policy should be on AS OF queries.
+        // Maybe they shouldn't be allowed in transactions at all because it's hard to explain
+        // what's going on there. This should probably get a small design document.
+
+        // We only track the peeks in the session if the query doesn't use AS
+        // OF or we're inside an explicit transaction. The latter case is
+        // necessary to support PG's `BEGIN` semantics, whose behavior can
+        // depend on whether or not reads have occurred in the txn.
+        let requires_linearization = (&explain_ctx).into();
+        let mut transaction_determination = determination.clone();
+        if select_plan.when.is_transactional() {
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id: target_cluster_id,
+                requires_linearization,
+            })?;
+        } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
+            // If the query uses AS OF, then ignore the timestamp.
+            transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
+            session.add_transaction_ops(TransactionOps::Peeks {
+                determination: transaction_determination,
+                cluster_id: target_cluster_id,
+                requires_linearization,
+            })?;
+        };
 
         // # From peek_optimize
 
@@ -533,7 +628,6 @@ impl PeekClient {
         let now = catalog.config().now.clone();
         let select_plan = select_plan.clone();
         let target_cluster_name = target_cluster_name.clone();
-        let requires_linearization = (&explain_ctx).into();
         let needs_plan_insights = explain_ctx.needs_plan_insights();
         let determination_for_pushdown = if matches!(explain_ctx, ExplainContext::Pushdown) {
             // This is a hairy data structure, so avoid this clone if we are not in
@@ -843,38 +937,6 @@ impl PeekClient {
                     session,
                     &df_meta.optimizer_notices,
                 );
-
-                // # We do the second half of sequence_peek_timestamp, as mentioned above.
-
-                // TODO(peek-seq): txn_read_holds stuff. Add SessionClient::txn_read_holds.
-
-                // (This TODO is copied from the old peek sequencing.)
-                // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
-                // arbitrary and we don't recall why we did it (possibly an error!). Change this to always
-                // set the transaction ops. Decide and document what our policy should be on AS OF queries.
-                // Maybe they shouldn't be allowed in transactions at all because it's hard to explain
-                // what's going on there. This should probably get a small design document.
-
-                // We only track the peeks in the session if the query doesn't use AS
-                // OF or we're inside an explicit transaction. The latter case is
-                // necessary to support PG's `BEGIN` semantics, whose behavior can
-                // depend on whether or not reads have occurred in the txn.
-                let mut transaction_determination = determination.clone();
-                if select_plan.when.is_transactional() {
-                    session.add_transaction_ops(TransactionOps::Peeks {
-                        determination: transaction_determination,
-                        cluster_id: target_cluster_id,
-                        requires_linearization,
-                    })?;
-                } else if matches!(session.transaction(), &TransactionStatus::InTransaction(_)) {
-                    // If the query uses AS OF, then ignore the timestamp.
-                    transaction_determination.timestamp_context = TimestampContext::NoTimestamp;
-                    session.add_transaction_ops(TransactionOps::Peeks {
-                        determination: transaction_determination,
-                        cluster_id: target_cluster_id,
-                        requires_linearization,
-                    })?;
-                };
 
                 // TODO(peek-seq): move this up to the beginning of the function when we have eliminated all
                 // the fallbacks to the old peek sequencing. Currently, it has to be here to avoid

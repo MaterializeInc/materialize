@@ -1016,6 +1016,8 @@ impl SessionClient {
                 | Command::GetComputeInstanceClient { .. }
                 | Command::GetOracle { .. }
                 | Command::DetermineRealTimeRecentTimestamp { .. }
+                | Command::GetTransactionReadHoldsBundle { .. }
+                | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
                 | Command::ExecuteCopyTo { .. } => {}
             };

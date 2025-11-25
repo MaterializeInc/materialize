@@ -9,13 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
 use mz_repr::GlobalId;
-use mz_sql::session::metadata::SessionMetadata;
 use serde::{Deserialize, Serialize};
 
-use crate::coord::Coordinator;
-use crate::session::Session;
+use crate::catalog::Catalog;
 
 /// A bundle of storage and compute collection identifiers.
 #[derive(Deserialize, Debug, Default, Clone, Serialize)]
@@ -118,23 +117,17 @@ impl CollectionIdBundle {
             .copied()
             .chain(self.compute_ids.values().flat_map(BTreeSet::iter).copied())
     }
-}
 
-impl Coordinator {
-    /// Resolves the full name from the corresponding catalog entry for each item in `id_bundle`.
+    /// Resolves the full name from the corresponding catalog entry for each item in this bundle.
     /// If an item in the bundle does not exist in the catalog, it's not included in the result.
-    pub fn resolve_collection_id_bundle_names(
-        &self,
-        session: &Session,
-        id_bundle: &CollectionIdBundle,
-    ) -> Vec<String> {
-        let mut names: Vec<_> = id_bundle
+    pub fn resolve_names(&self, catalog: &Catalog, conn_id: &ConnectionId) -> Vec<String> {
+        let mut names: Vec<_> = self
             .iter()
             // This could filter out an entry that has been replaced in another transaction.
-            .filter_map(|id| self.catalog().try_get_entry_by_global_id(&id))
+            .filter_map(|id| catalog.try_get_entry_by_global_id(&id))
             .map(|item| {
-                self.catalog()
-                    .resolve_full_name(item.name(), Some(session.conn_id()))
+                catalog
+                    .resolve_full_name(item.name(), Some(conn_id))
                     .to_string()
             })
             .collect();

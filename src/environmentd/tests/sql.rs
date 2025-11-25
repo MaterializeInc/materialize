@@ -2423,6 +2423,8 @@ fn test_emit_tracing_notice() {
         .with_system_parameter_default("log_filter".to_string(), "info".to_string())
         .start_blocking();
 
+    server.disable_feature_flags(&["enable_frontend_peek_sequencing"]);
+
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let mut client = server
@@ -3601,7 +3603,10 @@ async fn test_constant_materialized_view() {
 async fn test_explain_timestamp_blocking() {
     let server = test_util::TestHarness::default().start().await;
     server
-        .enable_feature_flags(&["enable_refresh_every_mvs"])
+        .enable_feature_flags(&[
+            "enable_refresh_every_mvs",
+            "enable_frontend_peek_sequencing",
+        ])
         .await;
     let client = server.connect().await.unwrap();
     // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
