@@ -2389,20 +2389,33 @@ steps:
     key: orchestratord-test
     steps:
       - id: orchestratord-defaults
-        label: "Orchestratord test (defaults from documentation)"
+        label: "Orchestratord + documentation defaults"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
-              run: defaults
+              run: documentation-defaults
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-rolling-upgrade-downtime
+        label: "Orchestratord + rolling upgrade downtime"
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 120
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: upgrade-downtime
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-default-properties
-        label: "Orchestratord test (defaults for properties)"
+        label: "Orchestratord + defaults for properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
@@ -2415,7 +2428,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-individual
-        label: "Orchestratord test (individual properties)"
+        label: "Orchestratord + individual properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
@@ -2428,7 +2441,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-combine
-        label: "Orchestratord test (combine properties)"
+        label: "Orchestratord + combine properties"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: build-aarch64
         timeout_in_minutes: 120
@@ -2441,7 +2454,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-individual
-        label: "Orchestratord test (upgrade, individual props)"
+        label: "Orchestratord + upgrade, individual props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
@@ -2454,7 +2467,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-combine
-        label: "Orchestratord test (upgrade, combine props)"
+        label: "Orchestratord + upgrade, combine props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
@@ -2467,7 +2480,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-chain-individual
-        label: "Orchestratord test (upgrade chain, individual props)"
+        label: "Orchestratord + upgrade chain, individual props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
@@ -2480,7 +2493,7 @@ steps:
           queue: hetzner-aarch64-16cpu-32gb
 
       - id: orchestratord-upgrade-chain-combine
-        label: "Orchestratord test (upgrade chain, combine props)"
+        label: "Orchestratord + upgrade chain, combine props"
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 120
