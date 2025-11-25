@@ -12,7 +12,7 @@
 
 //! Logic for executing a planned SQL query.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -40,17 +40,21 @@ use mz_sql::plan::{
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars;
 use mz_sql::session::vars::SessionVars;
 use mz_sql_parser::ast::{Raw, Statement};
 use mz_storage_client::client::TableData;
 use mz_storage_client::storage_collections::StorageCollections;
 use mz_storage_types::connections::inline::IntoInlineConnection;
+use mz_storage_types::controller::StorageError;
 use mz_storage_types::stats::RelationPartStats;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNoticeApi, OptimizerNoticeKind, RawOptimizerNotice};
+use mz_transform::{EmptyStatisticsOracle, StatisticsOracle};
 use timely::progress::Antichain;
+use timely::progress::Timestamp as TimelyTimestamp;
 use tokio::sync::oneshot;
-use tracing::{Instrument, Level, Span, event};
+use tracing::{Instrument, Level, Span, event, warn};
 
 use crate::ExecuteContext;
 use crate::catalog::{Catalog, CatalogState};
@@ -183,14 +187,14 @@ impl Coordinator {
 
             if let Err(e) = rbac::check_plan(
                 &session_catalog,
-                |id| {
+                Some(|id| {
                     // We use linear search through active connections if needed, which is fine
                     // because the RBAC check will call the closure at most once.
                     self.active_conns()
                         .into_iter()
                         .find(|(conn_id, _)| conn_id.unhandled() == id)
                         .map(|(_, conn_meta)| *conn_meta.authenticated_role_id())
-                },
+                }),
                 ctx.session(),
                 &plan,
                 target_cluster_id,
@@ -1204,4 +1208,89 @@ pub(crate) async fn explain_plan_inner(
         .await?;
 
     Ok(rows)
+}
+
+/// Creates a statistics oracle for query optimization.
+///
+/// This is a free-standing function that can be called from both the old peek sequencing
+/// and the new frontend peek sequencing.
+pub(crate) async fn statistics_oracle(
+    session: &Session,
+    source_ids: &BTreeSet<GlobalId>,
+    query_as_of: &Antichain<Timestamp>,
+    is_oneshot: bool,
+    system_config: &vars::SystemVars,
+    storage_collections: &dyn StorageCollections<Timestamp = Timestamp>,
+) -> Result<Box<dyn StatisticsOracle>, AdapterError> {
+    if !session.vars().enable_session_cardinality_estimates() {
+        return Ok(Box::new(EmptyStatisticsOracle));
+    }
+
+    let timeout = if is_oneshot {
+        // TODO(mgree): ideally, we would shorten the timeout even more if we think the query could take the fast path
+        system_config.optimizer_oneshot_stats_timeout()
+    } else {
+        system_config.optimizer_stats_timeout()
+    };
+
+    let cached_stats = mz_ore::future::timeout(
+        timeout,
+        CachedStatisticsOracle::new(source_ids, query_as_of, storage_collections),
+    )
+    .await;
+
+    match cached_stats {
+        Ok(stats) => Ok(Box::new(stats)),
+        Err(mz_ore::future::TimeoutError::DeadlineElapsed) => {
+            warn!(
+                is_oneshot = is_oneshot,
+                "optimizer statistics collection timed out after {}ms",
+                timeout.as_millis()
+            );
+
+            Ok(Box::new(EmptyStatisticsOracle))
+        }
+        Err(mz_ore::future::TimeoutError::Inner(e)) => Err(AdapterError::Storage(e)),
+    }
+}
+
+#[derive(Debug)]
+struct CachedStatisticsOracle {
+    cache: BTreeMap<GlobalId, usize>,
+}
+
+impl CachedStatisticsOracle {
+    pub async fn new<T: TimelyTimestamp>(
+        ids: &BTreeSet<GlobalId>,
+        as_of: &Antichain<T>,
+        storage_collections: &dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T>,
+    ) -> Result<Self, StorageError<T>> {
+        let mut cache = BTreeMap::new();
+
+        for id in ids {
+            let stats = storage_collections.snapshot_stats(*id, as_of.clone()).await;
+
+            match stats {
+                Ok(stats) => {
+                    cache.insert(*id, stats.num_updates);
+                }
+                Err(StorageError::IdentifierMissing(id)) => {
+                    ::tracing::debug!("no statistics for {id}")
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        Ok(Self { cache })
+    }
+}
+
+impl StatisticsOracle for CachedStatisticsOracle {
+    fn cardinality_estimate(&self, id: GlobalId) -> Option<usize> {
+        self.cache.get(&id).map(|estimate| *estimate)
+    }
+
+    fn as_map(&self) -> BTreeMap<GlobalId, usize> {
+        self.cache.clone()
+    }
 }

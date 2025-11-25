@@ -19,6 +19,7 @@ use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::EpochMillis;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
+use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{self, Plan, QueryWhen};
@@ -35,7 +36,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::catalog::CatalogState;
 use crate::command::Command;
 use crate::coord::peek::PeekPlan;
-use crate::coord::sequencer::eval_copy_to_uri;
+use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
@@ -300,11 +301,7 @@ impl PeekClient {
 
         rbac::check_plan(
             &conn_catalog,
-            |_id| {
-                // This is only used by `Plan::SideEffectingFunc`, so it is irrelevant for us here
-                // TODO(peek-seq): refactor `check_plan` to make this nicer
-                unreachable!()
-            },
+            None::<fn(u32) -> Option<RoleId>>,
             session,
             &plan,
             Some(target_cluster_id),
@@ -518,14 +515,16 @@ impl PeekClient {
 
         // # From peek_optimize
 
-        if session.vars().enable_session_cardinality_estimates() {
-            debug!(
-                "Bailing out from try_frontend_peek_inner, because of enable_session_cardinality_estimates"
-            );
-            return Ok(None);
-        }
-        // TODO(peek-seq): wire up statistics
-        let stats = Box::new(EmptyStatisticsOracle);
+        let stats = statistics_oracle(
+            session,
+            &source_ids,
+            &determination.timestamp_context.antichain(),
+            true,
+            catalog.system_config(),
+            &*self.storage_collections,
+        )
+        .await
+        .unwrap_or_else(|_| Box::new(EmptyStatisticsOracle));
 
         // Generate data structures that can be moved to another task where we will perform possibly
         // expensive optimizations.

@@ -337,7 +337,8 @@ pub fn check_usage(
 pub fn check_plan(
     catalog: &impl SessionCatalog,
     // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
-    active_conns: impl FnOnce(u32) -> Option<RoleId>,
+    // Only required for Plan::SideEffectingFunc; can be None for other plan types.
+    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
@@ -377,7 +378,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: impl FnOnce(u32) -> Option<RoleId>,
+    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -1464,11 +1465,12 @@ fn generate_rbac_requirements(
         },
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
-                SideEffectingFunc::PgCancelBackend { connection_id } => {
-                    active_conns(*connection_id)
-                        .map(|x| [x].into())
-                        .unwrap_or_default()
-                }
+                SideEffectingFunc::PgCancelBackend { connection_id } => active_conns
+                    .expect("active_conns is required for Plan::SideEffectingFunc")(
+                    *connection_id
+                )
+                .map(|x| [x].into())
+                .unwrap_or_default(),
             };
             RbacRequirements {
                 role_membership,
