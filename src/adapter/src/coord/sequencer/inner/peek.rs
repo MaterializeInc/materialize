@@ -8,10 +8,8 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::str::FromStr;
 use std::sync::Arc;
 
-use http::Uri;
 use itertools::Either;
 use mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION;
 use mz_catalog::memory::objects::CatalogItem;
@@ -21,12 +19,12 @@ use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
+use mz_repr::{Datum, GlobalId, Timestamp};
 use mz_sql::ast::{ExplainStage, Statement};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::QueryWhen;
-use mz_sql::plan::{self, HirScalarExpr};
+use mz_sql::plan::{self};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use tokio::sync::oneshot;
@@ -38,7 +36,7 @@ use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::sequencer::inner::return_if_err;
-use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
+use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices, eval_copy_to_uri};
 use crate::coord::timeline::TimelineContext;
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
@@ -53,7 +51,6 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
@@ -165,32 +162,10 @@ impl Coordinator {
         }: plan::CopyToPlan,
         target_cluster: TargetCluster,
     ) {
-        let eval_uri = |to: HirScalarExpr| -> Result<Uri, AdapterError> {
-            let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
-                session: ctx.session(),
-                catalog_state: self.catalog().state(),
-            };
-            let mut to = to.lower_uncorrelated()?;
-            prep_scalar_expr(&mut to, style)?;
-            let temp_storage = RowArena::new();
-            let evaled = to.eval(&[], &temp_storage)?;
-            if evaled == Datum::Null {
-                coord_bail!("COPY TO target value can not be null");
-            }
-            let to_url = match Uri::from_str(evaled.unwrap_str()) {
-                Ok(url) => {
-                    if url.scheme_str() != Some("s3") {
-                        coord_bail!("only 's3://...' urls are supported as COPY TO target");
-                    }
-                    url
-                }
-                Err(e) => coord_bail!("could not parse COPY TO target url: {}", e),
-            };
-            Ok(to_url)
-        };
-
-        let uri = return_if_err!(eval_uri(to), ctx);
+        let uri = return_if_err!(
+            eval_copy_to_uri(to, ctx.session(), self.catalog().state()),
+            ctx
+        );
 
         let stage = return_if_err!(
             self.peek_validate(

@@ -367,6 +367,7 @@ impl Message {
                     "determine-real-time-recent-timestamp"
                 }
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
+                Command::ExecuteCopyTo { .. } => "execute-copy-to",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,

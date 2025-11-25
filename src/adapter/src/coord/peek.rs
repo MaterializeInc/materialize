@@ -28,6 +28,7 @@ use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
+use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_controller_types::ClusterId;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
@@ -37,6 +38,7 @@ use mz_expr::{
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
+use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::Schemas;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -49,10 +51,13 @@ use mz_repr::{
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use tokio::sync::oneshot;
+use tracing::{Instrument, Span};
 use uuid::Uuid;
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::optimize::OptimizerError;
+use crate::optimize::{self, OptimizerError};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
@@ -1236,6 +1241,117 @@ impl crate::coord::Coordinator {
             max_query_result_size,
         )
         .await
+    }
+
+    /// Implements a COPY TO command by validating S3 connection, shipping the dataflow,
+    /// and spawning a background task to wait for completion.
+    /// This is called from the command handler for ExecuteCopyTo.
+    ///
+    /// This method inlines the logic from peek_copy_to_preflight and peek_copy_to_dataflow
+    /// to avoid the complexity of the staging mechanism for the frontend peek sequencing path.
+    ///
+    /// This method does NOT block waiting for completion. Instead, it spawns a background task that
+    /// will send the response through the provided tx channel when the COPY TO completes.
+    /// All errors (setup or execution) are sent through tx.
+    pub(crate) async fn implement_copy_to(
+        &mut self,
+        global_lir_plan: optimize::copy_to::GlobalLirPlan,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    ) {
+        // Helper to send error and return early
+        let send_err = |tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+                        e: AdapterError| {
+            let _ = tx.send(Err(e));
+        };
+
+        let sink_id = global_lir_plan.sink_id();
+
+        // # Inlined from peek_copy_to_preflight
+
+        let connection_context = self.connection_context().clone();
+        let sinks = &global_lir_plan.df_desc().sink_exports;
+
+        if sinks.len() != 1 {
+            send_err(
+                tx,
+                AdapterError::Internal("expected exactly one copy to s3 sink".into()),
+            );
+            return;
+        }
+        let (sink_id_check, sink_desc) = sinks
+            .first_key_value()
+            .expect("known to be exactly one copy to s3 sink");
+        assert_eq!(sink_id, *sink_id_check);
+
+        match &sink_desc.connection {
+            ComputeSinkConnection::CopyToS3Oneshot(conn) => {
+                if let Err(e) = mz_storage_types::sinks::s3_oneshot_sink::preflight(
+                    connection_context,
+                    &conn.aws_connection,
+                    &conn.upload_info,
+                    conn.connection_id,
+                    sink_id,
+                )
+                .await
+                {
+                    send_err(tx, e.into());
+                    return;
+                }
+            }
+            _ => {
+                send_err(
+                    tx,
+                    AdapterError::Internal("expected copy to s3 oneshot sink".into()),
+                );
+                return;
+            }
+        }
+
+        // # Inlined from peek_copy_to_dataflow
+
+        let (df_desc, _df_meta) = global_lir_plan.unapply();
+
+        // Create and register ActiveCopyTo.
+        // Note: sink_tx/sink_rx is the channel for the compute sink to notify completion
+        // This is different from the command's tx which sends the response to the client
+        let (sink_tx, sink_rx) = oneshot::channel();
+        let active_copy_to = ActiveCopyTo {
+            conn_id: conn_id.clone(),
+            tx: sink_tx,
+            cluster_id: compute_instance,
+            depends_on: source_ids,
+        };
+
+        // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
+        drop(
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
+                .await,
+        );
+
+        self.ship_dataflow(df_desc, compute_instance, target_replica)
+            .await;
+
+        // Spawn background task to wait for completion
+        // We must NOT await sink_rx here directly, as that would block the coordinator's main task
+        // from processing the completion message. Instead, we spawn a background task that will
+        // send the result through tx when the COPY TO completes.
+        let span = Span::current();
+        task::spawn(
+            || "copy to completion",
+            async move {
+                let res = sink_rx.await;
+                let result = match res {
+                    Ok(res) => res,
+                    Err(_) => Err(AdapterError::Internal("copy to sender dropped".into())),
+                };
+                let _ = tx.send(result);
+            }
+            .instrument(span),
+        );
     }
 
     /// Constructs an [`ExecuteResponse`] that that will send some rows to the

@@ -13,11 +13,13 @@
 //! Logic for executing a planned SQL query.
 
 use std::collections::BTreeSet;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use futures::FutureExt;
 use futures::future::LocalBoxFuture;
 use futures::stream::FuturesOrdered;
+use http::Uri;
 use inner::return_if_err;
 use maplit::btreemap;
 use mz_catalog::memory::objects::Cluster;
@@ -28,12 +30,13 @@ use mz_ore::cast::CastFrom;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::stats::SnapshotPartStats;
 use mz_repr::explain::{ExprHumanizerExt, TransientItem};
-use mz_repr::{CatalogItemId, Diff, GlobalId, IntoRowIterator, Row, Timestamp};
+use mz_repr::{CatalogItemId, Datum, Diff, GlobalId, IntoRowIterator, Row, RowArena, Timestamp};
 use mz_sql::catalog::{CatalogError, SessionCatalog};
 use mz_sql::names::ResolvedIds;
 use mz_sql::plan::{
     self, AbortTransactionPlan, CommitTransactionPlan, CopyFromSource, CreateRolePlan,
-    CreateSourcePlanBundle, FetchPlan, MutationKind, Params, Plan, PlanKind, RaisePlan,
+    CreateSourcePlanBundle, FetchPlan, HirScalarExpr, MutationKind, Params, Plan, PlanKind,
+    RaisePlan,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -50,7 +53,7 @@ use tokio::sync::oneshot;
 use tracing::{Instrument, Level, Span, event};
 
 use crate::ExecuteContext;
-use crate::catalog::Catalog;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::{Command, ExecuteResponse, Response};
 use crate::coord::appends::{DeferredOp, DeferredPlan};
 use crate::coord::validity::PlanValidity;
@@ -61,6 +64,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::optimize::peek;
 use crate::session::{
     EndTransactionAction, Session, StateRevision, TransactionOps, TransactionStatus, WriteOp,
@@ -1008,6 +1012,39 @@ pub(crate) fn emit_optimizer_notices(
             .optimization_notices(&[kind.metric_label()])
             .inc_by(1);
     }
+}
+
+/// Evaluates a COPY TO target URI expression and validates it.
+///
+/// This function is shared between the old peek sequencing (sequence_copy_to)
+/// and the new frontend peek sequencing to avoid code duplication.
+pub fn eval_copy_to_uri(
+    to: HirScalarExpr,
+    session: &Session,
+    catalog_state: &CatalogState,
+) -> Result<Uri, AdapterError> {
+    let style = ExprPrepStyle::OneShot {
+        logical_time: EvalTime::NotAvailable,
+        session,
+        catalog_state,
+    };
+    let mut to = to.lower_uncorrelated()?;
+    prep_scalar_expr(&mut to, style)?;
+    let temp_storage = RowArena::new();
+    let evaled = to.eval(&[], &temp_storage)?;
+    if evaled == Datum::Null {
+        coord_bail!("COPY TO target value can not be null");
+    }
+    let to_url = match Uri::from_str(evaled.unwrap_str()) {
+        Ok(url) => {
+            if url.scheme_str() != Some("s3") {
+                coord_bail!("only 's3://...' urls are supported as COPY TO target");
+            }
+            url
+        }
+        Err(e) => coord_bail!("could not parse COPY TO target url: {}", e),
+    };
+    Ok(to_url)
 }
 
 /// Returns a future that will execute EXPLAIN FILTER PUSHDOWN, i.e., compute the filter pushdown

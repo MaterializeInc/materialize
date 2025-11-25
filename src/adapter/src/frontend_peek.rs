@@ -8,24 +8,24 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use itertools::Either;
 use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, ResultSpec};
-use mz_ore::cast::CastLossy;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::EpochMillis;
-use mz_repr::IntoRowIterator;
-use mz_repr::Timestamp;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{self, Plan, QueryWhen};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::{ExplainStage, Statement};
+use mz_sql_parser::ast::{CopyDirection, ExplainStage, Statement};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -35,8 +35,9 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 use crate::catalog::CatalogState;
 use crate::command::Command;
 use crate::coord::peek::PeekPlan;
+use crate::coord::sequencer::eval_copy_to_uri;
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::{Coordinator, ExplainContext, ExplainPlanContext, TargetCluster};
+use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
@@ -156,6 +157,19 @@ impl PeekClient {
                     }
                 }
             }
+            Statement::Copy(copy_stmt) => {
+                match &copy_stmt.direction {
+                    CopyDirection::To => {
+                        // This is COPY TO, continue
+                    }
+                    CopyDirection::From => {
+                        debug!(
+                            "Bailing out from try_frontend_peek_inner, because COPY FROM is not supported"
+                        );
+                        return Ok(None);
+                    }
+                }
+            }
             _ => {
                 debug!(
                     "Bailing out from try_frontend_peek_inner, because statement type is not supported"
@@ -176,7 +190,7 @@ impl PeekClient {
 
         let pcx = session.pcx();
         let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
-        let (select_plan, explain_ctx) = match &plan {
+        let (select_plan, explain_ctx, copy_to_ctx) = match &plan {
             Plan::Select(select_plan) => {
                 let explain_ctx = if session.vars().emit_plan_insights_notice() {
                     let optimizer_trace = OptimizerTrace::new(ExplainStage::PlanInsights.paths());
@@ -184,7 +198,7 @@ impl PeekClient {
                 } else {
                     ExplainContext::None
                 };
-                (select_plan, explain_ctx)
+                (select_plan, explain_ctx, None)
             }
             Plan::ExplainPlan(plan::ExplainPlanPlan {
                 stage,
@@ -204,7 +218,32 @@ impl PeekClient {
                     desc: Some(desc.clone()),
                     optimizer_trace,
                 });
-                (plan, explain_ctx)
+                (plan, explain_ctx, None)
+            }
+            Plan::CopyTo(plan::CopyToPlan {
+                select_plan,
+                desc,
+                to,
+                connection,
+                connection_id,
+                format,
+                max_file_size,
+            }) => {
+                // Evaluate the COPY TO target URI
+                let uri = eval_copy_to_uri(to.clone(), session, catalog.state())?;
+
+                // Create CopyToContext (output_batch_count will be set later)
+                let copy_to_ctx = CopyToContext {
+                    desc: desc.clone(),
+                    uri,
+                    connection: connection.clone(),
+                    connection_id: *connection_id,
+                    format: format.clone(),
+                    max_file_size: *max_file_size,
+                    output_batch_count: None,
+                };
+
+                (select_plan, ExplainContext::None, Some(copy_to_ctx))
             }
             Plan::ExplainPushdown(plan::ExplainPushdownPlan { explainee }) => {
                 // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
@@ -215,7 +254,7 @@ impl PeekClient {
                         desc: _,
                     }) => {
                         let explain_ctx = ExplainContext::Pushdown;
-                        (plan, explain_ctx)
+                        (plan, explain_ctx, None)
                     }
                     _ => {
                         debug!(
@@ -227,7 +266,7 @@ impl PeekClient {
             }
             _ => {
                 debug!(
-                    "Bailing out from try_frontend_peek_inner, because the Plan is not a SELECT, EXPLAIN SELECT, or EXPLAIN FILTER PUSHDOWN"
+                    "Bailing out from try_frontend_peek_inner, because the Plan is not a SELECT, EXPLAIN SELECT, EXPLAIN FILTER PUSHDOWN, or COPY TO"
                 );
                 return Ok(None);
             }
@@ -313,15 +352,43 @@ impl PeekClient {
         let (_, view_id) = self.transient_id_gen.allocate_id();
         let (_, index_id) = self.transient_id_gen.allocate_id();
 
-        let mut optimizer = optimize::peek::Optimizer::new(
-            Arc::clone(&catalog),
-            compute_instance_snapshot.clone(),
-            select_plan.finishing.clone(),
-            view_id,
-            index_id,
-            optimizer_config,
-            self.optimizer_metrics.clone(),
-        );
+        let mut optimizer = if let Some(mut copy_to_ctx) = copy_to_ctx {
+            // COPY TO path: calculate output_batch_count and create copy_to optimizer
+            let worker_counts = cluster.replicas().map(|r| {
+                let loc = &r.config.location;
+                loc.workers().unwrap_or_else(|| loc.num_processes())
+            });
+            let max_worker_count = match worker_counts.max() {
+                Some(count) => u64::cast_from(count),
+                None => {
+                    return Err(AdapterError::NoClusterReplicasAvailable {
+                        name: cluster.name.clone(),
+                        is_managed: cluster.is_managed(),
+                    });
+                }
+            };
+            copy_to_ctx.output_batch_count = Some(max_worker_count);
+
+            Either::Right(optimize::copy_to::Optimizer::new(
+                Arc::clone(&catalog),
+                compute_instance_snapshot.clone(),
+                view_id,
+                copy_to_ctx,
+                optimizer_config,
+                self.optimizer_metrics.clone(),
+            ))
+        } else {
+            // SELECT/EXPLAIN path: create peek optimizer
+            Either::Left(optimize::peek::Optimizer::new(
+                Arc::clone(&catalog),
+                compute_instance_snapshot.clone(),
+                select_plan.finishing.clone(),
+                view_id,
+                index_id,
+                optimizer_config,
+                self.optimizer_metrics.clone(),
+            ))
+        };
 
         let target_replica_name = session.vars().cluster_replica();
         let mut target_replica = target_replica_name
@@ -493,8 +560,18 @@ impl PeekClient {
             }
         }
 
-        // Enum for branching between EXPLAIN and normal execution after optimization
-        enum ExecuteOrExplain {
+        // Enum for branching among various execution steps after optimization
+        enum Execution {
+            Peek {
+                global_lir_plan: optimize::peek::GlobalLirPlan,
+                optimization_finished_at: EpochMillis,
+                plan_insights_optimizer_trace: Option<OptimizerTrace>,
+                insights_ctx: Option<Box<PlanInsightsContext>>,
+            },
+            CopyTo {
+                global_lir_plan: optimize::copy_to::GlobalLirPlan,
+                source_ids: BTreeSet<GlobalId>,
+            },
             ExplainPlan {
                 df_meta: DataflowMetainfo,
                 explain_ctx: ExplainPlanContext,
@@ -505,14 +582,9 @@ impl PeekClient {
                 imports: BTreeMap<GlobalId, mz_expr::MapFilterProject>,
                 determination: TimestampDetermination<Timestamp>,
             },
-            Execute {
-                global_lir_plan: optimize::peek::GlobalLirPlan,
-                optimization_finished_at: EpochMillis,
-                plan_insights_optimizer_trace: Option<OptimizerTrace>,
-                insights_ctx: Option<Box<PlanInsightsContext>>,
-            },
         }
 
+        let source_ids_for_closure = source_ids.clone();
         let optimization_result = mz_ore::task::spawn_blocking(
             || "optimize peek",
             move || {
@@ -524,17 +596,31 @@ impl PeekClient {
                     // The purpose of wrapping the following in a closure is to control where the
                     // `?`s return from, so that even when a `catch_unwind_optimize` call fails,
                     // we can still handle `EXPLAIN BROKEN`.
-                    let pipeline = || -> Result<optimize::peek::GlobalLirPlan, OptimizerError> {
-                        // HIR ⇒ MIR lowering and MIR optimization (local)
-                        let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr.clone())?;
-                        // Attach resolved context required to continue the pipeline.
-                        // Note: Pass &session_meta by reference so we can move it later into PlanInsightsContext
-                        let local_mir_plan =
-                            local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
-                        // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
-                        let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
-
-                        Ok(global_lir_plan)
+                    let pipeline = || -> Result<Either<optimize::peek::GlobalLirPlan, optimize::copy_to::GlobalLirPlan>, OptimizerError> {
+                        match optimizer.as_mut() {
+                            Either::Left(optimizer) => {
+                                // SELECT/EXPLAIN path
+                                // HIR ⇒ MIR lowering and MIR optimization (local)
+                                let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr.clone())?;
+                                // Attach resolved context required to continue the pipeline.
+                                let local_mir_plan =
+                                    local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
+                                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                                Ok(Either::Left(global_lir_plan))
+                            }
+                            Either::Right(optimizer) => {
+                                // COPY TO path
+                                // HIR ⇒ MIR lowering and MIR optimization (local)
+                                let local_mir_plan = optimizer.catch_unwind_optimize(raw_expr.clone())?;
+                                // Attach resolved context required to continue the pipeline.
+                                let local_mir_plan =
+                                    local_mir_plan.resolve(timestamp_context.clone(), &session_meta, stats);
+                                // MIR optimization (global), MIR ⇒ LIR lowering, and LIR optimization (global)
+                                let global_lir_plan = optimizer.catch_unwind_optimize(local_mir_plan)?;
+                                Ok(Either::Right(global_lir_plan))
+                            }
+                        }
                     };
 
                     let global_lir_plan_result = pipeline();
@@ -579,71 +665,89 @@ impl PeekClient {
                         }))
                     };
 
-                    match explain_ctx {
-                        ExplainContext::Plan(explain_ctx) => {
-                            match global_lir_plan_result {
-                                Ok(global_lir_plan) => {
+                    match global_lir_plan_result {
+                        Ok(Either::Left(global_lir_plan)) => {
+                            // SELECT/EXPLAIN path
+                            let optimizer = optimizer.unwrap_left();
+                            match explain_ctx {
+                                ExplainContext::Plan(explain_ctx) => {
                                     let (_, df_meta, _) = global_lir_plan.unapply();
                                     let insights_ctx = create_insights_ctx(&optimizer, false);
-                                    Ok(ExecuteOrExplain::ExplainPlan {
+                                    Ok(Execution::ExplainPlan {
                                         df_meta,
                                         explain_ctx,
                                         optimizer,
                                         insights_ctx,
                                     })
                                 }
-                                Err(err) => {
-                                    // Try to still show the output if EXPLAIN BROKEN.
-                                    if explain_ctx.broken {
-                                        tracing::error!("error while handling EXPLAIN statement: {}", err);
-                                        Ok(ExecuteOrExplain::ExplainPlan {
-                                            df_meta: Default::default(),
-                                            explain_ctx,
-                                            optimizer,
-                                            insights_ctx: None,
-                                        })
-                                    } else {
-                                        Err(err)
-                                    }
+                                ExplainContext::None => {
+                                    Ok(Execution::Peek {
+                                        global_lir_plan,
+                                        optimization_finished_at,
+                                        plan_insights_optimizer_trace: None,
+                                        insights_ctx: None,
+                                    })
+                                }
+                                ExplainContext::PlanInsightsNotice(optimizer_trace) => {
+                                    let insights_ctx = create_insights_ctx(&optimizer, true);
+                                    Ok(Execution::Peek {
+                                        global_lir_plan,
+                                        optimization_finished_at,
+                                        plan_insights_optimizer_trace: Some(optimizer_trace),
+                                        insights_ctx,
+                                    })
+                                }
+                                ExplainContext::Pushdown => {
+                                    let (plan, _, _) = global_lir_plan.unapply();
+                                    let imports = match plan {
+                                        PeekPlan::SlowPath(plan) => plan
+                                            .desc
+                                            .source_imports
+                                            .into_iter()
+                                            .filter_map(|(id, (desc, _, _upper))| {
+                                                desc.arguments.operators.map(|mfp| (id, mfp))
+                                            })
+                                            .collect(),
+                                        PeekPlan::FastPath(_) => std::collections::BTreeMap::default(),
+                                    };
+                                    Ok(Execution::ExplainPushdown {
+                                        imports,
+                                        determination: determination_for_pushdown.expect("it's present for the ExplainPushdown case"),
+                                    })
                                 }
                             }
                         }
-                        ExplainContext::None => {
-                            Ok(ExecuteOrExplain::Execute {
-                                global_lir_plan: global_lir_plan_result?,
-                                optimization_finished_at,
-                                plan_insights_optimizer_trace: None,
-                                insights_ctx: None,
-                            })
-                        }
-                        ExplainContext::PlanInsightsNotice(optimizer_trace) => {
-                            let global_lir_plan = global_lir_plan_result?;
-                            let insights_ctx = create_insights_ctx(&optimizer, true);
-                            Ok(ExecuteOrExplain::Execute {
+                        Ok(Either::Right(global_lir_plan)) => {
+                            // COPY TO path
+                            let _optimizer = optimizer.unwrap_right();
+                            Ok(Execution::CopyTo {
                                 global_lir_plan,
-                                optimization_finished_at,
-                                plan_insights_optimizer_trace: Some(optimizer_trace),
-                                insights_ctx,
+                                source_ids: source_ids_for_closure,
                             })
                         }
-                        ExplainContext::Pushdown => {
-                            let global_lir_plan = global_lir_plan_result?;
-                            let (plan, _, _) = global_lir_plan.unapply();
-                            let imports = match plan {
-                                PeekPlan::SlowPath(plan) => plan
-                                    .desc
-                                    .source_imports
-                                    .into_iter()
-                                    .filter_map(|(id, (desc, _, _upper))| {
-                                        desc.arguments.operators.map(|mfp| (id, mfp))
+                        Err(err) => {
+                            if optimizer.is_right() {
+                                // COPY TO has no EXPLAIN BROKEN support
+                                return Err(err);
+                            }
+                            // SELECT/EXPLAIN error handling
+                            let optimizer = optimizer.expect_left("checked above");
+                            if let ExplainContext::Plan(explain_ctx) = explain_ctx {
+                                if explain_ctx.broken {
+                                    // EXPLAIN BROKEN: log error and continue with defaults
+                                    tracing::error!("error while handling EXPLAIN statement: {}", err);
+                                    Ok(Execution::ExplainPlan {
+                                        df_meta: Default::default(),
+                                        explain_ctx,
+                                        optimizer,
+                                        insights_ctx: None,
                                     })
-                                    .collect(),
-                                PeekPlan::FastPath(_) => BTreeMap::default(),
-                            };
-                            Ok(ExecuteOrExplain::ExplainPushdown {
-                                imports,
-                                determination: determination_for_pushdown.expect("it's present for the ExplainPushdown case"),
-                            })
+                                } else {
+                                    Err(err)
+                                }
+                            } else {
+                                Err(err)
+                            }
                         }
                     }
                 })
@@ -654,7 +758,7 @@ impl PeekClient {
 
         // Handle the optimization result: either generate EXPLAIN output or continue with execution
         match optimization_result {
-            ExecuteOrExplain::ExplainPlan {
+            Execution::ExplainPlan {
                 df_meta,
                 explain_ctx,
                 optimizer,
@@ -674,7 +778,7 @@ impl PeekClient {
                     rows: Box::new(rows.into_row_iter()),
                 }))
             }
-            ExecuteOrExplain::ExplainPushdown {
+            Execution::ExplainPushdown {
                 imports,
                 determination,
             } => {
@@ -700,7 +804,7 @@ impl PeekClient {
                     .await?,
                 ))
             }
-            ExecuteOrExplain::Execute {
+            Execution::Peek {
                 global_lir_plan,
                 optimization_finished_at: _optimization_finished_at,
                 plan_insights_optimizer_trace,
@@ -839,6 +943,23 @@ impl PeekClient {
                         Ok(Some(response))
                     }
                 }
+            }
+            Execution::CopyTo {
+                global_lir_plan,
+                source_ids,
+            } => {
+                let response = self
+                    .call_coordinator(|tx| Command::ExecuteCopyTo {
+                        global_lir_plan: Box::new(global_lir_plan),
+                        compute_instance: target_cluster_id,
+                        target_replica,
+                        source_ids,
+                        conn_id: session.conn_id().clone(),
+                        tx,
+                    })
+                    .await?;
+
+                Ok(Some(response))
             }
         }
     }

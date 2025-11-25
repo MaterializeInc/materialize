@@ -52,7 +52,7 @@ use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError};
+use crate::{AdapterNotice, AppendWebhookError, optimize};
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -199,6 +199,15 @@ pub enum Command {
         max_query_result_size: Option<u64>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
+
+    ExecuteCopyTo {
+        global_lir_plan: Box<optimize::copy_to::GlobalLirPlan>,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
 }
 
 impl Command {
@@ -222,7 +231,8 @@ impl Command {
             | Command::GetComputeInstanceClient { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
-            | Command::ExecuteSlowPathPeek { .. } => None,
+            | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteCopyTo { .. } => None,
         }
     }
 
@@ -246,7 +256,8 @@ impl Command {
             | Command::GetComputeInstanceClient { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
-            | Command::ExecuteSlowPathPeek { .. } => None,
+            | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteCopyTo { .. } => None,
         }
     }
 }
