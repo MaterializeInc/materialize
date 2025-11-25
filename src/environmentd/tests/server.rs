@@ -262,7 +262,7 @@ fn setup_statement_logging_core(
         )
         .with_system_parameter_default(
             "enable_frontend_peek_sequencing".to_string(),
-            "false".to_string(),
+            "true".to_string(),
         )
         .start_blocking();
     let client = server.connect(postgres::NoTls).unwrap();
