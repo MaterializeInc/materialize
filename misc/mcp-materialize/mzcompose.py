@@ -54,7 +54,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     "default_cluster_replication_factor": "1"
                 },
             )
-            test_args = ["tests/"]
+            # TODO: Remove -vvv again when database-issues#9927 is fixed
+            test_args = ["tests/", "-vvv"]
             if args.k:
                 test_args.append(f"-k {args.k}")
             if args.s:
