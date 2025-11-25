@@ -200,10 +200,12 @@ where
         )
     }
 
-    /// Whether or not this WriteHandle supports writing without enforcing batch
+    /// True iff this WriteHandle supports writing without enforcing batch
     /// bounds checks.
     pub fn validate_part_bounds_on_write(&self) -> bool {
-        VALIDATE_PART_BOUNDS_ON_WRITE.get(&self.cfg) && VALIDATE_PART_BOUNDS_ON_READ.get(&self.cfg)
+        // Note that we require validation when the read checks are enabled, even if the write-time
+        // checks would otherwise be disabled, to avoid batches that would fail at read time.
+        VALIDATE_PART_BOUNDS_ON_WRITE.get(&self.cfg) || VALIDATE_PART_BOUNDS_ON_READ.get(&self.cfg)
     }
 
     /// This handle's shard id.
