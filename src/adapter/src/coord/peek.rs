@@ -1189,6 +1189,55 @@ impl crate::coord::Coordinator {
         pending_peek
     }
 
+    /// Implements a slow-path peek by creating a transient dataflow.
+    /// This is called from the command handler for ExecuteSlowPathPeek.
+    ///
+    /// (For now, this method simply delegates to implement_peek_plan by constructing
+    /// the necessary PlannedPeek structure and a minimal ExecuteContext.)
+    pub(crate) async fn implement_slow_path_peek(
+        &mut self,
+        dataflow_plan: PeekDataflowPlan<mz_repr::Timestamp>,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
+        finishing: RowSetFinishing,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        intermediate_result_type: SqlRelationType,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        max_result_size: u64,
+        max_query_result_size: Option<u64>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let source_arity = intermediate_result_type.arity();
+
+        let planned_peek = PlannedPeek {
+            plan: PeekPlan::SlowPath(dataflow_plan),
+            determination,
+            conn_id,
+            intermediate_result_type,
+            source_arity,
+            source_ids,
+        };
+
+        // Create a minimal ExecuteContext
+        // TODO(peek-seq): Use the real context once we have statement logging.
+        let mut ctx_extra = ExecuteContextExtra::default();
+
+        // Call the old peek sequencing's implement_peek_plan for now.
+        // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
+        // relevant parts of the old `implement_peek_plan` into this method, and remove the old
+        // `implement_peek_plan`.
+        self.implement_peek_plan(
+            &mut ctx_extra,
+            planned_peek,
+            finishing,
+            compute_instance,
+            target_replica,
+            max_result_size,
+            max_query_result_size,
+        )
+        .await
+    }
+
     /// Constructs an [`ExecuteResponse`] that that will send some rows to the
     /// client immediately, as opposed to asking the dataflow layer to send along
     /// the rows after some computation.

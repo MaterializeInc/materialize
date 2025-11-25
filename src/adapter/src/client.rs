@@ -1015,7 +1015,8 @@ impl SessionClient {
                 | Command::Dump { .. }
                 | Command::GetComputeInstanceClient { .. }
                 | Command::GetOracle { .. }
-                | Command::DetermineRealTimeRecentTimestamp { .. } => {}
+                | Command::DetermineRealTimeRecentTimestamp { .. }
+                | Command::ExecuteSlowPathPeek { .. } => {}
             };
             cmd
         });
