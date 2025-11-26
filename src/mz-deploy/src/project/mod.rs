@@ -7,9 +7,9 @@ pub mod error;
 pub mod hir;
 pub mod mir;
 pub mod normalize;
+pub mod object_id;
 mod parser;
 pub mod raw;
-pub mod object_id;
 
 // Re-export commonly used types
 pub use mir::ModStatement;

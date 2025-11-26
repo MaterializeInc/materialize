@@ -6,7 +6,7 @@
 use crate::client::{ConflictRecord, ConnectionError, DatabaseValidationError};
 use crate::project::deployment_snapshot::DeploymentSnapshotError;
 use crate::project::error::{DependencyError, ProjectError};
-use crate::types::TypesError;
+use crate::types::{TypeCheckError, TypesError};
 use owo_colors::OwoColorize;
 use thiserror::Error;
 
@@ -58,6 +58,10 @@ pub enum CliError {
     #[error("failed to determine git SHA for staging environment name")]
     GitShaFailed,
 
+    /// Git repository has uncommitted changes
+    #[error("git repository has uncommitted changes")]
+    GitDirty,
+
     /// No schemas to deploy
     #[error("no schemas found to deploy")]
     NoSchemas,
@@ -101,8 +105,8 @@ pub enum CliError {
     TestsFailed { failed: usize, passed: usize },
 
     /// Type check failed
-    #[error("type check failed: {0}")]
-    TypeCheckFailed(String),
+    #[error(transparent)]
+    TypeCheckFailed(#[from] TypeCheckError),
 
     /// I/O error
     #[error("I/O error: {0}")]
@@ -163,6 +167,10 @@ impl CliError {
             Self::GitShaFailed => Some(
                 "either run mz-deploy from inside a git repository, or provide a staging environment name using:\n  \
                  mz-deploy stage . --name <environment-name>"
+                    .to_string(),
+            ),
+            Self::GitDirty => Some(
+                "commit or stash your changes before deploying, or use the --allow-dirty flag to deploy anyway"
                     .to_string(),
             ),
             Self::NoSchemas => Some(

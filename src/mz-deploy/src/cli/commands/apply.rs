@@ -2,6 +2,7 @@
 
 use crate::cli::{CliError, helpers};
 use crate::client::Profile;
+use crate::utils::git;
 use crate::{project, verbose};
 use std::path::Path;
 
@@ -24,6 +25,7 @@ use std::path::Path;
 /// * `directory` - Project root directory
 /// * `in_place_dangerous_will_cause_downtime` - Allow dropping/recreating production objects
 /// * `force` - Force promotion despite conflicts (for blue/green mode)
+/// * `allow_dirty` - Allow deploying with uncommitted changes
 /// * `staging_env` - Optional staging environment name (enables blue/green mode)
 ///
 /// # Returns
@@ -36,11 +38,17 @@ pub async fn run(
     directory: &Path,
     in_place_dangerous_will_cause_downtime: bool,
     force: bool,
+    allow_dirty: bool,
     staging_env: Option<&str>,
 ) -> Result<(), CliError> {
+    // Check for uncommitted changes before proceeding
+    if !allow_dirty && git::is_dirty() {
+        return Err(CliError::GitDirty);
+    }
+
     // Compile the project first (skip type checking since we're deploying)
     let compile_args = super::compile::CompileArgs {
-        typecheck: false,  // Skip type checking for apply
+        typecheck: false, // Skip type checking for apply
         docker_image: None,
     };
     let mir_project = super::compile::run(directory, compile_args).await?;
@@ -87,10 +95,7 @@ pub async fn run(
     if let Some(ref cs) = change_set {
         if !cs.objects_to_deploy.is_empty() && !in_place_dangerous_will_cause_downtime {
             // Check which objects exist in production
-            let existing_objects = client
-                .introspection()
-                .check_objects_exist(&cs.objects_to_deploy)
-                .await?;
+            let existing_objects = client.check_objects_exist(&cs.objects_to_deploy).await?;
 
             if !existing_objects.is_empty() {
                 return Err(CliError::ProductionOverwriteNotAllowed {
@@ -124,10 +129,7 @@ pub async fn run(
                 );
                 println!("This will cause downtime!");
 
-                let dropped = client
-                    .destruction()
-                    .drop_objects(&cs.objects_to_deploy)
-                    .await?;
+                let dropped = client.drop_objects(&cs.objects_to_deploy).await?;
                 println!("Dropped {} objects:", dropped.len());
                 for fqn in &dropped {
                     println!("  - {}", fqn);
@@ -181,7 +183,6 @@ pub async fn run(
                 } => {
                     println!("Applying database setup for: {}", database);
                     client
-                        .pg_client()
                         .execute(&statement.to_string(), &[])
                         .await
                         .map_err(|e| CliError::SqlExecutionFailed {
@@ -196,7 +197,6 @@ pub async fn run(
                 } => {
                     println!("Applying schema setup for: {}.{}", database, schema);
                     client
-                        .pg_client()
                         .execute(&statement.to_string(), &[])
                         .await
                         .map_err(|e| CliError::SqlExecutionFailed {
@@ -238,12 +238,7 @@ pub async fn run(
     let executor = helpers::DeploymentExecutor::new(&client);
     let mut success_count = 0;
     for (idx, (object_id, hir_obj)) in objects.iter().enumerate() {
-        verbose!(
-            "Applying {}/{}: {}",
-            idx + 1,
-            objects.len(),
-            object_id
-        );
+        verbose!("Applying {}/{}: {}", idx + 1, objects.len(), object_id);
 
         executor.execute_object(hir_obj).await?;
         success_count += 1;

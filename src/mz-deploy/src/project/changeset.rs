@@ -5,9 +5,9 @@
 use super::ast::Cluster;
 use super::deployment_snapshot::DeploymentSnapshot;
 use super::mir::{self, Project};
+use crate::project::object_id::ObjectId;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use crate::project::object_id::ObjectId;
 
 /// Represents the set of changes between two project states.
 ///

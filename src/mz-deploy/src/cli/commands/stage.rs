@@ -4,6 +4,7 @@ use crate::cli::{CliError, helpers};
 use crate::client::{ClusterOptions, Profile};
 use crate::project::changeset::ChangeSet;
 use crate::project::{self, hir::FullyQualifiedName, normalize::NormalizingVisitor};
+use crate::utils::git;
 use crate::utils::git::get_git_commit;
 use crate::verbose;
 use mz_sql_parser::ast::Ident;
@@ -31,19 +32,27 @@ use std::path::Path;
 /// * `profile` - Database profile containing connection information
 /// * `stage_name` - Optional staging environment name (defaults to first 5 chars of git SHA)
 /// * `directory` - Project root directory
+/// * `allow_dirty` - Allow deploying with uncommitted changes
 ///
 /// # Returns
 /// Ok(()) if staging deployment succeeds
 ///
 /// # Errors
 /// Returns `CliError::GitShaFailed` if no git SHA and no --name provided
+/// Returns `CliError::GitDirty` if repository has uncommitted changes and allow_dirty is false
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Project` for project compilation errors
 pub async fn run(
     profile: Option<&Profile>,
     stage_name: Option<&str>,
     directory: &Path,
+    allow_dirty: bool,
 ) -> Result<(), CliError> {
+    // Check for uncommitted changes before proceeding
+    if !allow_dirty && git::is_dirty() {
+        return Err(CliError::GitDirty);
+    }
+
     let stage_name = match stage_name {
         Some(name) => name.to_string(),
         None => get_git_commit(directory)
@@ -53,7 +62,7 @@ pub async fn run(
 
     // Run compile to validate and get the project (skip type checking for staging deployment)
     let compile_args = super::compile::CompileArgs {
-        typecheck: false,  // Skip type checking for staging deployment
+        typecheck: false, // Skip type checking for staging deployment
         docker_image: None,
     };
     let mir_project = super::compile::run(directory, compile_args).await?;
@@ -69,10 +78,7 @@ pub async fn run(
     helpers::initialize_deployment_tracking(&client).await?;
 
     // Validate deployment doesn't already exist
-    let existing_metadata = client
-        .introspection()
-        .get_deployment_metadata(&stage_name)
-        .await?;
+    let existing_metadata = client.get_deployment_metadata(&stage_name).await?;
 
     if existing_metadata.is_some() {
         return Err(CliError::InvalidEnvironmentName {
@@ -134,10 +140,7 @@ pub async fn run(
     println!("Creating staging schemas...");
     for (database, schema) in &schema_set {
         let staging_schema = format!("{}{}", schema, staging_suffix);
-        client
-            .creation()
-            .create_schema(database, &staging_schema)
-            .await?;
+        client.create_schema(database, &staging_schema).await?;
         verbose!("  Created schema {}.{}", database, staging_schema);
     }
     verbose!();
@@ -148,10 +151,7 @@ pub async fn run(
         let staging_cluster = format!("{}{}", prod_cluster, staging_suffix);
 
         // Check if staging cluster already exists
-        let cluster_exists = client
-            .introspection()
-            .cluster_exists(&staging_cluster)
-            .await?;
+        let cluster_exists = client.cluster_exists(&staging_cluster).await?;
 
         if cluster_exists {
             verbose!("  Cluster '{}' already exists, skipping", staging_cluster);
@@ -159,7 +159,7 @@ pub async fn run(
         }
 
         // Get production cluster configuration
-        let prod_config = client.introspection().get_cluster(prod_cluster).await?;
+        let prod_config = client.get_cluster(prod_cluster).await?;
 
         let prod_config = match prod_config {
             Some(config) => config,
@@ -175,7 +175,6 @@ pub async fn run(
 
         // Create staging cluster
         client
-            .creation()
             .create_cluster(&staging_cluster, options.clone())
             .await?;
         verbose!(
@@ -233,7 +232,6 @@ pub async fn run(
             .normalize_cluster_with(&visitor);
 
         client
-            .pg_client()
             .execute(&stmt.to_string(), &[])
             .await
             .map_err(|source| CliError::SqlExecutionFailed {
@@ -254,7 +252,6 @@ pub async fn run(
 
         for index in &indexes {
             client
-                .pg_client()
                 .execute(&index.to_string(), &[])
                 .await
                 .map_err(|source| CliError::SqlExecutionFailed {
@@ -265,7 +262,6 @@ pub async fn run(
 
         for grant in &grants {
             client
-                .pg_client()
                 .execute(&grant.to_string(), &[])
                 .await
                 .map_err(|source| CliError::SqlExecutionFailed {
@@ -276,7 +272,6 @@ pub async fn run(
 
         for comment in &comments {
             client
-                .pg_client()
                 .execute(&comment.to_string(), &[])
                 .await
                 .map_err(|source| CliError::SqlExecutionFailed {

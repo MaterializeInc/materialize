@@ -25,17 +25,18 @@ use std::path::Path;
 /// Returns `CliError::StagingEnvironmentNotFound` if the environment doesn't exist
 /// Returns `CliError::StagingAlreadyPromoted` if the environment was already promoted
 /// Returns `CliError::Connection` for database errors
-pub async fn run(profile: Option<&Profile>, _directory: &Path, environment: &str) -> Result<(), CliError> {
+pub async fn run(
+    profile: Option<&Profile>,
+    _directory: &Path,
+    environment: &str,
+) -> Result<(), CliError> {
     println!("Aborting staged deployment: {}", environment);
 
     // Connect to database
     let client = helpers::connect_to_database(profile.unwrap()).await?;
 
     // Validate deployment exists and is not promoted
-    let metadata = client
-        .introspection()
-        .get_deployment_metadata(environment)
-        .await?;
+    let metadata = client.get_deployment_metadata(environment).await?;
 
     match metadata {
         Some(meta) if meta.promoted_at.is_some() => {
@@ -54,15 +55,9 @@ pub async fn run(profile: Option<&Profile>, _directory: &Path, environment: &str
     }
 
     // Get staging schemas and clusters
-    let staging_schemas = client
-        .introspection()
-        .get_staging_schemas(environment)
-        .await?;
+    let staging_schemas = client.get_staging_schemas(environment).await?;
 
-    let staging_clusters = client
-        .introspection()
-        .get_staging_clusters(environment)
-        .await?;
+    let staging_clusters = client.get_staging_clusters(environment).await?;
 
     verbose!("Dropping staging resources:");
     verbose!("  Schemas: {}", staging_schemas.len());
@@ -72,10 +67,7 @@ pub async fn run(profile: Option<&Profile>, _directory: &Path, environment: &str
     // Drop staging schemas
     if !staging_schemas.is_empty() {
         verbose!("Dropping staging schemas...");
-        client
-            .destruction()
-            .drop_staging_schemas(&staging_schemas)
-            .await?;
+        client.drop_staging_schemas(&staging_schemas).await?;
         for (database, schema) in &staging_schemas {
             verbose!("  Dropped {}.{}", database, schema);
         }
@@ -84,10 +76,7 @@ pub async fn run(profile: Option<&Profile>, _directory: &Path, environment: &str
     // Drop staging clusters
     if !staging_clusters.is_empty() {
         verbose!("Dropping staging clusters...");
-        client
-            .destruction()
-            .drop_staging_clusters(&staging_clusters)
-            .await?;
+        client.drop_staging_clusters(&staging_clusters).await?;
         for cluster in &staging_clusters {
             verbose!("  Dropped {}", cluster);
         }
@@ -95,7 +84,7 @@ pub async fn run(profile: Option<&Profile>, _directory: &Path, environment: &str
 
     // Delete deployment records
     verbose!("Deleting deployment records...");
-    client.creation().delete_deployment(environment).await?;
+    client.delete_deployment(environment).await?;
 
     println!("Successfully aborted deployment '{}'", environment);
 

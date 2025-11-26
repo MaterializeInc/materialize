@@ -35,10 +35,10 @@
 use super::ast::{DatabaseIdent, Statement};
 use super::error::{ValidationError, ValidationErrorKind, ValidationErrors};
 use super::normalize::{ClusterTransformer, NameTransformer, NormalizingVisitor};
+use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use crate::project::object_id::ObjectId;
 
 /// Fully qualified name parsed from file path structure.
 ///

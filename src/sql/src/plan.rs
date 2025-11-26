@@ -95,7 +95,7 @@ pub(crate) mod plan_utils;
 pub(crate) mod query;
 pub(crate) mod scope;
 pub(crate) mod side_effecting_func;
-pub(crate) mod statement;
+pub mod statement;
 pub(crate) mod transform_ast;
 pub(crate) mod transform_hir;
 pub(crate) mod typeconv;
@@ -322,6 +322,7 @@ impl Plan {
             StatementKind::Update => &[PlanKind::ReadThenWrite],
             StatementKind::ValidateConnection => &[PlanKind::ValidateConnection],
             StatementKind::AlterRetainHistory => &[PlanKind::AlterRetainHistory],
+            StatementKind::ExecuteUnitTest => &[],
         }
     }
 

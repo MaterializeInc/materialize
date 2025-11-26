@@ -21,12 +21,12 @@
 //!
 //! This design avoids duplicating context fields across all error variants.
 
+use crate::project::object_id::ObjectId;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use thiserror::Error;
-use crate::project::object_id::ObjectId;
 
 /// Contextual information about where an error occurred.
 ///

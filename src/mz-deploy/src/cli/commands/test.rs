@@ -1,9 +1,10 @@
 //! Test command - run unit tests against the database.
 
-use crate::cli::{CliError, helpers};
-use crate::client::Profile;
+use crate::cli::CliError;
 use crate::project::{self, hir};
+use crate::types::TypeCheckError;
 use crate::unit_test;
+use crate::utils::docker_runtime::DockerRuntime;
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
 use std::path::Path;
@@ -41,7 +42,6 @@ use std::path::Path;
 /// - Unexpected rows appear in actual results
 ///
 /// # Arguments
-/// * `profile` - Database profile containing connection information
 /// * `directory` - Project root directory
 ///
 /// # Returns
@@ -51,13 +51,21 @@ use std::path::Path;
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
 /// Returns error if tests fail (exits with code 1)
-pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliError> {
+pub async fn run(directory: &Path) -> Result<(), CliError> {
     // Load the project (tests are loaded during compilation)
     let mir_project = project::plan(directory)?;
 
-    // Connect to the database
-    let client = helpers::connect_to_database(profile.unwrap()).await?;
+    // Load types.lock if it exists
+    let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
+        println!("No types.lock found, assuming no external dependencies");
+        crate::types::Types {
+            version: 1,
+            objects: std::collections::BTreeMap::new(),
+        }
+    });
 
+    // Create Docker runtime and get connected client
+    let runtime = DockerRuntime::new();
     if mir_project.tests.is_empty() {
         println!("No tests found in {}", directory.display());
         return Ok(());
@@ -73,6 +81,22 @@ pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliE
 
     // Run each test from the compiled project
     for (object_id, test) in &mir_project.tests {
+        let client = match runtime.get_client(&mir_project, &types).await {
+            Ok(client) => client,
+            Err(TypeCheckError::ContainerStartFailed(e)) => {
+                return Err(CliError::Message(format!(
+                    "Docker not available for running tests: {}",
+                    e
+                )));
+            }
+            Err(e) => {
+                return Err(CliError::Message(format!(
+                    "Failed to start test environment: {}",
+                    e
+                )));
+            }
+        };
+
         print!("{} {} ... ", "test".cyan(), test.name.cyan());
 
         // Find the target object in the project
@@ -91,20 +115,20 @@ pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliE
         };
 
         // Convert mir::ObjectId to hir::FullyQualifiedName for unit test processing
-        let hir_fqn =
-            hir::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
-                Ident::new(&object_id.database).unwrap(),
-                Ident::new(&object_id.schema).unwrap(),
-                Ident::new(&object_id.object).unwrap(),
-            ]));
+        let hir_fqn = hir::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
+            Ident::new(&object_id.database).unwrap(),
+            Ident::new(&object_id.schema).unwrap(),
+            Ident::new(&object_id.object).unwrap(),
+        ]));
 
         // Desugar the test
-        let sql_statements = unit_test::desugar_unit_test(&test, &target_obj.hir_object.stmt, &hir_fqn);
+        let sql_statements =
+            unit_test::desugar_unit_test(&test, &target_obj.hir_object.stmt, &hir_fqn);
 
         // Execute all SQL statements except the last one (which is the test query)
         let mut execution_failed = false;
         for sql in &sql_statements[..sql_statements.len() - 1] {
-            if let Err(e) = client.pg_client().execute(sql, &[]).await {
+            if let Err(e) = client.execute(sql, &[]).await {
                 println!("{}", "FAILED".red().bold());
                 eprintln!("  {}: failed to execute SQL: {:?}", "error".red().bold(), e);
                 eprintln!("  statement: {}", sql);
@@ -115,13 +139,12 @@ pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliE
         }
 
         if execution_failed {
-            let _ = client.pg_client().execute("DISCARD ALL", &[]).await;
             continue;
         }
 
         // Execute the test query (last statement)
         let test_query = &sql_statements[sql_statements.len() - 1];
-        match client.pg_client().query(test_query, &[]).await {
+        match client.query(test_query, &[]).await {
             Ok(rows) => {
                 if rows.is_empty() {
                     println!("{}", "ok".green().bold());
@@ -190,7 +213,7 @@ pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliE
         }
 
         // Clean up with DISCARD ALL
-        if let Err(e) = client.pg_client().execute("DISCARD ALL", &[]).await {
+        if let Err(e) = client.execute("DISCARD ALL", &[]).await {
             eprintln!("warning: failed to execute DISCARD ALL: {}", e);
         }
     }

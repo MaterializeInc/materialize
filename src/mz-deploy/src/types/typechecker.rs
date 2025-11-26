@@ -1,10 +1,19 @@
 //! Type checking trait and error types for Materialize projects.
 
+use crate::client::Client;
+use crate::project::ast::Statement;
+use crate::project::hir::FullyQualifiedName;
 use crate::project::mir::Project;
+use crate::project::normalize::NormalizingVisitor;
 use crate::project::object_id::ObjectId;
+use crate::verbose;
+use mz_sql_parser::ast::{
+    CreateViewStatement, Ident, IfExistsBehavior, UnresolvedItemName, ViewDefinition,
+};
 use owo_colors::OwoColorize;
+use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 /// Errors that can occur during type checking
@@ -174,4 +183,159 @@ pub trait TypeChecker: Send + Sync {
     ///
     /// Returns Ok(()) if all objects pass type checking, or Err with detailed errors
     async fn typecheck(&self, project: &Project) -> Result<(), TypeCheckError>;
+}
+
+/// Type check a project using a pre-configured client
+///
+/// This function performs type checking by creating temporary views/tables for all project
+/// objects in topological order. The client should already be connected and have external
+/// dependencies staged as temporary tables.
+///
+/// # Arguments
+/// * `client` - A connected client with external dependencies already staged
+/// * `project` - The project to type check
+/// * `project_root` - Root directory of the project (for error reporting)
+///
+/// # Returns
+/// Ok(()) if all objects pass type checking, or Err with detailed errors
+pub async fn typecheck_with_client(
+    client: &mut Client,
+    project: &Project,
+    project_root: &Path,
+) -> Result<(), TypeCheckError> {
+    // Type check objects in topological order
+    let object_paths = build_object_paths(project, project_root);
+    let sorted_objects = project.get_sorted_objects()?;
+
+    verbose!(
+        "Type checking {} objects in topological order",
+        sorted_objects.len()
+    );
+    let mut errors = Vec::new();
+
+    for (object_id, hir_object) in sorted_objects {
+        verbose!("Type checking: {}", object_id);
+
+        // Build the FQN from the object_id
+        let fqn = FullyQualifiedName::from(UnresolvedItemName(vec![
+            Ident::new(&object_id.database).expect("valid database"),
+            Ident::new(&object_id.schema).expect("valid schema"),
+            Ident::new(&object_id.object).expect("valid object"),
+        ]));
+
+        if let Some(statement) = create_temporary_view_sql(&hir_object.stmt, &fqn) {
+            let sql = statement.to_string();
+            match client.execute(&sql.to_string(), &[]).await {
+                Ok(_) => {
+                    verbose!("  ✓ Type check passed");
+                }
+                Err(e) => {
+                    // ConnectionError wraps tokio_postgres::Error, extract the database error
+                    let (error_message, detail, hint) = match &e {
+                        crate::client::ConnectionError::Query(pg_err) => {
+                            if let Some(db_err) = pg_err.as_db_error() {
+                                (
+                                    db_err.message().to_string(),
+                                    db_err.detail().map(|s| s.to_string()),
+                                    db_err.hint().map(|s| s.to_string()),
+                                )
+                            } else {
+                                (pg_err.to_string(), None, None)
+                            }
+                        }
+                        _ => (e.to_string(), None, None),
+                    };
+
+                    verbose!("  ✗ Type check failed: {}", error_message);
+
+                    let path = object_paths.get(&object_id).cloned().unwrap_or_else(|| {
+                        project_root
+                            .join(&object_id.database)
+                            .join(&object_id.schema)
+                            .join(format!("{}.sql", object_id.object))
+                    });
+
+                    errors.push(ObjectTypeCheckError {
+                        object_id: object_id.clone(),
+                        file_path: path,
+                        sql_statement: sql,
+                        error_message,
+                        detail,
+                        hint,
+                    });
+                }
+            }
+        } else {
+            verbose!("  - Skipping non-view/table object");
+        }
+    }
+
+    if errors.is_empty() {
+        verbose!("All type checks passed!");
+        Ok(())
+    } else {
+        Err(TypeCheckError::Multiple(TypeCheckErrors { errors }))
+    }
+}
+
+/// Build object path mapping for error reporting
+fn build_object_paths(project: &Project, project_root: &Path) -> HashMap<ObjectId, PathBuf> {
+    let mut paths = HashMap::new();
+    for obj in project.iter_objects() {
+        let path = project_root
+            .join(&obj.id.database)
+            .join(&obj.id.schema)
+            .join(format!("{}.sql", obj.id.object));
+        paths.insert(obj.id.clone(), path);
+    }
+    paths
+}
+
+/// Create temporary view for a project object
+fn create_temporary_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Option<Statement> {
+    let visitor = NormalizingVisitor::flattening(fqn);
+
+    match stmt {
+        Statement::CreateView(view) => {
+            let mut view = view.clone();
+            view.temporary = true;
+
+            let normalized = Statement::CreateView(view)
+                .normalize_name_with(&visitor, &fqn.to_item_name())
+                .normalize_dependencies_with(&visitor);
+
+            Some(normalized)
+        }
+        Statement::CreateMaterializedView(mv) => {
+            let view_stmt = CreateViewStatement {
+                if_exists: IfExistsBehavior::Error,
+                temporary: true,
+                definition: ViewDefinition {
+                    name: mv.name.clone(),
+                    columns: mv.columns.clone(),
+                    query: mv.query.clone(),
+                },
+            };
+            let normalized = Statement::CreateView(view_stmt)
+                .normalize_name_with(&visitor, &fqn.to_item_name())
+                .normalize_dependencies_with(&visitor);
+
+            Some(normalized)
+        }
+        Statement::CreateTable(table) => {
+            let mut table = table.clone();
+            table.temporary = true;
+
+            let normalized = Statement::CreateTable(table)
+                .normalize_name_with(&visitor, &fqn.to_item_name())
+                .normalize_dependencies_with(&visitor);
+
+            Some(normalized)
+        }
+        _ => {
+            // Other statement types (sources, sinks, connections, secrets)
+            // cannot be type-checked in this way
+            None
+        }
+    }
 }

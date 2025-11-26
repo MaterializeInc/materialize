@@ -50,6 +50,10 @@ enum Command {
         #[arg(long)]
         force: bool,
 
+        /// Allow deploying with uncommitted changes
+        #[arg(long)]
+        allow_dirty: bool,
+
         /// Optional staging environment to swap with (blue/green deployment)
         staging_env: Option<String>,
     },
@@ -58,6 +62,10 @@ enum Command {
         /// Staging environment name (default: first 5 chars of git SHA if in git repo)
         #[arg(long)]
         name: Option<String>,
+
+        /// Allow deploying with uncommitted changes
+        #[arg(long)]
+        allow_dirty: bool,
     },
     /// Test database connection with a profile
     Debug,
@@ -80,7 +88,7 @@ fn needs_connection(command: &Option<Command>) -> bool {
         Some(Command::Stage { .. }) => true,
         Some(Command::Debug) => true,
         Some(Command::GenDataContracts) => true,
-        Some(Command::Test) => true,
+        Some(Command::Test) => false, // Test uses Docker, not profile connection
         Some(Command::Abort { .. }) => true,
         None => false,
     }
@@ -97,7 +105,7 @@ async fn main() {
             Ok(p) => Some(p),
             Err(e) => {
                 cli::display_error(&cli::CliError::Connection(
-                    mz_deploy::client::ConnectionError::Config(e)
+                    mz_deploy::client::ConnectionError::Config(e),
                 ));
                 return;
             }
@@ -122,6 +130,7 @@ async fn main() {
         Some(Command::Apply {
             in_place_dangerous_will_cause_downtime,
             force,
+            allow_dirty,
             staging_env,
         }) => {
             cli::commands::apply::run(
@@ -129,23 +138,25 @@ async fn main() {
                 &args.directory,
                 in_place_dangerous_will_cause_downtime,
                 force,
+                allow_dirty,
                 staging_env.as_deref(),
             )
             .await
         }
-        Some(Command::Stage { name }) => {
-            cli::commands::stage::run(profile.as_ref(), name.as_deref(), &args.directory)
-                .await
+        Some(Command::Stage { name, allow_dirty }) => {
+            cli::commands::stage::run(
+                profile.as_ref(),
+                name.as_deref(),
+                &args.directory,
+                allow_dirty,
+            )
+            .await
         }
-        Some(Command::Debug) => {
-            cli::commands::debug::run(profile.as_ref(), &args.directory).await
-        }
+        Some(Command::Debug) => cli::commands::debug::run(profile.as_ref(), &args.directory).await,
         Some(Command::GenDataContracts) => {
             cli::commands::gen_data_contracts::run(profile.as_ref(), &args.directory).await
         }
-        Some(Command::Test) => {
-            cli::commands::test::run(profile.as_ref(), &args.directory).await
-        }
+        Some(Command::Test) => cli::commands::test::run(&args.directory).await,
         Some(Command::Abort { name }) => {
             cli::commands::abort::run(profile.as_ref(), &args.directory, &name).await
         }

@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
 use crate::client::{Client, ConnectionError};
-use crate::project::{hir, mir};
 use crate::project::object_id::ObjectId;
+use crate::project::{hir, mir};
 
 /// Represents a point-in-time snapshot of deployment state.
 ///
@@ -143,7 +143,7 @@ pub fn build_snapshot_from_mir(
 /// Creates the `deploy` schema, `schema_deployments` table, and `deployment_objects` table
 /// if they don't exist. This is idempotent and safe to call multiple times.
 pub async fn initialize_deployment_table(client: &Client) -> Result<(), DeploymentSnapshotError> {
-    client.creation().create_deployments().await?;
+    client.create_deployments().await?;
 
     Ok(())
 }
@@ -161,7 +161,6 @@ pub async fn load_from_database(
     environment: Option<&str>,
 ) -> Result<DeploymentSnapshot, DeploymentSnapshotError> {
     let deployment_snapshot = client
-        .introspection()
         .get_deployment_objects(environment)
         .await
         .map_err(DeploymentSnapshotError::Connection)?;
@@ -221,14 +220,8 @@ pub async fn write_to_database(
     }
 
     // Write to database
-    client
-        .creation()
-        .insert_schema_deployments(&schema_records)
-        .await?;
-    client
-        .creation()
-        .append_deployment_objects(&object_records)
-        .await?;
+    client.insert_schema_deployments(&schema_records).await?;
+    client.append_deployment_objects(&object_records).await?;
 
     Ok(())
 }

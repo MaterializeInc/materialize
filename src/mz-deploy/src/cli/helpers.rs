@@ -62,14 +62,10 @@ pub async fn collect_deployment_metadata(
     client: &Client,
     directory: &Path,
 ) -> project::deployment_snapshot::DeploymentMetadata {
-    let deployed_by = client
-        .introspection()
-        .get_current_user()
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("warning: failed to get current user: {}", e);
-            "unknown".to_string()
-        });
+    let deployed_by = client.get_current_user().await.unwrap_or_else(|e| {
+        eprintln!("warning: failed to get current user: {}", e);
+        "unknown".to_string()
+    });
 
     let git_commit = get_git_commit(directory);
 
@@ -139,7 +135,6 @@ impl<'a> DeploymentExecutor<'a> {
     async fn execute_sql(&self, stmt: &impl ToString) -> Result<(), CliError> {
         let sql = stmt.to_string();
         self.client
-            .pg_client()
             .execute(&sql, &[])
             .await
             .map_err(|source| CliError::SqlExecutionFailed {

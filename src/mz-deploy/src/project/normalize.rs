@@ -22,8 +22,8 @@
 //! ```
 
 use super::hir::FullyQualifiedName;
-use mz_sql_parser::ast::*;
 use crate::project::object_id::ObjectId;
+use mz_sql_parser::ast::*;
 
 /// Trait for transforming object names in SQL AST nodes.
 ///
