@@ -14,7 +14,7 @@ aliases:
 *Released: 2025-11-26*
 
 v26.1.0 includes bugfixes and improvements for SQLServer Support.
-- Introduced `EXPLAIN ANALYZE CLUSTER`, to better understand CPU time spent and memory usage on a cluster.
+- Introduced `EXPLAIN ANALYZE CLUSTER`, to better understand CPU time spent and memory utilization on a cluster.
 - Improvements to our SQLServer Source, including the ability to create a SQLServer Source via the console
 - Various console bugfixes
 
