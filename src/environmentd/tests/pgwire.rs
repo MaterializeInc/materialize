@@ -450,6 +450,7 @@ fn test_simple_query_no_hang() {
 #[mz_ore::test]
 fn test_copy() {
     let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_frontend_peek_sequencing"]);
     let mut client = server.connect(postgres::NoTls).unwrap();
 
     // Ensure empty COPY result sets work. We used to mishandle this with binary
