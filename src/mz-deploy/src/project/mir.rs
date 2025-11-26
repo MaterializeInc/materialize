@@ -35,9 +35,9 @@
 use super::ast::{Cluster, Statement};
 use super::error::DependencyError;
 use super::hir;
+use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
 use std::collections::{HashMap, HashSet};
-use crate::project::object_id::ObjectId;
 
 /// A database object with its dependencies.
 #[derive(Debug)]
@@ -413,8 +413,7 @@ impl From<hir::Project> for Project {
                     // Collect tests for this object
                     for test_stmt in &hir_obj.tests {
                         let unit_test = crate::unit_test::UnitTest::from_execute_statement(
-                            test_stmt,
-                            &object_id,
+                            test_stmt, &object_id,
                         );
                         tests.push((object_id.clone(), unit_test));
                     }

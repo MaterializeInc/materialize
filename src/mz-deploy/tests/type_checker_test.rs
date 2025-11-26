@@ -2,45 +2,16 @@
 
 #[cfg(test)]
 mod tests {
-    use mz_deploy::types::{NoOpTypeChecker, TypeChecker};
     use mz_deploy::project;
-    use tempfile::TempDir;
+    use mz_deploy::types::TypeChecker;
     use std::fs;
-
-    #[tokio::test]
-    async fn test_noop_typechecker_always_passes() {
-        // Create a test project
-        let temp_dir = TempDir::new().unwrap();
-        let project_path = temp_dir.path();
-
-        // Create project structure
-        let materialize_dir = project_path.join("materialize");
-        fs::create_dir(&materialize_dir).unwrap();
-        let public_dir = materialize_dir.join("public");
-        fs::create_dir(&public_dir).unwrap();
-
-        // Create a simple SQL file
-        let sql_content = r#"
-CREATE VIEW test_view AS
-SELECT 1 AS id, 'test' AS name;
-"#;
-        fs::write(public_dir.join("test_view.sql"), sql_content).unwrap();
-
-        // Load the project
-        let mir_project = project::plan(project_path).unwrap();
-
-        // Test NoOpTypeChecker
-        let checker = NoOpTypeChecker::new();
-        let result = checker.typecheck(&mir_project).await;
-
-        // NoOpTypeChecker should always pass
-        assert!(result.is_ok());
-    }
+    use tempfile::TempDir;
 
     #[cfg(feature = "docker-typecheck")]
     #[tokio::test]
     async fn test_docker_typechecker_with_external_dependencies() {
-        use mz_deploy::types::{DockerTypeChecker, Types, ColumnType};
+        use mz_deploy::types::{ColumnType, Types, typecheck_with_client};
+        use mz_deploy::utils::docker_runtime::DockerRuntime;
         use std::collections::BTreeMap;
 
         // Create a test project with external dependencies
@@ -85,7 +56,10 @@ GROUP BY u.id, u.name;
                 nullable: false,
             },
         );
-        objects.insert("external_db.external_schema.users".to_string(), users_columns);
+        objects.insert(
+            "external_db.external_schema.users".to_string(),
+            users_columns,
+        );
 
         // Define external_db.external_schema.orders
         let mut orders_columns = BTreeMap::new();
@@ -103,7 +77,10 @@ GROUP BY u.id, u.name;
                 nullable: false,
             },
         );
-        objects.insert("external_db.external_schema.orders".to_string(), orders_columns);
+        objects.insert(
+            "external_db.external_schema.orders".to_string(),
+            orders_columns,
+        );
 
         let types = Types {
             version: 1,
@@ -116,25 +93,38 @@ GROUP BY u.id, u.name;
         // Load the project
         let mir_project = project::plan(project_path).unwrap();
 
-        // Test DockerTypeChecker (will attempt to start container)
-        let checker = DockerTypeChecker::new(types, project_path);
-        let result = checker.typecheck(&mir_project).await;
-
-        // This might fail if Docker is not available, which is expected
-        match result {
-            Ok(_) => {
-                println!("Type checking passed with Docker");
-            }
+        // Create Docker runtime and get client
+        let runtime = DockerRuntime::new();
+        let mut client = match runtime.get_client(&mir_project, &types).await {
+            Ok(client) => client,
             Err(e) => {
-                println!("Type checking with Docker failed (expected if Docker not available): {}", e);
+                println!(
+                    "Docker not available for testing (expected if Docker not installed): {}",
+                    e
+                );
                 // If Docker is not available, this is expected behavior
-                if e.to_string().contains("container startup") ||
-                   e.to_string().contains("Docker daemon") {
+                if e.to_string().contains("container")
+                    || e.to_string().contains("Docker")
+                    || e.to_string().contains("docker")
+                {
                     // This is expected when Docker is not available
                     return;
                 }
                 // Re-throw other errors
                 panic!("Unexpected error: {}", e);
+            }
+        };
+
+        // Run type checking with the client
+        let result = typecheck_with_client(&mut client, &mir_project, project_path).await;
+
+        // This might fail if there are actual type errors, which is unexpected
+        match result {
+            Ok(_) => {
+                println!("Type checking passed with Docker");
+            }
+            Err(e) => {
+                panic!("Type checking failed: {}", e);
             }
         }
     }

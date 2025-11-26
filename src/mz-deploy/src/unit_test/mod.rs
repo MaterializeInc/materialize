@@ -68,7 +68,12 @@ impl UnitTest {
                 let columns = mock
                     .columns
                     .iter()
-                    .map(|col| (col.name.to_string(), col.data_type.to_ast_string(FormatMode::Simple)))
+                    .map(|col| {
+                        (
+                            col.name.to_string(),
+                            col.data_type.to_ast_string(FormatMode::Simple),
+                        )
+                    })
                     .collect();
                 let query = mock.query.to_ast_string(FormatMode::Simple);
                 MockView {
@@ -85,7 +90,12 @@ impl UnitTest {
                 .expected
                 .columns
                 .iter()
-                .map(|col| (col.name.to_string(), col.data_type.to_ast_string(FormatMode::Simple)))
+                .map(|col| {
+                    (
+                        col.name.to_string(),
+                        col.data_type.to_ast_string(FormatMode::Simple),
+                    )
+                })
                 .collect(),
             query: stmt.expected.query.to_ast_string(FormatMode::Simple),
         };
@@ -155,7 +165,9 @@ pub fn desugar_unit_test(
     // 4. Create test query
     let target_fqn_str = format!(
         "{}.{}.{}",
-        target_fqn.database(), target_fqn.schema(), target_fqn.object()
+        target_fqn.database(),
+        target_fqn.schema(),
+        target_fqn.object()
     );
     let flattened_target_name = flatten_fqn(&target_fqn_str);
     statements.push(create_test_query_sql(&flattened_target_name));
@@ -186,7 +198,12 @@ fn qualify_mock_name(mock: &MockView, target_fqn: &FullyQualifiedName) -> MockVi
         1 => {
             // Unqualified: object only
             // Prepend database.schema
-            format!("{}.{}.{}", target_fqn.database(), target_fqn.schema(), mock.fqn)
+            format!(
+                "{}.{}.{}",
+                target_fqn.database(),
+                target_fqn.schema(),
+                mock.fqn
+            )
         }
         2 => {
             // Partially qualified: schema.object

@@ -48,10 +48,7 @@ pub async fn run(
     helpers::initialize_deployment_tracking(&client).await?;
 
     // Validate deployment exists and is not promoted
-    let metadata = client
-        .introspection()
-        .get_deployment_metadata(stage_name)
-        .await?;
+    let metadata = client.get_deployment_metadata(stage_name).await?;
 
     match metadata {
         Some(meta) if meta.promoted_at.is_some() => {
@@ -83,10 +80,7 @@ pub async fn run(
     );
 
     verbose!("Checking for deployment conflicts...");
-    let conflicts = client
-        .introspection()
-        .check_deployment_conflicts(stage_name)
-        .await?;
+    let conflicts = client.check_deployment_conflicts(stage_name).await?;
 
     if !conflicts.is_empty() {
         if force {
@@ -124,7 +118,6 @@ pub async fn run(
 
         // Check if the staging schema actually exists
         if client
-            .introspection()
             .schema_exists(&object_id.database, &staging_schema)
             .await?
         {
@@ -137,11 +130,7 @@ pub async fn run(
         let staging_cluster = format!("{}{}", cluster.name, staging_suffix);
 
         // Check if this staging cluster exists
-        if client
-            .introspection()
-            .cluster_exists(&staging_cluster)
-            .await?
-        {
+        if client.cluster_exists(&staging_cluster).await? {
             staging_clusters.insert(cluster.name.clone());
         }
     }
@@ -166,7 +155,6 @@ pub async fn run(
 
     // Begin transaction for atomic swap
     client
-        .pg_client()
         .execute("BEGIN", &[])
         .await
         .map_err(|e| CliError::SqlExecutionFailed {
@@ -183,8 +171,8 @@ pub async fn run(
         );
 
         verbose!("  {}", swap_sql);
-        if let Err(e) = client.pg_client().execute(&swap_sql, &[]).await {
-            let _ = client.pg_client().execute("ROLLBACK", &[]).await;
+        if let Err(e) = client.execute(&swap_sql, &[]).await {
+            let _ = client.execute("ROLLBACK", &[]).await;
             return Err(CliError::SqlExecutionFailed {
                 statement: swap_sql,
                 source: e.into(),
@@ -201,8 +189,8 @@ pub async fn run(
         );
 
         verbose!("  {}", swap_sql);
-        if let Err(e) = client.pg_client().execute(&swap_sql, &[]).await {
-            let _ = client.pg_client().execute("ROLLBACK", &[]).await;
+        if let Err(e) = client.execute(&swap_sql, &[]).await {
+            let _ = client.execute("ROLLBACK", &[]).await;
             return Err(CliError::SqlExecutionFailed {
                 statement: swap_sql,
                 source: e.into(),
@@ -212,7 +200,6 @@ pub async fn run(
 
     // Commit transaction
     client
-        .pg_client()
         .execute("COMMIT", &[])
         .await
         .map_err(|e| CliError::SqlExecutionFailed {
@@ -227,7 +214,6 @@ pub async fn run(
 
     // Promote to production by updating promoted_at timestamp
     client
-        .creation()
         .update_promoted_at(stage_name)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
@@ -245,7 +231,7 @@ pub async fn run(
         );
 
         verbose!("  {}", drop_sql);
-        if let Err(e) = client.pg_client().execute(&drop_sql, &[]).await {
+        if let Err(e) = client.execute(&drop_sql, &[]).await {
             eprintln!(
                 "warning: failed to drop old schema {}.{}: {}",
                 database, old_schema, e
@@ -260,7 +246,7 @@ pub async fn run(
         let drop_sql = format!("DROP CLUSTER IF EXISTS \"{}\" CASCADE;", old_cluster);
 
         verbose!("  {}", drop_sql);
-        if let Err(e) = client.pg_client().execute(&drop_sql, &[]).await {
+        if let Err(e) = client.execute(&drop_sql, &[]).await {
             eprintln!("warning: failed to drop old cluster {}: {}", old_cluster, e);
         }
     }

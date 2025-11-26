@@ -198,7 +198,8 @@ async fn typecheck_with_docker(
     mir_project: &project::mir::Project,
     docker_image: Option<String>,
 ) -> Result<(), CliError> {
-    use crate::types::{DockerTypeChecker, TypeChecker, TypeCheckError};
+    use crate::types::{TypeCheckError, typecheck_with_client};
+    use crate::utils::docker_runtime::DockerRuntime;
 
     verbose!("Starting type checking with Docker...");
 
@@ -212,28 +213,35 @@ async fn typecheck_with_docker(
         }
     });
 
-    // Create Docker type checker
-    let mut checker = DockerTypeChecker::new(types, directory);
+    // Create Docker runtime
+    let mut runtime = DockerRuntime::new();
     if let Some(image) = docker_image {
-        checker = checker.with_image(image);
+        runtime = runtime.with_image(image);
     }
 
-    // Run type checking
-    match checker.typecheck(mir_project).await {
-        Ok(()) => {
-            verbose!("✓ Type checking passed");
-            Ok(())
-        }
+    // Get connected client with staged dependencies
+    let mut client = match runtime.get_client(mir_project, &types).await {
+        Ok(client) => client,
         Err(TypeCheckError::ContainerStartFailed(e)) => {
             // Docker not available, warn but don't fail
             println!("Warning: Docker not available for type checking: {}", e);
             println!("  Type checking skipped. Install Docker to enable type checking.");
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(e.into());
+        }
+    };
+
+    // Run type checking
+    match typecheck_with_client(&mut client, mir_project, directory).await {
+        Ok(()) => {
+            verbose!("✓ Type checking passed");
             Ok(())
         }
         Err(e) => {
             // Real type checking errors
-            Err(CliError::TypeCheckFailed(format!("{}", e)))
+            Err(e.into())
         }
     }
 }
-
