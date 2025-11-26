@@ -27,8 +27,14 @@ pub fn get_git_commit(directory: &std::path::Path) -> Option<String> {
 ///
 /// This uses `git status --porcelain`, which outputs a line for each changed file.
 /// Any non-empty output means the repo is dirty.
-pub fn is_dirty() -> bool {
-    let output = Command::new("git").args(["status", "--porcelain"]).output();
+///
+/// # Arguments
+/// * `directory` - Path to the project directory
+pub fn is_dirty(directory: &std::path::Path) -> bool {
+    let output = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(directory)
+        .output();
 
     let out = match output {
         Ok(out) => out,

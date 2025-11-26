@@ -133,15 +133,21 @@ async fn main() {
             allow_dirty,
             staging_env,
         }) => {
-            cli::commands::apply::run(
-                profile.as_ref(),
-                &args.directory,
-                in_place_dangerous_will_cause_downtime,
-                force,
-                allow_dirty,
-                staging_env.as_deref(),
-            )
-            .await
+            match staging_env {
+                None => cli::commands::apply::run(
+                    profile.as_ref(),
+                    &args.directory,
+                    in_place_dangerous_will_cause_downtime,
+                    allow_dirty,
+                ).await,
+
+                Some(stage_env) => cli::commands::swap::run(
+                    profile.as_ref(),
+                    &stage_env,
+                    force
+                ) .await
+            }
+
         }
         Some(Command::Stage { name, allow_dirty }) => {
             cli::commands::stage::run(

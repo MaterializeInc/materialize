@@ -84,6 +84,13 @@ pub async fn run(
 
     // Delete deployment records
     verbose!("Deleting deployment records...");
+
+    // Clean up cluster tracking records
+    client
+        .delete_deployment_clusters(environment)
+        .await
+        .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
+
     client.delete_deployment(environment).await?;
 
     println!("Successfully aborted deployment '{}'", environment);
