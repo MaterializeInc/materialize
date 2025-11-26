@@ -8,6 +8,8 @@
 
   code: |
     CREATE SECRET pgpass AS '<PASSWORD>';
+  test_replacements:
+    <PASSWORD>: postgres
 
 - name: "create-connection"
   description: |
@@ -15,15 +17,29 @@
     connection object with access and authentication details for Materialize to
     use:
 
+  test_setup: |
+    $ postgres-execute connection=postgres://postgres:postgres@postgres
+    DROP USER IF EXISTS materialize;
+    CREATE USER materialize WITH SUPERUSER PASSWORD 'postgres';
+    ALTER USER materialize WITH replication;
+    DROP SCHEMA IF EXISTS public CASCADE;
+    DROP PUBLICATION IF EXISTS mz_source;
+    CREATE SCHEMA PUBLIC;
+    CREATE TABLE items (a INT);
+    ALTER TABLE items REPLICA IDENTITY FULL;
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
   code: |
     CREATE CONNECTION pg_connection TO POSTGRES (
       HOST '<host>',
       PORT 5432,
-      USER 'materialize',
+      USER materialize,
       PASSWORD SECRET pgpass,
       SSL MODE 'require',
       DATABASE '<database>'
     );
+  test_replacements:
+    <host>: postgres
+    <database>: postgres
 
 - name: "create-connection-options-general"
   description: |

@@ -1,3 +1,5 @@
+- test_depends_on: rbac-sm/alter_default_privileges.yml
+
 - name: "view-privileges-for-current-owner"
   description: |
     Review `lemon@example.com"`'s privileges on the `shared_lemon` table.

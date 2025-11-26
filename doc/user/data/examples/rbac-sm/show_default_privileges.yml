@@ -1,3 +1,5 @@
+- test_depends_on: rbac-sm/grant_roles.yml
+
 - name: "for-user"
   description: |
 

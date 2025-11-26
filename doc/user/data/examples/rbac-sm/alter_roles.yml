@@ -1,3 +1,5 @@
+- test_depends_on: rbac-sm/create_roles.yml
+
 - name: "alter-role-syntax"
   description: |
     The following syntax is used to alter a role in Materialize Self-Managed.
@@ -45,6 +47,7 @@
       string can specify a different database for the session or the user can
       issue a `SET ...` command to override these values for the current
       session.
+  testable_results: false
 
 - name: "alter-roles-configs-not-inherited"
   description: |
@@ -55,6 +58,8 @@
     the following example updates the `data_reader` role to use
     `serving_cluster` by default.
 
+  test_setup: |
+    > CREATE CLUSTER serving_cluster SIZE 'scale=1,workers=1'
   code: |
     ALTER ROLE data_reader SET CLUSTER = serving_cluster;
   results: |
@@ -71,3 +76,4 @@
     {{< tip >}}
     {{< include-md file="shared-content/rbac-sm/alter-role-tip.md" >}}
     {{</ tip >}}
+  testable_results: false

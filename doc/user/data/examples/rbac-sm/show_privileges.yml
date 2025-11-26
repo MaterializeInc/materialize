@@ -1,3 +1,5 @@
+- test_depends_on: rbac-sm/create_roles.yml
+
 - name: "for-user"
   description: |
 
@@ -7,6 +9,10 @@
 
   code: |
     SHOW PRIVILEGES FOR "blue.berry@example.com";
+  test_results: |
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "for-service-account"
   description: |
@@ -17,6 +23,10 @@
 
   code: |
     SHOW PRIVILEGES FOR sales_report_app;
+  test_results: |
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "for-view-manager"
   description: |
@@ -26,6 +36,10 @@
 
   code: |
     SHOW PRIVILEGES FOR view_manager;
+  test_results: |
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "for-serving-index-manager"
   description: |
@@ -35,6 +49,10 @@
 
   code: |
     SHOW PRIVILEGES FOR serving_index_manager;
+  test_results: |
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 
 - name: "for-data-reader"
@@ -45,6 +63,10 @@
 
   code: |
     SHOW PRIVILEGES FOR data_reader;
+  test_results: |
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "example-results"
   description: |

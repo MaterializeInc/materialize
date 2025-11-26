@@ -1,9 +1,18 @@
+- test_depends_on: rbac-sm/alter_roles.yml
+
 - name: "view_manager"
   description: |
 
     The following grants the `view_manager` role to the role associated with the
     user `blue.berry@example.com`.
 
+  test_setup: |
+    > CREATE DATABASE mydb
+    > CREATE SCHEMA mydb.sales
+    > CREATE CLUSTER compute_cluster SIZE 'scale=1,workers=1'
+    > CREATE TABLE mydb.sales.orders (item INT, quantity INT, order_date TIMESTAMP)
+    > CREATE TABLE mydb.sales.items (item INT, price FLOAT)
+    > CREATE TABLE mydb.sales.sales_items (item INT, price FLOAT)
   code: |
     GRANT view_manager TO "blue.berry@example.com";
 
@@ -37,6 +46,11 @@
     | mz_system | view_manager | null        | null   | compute_cluster | cluster     | CREATE         |
     | mz_system | view_manager | null        | null   | compute_cluster | cluster     | USAGE          |
     ```
+  test_results: |
+    materialize PUBLIC mydb <null> public schema USAGE
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "view_manager-results-create-objects"
   description: |
@@ -66,7 +80,7 @@
 
     -- Select from the materialized view
     -- Requires SELECT on the materialized view and its underlying relations.
-    SELECT * from orders_daily_totals;
+    SELECT * FROM orders_daily_totals;
 
   results: |
 
@@ -102,6 +116,7 @@
     - Use [default
     privileges](/security/self-managed/access-control/manage-roles/#manage-future-privileges-for-a-role)
     to automatically grant privileges on new objects.
+  testable_results: false
 
 - name: "serving_index_manager"
   description: |
@@ -145,6 +160,11 @@
     | mz_system | view_manager          | null        | null   | compute_cluster | cluster     | CREATE         |
     | mz_system | view_manager          | null        | null   | compute_cluster | cluster     | USAGE          |
     ```
+  test_results: |
+    materialize PUBLIC mydb <null> public schema USAGE
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 - name: "serving_index_manager-results-show-privileges-view_manager-member"
   description: |
     Review the privileges for `"blue.berry@example.com"` (a member of `view_manager`):
@@ -182,6 +202,11 @@
     | mz_system              | view_manager           | null        | null   | compute_cluster     | cluster           | CREATE         |
     | mz_system              | view_manager           | null        | null   | compute_cluster     | cluster           | USAGE          |
     ```
+  test_results: |
+    materialize PUBLIC mydb <null> public schema USAGE
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "serving_index_manager-results-create-index"
   description: |
@@ -210,6 +235,7 @@
 
     To allow others in the `view_manager` role to create indexes, see [Change
     ownership of objects](/security/self-managed/access-control/manage-roles/#change-ownership-of-objects).
+  testable_results: false
 
 - name: "data_reader"
   description: |
@@ -246,6 +272,11 @@
     | mz_system | data_reader | mydb        | null   | sales           | schema      | USAGE          |
     | mz_system | data_reader | null        | null   | serving_cluster | cluster     | USAGE          |
     ```
+  test_results: |
+    materialize PUBLIC mydb <null> public schema USAGE
+    mz_system PUBLIC <null> <null> materialize database USAGE
+    mz_system PUBLIC <null> <null> quickstart cluster USAGE
+    mz_system PUBLIC materialize <null> public schema USAGE
 
 - name: "data_reader-results-select"
   description: |
@@ -274,3 +305,4 @@
     - Use [default
     privileges](/security/self-managed/access-control/manage-roles/#manage-future-privileges-for-a-role)
     to automatically grant `SELECT` privileges on new objects.
+  testable_results: false

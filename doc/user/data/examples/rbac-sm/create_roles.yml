@@ -30,6 +30,8 @@
 
   code: |
     CREATE ROLE "blue.berry@example.com" WITH LOGIN PASSWORD '<password>';
+  test_replacements:
+    <password>: materialize
   results: |
     {{< note >}}
     The role/user name `blue.berry@example.com` is enclosed in double quotes to
@@ -38,6 +40,7 @@
 
     Once created, the user `blue.berry@example.com` can login using the
     password.
+  testable_results: false
 
 - name: "create-role-service-account"
   description: |
@@ -48,10 +51,13 @@
 
   code: |
     CREATE ROLE "sales_report_app" WITH LOGIN PASSWORD '<password>';
+  test_replacements:
+    <password>: materialize
   results: |
 
     Once created, the associated application can use the `sales_report_app`
     service account to connect to Materialize.
+  testable_results: false
 
 - name: "create-role-view-manager"
   description: |
