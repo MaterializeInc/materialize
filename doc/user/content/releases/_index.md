@@ -13,10 +13,7 @@ aliases:
 ## Self-Managed v26.1.0
 *Released: 2025-11-26*
 
-v26.1.0 introduces `EXPLAIN ANALYZE CLUSTER`, includes bugfixes, and improvements for SQLServer Support.
-- Introduced `EXPLAIN ANALYZE CLUSTER`, to better understand CPU time spent and memory utilization on a cluster.
-- Improvements to our SQLServer Source, including the ability to create a SQLServer Source via the console
-- Various console bugfixes
+v26.1.0 introduces `EXPLAIN ANALYZE CLUSTER`, console bugfixes, and improvements for SQLServer Support, including the ability to create a SQLServer Source via the console.
 
 ### `EXPLAIN ANALYZE CLUSTER`
 The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement helps analyze how objects, namely indexes or materialized views, are running. We've introduced a variation of this statement, `EXPLAIN ANALYZE CLUSTER`, which presents a summary of every object running on your current cluster.
