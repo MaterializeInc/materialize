@@ -177,6 +177,9 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
 ### Version Specific Upgrade Notes
 
+#### Upgrading to `v26.1` and later versions
+{{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
+
 #### Upgrading to `v26.0`
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
