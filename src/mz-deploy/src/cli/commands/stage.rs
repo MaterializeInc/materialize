@@ -3,6 +3,7 @@
 use crate::cli::{CliError, helpers};
 use crate::client::{ClusterOptions, Profile};
 use crate::project::changeset::ChangeSet;
+use crate::project::mir::extract_external_indexes;
 use crate::project::{self, hir::FullyQualifiedName, normalize::NormalizingVisitor};
 use crate::utils::git;
 use crate::utils::git::get_git_commit;
@@ -94,13 +95,15 @@ pub async fn run(
     let production_snapshot =
         project::deployment_snapshot::load_from_database(&client, None).await?;
 
-    let change_set = production_snapshot.objects.is_empty().then(|| {
-        ChangeSet::from_deployment_snapshot_comparison(
+    let change_set = if !production_snapshot.objects.is_empty() {
+        Some(ChangeSet::from_deployment_snapshot_comparison(
             &production_snapshot,
             &new_snapshot,
             &mir_project,
-        )
-    });
+        ))
+    } else {
+        None
+    };
 
     let objects = if let Some(ref cs) = change_set {
         if cs.is_empty() {
@@ -192,6 +195,24 @@ pub async fn run(
 
     // Collect ObjectIds from objects being deployed for the staging transformer
     let objects_to_deploy_set: HashSet<_> = objects.iter().map(|(oid, _)| oid.clone()).collect();
+
+    // Deploy external indexes
+    let mut external_indexes: Vec<_> = mir_project
+        .iter_objects()
+        .filter(|object| !objects_to_deploy_set.contains(&object.id))
+        .flat_map(|object| extract_external_indexes(object))
+        .filter_map(|(cluster, index)| cluster_set.contains(&cluster.name).then_some(index))
+        .collect();
+
+    let fqn = FullyQualifiedName::null();
+    let empty = HashSet::new();
+    let external_index_visitor =
+        NormalizingVisitor::staging(&fqn, staging_suffix.clone(), &empty, None);
+    external_index_visitor.normalize_index_clusters(external_indexes.as_mut_slice());
+    for index in external_indexes {
+        verbose!("Creating external index {}", index);
+        client.execute(&index.to_string(), &[]).await?;
+    }
 
     let mut success_count = 0;
     for (idx, (object_id, hir_obj)) in objects.iter().enumerate() {
