@@ -34,10 +34,8 @@ use std::time::SystemTime;
 /// Returns `CliError::Connection` for database errors
 pub async fn run(
     profile: Option<&Profile>,
-    _directory: &Path,
     stage_name: &str,
     force: bool,
-    mir_project: &project::mir::Project,
 ) -> Result<(), CliError> {
     println!("Deploying '{}' to production", stage_name);
 
@@ -104,34 +102,40 @@ pub async fn run(
         verbose!("No conflicts detected");
     }
 
-    // Extract unique schemas and clusters from the staging objects
+    // Get schemas and clusters from deployment tables
     let staging_suffix = format!("_{}", stage_name);
     let mut staging_schemas = HashSet::new();
     let mut staging_clusters = HashSet::new();
 
-    // Collect schemas from staged objects
-    // Note: The deployment table stores ORIGINAL object IDs (without staging suffix),
-    // so we need to construct the staging schema name and verify it exists
-    for object_id in staging_snapshot.objects.keys() {
-        // Construct the staging schema name
-        let staging_schema = format!("{}{}", object_id.schema, staging_suffix);
+    // Get schemas from deploy.deployments table for this environment
+    let deployment_records = client.get_schema_deployments(Some(stage_name)).await?;
+    for record in deployment_records {
+        let staging_schema = format!("{}{}", record.schema, staging_suffix);
 
-        // Check if the staging schema actually exists
+        // Verify staging schema still exists
         if client
-            .schema_exists(&object_id.database, &staging_schema)
+            .schema_exists(&record.database, &staging_schema)
             .await?
         {
-            staging_schemas.insert((object_id.database.clone(), staging_schema));
+            staging_schemas.insert((record.database.clone(), staging_schema));
+        } else {
+            eprintln!(
+                "Warning: Staging schema {}.{} not found",
+                record.database, staging_schema
+            );
         }
     }
 
-    // Collect clusters that are used by the project
-    for cluster in &mir_project.cluster_dependencies {
-        let staging_cluster = format!("{}{}", cluster.name, staging_suffix);
+    // Get clusters from deploy.clusters table
+    let cluster_names = client.get_deployment_clusters(stage_name).await?;
+    for cluster_name in cluster_names {
+        let staging_cluster = format!("{}{}", cluster_name, staging_suffix);
 
-        // Check if this staging cluster exists
+        // Verify staging cluster still exists
         if client.cluster_exists(&staging_cluster).await? {
-            staging_clusters.insert(cluster.name.clone());
+            staging_clusters.insert(cluster_name);
+        } else {
+            eprintln!("Warning: Staging cluster {} not found", staging_cluster);
         }
     }
 
@@ -215,6 +219,13 @@ pub async fn run(
     // Promote to production by updating promoted_at timestamp
     client
         .update_promoted_at(stage_name)
+        .await
+        .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
+
+    // Clean up cluster tracking records after successful swap
+    verbose!("Cleaning up cluster tracking records...");
+    client
+        .delete_deployment_clusters(stage_name)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 

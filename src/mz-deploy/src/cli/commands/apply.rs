@@ -37,12 +37,10 @@ pub async fn run(
     profile: Option<&Profile>,
     directory: &Path,
     in_place_dangerous_will_cause_downtime: bool,
-    force: bool,
     allow_dirty: bool,
-    staging_env: Option<&str>,
 ) -> Result<(), CliError> {
     // Check for uncommitted changes before proceeding
-    if !allow_dirty && git::is_dirty() {
+    if !allow_dirty && git::is_dirty(directory) {
         return Err(CliError::GitDirty);
     }
 
@@ -52,11 +50,6 @@ pub async fn run(
         docker_image: None,
     };
     let mir_project = super::compile::run(directory, compile_args).await?;
-
-    // If a staging environment is provided, perform blue/green deployment via ALTER SWAP
-    if let Some(stage_name) = staging_env {
-        return super::swap::run(profile, directory, stage_name, force, &mir_project).await;
-    }
 
     println!("Applying SQL to database");
 

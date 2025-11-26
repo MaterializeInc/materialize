@@ -50,7 +50,7 @@ pub async fn run(
     allow_dirty: bool,
 ) -> Result<(), CliError> {
     // Check for uncommitted changes before proceeding
-    if !allow_dirty && git::is_dirty() {
+    if !allow_dirty && git::is_dirty(directory) {
         return Err(CliError::GitDirty);
     }
 
@@ -189,6 +189,12 @@ pub async fn run(
         );
     }
     verbose!();
+
+    // Write cluster mappings to deploy.clusters table
+    let cluster_names: Vec<String> = cluster_set.iter().cloned().collect();
+    client
+        .insert_deployment_clusters(&stage_name, &cluster_names)
+        .await?;
 
     // Deploy objects using staging transformer
     println!("Deploying objects to staging environment...\n");

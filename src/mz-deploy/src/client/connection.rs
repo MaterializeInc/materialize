@@ -457,6 +457,17 @@ impl Client {
         .await?;
 
         self.execute(
+            r#"CREATE TABLE IF NOT EXISTS deploy.clusters (
+                environment TEXT NOT NULL,
+                name TEXT NOT NULL
+            ) WITH (
+                PARTITION BY (environment)
+            );"#,
+            &[],
+        )
+        .await?;
+
+        self.execute(
             r#"
             CREATE VIEW IF NOT EXISTS deploy.production AS
             WITH candidates AS (
@@ -542,6 +553,61 @@ impl Client {
             .await?;
         }
 
+        Ok(())
+    }
+
+    /// Insert cluster records for a staging deployment.
+    pub async fn insert_deployment_clusters(
+        &self,
+        environment: &str,
+        clusters: &[String],
+    ) -> Result<(), ConnectionError> {
+        if clusters.is_empty() {
+            return Ok(());
+        }
+
+        let insert_sql = r#"
+            INSERT INTO deploy.clusters
+                (environment, name)
+            VALUES
+                ($1, $2)
+        "#;
+
+        for cluster in clusters {
+            self.execute(insert_sql, &[&environment, &cluster])
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    /// Get cluster names for a staging deployment.
+    pub async fn get_deployment_clusters(
+        &self,
+        environment: &str,
+    ) -> Result<Vec<String>, ConnectionError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT name FROM deploy.clusters WHERE environment = $1",
+                &[&environment],
+            )
+            .await
+            .map_err(ConnectionError::Query)?;
+
+        Ok(rows.iter().map(|row| row.get("name")).collect())
+    }
+
+    /// Delete cluster records for a staging deployment.
+    pub async fn delete_deployment_clusters(
+        &self,
+        environment: &str,
+    ) -> Result<(), ConnectionError> {
+        self.execute(
+            "DELETE FROM deploy.clusters WHERE environment = $1",
+            &[&environment],
+        )
+        .await?;
         Ok(())
     }
 
