@@ -773,7 +773,9 @@ impl crate::coord::Coordinator {
                 self.controller
                     .compute
                     .create_dataflow(compute_instance, dataflow, None)
-                    .unwrap_or_terminate("cannot fail to create dataflows");
+                    .map_err(
+                        AdapterError::concurrent_dependency_drop_from_dataflow_creation_error,
+                    )?;
                 self.initialize_compute_read_policies(
                     output_ids,
                     compute_instance,
@@ -1332,8 +1334,16 @@ impl crate::coord::Coordinator {
                 .await,
         );
 
-        self.ship_dataflow(df_desc, compute_instance, target_replica)
-            .await;
+        // Try to ship the dataflow. We handle errors gracefully because dependencies might have
+        // disappeared during sequencing.
+        if let Err(e) = self
+            .try_ship_dataflow(df_desc, compute_instance, target_replica)
+            .await
+            .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)
+        {
+            let _ = tx.send(Err(e));
+            return;
+        }
 
         // Spawn background task to wait for completion
         // We must NOT await sink_rx here directly, as that would block the coordinator's main task
