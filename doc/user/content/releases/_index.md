@@ -40,7 +40,7 @@ To understand worker skew, you can run `EXPLAIN ANALYZE CLUSTER CPU WITH SKEW`, 
 | materialize.public.idx_top_buyers       | u85496    | 0         | 0.99                   | 00:00:00.020932 | 00:00:00.021048 | 00:00:00.042096 |
 | materialize.public.idx_sales_by_product | u85492    | 1         | 0.82                   | 00:00:00.065211 | 00:00:00.079829 | 00:00:00.159659 |
 
-#### Upgrade notes for v26.0.0
+#### Upgrade notes for v26.1.0
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
 
