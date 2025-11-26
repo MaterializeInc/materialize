@@ -1009,9 +1009,11 @@ impl PeekClient {
                 global_lir_plan,
                 source_ids,
             } => {
+                let (df_desc, df_meta) = global_lir_plan.unapply();
+
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteCopyTo {
-                        global_lir_plan: Box::new(global_lir_plan),
+                        df_desc: Box::new(df_desc),
                         compute_instance: target_cluster_id,
                         target_replica,
                         source_ids,

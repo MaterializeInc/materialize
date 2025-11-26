@@ -150,9 +150,7 @@ impl GlobalLirPlan {
     }
 
     pub fn sink_id(&self) -> GlobalId {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink_id = sink_exports.keys().next().expect("valid sink");
-        *sink_id
+        self.df_desc.sink_id()
     }
 }
 

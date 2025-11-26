@@ -57,7 +57,7 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::optimize::{self, OptimizerError};
+use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
@@ -1257,7 +1257,7 @@ impl crate::coord::Coordinator {
     /// All errors (setup or execution) are sent through tx.
     pub(crate) async fn implement_copy_to(
         &mut self,
-        global_lir_plan: optimize::copy_to::GlobalLirPlan,
+        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
@@ -1270,12 +1270,12 @@ impl crate::coord::Coordinator {
             let _ = tx.send(Err(e));
         };
 
-        let sink_id = global_lir_plan.sink_id();
+        let sink_id = df_desc.sink_id();
 
         // # Inlined from peek_copy_to_preflight
 
         let connection_context = self.connection_context().clone();
-        let sinks = &global_lir_plan.df_desc().sink_exports;
+        let sinks = &df_desc.sink_exports;
 
         if sinks.len() != 1 {
             send_err(
@@ -1314,8 +1314,6 @@ impl crate::coord::Coordinator {
         }
 
         // # Inlined from peek_copy_to_dataflow
-
-        let (df_desc, _df_meta) = global_lir_plan.unapply();
 
         // Create and register ActiveCopyTo.
         // Note: sink_tx/sink_rx is the channel for the compute sink to notify completion

@@ -396,6 +396,17 @@ impl<P, S, T> DataflowDescription<P, S, T> {
         assert!(builds.next().is_none());
         build
     }
+
+    /// Returns the id of the first sink export.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dataflow has no sink exports.
+    pub fn sink_id(&self) -> GlobalId {
+        let sink_exports = &self.sink_exports;
+        let sink_id = sink_exports.keys().next().expect("valid sink");
+        *sink_id
+    }
 }
 
 impl<P, S, T> DataflowDescription<P, S, T>

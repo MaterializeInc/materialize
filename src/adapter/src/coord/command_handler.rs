@@ -360,7 +360,7 @@ impl Coordinator {
                 }
 
                 Command::ExecuteCopyTo {
-                    global_lir_plan,
+                    df_desc,
                     compute_instance,
                     target_replica,
                     source_ids,
@@ -371,7 +371,7 @@ impl Coordinator {
                     // through tx when the COPY TO completes (or immediately if setup fails).
                     // We just call it and let it handle all response sending.
                     self.implement_copy_to(
-                        *global_lir_plan,
+                        *df_desc,
                         compute_instance,
                         target_replica,
                         source_ids,
