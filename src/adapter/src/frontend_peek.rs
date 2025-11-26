@@ -910,6 +910,16 @@ impl PeekClient {
 
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
+                // Warning: Do not bail out from the new peek sequencing after this point, because the
+                // following has side effects. TODO(peek-seq): remove this comment once we never
+                // bail out to the old sequencing.
+
+                coord::sequencer::emit_optimizer_notices(
+                    &*catalog,
+                    session,
+                    &df_meta.optimizer_notices,
+                );
+
                 // Generate plan insights notice if needed
                 if let Some(trace) = plan_insights_optimizer_trace {
                     let target_cluster = catalog.get_cluster(target_cluster_id);
@@ -927,16 +937,6 @@ impl PeekClient {
                         .await?;
                     session.add_notice(AdapterNotice::PlanInsights(insights));
                 }
-
-                // Warning: Do not bail out from the new peek sequencing after this point, because the
-                // following has side effects. TODO(peek-seq): remove this comment once we never
-                // bail out to the old sequencing.
-
-                coord::sequencer::emit_optimizer_notices(
-                    &*catalog,
-                    session,
-                    &df_meta.optimizer_notices,
-                );
 
                 // TODO(peek-seq): move this up to the beginning of the function when we have eliminated all
                 // the fallbacks to the old peek sequencing. Currently, it has to be here to avoid
@@ -1010,6 +1010,12 @@ impl PeekClient {
                 source_ids,
             } => {
                 let (df_desc, df_meta) = global_lir_plan.unapply();
+
+                coord::sequencer::emit_optimizer_notices(
+                    &*catalog,
+                    session,
+                    &df_meta.optimizer_notices,
+                );
 
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteCopyTo {
