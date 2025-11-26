@@ -413,7 +413,7 @@ class SqlCommand(Command):
         image = service["image"].rsplit(":", 1)[0]
         ghcr_prefix = "ghcr.io/materializeinc/"
         if image.startswith(ghcr_prefix):
-            image.removeprefix(ghcr_prefix)
+            image = image.removeprefix(ghcr_prefix)
 
         if image == "materialize/materialized":
             deps = composition.repo.resolve_dependencies(

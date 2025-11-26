@@ -36,10 +36,13 @@ ALTER SYSTEM SET enable_alter_table_add_column = true
 3
 
 # Check initial shard mappings for the table. We should see one mapping.
-> SELECT COUNT(*) AS shard_count FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%'
+> SELECT COUNT(*) AS shard_count FROM mz_internal.mz_storage_shards WHERE object_id = (SELECT id FROM mz_tables WHERE name = 't')
 shard_count
 -----------
 1
+
+$ set-from-sql var=old-shard-count
+SELECT COUNT(*)::text FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%'
 
 # Now alter the table to add a column
 > ALTER TABLE t ADD COLUMN added_col text
@@ -65,22 +68,18 @@ initial_col added_col
 
 # Check shard mappings after ALTER TABLE. We should now see a mapping for the
 # old GlobalId of the table and one for the _new_ GlobalId of the table.
-> SELECT COUNT(*) AS shard_count FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%'
-shard_count
------------
-2
+> SELECT COUNT(*) = ${old-shard-count} + 1 FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%'
+true
 
 # Now drop the table - this previously would cause negative multiplicities
 # because ALTER TABLE didn't write down shard mappings but DROP TABLE would try
 # to remove them.
 > DROP TABLE t
 
-# Verify that shard mappings are properly cleaned up. There should be no shards
-# for user objects after dropping the table.
-> SELECT COUNT(*) AS shard_count FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%'
-shard_count
------------
-0
+# Verify that shard mappings are properly cleaned up. The shards should be back
+# to where they started out.
+> SELECT COUNT(*) = ${old-shard-count} - 1 FROM mz_internal.mz_storage_shards WHERE object_id LIKE 'u%'
+true
 
 # Reset the feature flag
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}

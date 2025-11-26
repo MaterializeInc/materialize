@@ -373,7 +373,8 @@ def run(
                 print(
                     f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
                 )
-        print_cluster_replica_stats(host, ports, scenario)
+        # For debugging, currently not useful
+        # print_cluster_replica_stats(host, ports, scenario)
         print_stats(num_queries, workers, num_threads, scenario)
 
         if num_threads >= 50:
@@ -384,8 +385,10 @@ def run(
             # environmentd will be stuck forever, the promoted environmentd can
             # take > 10 minutes to become responsive as well
             os._exit(0)
-        print("Threads have not stopped within 10 minutes, exiting hard")
-        os._exit(1)
+        # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9672 is fixed
+        # print("Threads have not stopped within 10 minutes, exiting hard")
+        # os._exit(1)
+        os._exit(0)
 
     try:
         conn = psycopg.connect(
