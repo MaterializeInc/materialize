@@ -449,6 +449,47 @@ impl From<hir::Project> for Project {
     }
 }
 
+/// Find all external indexes on an object. That is,
+/// any index that lives on a different cluster than the one where
+/// the main object is installed.
+pub fn extract_external_indexes(
+    object: &DatabaseObject,
+) -> Vec<(Cluster, CreateIndexStatement<Raw>)> {
+    match &object.hir_object.stmt {
+        Statement::CreateView(_) | Statement::CreateTable(_) => object
+            .hir_object
+            .indexes
+            .iter()
+            .map(|index| {
+                let cluster = Cluster {
+                    name: index.in_cluster.clone().unwrap().to_string(),
+                };
+
+                (cluster, index.clone())
+            })
+            .collect(),
+        Statement::CreateMaterializedView(materialized_view) => {
+            let mv_cluster = Cluster {
+                name: materialized_view.in_cluster.clone().unwrap().to_string(),
+            };
+
+            object
+                .hir_object
+                .indexes
+                .iter()
+                .filter_map(|index| {
+                    let index_cluster = Cluster {
+                        name: index.in_cluster.clone().unwrap().to_string(),
+                    };
+
+                    (mv_cluster != index_cluster).then(|| (index_cluster, index.clone()))
+                })
+                .collect()
+        }
+        _ => unimplemented!(),
+    }
+}
+
 /// Extract all dependencies from a statement.
 ///
 /// Returns a tuple of (object_dependencies, cluster_dependencies).

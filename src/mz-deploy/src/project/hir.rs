@@ -38,7 +38,7 @@ use super::normalize::{ClusterTransformer, NameTransformer, NormalizingVisitor};
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Fully qualified name parsed from file path structure.
 ///
@@ -57,6 +57,14 @@ pub struct FullyQualifiedName {
 }
 
 impl FullyQualifiedName {
+    pub fn null() -> FullyQualifiedName {
+        Self {
+            id: ObjectId::new("".to_string(), "".to_string(), "".to_string()),
+            path: Path::new("/tmp").into(),
+            item_name: UnresolvedItemName(vec![]),
+        }
+    }
+
     /// Get the database name.
     pub fn database(&self) -> &str {
         &self.id.database

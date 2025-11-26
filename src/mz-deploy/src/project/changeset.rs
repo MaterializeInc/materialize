@@ -4,8 +4,9 @@
 
 use super::ast::Cluster;
 use super::deployment_snapshot::DeploymentSnapshot;
-use super::mir::{self, Project};
+use super::mir::{self, Project, extract_external_indexes};
 use crate::project::object_id::ObjectId;
+use mz_sql_parser::ast::{CreateIndexStatement, Raw};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
@@ -225,16 +226,32 @@ impl Display for ChangeSet {
             "Incremental deployment: {} objects need redeployment",
             self.deployment_count()
         )?;
+
+        if !self.changed_objects.is_empty() {
+            writeln!(f, "Changed objects:")?;
+            for obj in &self.changed_objects {
+                writeln!(f, "  - {}.{}.{}", obj.database, obj.schema, obj.object)?;
+            }
+        }
+
         if !self.dirty_schemas.is_empty() {
             writeln!(f, "Dirty schemas:")?;
             for (db, schema) in &self.dirty_schemas {
                 writeln!(f, "  - {}.{}", db, schema)?;
             }
         }
+
         if !self.dirty_clusters.is_empty() {
             writeln!(f, "Dirty clusters:")?;
             for cluster in &self.dirty_clusters {
                 writeln!(f, "  - {}", cluster.name)?;
+            }
+        }
+
+        if !self.objects_to_deploy.is_empty() {
+            writeln!(f, "Objects to deploy:")?;
+            for obj in &self.objects_to_deploy {
+                writeln!(f, "  - {}.{}.{}", obj.database, obj.schema, obj.object)?;
             }
         }
 
