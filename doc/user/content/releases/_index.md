@@ -10,6 +10,36 @@ aliases:
   - /self-managed/v25.1/release-notes/
 ---
 
+## Self-Managed v26.1.0
+*Released: 2025-11-26*
+
+v26.1.0 includes bugfixes and improvements for SQLServer Support.
+- Introduced `EXPLAIN ANALYZE CLUSTER`, to better understand CPU time spent and memory usage on a cluster.
+- Improvements to our SQLServer Source, including the ability to create a SQLServer Source via the console
+- Various console bugfixes
+
+### `EXPLAIN ANALYZE CLUSTER`
+The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement helps analyze how objects, namely indexes or materialized views, are running. We've introduced a variation of this statement, `EXPLAIN ANALYZE CLUSTER`, which presents a summary of every object running on your current cluster.
+
+You can use this statement to understand the CPU time spent and memory consumed per object on a given cluster. You can also reveal whether an object has skewed operators, where work isn't evenly distributed among workers. 
+
+For example, to get a report on memory, you can run `EXPLAIN ANALYZE CLUSTER MEMORY`, and you'll receive an output similar to the table below:
+| object                                  | global_id | total_memory | total_records |
+| --------------------------------------- | --------- | ------------ | ------------- |
+| materialize.public.idx_top_buyers       | u85496    | 2086 bytes   | 25            |
+| materialize.public.idx_sales_by_product | u85492    | 1909 kB      | 148607        |
+| materialize.public.idx_top_buyers       | u85495    | 1332 kB      | 77133         |
+
+To understand worker skew, you can run `EXPLAIN ANALYZE CLUSTER CPU WITH SKEW`, and you'll receive an output similar the table below:
+| object                                  | global_id | worker_id | max_operator_cpu_ratio | worker_elapsed  | avg_elapsed     | total_elapsed   |
+| --------------------------------------- | --------- | --------- | ---------------------- | --------------- | --------------- | --------------- |
+| materialize.public.idx_sales_by_product | u85492    | 0         | 1.18                   | 00:00:00.094447 | 00:00:00.079829 | 00:00:00.159659 |
+| materialize.public.idx_top_buyers       | u85495    | 0         | 1.15                   | 00:00:01.371221 | 00:00:01.363659 | 00:00:02.727319 |
+| materialize.public.idx_top_buyers       | u85495    | 1         | 1.03                   | 00:00:01.356098 | 00:00:01.363659 | 00:00:02.727319 |
+| materialize.public.idx_top_buyers       | u85496    | 1         | 1.01                   | 00:00:00.021163 | 00:00:00.021048 | 00:00:00.042096 |
+| materialize.public.idx_top_buyers       | u85496    | 0         | 0.99                   | 00:00:00.020932 | 00:00:00.021048 | 00:00:00.042096 |
+| materialize.public.idx_sales_by_product | u85492    | 1         | 0.82                   | 00:00:00.065211 | 00:00:00.079829 | 00:00:00.159659 |
+
 ## Self-Managed v26.0.0
 
 *Released: 2025-11-18*
