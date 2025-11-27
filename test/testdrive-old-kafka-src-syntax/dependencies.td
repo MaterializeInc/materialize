@@ -167,7 +167,7 @@ contains:materialize.public.s1 is a sink, which cannot be depended upon
 # Test that indexes cannot be depended upon
 
 ! CREATE VIEW v3 as SELECT * FROM i1;
-contains:materialize.public.i1 is an index, which cannot be depended upon
+contains:materialize.public.i1 is a index, which cannot be depended upon
 
 > CREATE INDEX i2 ON v2a(x*2);
 

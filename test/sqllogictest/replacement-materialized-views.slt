@@ -182,10 +182,22 @@ CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT a, b FROM t
 statement error db error: ERROR: cannot drop materialized view "mv": still depended upon by materialized view "rp"
 DROP MATERIALIZED VIEW mv;
 
+
+# Test: cannot create an object depending on a replacement
+
+statement error db error: ERROR: rp is a replacement materialized view, which cannot be depended upon
+CREATE VIEW v AS SELECT * FROM rp
+
+statement error db error: ERROR: rp is a replacement materialized view, which cannot be depended upon
+CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM rp
+
+statement error db error: ERROR: index cannot be created on materialize.public.rp because it is a replacement materialized view
+CREATE DEFAULT INDEX ON rp
+
+
 statement ok
 DROP MATERIALIZED VIEW mv CASCADE;
 
 # TODO(alter-mv): Test: replacement cannot be selected from
 # TODO(alter-mv): Test: not more than one replacement allowed per MV
-# TODO(alter-mv): Test: cannot create an object depending on a replacement
 # TODO(alter-mv): Test: audit log

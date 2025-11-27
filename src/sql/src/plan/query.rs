@@ -508,7 +508,7 @@ pub fn plan_copy_item(
         None => {
             return Err(PlanError::InvalidDependency {
                 name: fullname.to_string(),
-                item_type: item.item_type(),
+                item_type: item.item_type().to_string(),
             });
         }
     };
@@ -6578,7 +6578,7 @@ impl<'a> QueryContext<'a> {
                     None => {
                         return Err(PlanError::InvalidDependency {
                             name: full_name.to_string(),
-                            item_type: item.item_type(),
+                            item_type: item.item_type().to_string(),
                         });
                     }
                 };

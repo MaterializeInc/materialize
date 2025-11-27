@@ -149,11 +149,11 @@ pub enum PlanError {
     },
     InvalidSinkFrom {
         name: String,
-        item_type: CatalogItemType,
+        item_type: String,
     },
     InvalidDependency {
         name: String,
-        item_type: CatalogItemType,
+        item_type: String,
     },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
@@ -663,8 +663,7 @@ impl fmt::Display for PlanError {
                 write!(f, "{name} is a {item_type}, which cannot be exported as a sink")
             },
             Self::InvalidDependency { name, item_type } => {
-                let a = if *item_type == CatalogItemType::Index { "an" } else { "a" };
-                write!(f, "{name} is {a} {item_type}, which cannot be depended upon")
+                write!(f, "{name} is a {item_type}, which cannot be depended upon")
             },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)

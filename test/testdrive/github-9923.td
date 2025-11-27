@@ -33,3 +33,9 @@ contains:v is a view, which cannot be exported as a sink
 
 ! ALTER SINK sink SET FROM v
 contains:v is a view, which cannot be exported as a sink
+
+> CREATE MATERIALIZED VIEW mv AS SELECT * FROM t
+> CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT * FROM t
+
+! ALTER SINK sink SET FROM rp
+contains:rp is a replacement materialized view, which cannot be exported as a sink
