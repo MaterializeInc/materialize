@@ -380,6 +380,10 @@ impl Coordinator {
                     )
                     .await;
                 }
+                Command::FrontendStatementLogging(_event) => {
+                    // TODO: Implement handler for frontend statement logging events
+                    // This will process statement logging events sent from frontend peek sequencing
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -647,7 +651,6 @@ impl Coordinator {
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
                     throttling_state: Arc::clone(&self.statement_logging.throttling_state),
-                    statement_logging_event_tx: self.statement_logging_event_tx.clone(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

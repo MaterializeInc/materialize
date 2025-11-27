@@ -372,6 +372,7 @@ impl Message {
                 Command::StoreTransactionReadHolds { .. } => "store-transaction-read-holds",
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
+                Command::FrontendStatementLogging(..) => "frontend-statement-logging",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -1773,13 +1774,6 @@ pub struct Coordinator {
 
     /// Data used by the statement logging feature.
     statement_logging: StatementLogging,
-
-    /// Receiver for statement logging events from frontend peek sequencing.
-    /// These events will be processed by the Coordinator in the future.
-    statement_logging_event_rx: mpsc::UnboundedReceiver<crate::coord::statement_logging::FrontendStatementLoggingEvent>,
-
-    /// Sender for statement logging events, cloned and passed to frontend peek clients.
-    statement_logging_event_tx: mpsc::UnboundedSender<crate::coord::statement_logging::FrontendStatementLoggingEvent>,
 
     /// Limit for how many concurrent webhook requests we allow.
     webhook_concurrency_limit: WebhookConcurrencyLimiter,
@@ -4076,8 +4070,6 @@ pub fn serve(
         let (internal_cmd_tx, internal_cmd_rx) = mpsc::unbounded_channel();
         let (strict_serializable_reads_tx, strict_serializable_reads_rx) =
             mpsc::unbounded_channel();
-        let (statement_logging_event_tx, statement_logging_event_rx) =
-            mpsc::unbounded_channel();
 
         // Validate and process availability zones.
         if !availability_zones.iter().all_unique() {
@@ -4393,8 +4385,6 @@ pub fn serve(
                     optimizer_metrics,
                     tracing_handle,
                     statement_logging: StatementLogging::new(coord_now.clone()),
-                    statement_logging_event_rx,
-                    statement_logging_event_tx,
                     webhook_concurrency_limit,
                     pg_timestamp_oracle_config,
                     check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,

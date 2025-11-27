@@ -222,6 +222,10 @@ pub enum Command {
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
+
+    /// Statement logging event from frontend peek sequencing.
+    /// No response channel needed - this is fire-and-forget.
+    FrontendStatementLogging(crate::coord::statement_logging::FrontendStatementLoggingEvent),
 }
 
 impl Command {
@@ -248,7 +252,8 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
-            | Command::ExecuteCopyTo { .. } => None,
+            | Command::ExecuteCopyTo { .. }
+            | Command::FrontendStatementLogging(..) => None,
         }
     }
 
@@ -275,7 +280,8 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
-            | Command::ExecuteCopyTo { .. } => None,
+            | Command::ExecuteCopyTo { .. }
+            | Command::FrontendStatementLogging(..) => None,
         }
     }
 }
@@ -309,7 +315,6 @@ pub struct StartupResponse {
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
     pub throttling_state: Arc<Mutex<ThrottlingState>>,
-    pub statement_logging_event_tx: mpsc::UnboundedSender<crate::coord::statement_logging::FrontendStatementLoggingEvent>,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).

@@ -265,7 +265,6 @@ impl Client {
             optimizer_metrics,
             persist_client,
             throttling_state,
-            statement_logging_event_tx,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -275,7 +274,6 @@ impl Client {
             optimizer_metrics,
             persist_client,
             throttling_state,
-            statement_logging_event_tx,
         );
 
         let mut client = SessionClient {
@@ -1023,7 +1021,8 @@ impl SessionClient {
                 | Command::GetTransactionReadHoldsBundle { .. }
                 | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
-                | Command::ExecuteCopyTo { .. } => {}
+                | Command::ExecuteCopyTo { .. }
+                | Command::FrontendStatementLogging(..) => {}
             };
             cmd
         });

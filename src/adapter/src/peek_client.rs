@@ -25,7 +25,7 @@ use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
 use timely::progress::Antichain;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
@@ -62,8 +62,6 @@ pub struct PeekClient {
     persist_client: PersistClient,
     /// Shared throttling state for statement logging.
     pub throttling_state: Arc<Mutex<ThrottlingState>>,
-    /// Sender for statement logging events to be sent to the Coordinator.
-    pub statement_logging_event_tx: mpsc::UnboundedSender<crate::coord::statement_logging::FrontendStatementLoggingEvent>,
 }
 
 impl PeekClient {
@@ -75,7 +73,6 @@ impl PeekClient {
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         throttling_state: Arc<Mutex<ThrottlingState>>,
-        statement_logging_event_tx: mpsc::UnboundedSender<crate::coord::statement_logging::FrontendStatementLoggingEvent>,
     ) -> Self {
         Self {
             coordinator_client,
@@ -86,7 +83,6 @@ impl PeekClient {
             oracles: Default::default(), // lazily populated
             persist_client,
             throttling_state,
-            statement_logging_event_tx,
         }
     }
 
