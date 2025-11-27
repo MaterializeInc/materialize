@@ -152,19 +152,27 @@ pub struct GlobalLirPlan {
 }
 
 impl GlobalLirPlan {
+    /// Returns the id of the dataflow's sink export.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dataflow has no sink exports or has more than one.
     pub fn sink_id(&self) -> GlobalId {
-        let sink_exports = &self.df_desc.sink_exports;
-        let sink_id = sink_exports.keys().next().expect("valid sink");
-        *sink_id
+        self.df_desc.sink_id()
     }
 
     pub fn as_of(&self) -> Option<Timestamp> {
         self.df_desc.as_of.clone().map(|as_of| as_of.into_element())
     }
 
+    /// Returns the description of the dataflow's sink export.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dataflow has no sink exports or has more than one.
     pub fn sink_desc(&self) -> &ComputeSinkDesc {
         let sink_exports = &self.df_desc.sink_exports;
-        let sink_desc = sink_exports.values().next().expect("valid sink");
+        let sink_desc = sink_exports.values().into_element();
         sink_desc
     }
 }

@@ -20,6 +20,7 @@ use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
@@ -52,7 +53,7 @@ use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, ReadHolds, optimize};
+use crate::{AdapterNotice, AppendWebhookError, ReadHolds};
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -213,7 +214,7 @@ pub enum Command {
     },
 
     ExecuteCopyTo {
-        global_lir_plan: Box<optimize::copy_to::GlobalLirPlan>,
+        df_desc: Box<DataflowDescription<mz_compute_types::plan::Plan>>,
         compute_instance: ComputeInstanceId,
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
