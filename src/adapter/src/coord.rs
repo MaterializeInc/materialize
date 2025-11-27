@@ -104,7 +104,9 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
-use mz_compute_client::controller::error::{DataflowCreationError, InstanceMissing};
+use mz_compute_client::controller::error::{
+    CollectionLookupError, DataflowCreationError, InstanceMissing,
+};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -190,7 +192,7 @@ use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
-use crate::coord::statement_logging::{StatementLogging, StatementLoggingId};
+use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::validity::PlanValidity;
@@ -203,7 +205,9 @@ use crate::optimize::dataflows::{
 };
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
-use crate::statement_logging::{StatementEndedExecutionReason, StatementLifecycleEvent};
+use crate::statement_logging::{
+    StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
+};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
@@ -374,6 +378,9 @@ impl Message {
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
+                Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
+                Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
+                Command::FrontendStatementLogging(..) => "frontend-statement-logging",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -1332,7 +1339,7 @@ impl ExecuteContextExtra {
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
     #[must_use]
-    fn retire(mut self) -> Option<StatementLoggingId> {
+    pub(crate) fn retire(mut self) -> Option<StatementLoggingId> {
         let Self { statement_uuid } = &mut self;
         statement_uuid.take()
     }
@@ -1356,14 +1363,13 @@ impl Drop for ExecuteContextExtra {
 ///
 /// This struct collects a bundle of state that needs to be threaded
 /// through various functions as part of statement execution.
-/// Currently, it is only used to finalize execution, by calling one
-/// of the methods `retire` or `retire_aysnc`. Finalizing execution
+/// It is used to finalize execution, by calling `retire`. Finalizing execution
 /// involves sending the session back to the pgwire layer so that it
-/// may be used to process further commands. In the future, it will
-/// also involve performing some work on the main coordinator thread
+/// may be used to process further commands. It also involves
+/// performing some work on the main coordinator thread
 /// (e.g., recording the time at which the statement finished
-/// executing) the state necessary to perform this work is bundled in
-/// the `ExecuteContextExtra` object (today, it is simply empty).
+/// executing). The state necessary to perform this work is bundled in
+/// the `ExecuteContextExtra` object.
 #[derive(Debug)]
 pub struct ExecuteContext {
     inner: Box<ExecuteContextInner>,
@@ -3762,13 +3768,14 @@ impl Coordinator {
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) {
-        let ws_id = self.controller.install_compute_watch_set(objects, t);
+    ) -> Result<(), CollectionLookupError> {
+        let ws_id = self.controller.install_compute_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        Ok(())
     }
 
     /// Install a _watch set_ in the controller that is automatically associated with the given
@@ -3780,13 +3787,14 @@ impl Coordinator {
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) {
-        let ws_id = self.controller.install_storage_watch_set(objects, t);
+    ) -> Result<(), CollectionLookupError> {
+        let ws_id = self.controller.install_storage_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        Ok(())
     }
 
     /// Cancels pending watchsets associated with the provided connection id.
