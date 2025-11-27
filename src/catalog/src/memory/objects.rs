@@ -1705,6 +1705,14 @@ impl CatalogItem {
         }
     }
 
+    /// Returns the [`RelationDesc`] for items that yield rows, at the requested
+    /// version.
+    ///
+    /// Tables honor `version` so callers can ask for the schema that matches a
+    /// specific [`GlobalId`] or historical definition. All other relation
+    /// types ignore `version` because they have a single shape. Non-relational
+    /// items (functions, indexes, sinks, secrets, and connections) return
+    /// [`SqlCatalogError::InvalidDependency`].
     pub fn desc(
         &self,
         name: &FullItemName,
