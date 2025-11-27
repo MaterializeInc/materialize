@@ -855,7 +855,7 @@ pub struct SelectPlan {
     pub when: QueryWhen,
     /// Instructions how to form the result set.
     pub finishing: RowSetFinishing,
-    /// For `COPY TO`, the format to use.
+    /// For `COPY TO STDOUT`, the format to use.
     pub copy_to: Option<CopyFormat>,
 }
 
@@ -987,6 +987,10 @@ pub enum CopyFromFilter {
     Pattern(String),
 }
 
+/// `COPY TO S3`
+///
+/// (This is a completely different thing from `COPY TO STDOUT`. That is a `Plan::Select` with
+/// `copy_to` set.)
 #[derive(Debug, Clone)]
 pub struct CopyToPlan {
     /// The select query plan whose data will be copied to destination uri.

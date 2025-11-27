@@ -214,6 +214,7 @@ impl PeekClient {
                 });
                 (plan, explain_ctx, None)
             }
+            // COPY TO S3
             Plan::CopyTo(plan::CopyToPlan {
                 select_plan,
                 desc,
@@ -223,10 +224,9 @@ impl PeekClient {
                 format,
                 max_file_size,
             }) => {
-                // Evaluate the COPY TO target URI
                 let uri = eval_copy_to_uri(to.clone(), session, catalog.state())?;
 
-                // Create CopyToContext (output_batch_count will be set later)
+                // (output_batch_count will be set later)
                 let copy_to_ctx = CopyToContext {
                     desc: desc.clone(),
                     uri,
@@ -661,7 +661,7 @@ impl PeekClient {
                 plan_insights_optimizer_trace: Option<OptimizerTrace>,
                 insights_ctx: Option<Box<PlanInsightsContext>>,
             },
-            CopyTo {
+            CopyToS3 {
                 global_lir_plan: optimize::copy_to::GlobalLirPlan,
                 source_ids: BTreeSet<GlobalId>,
             },
@@ -811,9 +811,8 @@ impl PeekClient {
                             }
                         }
                         Ok(Either::Right(global_lir_plan)) => {
-                            // COPY TO path
-                            let _optimizer = optimizer.unwrap_right();
-                            Ok(Execution::CopyTo {
+                            // COPY TO S3 path
+                            Ok(Execution::CopyToS3 {
                                 global_lir_plan,
                                 source_ids: source_ids_for_closure,
                             })
@@ -953,7 +952,7 @@ impl PeekClient {
 
                 let max_result_size = catalog.system_config().max_result_size();
 
-                match peek_plan {
+                let response = match peek_plan {
                     PeekPlan::FastPath(fast_path_plan) => {
                         let row_set_finishing_seconds =
                             session.metrics().row_set_finishing_seconds().clone();
@@ -965,47 +964,50 @@ impl PeekClient {
                             mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
                                 .get(catalog.system_config().dyncfgs());
 
-                        let resp = self
-                            .implement_fast_path_peek_plan(
-                                fast_path_plan,
-                                determination.timestamp_context.timestamp_or_default(),
-                                select_plan.finishing,
-                                target_cluster_id,
-                                target_replica,
-                                typ,
-                                max_result_size,
-                                max_query_result_size,
-                                row_set_finishing_seconds,
-                                read_holds,
-                                peek_stash_read_batch_size_bytes,
-                                peek_stash_read_memory_budget_bytes,
-                            )
-                            .await?;
-
-                        Ok(Some(resp))
+                        self.implement_fast_path_peek_plan(
+                            fast_path_plan,
+                            determination.timestamp_context.timestamp_or_default(),
+                            select_plan.finishing,
+                            target_cluster_id,
+                            target_replica,
+                            typ,
+                            max_result_size,
+                            max_query_result_size,
+                            row_set_finishing_seconds,
+                            read_holds,
+                            peek_stash_read_batch_size_bytes,
+                            peek_stash_read_memory_budget_bytes,
+                        )
+                        .await?
                     }
                     PeekPlan::SlowPath(dataflow_plan) => {
-                        let response = self
-                            .call_coordinator(|tx| Command::ExecuteSlowPathPeek {
-                                dataflow_plan: Box::new(dataflow_plan),
-                                determination,
-                                finishing: select_plan.finishing,
-                                compute_instance: target_cluster_id,
-                                target_replica,
-                                intermediate_result_type: typ,
-                                source_ids,
-                                conn_id: session.conn_id().clone(),
-                                max_result_size,
-                                max_query_result_size,
-                                tx,
-                            })
-                            .await?;
-
-                        Ok(Some(response))
+                        self.call_coordinator(|tx| Command::ExecuteSlowPathPeek {
+                            dataflow_plan: Box::new(dataflow_plan),
+                            determination,
+                            finishing: select_plan.finishing,
+                            compute_instance: target_cluster_id,
+                            target_replica,
+                            intermediate_result_type: typ,
+                            source_ids,
+                            conn_id: session.conn_id().clone(),
+                            max_result_size,
+                            max_query_result_size,
+                            tx,
+                        })
+                        .await?
                     }
-                }
+                };
+
+                Ok(Some(match select_plan.copy_to {
+                    None => response,
+                    // COPY TO STDOUT
+                    Some(format) => ExecuteResponse::CopyTo {
+                        format,
+                        resp: Box::new(response),
+                    },
+                }))
             }
-            Execution::CopyTo {
+            Execution::CopyToS3 {
                 global_lir_plan,
                 source_ids,
             } => {
