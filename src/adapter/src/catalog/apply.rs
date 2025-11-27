@@ -762,7 +762,6 @@ impl CatalogState {
                 // Assert that no built-in types are record types so that we don't
                 // need to bother to build a description. Only record types need
                 // descriptions.
-                let desc = None;
                 assert!(!matches!(typ.details.typ, CatalogType::Record { .. }));
                 let schema_id = self.resolve_system_schema(typ.schema);
 
@@ -780,7 +779,6 @@ impl CatalogState {
                         create_sql: None,
                         global_id,
                         details: typ.details.clone(),
-                        desc,
                         resolved_ids: ResolvedIds::empty(),
                     }),
                     MZ_SYSTEM_ROLE_ID,

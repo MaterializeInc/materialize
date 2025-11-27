@@ -1479,10 +1479,14 @@ impl Coordinator {
     ) -> Result<ExecuteResponse, AdapterError> {
         let id_ts = self.get_catalog_write_ts().await;
         let (item_id, global_id) = self.catalog().allocate_user_id(id_ts).await?;
+        // Validate the type definition (e.g., composite columns) before storing.
+        plan.typ
+            .inner
+            .desc(&self.catalog().for_session(session))
+            .map_err(AdapterError::from)?;
         let typ = Type {
             create_sql: Some(plan.typ.create_sql),
             global_id,
-            desc: plan.typ.inner.desc(&self.catalog().for_session(session))?,
             details: CatalogTypeDetails {
                 array_id: None,
                 typ: plan.typ.inner,

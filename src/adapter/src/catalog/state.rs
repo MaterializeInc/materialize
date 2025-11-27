@@ -1419,14 +1419,12 @@ impl CatalogState {
                 cluster_id: in_cluster,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
-                let desc = match typ.inner.desc(&session_catalog) {
-                    Ok(desc) => desc,
-                    Err(err) => return Err((err.into(), cached_expr)),
-                };
+                if let Err(err) = typ.inner.desc(&session_catalog) {
+                    return Err((err.into(), cached_expr));
+                }
                 CatalogItem::Type(Type {
                     create_sql: Some(typ.create_sql),
                     global_id,
-                    desc,
                     details: CatalogTypeDetails {
                         array_id: None,
                         typ: typ.inner,

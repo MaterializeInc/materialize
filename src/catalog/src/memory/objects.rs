@@ -40,9 +40,9 @@ use mz_sql::ast::{
 };
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, RoleAttributes, RoleMembership,
-    RoleVars, SystemObjectType,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference,
+    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, DependencyIds, FullItemName, QualifiedItemName,
@@ -1486,7 +1486,6 @@ pub struct Type {
     pub global_id: GlobalId,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
-    pub desc: Option<RelationDesc>,
     /// Other catalog objects referenced by this type.
     pub resolved_ids: ResolvedIds,
 }
@@ -1727,13 +1726,13 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 Some(Cow::Owned(mview.desc.at_version(version)))
             }
-            CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
             CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Type(_) => None,
         }
     }
 
