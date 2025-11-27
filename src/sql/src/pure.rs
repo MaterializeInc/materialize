@@ -398,10 +398,20 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 // Attach comment for each column in the item, if the user has
                 // not already provided an overriding `DOC ON` option for the
                 // column.
-                if let Ok(desc) = item.desc(&full_name) {
+                let column_descs: Result<Option<RelationDesc>, PlanError> = match item.item_type() {
+                    CatalogItemType::Type => item
+                        .type_details()
+                        .and_then(|details| details.typ.desc(catalog).transpose())
+                        .transpose(),
+                    _ => item
+                        .desc(&full_name)
+                        .map(|desc| Some(desc.into_owned()))
+                        .map_err(Into::into),
+                };
+
+                if let Ok(Some(desc)) = column_descs {
                     for (pos, column_name) in desc.iter_names().enumerate() {
-                        let comment = comments_map.get(&Some(pos + 1));
-                        if let Some(comment_str) = comment {
+                        if let Some(comment_str) = comments_map.get(&Some(pos + 1)) {
                             let doc_on_column_key = AvroDocOn {
                                 identifier: DocOnIdentifier::Column(ColumnName {
                                     relation: full_resolved_name.clone(),
