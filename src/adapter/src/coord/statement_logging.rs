@@ -303,7 +303,7 @@ impl Coordinator {
     /// This function does not do a sampling check, and assumes we did so in a higher layer.
     ///
     /// It _does_ do a throttling check, and returns `None` if we must not log due to throttling.
-    pub(crate) fn log_prepared_statement(
+    fn log_prepared_statement(
         &mut self,
         session: &mut Session,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
@@ -377,7 +377,7 @@ impl Coordinator {
     /// The rate at which statement execution should be sampled.
     /// This is the value of the session var `statement_logging_sample_rate`,
     /// constrained by the system var `statement_logging_max_sample_rate`.
-    pub fn statement_execution_sample_rate(&self, session: &Session) -> f64 {
+    fn statement_execution_sample_rate(&self, session: &Session) -> f64 {
         let system: f64 = self
             .catalog()
             .system_config()
@@ -565,7 +565,7 @@ impl Coordinator {
         ])
     }
 
-    pub fn pack_full_statement_execution_update(
+    fn pack_full_statement_execution_update(
         began_record: &StatementBeganExecutionRecord,
         ended_record: &StatementEndedExecutionRecord,
     ) -> Row {
@@ -606,7 +606,7 @@ impl Coordinator {
         row
     }
 
-    pub fn pack_statement_ended_execution_updates(
+    fn pack_statement_ended_execution_updates(
         began_record: &StatementBeganExecutionRecord,
         ended_record: &StatementEndedExecutionRecord,
     ) -> [(Row, Diff); 2] {
