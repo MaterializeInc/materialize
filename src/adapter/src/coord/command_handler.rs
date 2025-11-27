@@ -380,9 +380,8 @@ impl Coordinator {
                     )
                     .await;
                 }
-                Command::FrontendStatementLogging(_event) => {
-                    // TODO: Implement handler for frontend statement logging events
-                    // This will process statement logging events sent from frontend peek sequencing
+                Command::FrontendStatementLogging(event) => {
+                    self.handle_frontend_statement_logging_event(event);
                 }
             }
         }

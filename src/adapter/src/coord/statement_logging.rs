@@ -120,6 +120,7 @@ pub struct StatementLoggingId(Uuid);
 pub struct PreparedStatementEvent {
     prepared_statement: Row,
     sql_text: Row,
+    pub(crate) session_id: Uuid,
 }
 
 /// Throttling state for statement logging, shared across multiple components.
@@ -356,6 +357,7 @@ pub(crate) fn log_prepared_statement_inner(
             prepared_statement_event = Some(PreparedStatementEvent {
                 prepared_statement: mpsh_row,
                 sql_text: sql_row,
+                session_id: sid,
             });
 
             *logging_ref = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
@@ -535,6 +537,76 @@ pub(crate) fn begin_statement_execution_frontend(
 }
 
 impl Coordinator {
+    /// Helper to write began execution events to pending buffers.
+    /// Can be called from both old and new peek sequencing.
+    fn write_began_execution_events(
+        &mut self,
+        record: StatementBeganExecutionRecord,
+        prepared_statement: Option<PreparedStatementEvent>,
+    ) {
+        // Write the began execution record
+        let mseh_update = Self::pack_statement_began_execution_update(&record);
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((mseh_update, Diff::ONE));
+        
+        // Track the execution for later updates
+        self.statement_logging
+            .executions_begun
+            .insert(record.id, record);
+        
+        // If we have a prepared statement, log it and possibly its session
+        if let Some(ps_event) = prepared_statement {
+            let session_id = ps_event.session_id;
+            self.statement_logging
+                .pending_prepared_statement_events
+                .push(ps_event);
+            
+            // Check if we need to log the session for this prepared statement
+            if let Some(sh) = self
+                .statement_logging
+                .unlogged_sessions
+                .remove(&session_id)
+            {
+                let sh_update = Self::pack_session_history_update(&sh);
+                self.statement_logging
+                    .pending_session_events
+                    .push(sh_update);
+            }
+        }
+    }
+
+    /// Handle a statement logging event from frontend peek sequencing.
+    pub(crate) fn handle_frontend_statement_logging_event(
+        &mut self,
+        event: FrontendStatementLoggingEvent,
+    ) {
+        match event {
+            FrontendStatementLoggingEvent::BeganExecution { record, prepared_statement } => {
+                // Use the shared helper to write began execution events
+                self.write_began_execution_events(record, prepared_statement);
+            }
+            FrontendStatementLoggingEvent::EndedExecution(ended_record) => {
+                self.end_statement_execution(
+                    StatementLoggingId(ended_record.id),
+                    ended_record.reason,
+                );
+            }
+            FrontendStatementLoggingEvent::SetCluster { id, cluster_id, cluster_name: _ } => {
+                self.set_statement_execution_cluster(id, cluster_id);
+            }
+            FrontendStatementLoggingEvent::SetTimestamp { id, timestamp } => {
+                self.set_statement_execution_timestamp(id, timestamp);
+            }
+            FrontendStatementLoggingEvent::SetTransientIndex { id, transient_index_id } => {
+                self.set_transient_index_id(id, transient_index_id);
+            }
+            FrontendStatementLoggingEvent::Lifecycle { id, event, when } => {
+                self.record_statement_lifecycle_event(&id, &event, when);
+            }
+        }
+    }
+
     pub(crate) fn spawn_statement_logging_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         spawn(|| "statement_logging", async move {
@@ -564,6 +636,7 @@ impl Coordinator {
                     |PreparedStatementEvent {
                          prepared_statement,
                          sql_text,
+                         ..
                      }| {
                         ((prepared_statement, Diff::ONE), (sql_text, Diff::ONE))
                     },
@@ -1025,28 +1098,13 @@ impl Coordinator {
             began_at,
             build_info_version,
         );
-        let mseh_update = Self::pack_statement_began_execution_update(&record);
-        self.statement_logging
-            .pending_statement_execution_events
-            .push((mseh_update, Diff::ONE));
-        self.statement_logging
-            .executions_begun
-            .insert(execution_uuid, record);
-        if let Some((ps_record, ps_update)) = ps_record {
-            self.statement_logging
-                .pending_prepared_statement_events
-                .push(ps_update);
-            if let Some(sh) = self
-                .statement_logging
-                .unlogged_sessions
-                .remove(&ps_record.session_id)
-            {
-                let sh_update = Self::pack_session_history_update(&sh);
-                self.statement_logging
-                    .pending_session_events
-                    .push(sh_update);
-            }
-        }
+        
+        // Extract just the PreparedStatementEvent from the tuple
+        let prepared_statement = ps_record.map(|(_, ps_event)| ps_event);
+        
+        // Use the shared helper to write began execution events
+        self.write_began_execution_events(record, prepared_statement);
+        
         Some(StatementLoggingId(execution_uuid))
     }
 
