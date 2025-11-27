@@ -63,11 +63,14 @@ module "materialize_infrastructure" {
 
   # EKS Configuration
   cluster_version           = "1.31"
-  node_group_instance_types = ["r8g.2xlarge"]
-  node_group_desired_size   = 2
-  node_group_min_size       = 1
-  node_group_max_size       = 3
-  node_group_capacity_type  = "ON_DEMAND"
+  system_node_group_instance_types = ["r8g.xlarge"]
+  system_node_group_desired_size   = 2
+  system_node_group_min_size       = 1
+  system_node_group_max_size       = 3
+  materialize_node_group_instance_types = ["r8gd.xlarge"]
+  materialize_node_group_desired_size   = 2
+  materialize_node_group_min_size       = 1
+  materialize_node_group_max_size       = 3
 
   # Storage Configuration
   bucket_force_destroy = true

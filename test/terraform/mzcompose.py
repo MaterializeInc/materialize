@@ -966,7 +966,7 @@ def workflow_aws_upgrade(c: Composition, parser: WorkflowArgumentParser) -> None
             mz_debug_build_thread = build_mz_debug_async()
         if args.setup:
             aws.setup(
-                "aws-upgrade",
+                "aws-up",
                 args.setup,
                 str(previous_tags[0]),
                 str(tag),

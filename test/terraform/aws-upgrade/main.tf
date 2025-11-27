@@ -62,7 +62,7 @@ module "materialize_infrastructure" {
   # Basic settings
   # The namespace and environment variables are used to construct the names of the resources
   # e.g. ${namespace}-${environment}-eks and etc.
-  namespace   = "aws-upgrade"
+  namespace   = "aws-up"
   environment = "dev"
 
   install_materialize_operator = true
@@ -99,11 +99,14 @@ module "materialize_infrastructure" {
 
   # EKS Configuration
   cluster_version           = "1.32"
-  node_group_instance_types = ["r7gd.2xlarge"]
-  node_group_desired_size   = 2
-  node_group_min_size       = 1
-  node_group_max_size       = 3
-  node_group_capacity_type  = "ON_DEMAND"
+  system_node_group_instance_types = ["r8g.xlarge"]
+  system_node_group_desired_size   = 2
+  system_node_group_min_size       = 1
+  system_node_group_max_size       = 3
+  materialize_node_group_instance_types = ["r8gd.xlarge"]
+  materialize_node_group_desired_size   = 2
+  materialize_node_group_min_size       = 1
+  materialize_node_group_max_size       = 3
 
   # Storage Configuration
   bucket_force_destroy = true
@@ -129,7 +132,7 @@ module "materialize_infrastructure" {
   # Tags
   tags = {
     Environment = "dev"
-    Project     = "aws-upgrade"
+    Project     = "aws-up"
     Terraform   = "true"
   }
 }
