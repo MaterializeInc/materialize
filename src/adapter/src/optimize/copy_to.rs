@@ -149,6 +149,11 @@ impl GlobalLirPlan {
         &self.df_desc
     }
 
+    /// Returns the id of the dataflow's sink export.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the dataflow has no sink exports or has more than one.
     pub fn sink_id(&self) -> GlobalId {
         self.df_desc.sink_id()
     }

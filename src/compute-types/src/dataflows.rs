@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use mz_expr::{CollectionPlan, MirRelationExpr, MirScalarExpr, OptimizedMirRelationExpr};
+use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{GlobalId, SqlRelationType};
@@ -397,14 +398,14 @@ impl<P, S, T> DataflowDescription<P, S, T> {
         build
     }
 
-    /// Returns the id of the first sink export.
+    /// Returns the id of the dataflow's sink export.
     ///
     /// # Panics
     ///
-    /// Panics if the dataflow has no sink exports.
+    /// Panics if the dataflow has no sink exports or has more than one.
     pub fn sink_id(&self) -> GlobalId {
         let sink_exports = &self.sink_exports;
-        let sink_id = sink_exports.keys().next().expect("valid sink");
+        let sink_id = sink_exports.keys().into_element();
         *sink_id
     }
 }
