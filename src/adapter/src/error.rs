@@ -675,6 +675,29 @@ impl AdapterError {
             e @ PeekError::ReadHoldInsufficient(_) => AdapterError::internal("peek error", e),
         }
     }
+
+    pub fn concurrent_dependency_drop_from_dataflow_creation_error(
+        e: compute_error::DataflowCreationError,
+    ) -> Self {
+        use compute_error::DataflowCreationError::*;
+        match e {
+            InstanceMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "cluster",
+                dependency_id: id.to_string(),
+            },
+            CollectionMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
+                dependency_id: id.to_string(),
+            },
+            ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            MissingAsOf | SinceViolation(..) | EmptyAsOfForSubscribe | EmptyAsOfForCopyTo => {
+                AdapterError::internal("dataflow creation error", e)
+            }
+        }
+    }
 }
 
 impl fmt::Display for AdapterError {

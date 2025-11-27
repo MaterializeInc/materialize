@@ -104,7 +104,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
-use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::error::{DataflowCreationError, InstanceMissing};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -3682,23 +3682,41 @@ impl Coordinator {
 
     /// Call into the compute controller to install a finalized dataflow, and
     /// initialize the read policies for its exported readable objects.
+    ///
+    /// # Panics
+    ///
+    /// Panics if dataflow creation fails.
     pub(crate) async fn ship_dataflow(
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
         subscribe_target_replica: Option<ReplicaId>,
     ) {
+        self.try_ship_dataflow(dataflow, instance, subscribe_target_replica)
+            .await
+            .unwrap_or_terminate("dataflow creation cannot fail");
+    }
+
+    /// Call into the compute controller to install a finalized dataflow, and
+    /// initialize the read policies for its exported readable objects.
+    pub(crate) async fn try_ship_dataflow(
+        &mut self,
+        dataflow: DataflowDescription<Plan>,
+        instance: ComputeInstanceId,
+        subscribe_target_replica: Option<ReplicaId>,
+    ) -> Result<(), DataflowCreationError> {
         // We must only install read policies for indexes, not for sinks.
         // Sinks are write-only compute collections that don't have read policies.
         let export_ids = dataflow.exported_index_ids().collect();
 
         self.controller
             .compute
-            .create_dataflow(instance, dataflow, subscribe_target_replica)
-            .unwrap_or_terminate("dataflow creation cannot fail");
+            .create_dataflow(instance, dataflow, subscribe_target_replica)?;
 
         self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
+
+        Ok(())
     }
 
     /// Call into the compute controller to allow writes to the specified IDs
