@@ -77,6 +77,12 @@ pub const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
 pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
 pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 
+pub const SYSTEM_ALLOC_KEYS: &[&str] = &[
+    SYSTEM_ITEM_ALLOC_KEY,
+    SYSTEM_CLUSTER_ID_ALLOC_KEY,
+    SYSTEM_REPLICA_ID_ALLOC_KEY,
+];
+
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
     pub cluster_replica_size_map: ClusterReplicaSizeMap,
