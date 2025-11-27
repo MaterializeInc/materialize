@@ -1197,7 +1197,7 @@ impl crate::coord::Coordinator {
     /// This is called from the command handler for ExecuteSlowPathPeek.
     ///
     /// (For now, this method simply delegates to implement_peek_plan by constructing
-    /// the necessary PlannedPeek structure and a minimal ExecuteContext.)
+    /// the necessary PlannedPeek structure.)
     pub(crate) async fn implement_slow_path_peek(
         &mut self,
         dataflow_plan: PeekDataflowPlan<mz_repr::Timestamp>,
@@ -1210,6 +1210,7 @@ impl crate::coord::Coordinator {
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
+        mut ctx_extra: ExecuteContextExtra,
     ) -> Result<ExecuteResponse, AdapterError> {
         let source_arity = intermediate_result_type.arity();
 
@@ -1221,10 +1222,6 @@ impl crate::coord::Coordinator {
             source_arity,
             source_ids,
         };
-
-        // Create a minimal ExecuteContext
-        // TODO(peek-seq): Use the real context once we have statement logging.
-        let mut ctx_extra = ExecuteContextExtra::default();
 
         // Call the old peek sequencing's implement_peek_plan for now.
         // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
@@ -1340,7 +1337,7 @@ impl crate::coord::Coordinator {
             // created. If we don't do this, the sink_id remains in drop_sinks but no collection
             // exists in the compute controller, causing a panic when the connection terminates.
             self.remove_active_compute_sink(sink_id).await;
-            let _ = tx.send(Err(e));
+            send_err(tx, e);
             return;
         }
 
@@ -1357,6 +1354,7 @@ impl crate::coord::Coordinator {
                     Ok(res) => res,
                     Err(_) => Err(AdapterError::Internal("copy to sender dropped".into())),
                 };
+
                 let _ = tx.send(result);
             }
             .instrument(span),
