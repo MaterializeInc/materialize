@@ -37,7 +37,7 @@ use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices, eval_copy_to_uri};
-use crate::coord::timeline::TimelineContext;
+use crate::coord::timeline::{TimelineContext, timedomain_for};
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
@@ -1097,7 +1097,9 @@ impl Coordinator {
                 let determine_bundle = if in_immediate_multi_stmt_txn {
                     // In a transaction, determine a timestamp that will be valid for anything in
                     // any schema referenced by the first query.
-                    timedomain_bundle = self.timedomain_for(
+                    timedomain_bundle = timedomain_for(
+                        self.catalog(),
+                        &self.index_oracle(cluster_id),
                         source_ids,
                         &timeline_context,
                         session.conn_id(),
@@ -1156,15 +1158,15 @@ impl Coordinator {
             // Queries without a timestamp and timeline can belong to any existing timedomain.
             if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
                 let valid_names =
-                    self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
-                let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
+                    allowed_id_bundle.resolve_names(self.catalog(), session.conn_id());
+                let invalid_names = outside.resolve_names(self.catalog(), session.conn_id());
                 return Err(AdapterError::RelationOutsideTimeDomain {
                     relations: invalid_names,
                     names: valid_names,
                 });
             }
         } else if let Some(read_holds) = read_holds {
-            self.store_transaction_read_holds(session, read_holds);
+            self.store_transaction_read_holds(session.conn_id().clone(), read_holds);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

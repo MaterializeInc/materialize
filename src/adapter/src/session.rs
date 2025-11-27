@@ -1184,7 +1184,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
-    /// Whether the transaction is in a multi-statement, immediate transaction.
+    /// Whether we are in a multi-statement transaction, AND the query is immediate.
     pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
         self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
     }

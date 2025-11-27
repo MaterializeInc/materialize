@@ -83,13 +83,16 @@ use crate::util::ClientTransmitter;
 // plans in `sequence_plan` and guarantee that no caller can circumvent
 // that logic.
 //
-// The two exceptions are:
+// The exceptions are:
 //
 // - Creating a role during connection startup. In this scenario, the session has not been properly
 // initialized and we need to skip directly to creating role. We have a specific method,
 // `sequence_create_role_for_startup` for this purpose.
 // - Methods that continue the execution of some plan that was being run asynchronously, such as
 // `sequence_peek_stage` and `sequence_create_connection_stage_finish`.
+// - The frontend peek sequencing temporarily reaches into this module for things that are needed
+//   by both the old and new peek sequencing. TODO(peek-seq): We plan to eliminate this with a
+//   big refactoring after the old peek sequencing is removed.
 
 mod inner;
 

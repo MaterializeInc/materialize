@@ -52,7 +52,7 @@ use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, optimize};
+use crate::{AdapterNotice, AppendWebhookError, ReadHolds, optimize};
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -186,6 +186,18 @@ pub enum Command {
         tx: oneshot::Sender<Result<Option<mz_repr::Timestamp>, AdapterError>>,
     },
 
+    GetTransactionReadHoldsBundle {
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Option<ReadHolds<mz_repr::Timestamp>>>,
+    },
+
+    /// _Merges_ the given read holds into the given connection's stored transaction read holds.
+    StoreTransactionReadHolds {
+        conn_id: ConnectionId,
+        read_holds: ReadHolds<mz_repr::Timestamp>,
+        tx: oneshot::Sender<()>,
+    },
+
     ExecuteSlowPathPeek {
         dataflow_plan: Box<PeekDataflowPlan<mz_repr::Timestamp>>,
         determination: TimestampDetermination<mz_repr::Timestamp>,
@@ -231,6 +243,8 @@ impl Command {
             | Command::GetComputeInstanceClient { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::GetTransactionReadHoldsBundle { .. }
+            | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
             | Command::ExecuteCopyTo { .. } => None,
         }
@@ -256,6 +270,8 @@ impl Command {
             | Command::GetComputeInstanceClient { .. }
             | Command::GetOracle { .. }
             | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::GetTransactionReadHoldsBundle { .. }
+            | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
             | Command::ExecuteCopyTo { .. } => None,
         }

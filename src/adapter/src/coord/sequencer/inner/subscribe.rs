@@ -288,7 +288,7 @@ impl Coordinator {
             }
         }
 
-        self.store_transaction_read_holds(ctx.session(), read_holds);
+        self.store_transaction_read_holds(ctx.session().conn_id().clone(), read_holds);
 
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
