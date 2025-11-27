@@ -787,7 +787,7 @@ impl<'a> Transaction<'a> {
             "we can only allocate system item IDs during bootstrap"
         );
         Ok(self
-            .get_and_increment_id_by(&[SYSTEM_ITEM_ALLOC_KEY], amount)?
+            .get_and_increment_id_by(SYSTEM_ALLOC_KEYS, amount)?
             .into_iter()
             // TODO(alter_table): Use separate ID allocators.
             .map(|x| (CatalogItemId::System(x), GlobalId::System(x)))
