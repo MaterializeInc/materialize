@@ -64,8 +64,8 @@ use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
-    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_CLUSTER_ID_ALLOC_KEY,
-    SYSTEM_ITEM_ALLOC_KEY, SYSTEM_REPLICA_ID_ALLOC_KEY, Snapshot, SystemConfiguration,
+    SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ALLOC_KEYS,
+    SYSTEM_CLUSTER_ID_ALLOC_KEY, SYSTEM_ITEM_ALLOC_KEY, Snapshot, SystemConfiguration,
     USER_ITEM_ALLOC_KEY, USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_REPLICA_ID_ALLOC_KEY,
     USER_ROLE_ID_ALLOC_KEY,
 };
@@ -903,7 +903,7 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.get_and_increment_id(&[SYSTEM_REPLICA_ID_ALLOC_KEY])?;
+        let id = self.get_and_increment_id(SYSTEM_ALLOC_KEYS)?;
         Ok(ReplicaId::System(id))
     }
 

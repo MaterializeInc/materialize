@@ -21,7 +21,7 @@ CREATE TABLE t (i INT)
 query T multiline
 SELECT redacted_create_sql FROM mz_tables WHERE name = 't'
 ----
-CREATE TABLE materialize.public.t (i [s20 AS pg_catalog.int4])
+CREATE TABLE materialize.public.t (i [s28 AS pg_catalog.int4])
 EOF
 
 query T multiline
@@ -68,7 +68,7 @@ CREATE TABLE redactable_t (a int) WITH (RETAIN HISTORY = FOR '2s', REDACTED = 'p
 query T multiline
 SELECT redacted_create_sql FROM mz_tables WHERE name = 'redactable_t'
 ----
-CREATE TABLE materialize.public.redactable_t (a [s20 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>')
+CREATE TABLE materialize.public.redactable_t (a [s28 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>')
 EOF
 
 query T multiline
@@ -80,7 +80,7 @@ EOF
 query T multiline
 SELECT pretty_sql(redacted_create_sql) FROM mz_tables WHERE name = 'redactable_t'
 ----
-CREATE TABLE materialize.public.redactable_t (a [s20 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>');
+CREATE TABLE materialize.public.redactable_t (a [s28 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>');
 EOF
 
 query T multiline
@@ -165,7 +165,7 @@ CREATE TYPE ty AS LIST (ELEMENT TYPE=bool)
 query T multiline
 SELECT redacted_create_sql FROM mz_types WHERE name = 'ty'
 ----
-CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s6 AS pg_catalog.bool])
+CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s14 AS pg_catalog.bool])
 EOF
 
 statement ok
