@@ -16,9 +16,10 @@ use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{
     AuctionView, Event, Generator, LoadGeneratorOutput,
 };
-use rand::SeedableRng;
-use rand::prelude::{Rng, SmallRng};
+use rand::Rng;
 use rand::seq::SliceRandom;
+
+use crate::source::generator::small_rng;
 
 /// CREATE TABLE organizations
 ///   (
@@ -73,7 +74,7 @@ impl Generator for Auction {
         seed: Option<u64>,
         _resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
-        let mut rng = SmallRng::seed_from_u64(seed.unwrap_or_default());
+        let mut rng = small_rng(seed.unwrap_or_default());
 
         let organizations = COMPANIES.iter().enumerate().map(|(offset, name)| {
             let mut company = Row::with_capacity(2);

@@ -23,9 +23,9 @@ use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
 use rand::distributions::{Alphanumeric, DistString};
-use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
+use rand_chacha::ChaCha12Rng;
 
 #[derive(Clone, Debug)]
 pub struct Tpch {
@@ -44,7 +44,7 @@ impl Generator for Tpch {
         seed: Option<u64>,
         _resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
-        let mut rng = StdRng::seed_from_u64(seed.unwrap_or_default());
+        let mut rng = ChaCha12Rng::seed_from_u64(seed.unwrap_or_default());
         let mut ctx = Context {
             tpch: self.clone(),
             decimal_one: Numeric::from(1),
@@ -260,7 +260,7 @@ impl Context {
     /// without having to hold onto the full row for the order and its
     /// lineitems.
     fn order_row(&mut self, seed: u64, key: i64) -> (Row, Vec<Row>) {
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = ChaCha12Rng::seed_from_u64(seed);
         let key = order_key(key);
         let custkey = loop {
             let custkey = rng.gen_range(1..=self.tpch.count_customer);

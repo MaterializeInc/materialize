@@ -27,6 +27,7 @@ use mz_storage_types::sources::load_generator::{
 use mz_storage_types::sources::{MzOffset, SourceExportDetails, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
+use rand::SeedableRng;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::core::Partition;
 use timely::dataflow::{Scope, Stream};
@@ -449,4 +450,84 @@ fn render_simple_generator<G: Scope<Timestamp = MzOffset>>(
         health_stream,
         vec![button.press_on_drop()],
     )
+}
+
+/// Create a portable version of [`rand::rngs::SmallRng`].
+///
+/// This returns a `Xoshiro256PlusPlus` RNG whose seed has been generated using PCG32. This matches
+/// the behavior of `rand` 0.8. Later versions of `rand` are allowed to change these implementation
+/// details, as `SmallRng` is documented as non-portable. So to ensure load generator output
+/// doesn't change across version upgrade, we reproduce those details here.
+///
+/// Note that we can't simply call `Xoshiro256PlusPlus::seed_from_u64` instead because that uses a
+/// different seed generation algorithm (Splitmix64), so the RNG output would change.
+fn small_rng(seed: u64) -> rand_xoshiro::Xoshiro256PlusPlus {
+    let mut state = seed;
+
+    // The below code is taken from
+    // <https://github.com/rust-random/rand/tree/0.6.4/rand_core>
+    //
+    // Copyright 2018 Developers of the Rand project.
+    // Copyright 2017-2018 The Rust Project Developers.
+    //
+    // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE or
+    // https://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+    // <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your
+    // option. This file may not be copied, modified, or distributed
+    // except according to those terms.
+
+    // We use PCG32 to generate a u32 sequence, and copy to the seed
+    #[allow(clippy::as_conversions)]
+    fn pcg32(state: &mut u64) -> [u8; 4] {
+        const MUL: u64 = 6364136223846793005;
+        const INC: u64 = 11634580027462260723;
+
+        // We advance the state first (to get away from the input value,
+        // in case it has low Hamming Weight).
+        *state = state.wrapping_mul(MUL).wrapping_add(INC);
+        let state = *state;
+
+        // Use PCG output function with to_le to generate x:
+        let xorshifted = (((state >> 18) ^ state) >> 27) as u32;
+        let rot = (state >> 59) as u32;
+        let x = xorshifted.rotate_right(rot);
+        x.to_le_bytes()
+    }
+
+    let mut seed = [0; 32];
+    let mut iter = seed.as_mut().chunks_exact_mut(4);
+    for chunk in &mut iter {
+        chunk.copy_from_slice(&pcg32(&mut state));
+    }
+    let rem = iter.into_remainder();
+    if !rem.is_empty() {
+        rem.copy_from_slice(&pcg32(&mut state)[..rem.len()]);
+    }
+
+    rand_xoshiro::Xoshiro256PlusPlus::from_seed(seed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::rngs::{SmallRng, StdRng};
+    use rand::{Rng, SeedableRng};
+
+    #[mz_ore::test]
+    fn smallrng_to_xoshiro() {
+        let mut small = SmallRng::seed_from_u64(123);
+        let mut xoshiro = small_rng(123);
+
+        assert_eq!(small.r#gen::<u64>(), xoshiro.r#gen::<u64>());
+        assert_eq!(small.r#gen::<u64>(), xoshiro.r#gen::<u64>());
+    }
+
+    #[mz_ore::test]
+    fn stdrng_to_chacha() {
+        let mut std = StdRng::seed_from_u64(123);
+        let mut chacha = rand_chacha::ChaCha12Rng::seed_from_u64(123);
+
+        assert_eq!(std.r#gen::<u64>(), chacha.r#gen::<u64>());
+        assert_eq!(std.r#gen::<u64>(), chacha.r#gen::<u64>());
+    }
 }

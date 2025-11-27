@@ -65,6 +65,8 @@ postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rand = "0.8.5"
+rand_chacha = "0.3.1"
+rand_xoshiro = "0.6.0"
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",

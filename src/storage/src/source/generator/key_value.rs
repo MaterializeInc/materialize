@@ -22,8 +22,8 @@ use mz_storage_types::sources::load_generator::{KeyValueLoadGenerator, LoadGener
 use mz_storage_types::sources::{MzOffset, SourceTimestamp};
 use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton};
 use mz_timely_util::containers::stack::AccountedStackBuilder;
-use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
+use rand_chacha::ChaCha12Rng;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::ToStream;
 use timely::dataflow::operators::core::Partition;
@@ -306,14 +306,14 @@ impl Iterator for &mut PartitionKeyIterator {
     }
 }
 
-/// Create `StdRng` seeded so identical values can be produced during resumption (during
+/// Create an RNG seeded so identical values can be produced during resumption (during
 /// snapshotting or after).
-fn create_consistent_rng(source_seed: u64, offset: u64, partition: u64) -> StdRng {
+fn create_consistent_rng(source_seed: u64, offset: u64, partition: u64) -> ChaCha12Rng {
     let mut seed = [0; 32];
     seed[0..8].copy_from_slice(&source_seed.to_le_bytes());
     seed[8..16].copy_from_slice(&offset.to_le_bytes());
     seed[16..24].copy_from_slice(&partition.to_le_bytes());
-    StdRng::from_seed(seed)
+    ChaCha12Rng::from_seed(seed)
 }
 
 /// A struct that produces batches of data for the snapshotting phase.
@@ -331,7 +331,7 @@ struct TransactionalSnapshotProducer {
     /// The total number of rounds.
     snapshot_rounds: u64,
     /// The rng for the current round.
-    rng: Option<StdRng>,
+    rng: Option<ChaCha12Rng>,
     /// The source-level seed for the rng.
     seed: u64,
     /// Whether to include the offset or not.

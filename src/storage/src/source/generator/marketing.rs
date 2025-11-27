@@ -18,7 +18,10 @@ use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{
     Event, Generator, LoadGeneratorOutput, MarketingView,
 };
-use rand::{Rng, SeedableRng, distributions::Standard, rngs::SmallRng};
+use rand::Rng;
+use rand::distributions::Standard;
+
+use crate::source::generator::small_rng;
 
 const CONTROL: &str = "control";
 const EXPERIMENT: &str = "experiment";
@@ -35,7 +38,7 @@ impl Generator for Marketing {
         seed: Option<u64>,
         _resume_offset: MzOffset,
     ) -> Box<dyn Iterator<Item = (LoadGeneratorOutput, Event<Option<MzOffset>, (Row, Diff)>)>> {
-        let mut rng: SmallRng = SmallRng::seed_from_u64(seed.unwrap_or_default());
+        let mut rng = small_rng(seed.unwrap_or_default());
 
         let mut counter = 0;
 
