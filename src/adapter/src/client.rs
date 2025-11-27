@@ -264,6 +264,7 @@ impl Client {
             transient_id_gen,
             optimizer_metrics,
             persist_client,
+            throttling_state,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -272,6 +273,7 @@ impl Client {
             transient_id_gen,
             optimizer_metrics,
             persist_client,
+            throttling_state,
         );
 
         let mut client = SessionClient {

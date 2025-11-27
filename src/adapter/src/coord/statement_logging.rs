@@ -124,7 +124,7 @@ pub(crate) struct PreparedStatementEvent {
 
 /// Throttling state for statement logging, shared across multiple components.
 #[derive(Debug)]
-pub(crate) struct ThrottlingState {
+pub struct ThrottlingState {
     /// The number of bytes that we are allowed to emit for statement logging without being throttled.
     /// Increases at a rate of [`mz_sql::session::vars::STATEMENT_LOGGING_TARGET_DATA_RATE`] per second,
     /// up to a max value of [`mz_sql::session::vars::STATEMENT_LOGGING_MAX_DATA_CREDIT`].
@@ -212,7 +212,7 @@ pub(crate) struct StatementLogging {
     pending_statement_lifecycle_events: Vec<Row>,
 
     /// Shared throttling state for rate-limiting statement logging.
-    throttling_state: Arc<Mutex<ThrottlingState>>,
+    pub(crate) throttling_state: Arc<Mutex<ThrottlingState>>,
 }
 
 impl StatementLogging {

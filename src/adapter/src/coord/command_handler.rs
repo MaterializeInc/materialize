@@ -646,6 +646,7 @@ impl Coordinator {
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
+                    throttling_state: Arc::clone(&self.statement_logging.throttling_state),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
