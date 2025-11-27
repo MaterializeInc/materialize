@@ -17,9 +17,9 @@ use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_persist_client::PersistClient;
-use mz_repr::RelationDesc;
 use mz_repr::Timestamp;
 use mz_repr::global_id::TransientIdGen;
+use mz_repr::{RelationDesc, Row};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
@@ -32,6 +32,11 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
+use crate::statement_logging::WatchSetCreation;
+use crate::statement_logging::{
+    FrontendStatementLoggingEvent, PreparedStatementEvent, StatementLoggingFrontend,
+    StatementLoggingId,
+};
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
@@ -59,6 +64,8 @@ pub struct PeekClient {
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     persist_client: PersistClient,
+    /// Statement logging state for frontend peek sequencing.
+    pub statement_logging_frontend: StatementLoggingFrontend,
 }
 
 impl PeekClient {
@@ -69,6 +76,7 @@ impl PeekClient {
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
+        statement_logging_frontend: StatementLoggingFrontend,
     ) -> Self {
         Self {
             coordinator_client,
@@ -76,6 +84,7 @@ impl PeekClient {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
+            statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
         }
@@ -84,8 +93,7 @@ impl PeekClient {
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<&mut mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing>
-    {
+    ) -> Result<mz_compute_client::controller::instance::Client<Timestamp>, InstanceMissing> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
@@ -97,8 +105,9 @@ impl PeekClient {
         }
         Ok(self
             .compute_instances
-            .get_mut(&compute_instance)
-            .expect("ensured above"))
+            .get(&compute_instance)
+            .expect("ensured above")
+            .clone())
     }
 
     pub async fn ensure_oracle(
@@ -212,10 +221,6 @@ impl PeekClient {
     /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
-    ///
-    /// TODO(peek-seq): add statement logging
-    /// TODO(peek-seq): cancellation (see pending_peeks/client_pending_peeks wiring in the old
-    /// sequencing)
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -230,9 +235,25 @@ impl PeekClient {
         input_read_holds: ReadHolds<Timestamp>,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
+        watch_set: Option<WatchSetCreation>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
+            // For constant queries with statement logging, immediately log that
+            // dependencies are "ready" (trivially, because there are none).
+            if let Some(ref ws) = watch_set {
+                self.log_lifecycle_event(
+                    ws.logging_id,
+                    statement_logging::StatementLifecycleEvent::StorageDependenciesFinished,
+                );
+                self.log_lifecycle_event(
+                    ws.logging_id,
+                    statement_logging::StatementLifecycleEvent::ComputeDependenciesFinished,
+                );
+            }
+
             let mut rows = match rows_res {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
@@ -328,13 +349,28 @@ impl PeekClient {
         let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
         let result_desc = RelationDesc::new(intermediate_result_type.clone(), cols);
 
-        // Issue the peek to the instance
         let client = self
             .ensure_compute_instance_client(compute_instance)
             .await
             .map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
+
+        // Register coordinator tracking of this peek. This has to complete before issuing the peek.
+        //
+        // Warning: If we fail to actually issue the peek after this point, then we need to
+        // unregister it to avoid an orphaned registration.
+        self.call_coordinator(|tx| Command::RegisterFrontendPeek {
+            uuid,
+            conn_id: conn_id.clone(),
+            cluster_id: compute_instance,
+            depends_on,
+            is_fast_path: true,
+            watch_set,
+            tx,
+        })
+        .await?;
+
         let finishing_for_instance = finishing.clone();
-        client
+        let peek_result = client
             .peek(
                 peek_target,
                 literal_constraints,
@@ -347,10 +383,18 @@ impl PeekClient {
                 target_replica,
                 rows_tx,
             )
-            .await
-            .map_err(|err| {
-                AdapterError::concurrent_dependency_drop_from_peek_error(err, compute_instance)
-            })?;
+            .await;
+
+        if let Err(err) = peek_result {
+            // Clean up the registered peek since the peek failed to issue.
+            // The frontend will handle statement logging for the error.
+            self.call_coordinator(|tx| Command::UnregisterFrontendPeek { uuid, tx })
+                .await;
+            return Err(AdapterError::concurrent_dependency_drop_from_peek_error(
+                err,
+                compute_instance,
+            ));
+        }
 
         let peek_response_stream = Coordinator::create_peek_response_stream(
             rows_rx,
@@ -362,10 +406,96 @@ impl PeekClient {
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
         );
+
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
             rows: Box::pin(peek_response_stream),
             instance_id: compute_instance,
             strategy,
         })
+    }
+
+    // Statement logging helper methods
+
+    /// Log the beginning of statement execution.
+    pub(crate) fn log_began_execution(
+        &self,
+        record: statement_logging::StatementBeganExecutionRecord,
+        mseh_update: Row,
+        prepared_statement: Option<PreparedStatementEvent>,
+    ) {
+        self.coordinator_client
+            .send(Command::FrontendStatementLogging(
+                FrontendStatementLoggingEvent::BeganExecution {
+                    record,
+                    mseh_update,
+                    prepared_statement,
+                },
+            ));
+    }
+
+    /// Log cluster selection for a statement.
+    pub(crate) fn log_set_cluster(
+        &self,
+        id: StatementLoggingId,
+        cluster_id: mz_controller_types::ClusterId,
+    ) {
+        self.coordinator_client
+            .send(Command::FrontendStatementLogging(
+                FrontendStatementLoggingEvent::SetCluster { id, cluster_id },
+            ));
+    }
+
+    /// Log timestamp determination for a statement.
+    pub(crate) fn log_set_timestamp(&self, id: StatementLoggingId, timestamp: mz_repr::Timestamp) {
+        self.coordinator_client
+            .send(Command::FrontendStatementLogging(
+                FrontendStatementLoggingEvent::SetTimestamp { id, timestamp },
+            ));
+    }
+
+    /// Log transient index ID for a statement.
+    pub(crate) fn log_set_transient_index_id(
+        &self,
+        id: StatementLoggingId,
+        transient_index_id: mz_repr::GlobalId,
+    ) {
+        self.coordinator_client
+            .send(Command::FrontendStatementLogging(
+                FrontendStatementLoggingEvent::SetTransientIndex {
+                    id,
+                    transient_index_id,
+                },
+            ));
+    }
+
+    /// Log a statement lifecycle event.
+    pub(crate) fn log_lifecycle_event(
+        &self,
+        id: StatementLoggingId,
+        event: statement_logging::StatementLifecycleEvent,
+    ) {
+        let when = (self.statement_logging_frontend.now)();
+        self.coordinator_client
+            .send(Command::FrontendStatementLogging(
+                FrontendStatementLoggingEvent::Lifecycle { id, event, when },
+            ));
+    }
+
+    /// Log the end of statement execution.
+    pub(crate) fn log_ended_execution(
+        &self,
+        id: StatementLoggingId,
+        reason: statement_logging::StatementEndedExecutionReason,
+    ) {
+        let ended_at = (self.statement_logging_frontend.now)();
+        let record = statement_logging::StatementEndedExecutionRecord {
+            id: id.0,
+            reason,
+            ended_at,
+        };
+        self.coordinator_client
+            .send(Command::FrontendStatementLogging(
+                FrontendStatementLoggingEvent::EndedExecution(record),
+            ));
     }
 }

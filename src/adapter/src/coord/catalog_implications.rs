@@ -62,9 +62,8 @@ use crate::coord::Coordinator;
 use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
-use crate::coord::statement_logging::StatementLoggingId;
 use crate::coord::timeline::TimelineState;
-use crate::statement_logging::StatementEndedExecutionReason;
+use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 
 pub mod parsed_state_updates;

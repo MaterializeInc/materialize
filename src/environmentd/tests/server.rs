@@ -185,6 +185,45 @@ impl TestServerWithStatementLoggingChecks {
     {
         self.server.connect_internal(tls)
     }
+
+    /// Returns the metrics registry for the test server.
+    pub fn metrics_registry(&self) -> &MetricsRegistry {
+        self.server.metrics_registry()
+    }
+}
+
+/// Helper to get statement logging record counts from the metrics registry.
+/// Returns (sampled_true_count, sampled_false_count).
+fn get_statement_logging_record_counts(
+    server: &TestServerWithStatementLoggingChecks,
+) -> (u64, u64) {
+    let metrics = server.metrics_registry().gather();
+    let record_count_metric = metrics
+        .into_iter()
+        .find(|m| m.name() == "mz_statement_logging_record_count")
+        .expect("mz_statement_logging_record_count metric should exist");
+
+    let metric_entries = record_count_metric.get_metric();
+    let sampled_true = metric_entries
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "sample" && l.value() == "true")
+        })
+        .map(|m| u64::cast_lossy(m.get_counter().get_value()))
+        .unwrap_or(0);
+    let sampled_false = metric_entries
+        .iter()
+        .find(|m| {
+            m.get_label()
+                .iter()
+                .any(|l| l.name() == "sample" && l.value() == "false")
+        })
+        .map(|m| u64::cast_lossy(m.get_counter().get_value()))
+        .unwrap_or(0);
+
+    (sampled_true, sampled_false)
 }
 
 impl Drop for TestServerWithStatementLoggingChecks {
@@ -585,10 +624,51 @@ ORDER BY mseh.began_at",
     );
     assert_none!(sl_results[3].result_size);
     assert_none!(sl_results[3].rows_returned);
+
+    // Verify metrics show all statements were sampled (100% sample rate means no unsampled).
+    let (sampled_true, sampled_false) = get_statement_logging_record_counts(&server);
+    assert!(
+        sampled_true > 0,
+        "some statements should be sampled with 100% rate"
+    );
+    assert_eq!(
+        sampled_false, 0,
+        "no statements should be unsampled with 100% rate"
+    );
+
+    // Verify statement_logging_actual_bytes metric is being tracked.
+    // With 100% sample rate, actual_bytes should equal unsampled_bytes.
+    let metrics = server.metrics_registry().gather();
+    let actual_bytes = metrics
+        .iter()
+        .find(|m| m.name() == "mz_statement_logging_actual_bytes")
+        .expect("mz_statement_logging_actual_bytes metric should exist")
+        .get_metric()[0]
+        .get_counter()
+        .get_value();
+    let unsampled_bytes = metrics
+        .iter()
+        .find(|m| m.name() == "mz_statement_logging_unsampled_bytes")
+        .expect("mz_statement_logging_unsampled_bytes metric should exist")
+        .get_metric()[0]
+        .get_counter()
+        .get_value();
+    assert!(
+        actual_bytes > 0.0,
+        "actual_bytes should be > 0 with 100% sample rate"
+    );
+    assert_eq!(
+        actual_bytes, unsampled_bytes,
+        "with 100% sample rate, actual_bytes should equal unsampled_bytes"
+    );
 }
 
 fn run_throttling_test(use_prepared_statement: bool) {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0, "1000");
+    // The `target_data_rate` should be
+    // - high enough so that the `SELECT 1` queries get throttled (even with high CPU load due to
+    //   other tests running in parallel),
+    // - but low enough that the `SELECT 2` query after the sleep doesn't get throttled.
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "200");
     thread::sleep(Duration::from_secs(2));
 
     if use_prepared_statement {
@@ -795,6 +875,18 @@ fn test_statement_logging_sampling_inner(
 
     let sqls: Vec<String> = sl.into_iter().map(|r| r.get(0)).collect();
     assert_eq!(sqls, expected_sqls);
+
+    // Verify the statement_logging_record_count metric correctly tracks sampled vs unsampled.
+    // With 50% sampling and deterministic RNG, exactly 21 of 50 statements should be sampled.
+    let (sampled_true, sampled_false) = get_statement_logging_record_counts(&server);
+    assert_eq!(
+        sampled_true, 21,
+        "expected 21 statements to be sampled with 50% rate and deterministic RNG"
+    );
+    assert_eq!(
+        sampled_false, 29,
+        "expected 29 statements to not be sampled with 50% rate and deterministic RNG"
+    );
 }
 
 #[mz_ore::test]
@@ -811,21 +903,15 @@ fn test_statement_logging_sampling_constrained() {
     test_statement_logging_sampling_inner(server, client);
 }
 
-#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-async fn test_statement_logging_unsampled_metrics() {
-    let server = test_util::TestHarness::default().start().await;
-    server
-        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
-        .await;
-    let client = server.connect().await.unwrap();
+/// Test that the `mz_statement_logging_unsampled_bytes` metric tracks the total bytes
+/// of SQL text that would have been logged if statement logging were fully enabled.
+/// We set `sample_rate=0.0` so no statements are actually sampled/logged, but the
+/// unsampled_bytes metric still gets incremented for every executed statement.
+#[mz_ore::test]
+fn test_statement_logging_unsampled_metrics() {
+    // Use sample_rate=0.0 so statements are not sampled, but unsampled_bytes metric is still tracked.
+    let (server, mut client) = setup_statement_logging(1.0, 0.0, "");
 
-    // TODO[btv]
-    //
-    // The point of these metrics is to show how much SQL text we
-    // would have logged had statement logging been turned on.
-    // Since there is no way (yet) to turn statement logging off or on,
-    // this test is valid as-is currently. However, once we turn statement logging on,
-    // we should make sure to turn it _off_ in this test.
     let batch_queries = [
         "SELECT 'Hello, world!';SELECT 1;;",
         "SELECT 'Hello, world again!'",
@@ -854,29 +940,26 @@ async fn test_statement_logging_unsampled_metrics() {
         .count();
 
     for q in batch_queries {
-        client.batch_execute(q).await.unwrap();
+        client.batch_execute(q).unwrap();
     }
 
     for q in single_queries {
-        client.execute(q, &[]).await.unwrap();
+        client.execute(q, &[]).unwrap();
     }
 
     for q in prepared_queries {
-        let s = client.prepare(q).await.unwrap();
-        client.execute(&s, &[]).await.unwrap();
+        let s = client.prepare(q).unwrap();
+        client.execute(&s, &[]).unwrap();
     }
 
-    client.batch_execute(&named_prepared_outer).await.unwrap();
+    client.batch_execute(&named_prepared_outer).unwrap();
 
     // This should NOT be logged, since we never actually execute it.
-    client
-        .prepare("SELECT 'Hello, not counted!'")
-        .await
-        .unwrap();
+    client.prepare("SELECT 'Hello, not counted!'").unwrap();
 
     let expected_total = batch_total + single_total + prepared_total + named_prepared_outer_len;
     let metric_value = server
-        .metrics_registry
+        .metrics_registry()
         .gather()
         .into_iter()
         .find(|m| m.name() == "mz_statement_logging_unsampled_bytes")
@@ -886,6 +969,14 @@ async fn test_statement_logging_unsampled_metrics() {
         .get_value();
     let metric_value = usize::cast_from(u64::try_cast_from(metric_value).unwrap());
     assert_eq!(expected_total, metric_value);
+
+    // Also verify that statement_logging_record_count shows all statements as not sampled
+    // (since we're using 0% sample rate).
+    let (sampled_true, _sampled_false) = get_statement_logging_record_counts(&server);
+    assert_eq!(
+        sampled_true, 0,
+        "no statements should be sampled with 0% sample rate"
+    );
 }
 
 #[mz_ore::test]
@@ -2009,20 +2100,11 @@ fn test_ws_passes_options() {
 // doesn't cause a crash with subscribes over web sockets,
 // which was previously happening (in staging) due to us
 // dropping the `ExecuteContext` on the floor in that case.
-fn test_ws_subscribe_no_crash() {
-    let server = test_util::TestHarness::default()
-        .with_system_parameter_default(
-            "statement_logging_max_sample_rate".to_string(),
-            "1.0".to_string(),
-        )
-        .with_system_parameter_default(
-            "statement_logging_default_sample_rate".to_string(),
-            "1.0".to_string(),
-        )
-        .start_blocking();
+fn test_statement_logging_ws_subscribe_no_crash() {
+    let (server, _client) = setup_statement_logging(1.0, 1.0, "");
 
     // Create our WebSocket.
-    let ws_url = server.ws_addr();
+    let ws_url = server.server.ws_addr();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
     test_util::auth_with_ws(&mut ws, Default::default()).unwrap();
 

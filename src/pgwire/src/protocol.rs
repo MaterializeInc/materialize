@@ -1340,6 +1340,8 @@ where
         Ok(State::Ready)
     }
 
+    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
+    /// triggering the execution of the underlying query.
     fn execute(
         &mut self,
         portal_name: String,

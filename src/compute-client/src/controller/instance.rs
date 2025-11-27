@@ -279,6 +279,8 @@ where
     }
 
     /// Issue a peek by calling into the instance task.
+    ///
+    /// If this returns an error, then it didn't modify any `Instance` state.
     pub async fn peek(
         &self,
         peek_target: PeekTarget,
@@ -1735,6 +1737,8 @@ where
     }
 
     /// Initiate a peek request for the contents of `id` at `timestamp`.
+    ///
+    /// If this returns an error, then it didn't modify any `Instance` state.
     #[mz_ore::instrument(level = "debug")]
     pub fn peek(
         &mut self,

@@ -1951,7 +1951,7 @@ feature_flags!(
         name: statement_logging_use_reproducible_rng,
         desc: "statement logging with reproducible RNG",
         default: false,
-        enable_for_item_parsing: true,
+        enable_for_item_parsing: false,
     },
     {
         name: enable_notices_for_index_already_exists,

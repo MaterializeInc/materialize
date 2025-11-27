@@ -56,11 +56,11 @@ use crate::client::RecordFirstRowStream;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::in_memory_oracle::InMemoryTimestampOracle;
 use crate::coord::peek::PeekResponseUnary;
-use crate::coord::statement_logging::PreparedStatementLoggingInfo;
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
 use crate::coord::{Coordinator, ExplainContext};
 use crate::error::AdapterError;
 use crate::metrics::{Metrics, SessionMetrics};
+use crate::statement_logging::PreparedStatementLoggingInfo;
 use crate::{AdapterNotice, ExecuteContext};
 
 const DUMMY_CONNECTION_ID: ConnectionId = ConnectionId::Static(0);

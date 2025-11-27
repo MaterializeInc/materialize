@@ -264,6 +264,7 @@ impl Client {
             transient_id_gen,
             optimizer_metrics,
             persist_client,
+            statement_logging_frontend,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -272,6 +273,7 @@ impl Client {
             transient_id_gen,
             optimizer_metrics,
             persist_client,
+            statement_logging_frontend,
         );
 
         let mut client = SessionClient {
@@ -692,6 +694,9 @@ impl SessionClient {
     /// Executes a previously-bound portal.
     ///
     /// Note: the provided `cancel_future` must be cancel-safe as it's polled in a `select!` loop.
+    ///
+    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
+    /// triggering the execution of the underlying query.
     #[mz_ore::instrument(level = "debug")]
     pub async fn execute(
         &mut self,
@@ -704,11 +709,19 @@ impl SessionClient {
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
-        if let Some(resp) = self.try_frontend_peek(&portal_name).await? {
+        let mut outer_ctx_extra = outer_ctx_extra;
+        if let Some(resp) = self
+            .try_frontend_peek(&portal_name, &mut outer_ctx_extra)
+            .await?
+        {
             debug!("frontend peek succeeded");
+            // Frontend peek handled the execution and retired outer_ctx_extra if it existed.
+            // No additional work needed here.
             return Ok((resp, execute_started));
         } else {
-            debug!("frontend peek did not happen");
+            debug!("frontend peek did not happen, falling back to `Command::Execute`");
+            // If we bailed out, outer_ctx_extra is still present (if it was originally).
+            // `Command::Execute` will handle it.
         }
 
         let response = self
@@ -1020,7 +1033,10 @@ impl SessionClient {
                 | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
                 | Command::ExecuteCopyTo { .. }
-                | Command::ExecuteSideEffectingFunc { .. } => {}
+                | Command::ExecuteSideEffectingFunc { .. }
+                | Command::RegisterFrontendPeek { .. }
+                | Command::UnregisterFrontendPeek { .. }
+                | Command::FrontendStatementLogging(..) => {}
             };
             cmd
         });
@@ -1105,16 +1121,20 @@ impl SessionClient {
 
     /// Attempt to sequence a peek from the session task.
     ///
-    /// Returns Some(response) if we handled the peek, or None to fall back to the Coordinator's
-    /// peek sequencing.
+    /// Returns `Ok(Some(response))` if we handled the peek, or `Ok(None)` to fall back to the
+    /// Coordinator's sequencing. If it returns an error, it should be returned to the user.
+    ///
+    /// `outer_ctx_extra` is Some when we are executing as part of an outer statement, e.g., a FETCH
+    /// triggering the execution of the underlying query.
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
+        outer_ctx_extra: &mut Option<ExecuteContextExtra>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek_inner(portal_name, session)
+                .try_frontend_peek(portal_name, session, outer_ctx_extra)
                 .await
         } else {
             Ok(None)
