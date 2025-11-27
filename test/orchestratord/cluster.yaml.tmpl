@@ -11,6 +11,14 @@
 
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
+# Allow access to the registry from both inside and outside kubernetes
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
+      endpoint = ["http://proxy-docker-hub:5000"]
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."ghcr.io"]
+      endpoint = ["http://proxy-ghcr:5000"]
 # Constrain the node port range to something relatively small, then forward all
 # those ports from the host. This makes services running in Kubernetes
 # accessible at localhost:$NODEPORT without requiring manual port forwarding.
@@ -23,6 +31,9 @@ kubeadmConfigPatches:
 nodes:
   - role: control-plane
     image: kindest/node:v1.32.5
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "$DOCKER_CONFIG/config.json"
     extraPortMappings:
       - containerPort: 32000
         hostPort: 32000
@@ -160,10 +171,17 @@ nodes:
       materialize.cloud/availability-zone: "1"
       topology.kubernetes.io/zone: "1"
       workload: "materialize-instance"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "$DOCKER_CONFIG/config.json"
   - role: worker
     image: kindest/node:v1.32.5
     labels:
       materialize.cloud/scratch-fs: "true"
+      materialize.cloud/disk: "true"
       materialize.cloud/availability-zone: "2"
       topology.kubernetes.io/zone: "2"
       workload: "materialize-instance"
+    extraMounts:
+      - containerPath: /var/lib/kubelet/config.json
+        hostPath: "$DOCKER_CONFIG/config.json"
