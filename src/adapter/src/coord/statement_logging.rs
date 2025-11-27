@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use bytes::BytesMut;
 use mz_controller_types::ClusterId;
@@ -122,33 +122,9 @@ pub(crate) struct PreparedStatementEvent {
     sql_text: Row,
 }
 
+/// Throttling state for statement logging, shared across multiple components.
 #[derive(Debug)]
-pub(crate) struct StatementLogging {
-    /// Information about statement executions that have been logged
-    /// but not finished.
-    ///
-    /// This map needs to have enough state left over to later retract
-    /// the system table entries (so that we can update them when the
-    /// execution finished.)
-    executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
-
-    /// Information about sessions that have been started, but which
-    /// have not yet been logged in `mz_session_history`.
-    /// They may be logged as part of a statement being executed (and chosen for logging).
-    unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
-
-    /// A reproducible RNG for deciding whether to sample statement executions.
-    /// Only used by tests; otherwise, `rand::thread_rng()` is used.
-    /// Controlled by the system var `statement_logging_use_reproducible_rng`.
-    reproducible_rng: rand_chacha::ChaCha8Rng,
-
-    pending_statement_execution_events: Vec<(Row, Diff)>,
-    pending_prepared_statement_events: Vec<PreparedStatementEvent>,
-    pending_session_events: Vec<Row>,
-    pending_statement_lifecycle_events: Vec<Row>,
-
-    now: NowFn,
-
+pub(crate) struct ThrottlingState {
     /// The number of bytes that we are allowed to emit for statement logging without being throttled.
     /// Increases at a rate of [`mz_sql::session::vars::STATEMENT_LOGGING_TARGET_DATA_RATE`] per second,
     /// up to a max value of [`mz_sql::session::vars::STATEMENT_LOGGING_MAX_DATA_CREDIT`].
@@ -157,23 +133,19 @@ pub(crate) struct StatementLogging {
     last_logged_ts_seconds: u64,
     /// The number of statements that have been throttled since the last successfully logged statement.
     throttled_count: usize,
+    /// Function to get the current time.
+    now: NowFn,
 }
 
-impl StatementLogging {
+impl ThrottlingState {
+    /// Create a new throttling state.
     pub(crate) fn new(now: NowFn) -> Self {
         let last_logged_ts_seconds = (now)() / 1000;
         Self {
-            executions_begun: BTreeMap::new(),
-            unlogged_sessions: BTreeMap::new(),
-            reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
-            pending_statement_execution_events: Vec::new(),
-            pending_prepared_statement_events: Vec::new(),
-            pending_session_events: Vec::new(),
-            pending_statement_lifecycle_events: Vec::new(),
             tokens: 0,
             last_logged_ts_seconds,
-            now: now.clone(),
             throttled_count: 0,
+            now,
         }
     }
 
@@ -182,7 +154,7 @@ impl StatementLogging {
     ///
     /// Returns `None` if we must throttle this statement, and `Some(n)` otherwise, where `n`
     /// is the number of statements that were dropped due to throttling before this one.
-    fn throttling_check(
+    pub(crate) fn throttling_check(
         &mut self,
         cost: u64,
         target_data_rate: u64,
@@ -210,6 +182,50 @@ impl StatementLogging {
             );
             self.throttled_count += 1;
             None
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct StatementLogging {
+    /// Information about statement executions that have been logged
+    /// but not finished.
+    ///
+    /// This map needs to have enough state left over to later retract
+    /// the system table entries (so that we can update them when the
+    /// execution finished.)
+    executions_begun: BTreeMap<Uuid, StatementBeganExecutionRecord>,
+
+    /// Information about sessions that have been started, but which
+    /// have not yet been logged in `mz_session_history`.
+    /// They may be logged as part of a statement being executed (and chosen for logging).
+    unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
+
+    /// A reproducible RNG for deciding whether to sample statement executions.
+    /// Only used by tests; otherwise, `rand::thread_rng()` is used.
+    /// Controlled by the system var `statement_logging_use_reproducible_rng`.
+    reproducible_rng: rand_chacha::ChaCha8Rng,
+
+    pending_statement_execution_events: Vec<(Row, Diff)>,
+    pending_prepared_statement_events: Vec<PreparedStatementEvent>,
+    pending_session_events: Vec<Row>,
+    pending_statement_lifecycle_events: Vec<Row>,
+
+    /// Shared throttling state for rate-limiting statement logging.
+    throttling_state: Arc<Mutex<ThrottlingState>>,
+}
+
+impl StatementLogging {
+    pub(crate) fn new(now: NowFn) -> Self {
+        Self {
+            executions_begun: BTreeMap::new(),
+            unlogged_sessions: BTreeMap::new(),
+            reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
+            pending_statement_execution_events: Vec::new(),
+            pending_prepared_statement_events: Vec::new(),
+            pending_session_events: Vec::new(),
+            pending_statement_lifecycle_events: Vec::new(),
+            throttling_state: Arc::new(Mutex::new(ThrottlingState::new(now))),
         }
     }
 }
@@ -284,13 +300,23 @@ impl Coordinator {
             .system_config()
             .statement_logging_target_data_rate()
         else {
-            return Some(std::mem::take(&mut self.statement_logging.throttled_count));
+            let mut throttling_state = self
+                .statement_logging
+                .throttling_state
+                .lock()
+                .expect("throttling state lock");
+            return Some(std::mem::take(&mut throttling_state.throttled_count));
         };
         let max_data_credit = self
             .catalog
             .system_config()
             .statement_logging_max_data_credit();
-        self.statement_logging.throttling_check(
+        let mut throttling_state = self
+            .statement_logging
+            .throttling_state
+            .lock()
+            .expect("throttling state lock");
+        throttling_state.throttling_check(
             cost.cast_into(),
             target_data_rate.cast_into(),
             max_data_credit.map(CastInto::cast_into),
