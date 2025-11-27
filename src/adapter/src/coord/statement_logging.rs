@@ -117,7 +117,7 @@ impl PreparedStatementLoggingInfo {
 pub struct StatementLoggingId(Uuid);
 
 #[derive(Debug, Clone)]
-pub(crate) struct PreparedStatementEvent {
+pub struct PreparedStatementEvent {
     prepared_statement: Row,
     sql_text: Row,
 }
@@ -412,8 +412,43 @@ pub(crate) fn create_began_execution_record(
 #[allow(dead_code)]
 pub(crate) struct StatementLoggingEvents {
     pub prepared_statement: Option<PreparedStatementEvent>,
-    pub session_history: Option<SessionHistoryEvent>,
     pub began_execution: StatementBeganExecutionRecord,
+}
+
+/// Represents a single statement logging event that can be sent from the frontend
+/// peek sequencing to the Coordinator via an mpsc channel.
+#[derive(Debug, Clone)]
+pub enum FrontendStatementLoggingEvent {
+    /// Statement execution began, possibly with an associated prepared statement
+    /// if this is the first time the prepared statement is being logged
+    BeganExecution {
+        record: StatementBeganExecutionRecord,
+        prepared_statement: Option<PreparedStatementEvent>,
+    },
+    /// Statement execution ended
+    EndedExecution(StatementEndedExecutionRecord),
+    /// Set the cluster for a statement execution
+    SetCluster {
+        id: StatementLoggingId,
+        cluster_id: ClusterId,
+        cluster_name: String,
+    },
+    /// Set the execution timestamp for a statement
+    SetTimestamp {
+        id: StatementLoggingId,
+        timestamp: Timestamp,
+    },
+    /// Set the transient index ID for a statement
+    SetTransientIndex {
+        id: StatementLoggingId,
+        transient_index_id: GlobalId,
+    },
+    /// Record a statement lifecycle event
+    Lifecycle {
+        id: StatementLoggingId,
+        event: StatementLifecycleEvent,
+        when: EpochMillis,
+    },
 }
 
 /// Sketch of a frontend version of `begin_statement_execution` that doesn't require
@@ -433,7 +468,6 @@ pub(crate) struct StatementLoggingEvents {
 /// * `sample_rate` - The sampling rate for this statement
 /// * `use_reproducible_rng` - Whether to use reproducible RNG (for testing)
 /// * `reproducible_rng` - The reproducible RNG (if enabled)
-/// * `unlogged_sessions` - Map of sessions that haven't been logged yet
 /// * `throttling_state` - Shared throttling state
 /// * `build_info_version` - Version string from build info
 /// * `now` - Function to get current time
@@ -450,7 +484,6 @@ pub(crate) fn begin_statement_execution_frontend(
     sample_rate: f64,
     use_reproducible_rng: bool,
     reproducible_rng: &mut rand_chacha::ChaCha8Rng,
-    unlogged_sessions: &BTreeMap<Uuid, SessionHistoryEvent>,
     throttling_state: &Arc<Mutex<ThrottlingState>>,
     target_data_rate: Option<u64>,
     max_data_credit: Option<u64>,
@@ -465,16 +498,13 @@ pub(crate) fn begin_statement_execution_frontend(
     }
 
     // Process prepared statement logging using the shared helper
-    let (prepared_statement_event, session_id, ps_uuid) = log_prepared_statement_inner(
+    let (prepared_statement_event, _session_id, ps_uuid) = log_prepared_statement_inner(
         session,
         logging,
         throttling_state,
         target_data_rate,
         max_data_credit,
     )?;
-
-    // Check if we need to log the session
-    let session_history_event = unlogged_sessions.get(&session_id).cloned();
 
     // Determine began_at timestamp
     let began_at = lifecycle_timestamps
@@ -499,7 +529,6 @@ pub(crate) fn begin_statement_execution_frontend(
         StatementLoggingId(execution_uuid),
         StatementLoggingEvents {
             prepared_statement: prepared_statement_event,
-            session_history: session_history_event,
             began_execution,
         },
     ))

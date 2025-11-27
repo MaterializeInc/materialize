@@ -647,6 +647,7 @@ impl Coordinator {
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
                     throttling_state: Arc::clone(&self.statement_logging.throttling_state),
+                    statement_logging_event_tx: self.statement_logging_event_tx.clone(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
