@@ -24,7 +24,7 @@ use itertools::EitherOrBoth;
 use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
-use mz_ore::{soft_panic_no_log, soft_panic_or_log};
+use mz_ore::{soft_assert_or_log, soft_panic_no_log, soft_panic_or_log};
 use mz_persist::indexed::columnar::arrow::{realloc_any, realloc_array};
 use mz_persist::indexed::columnar::{ColumnarRecords, ColumnarRecordsStructuredExt};
 use mz_persist::indexed::encoding::{BlobTraceBatchPart, BlobTraceUpdates};
@@ -1265,7 +1265,7 @@ where
             || inline_desc.upper() != registered_desc.upper();
         if needs_truncation {
             if cfg.validate_bounds_on_read {
-                assert!(
+                soft_assert_or_log!(
                     PartialOrder::less_equal(inline_desc.lower(), registered_desc.lower()),
                     "key={} inline={:?} registered={:?}",
                     printable_name,
@@ -1278,7 +1278,7 @@ where
                     // upper of a batch that's already been staged (the inline
                     // upper), so if it's been used, then there's no useful
                     // invariant that we can assert here.
-                    assert!(
+                    soft_assert_or_log!(
                         PartialOrder::less_equal(registered_desc.upper(), inline_desc.upper()),
                         "key={} inline={:?} registered={:?}",
                         printable_name,

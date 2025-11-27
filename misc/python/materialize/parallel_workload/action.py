@@ -1301,9 +1301,9 @@ class FlipFlagsAction(Action):
             "100",
         ]
         self.flags_with_values["persist_stats_audit_panic"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["persist_validate_part_bounds_on_read"] = (
-            BOOLEAN_FLAG_VALUES
-        )
+        # Note: it's not safe to re-enable this flag after writing with `persist_validate_part_bounds_on_write`,
+        # since those new-style parts may fail our old-style validation.
+        self.flags_with_values["persist_validate_part_bounds_on_read"] = ["FALSE"]
         self.flags_with_values["persist_validate_part_bounds_on_write"] = (
             BOOLEAN_FLAG_VALUES
         )
