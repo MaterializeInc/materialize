@@ -2441,7 +2441,12 @@ impl CatalogEntry {
 
     /// Reports if the item has columns.
     pub fn has_columns(&self) -> bool {
-        self.desc_opt_latest().is_some()
+        match self.item() {
+            CatalogItem::Type(Type { details, .. }) => {
+                matches!(details.typ, CatalogType::Record { .. })
+            }
+            _ => self.desc_opt_latest().is_some(),
+        }
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
