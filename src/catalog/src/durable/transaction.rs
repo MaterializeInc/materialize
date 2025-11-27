@@ -230,7 +230,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(DatabaseId, u32), CatalogError> {
-        let id = self.get_and_increment_id(DATABASE_ID_ALLOC_KEY.to_string())?;
+        let id = self.get_and_increment_id(&[DATABASE_ID_ALLOC_KEY])?;
         let id = DatabaseId::User(id);
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_database(id, database_name, owner_id, privileges, oid)?;
@@ -268,7 +268,7 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(SchemaId, u32), CatalogError> {
-        let id = self.get_and_increment_id(SCHEMA_ID_ALLOC_KEY.to_string())?;
+        let id = self.get_and_increment_id(&[SCHEMA_ID_ALLOC_KEY])?;
         let id = SchemaId::User(id);
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_schema(
@@ -341,7 +341,7 @@ impl<'a> Transaction<'a> {
         vars: RoleVars,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(RoleId, u32), CatalogError> {
-        let id = self.get_and_increment_id(USER_ROLE_ID_ALLOC_KEY.to_string())?;
+        let id = self.get_and_increment_id(&[USER_ROLE_ID_ALLOC_KEY])?;
         let id = RoleId::User(id);
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_role(id, name, attributes, membership, vars, oid)?;
@@ -436,7 +436,7 @@ impl<'a> Transaction<'a> {
         config: ClusterConfig,
         temporary_oids: &HashSet<u32>,
     ) -> Result<(), CatalogError> {
-        let cluster_id = self.get_and_increment_id(SYSTEM_CLUSTER_ID_ALLOC_KEY.to_string())?;
+        let cluster_id = self.get_and_increment_id(&[SYSTEM_CLUSTER_ID_ALLOC_KEY])?;
         let cluster_id = ClusterId::system(cluster_id).ok_or(SqlCatalogError::IdExhaustion)?;
         self.insert_cluster(
             cluster_id,
@@ -615,7 +615,7 @@ impl<'a> Transaction<'a> {
         temporary_oids: &HashSet<u32>,
     ) -> Result<NetworkPolicyId, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
-        let id = self.get_and_increment_id(USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string())?;
+        let id = self.get_and_increment_id(&[USER_NETWORK_POLICY_ID_ALLOC_KEY])?;
         let id = NetworkPolicyId::User(id);
         self.insert_network_policy(id, name, rules, privileges, owner_id, oid)
     }
@@ -733,40 +733,48 @@ impl<'a> Transaction<'a> {
         }
     }
 
-    pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {
-        Ok(self.get_and_increment_id_by(key, 1)?.into_element())
+    pub fn get_and_increment_id(&mut self, keys: &[&str]) -> Result<u64, CatalogError> {
+        Ok(self.get_and_increment_id_by(keys, 1)?.into_element())
     }
 
     pub fn get_and_increment_id_by(
         &mut self,
-        key: String,
+        keys: &[&str],
         amount: u64,
     ) -> Result<Vec<u64>, CatalogError> {
+        let items = self.id_allocator.items();
+
         assert!(
-            key != SYSTEM_ITEM_ALLOC_KEY || !self.durable_catalog.is_bootstrap_complete(),
+            keys != &[SYSTEM_ITEM_ALLOC_KEY] || !self.durable_catalog.is_bootstrap_complete(),
             "system item IDs cannot be allocated outside of bootstrap"
         );
 
-        let current_id = self
-            .id_allocator
-            .items()
-            .get(&IdAllocKey { name: key.clone() })
-            .unwrap_or_else(|| panic!("{key} id allocator missing"))
-            .next_id;
+        let mut current_id = 1;
+        for key in keys {
+            let next_id = items
+                .get(&IdAllocKey {
+                    name: key.to_string(),
+                })
+                .unwrap_or_else(|| panic!("{key} id allocator missing"))
+                .next_id;
+
+            current_id = current_id.max(next_id)
+        }
+
         let next_id = current_id
             .checked_add(amount)
             .ok_or(SqlCatalogError::IdExhaustion)?;
-        let prev = self.id_allocator.set(
-            IdAllocKey { name: key },
-            Some(IdAllocValue { next_id }),
-            self.op_id,
-        )?;
-        assert_eq!(
-            prev,
-            Some(IdAllocValue {
-                next_id: current_id
-            })
-        );
+        for key in keys {
+            let prev = self.id_allocator.set(
+                IdAllocKey {
+                    name: key.to_string(),
+                },
+                Some(IdAllocValue { next_id }),
+                self.op_id,
+            )?;
+            assert!(prev.is_some_and(|value| value.next_id <= current_id),);
+        }
+
         Ok((current_id..next_id).collect())
     }
 
@@ -779,7 +787,7 @@ impl<'a> Transaction<'a> {
             "we can only allocate system item IDs during bootstrap"
         );
         Ok(self
-            .get_and_increment_id_by(SYSTEM_ITEM_ALLOC_KEY.to_string(), amount)?
+            .get_and_increment_id_by(&[SYSTEM_ITEM_ALLOC_KEY], amount)?
             .into_iter()
             // TODO(alter_table): Use separate ID allocators.
             .map(|x| (CatalogItemId::System(x), GlobalId::System(x)))
@@ -882,7 +890,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         Ok(self
-            .get_and_increment_id_by(USER_ITEM_ALLOC_KEY.to_string(), amount)?
+            .get_and_increment_id_by(&[USER_ITEM_ALLOC_KEY], amount)?
             .into_iter()
             // TODO(alter_table): Use separate ID allocators.
             .map(|x| (CatalogItemId::User(x), GlobalId::User(x)))
@@ -890,21 +898,21 @@ impl<'a> Transaction<'a> {
     }
 
     pub fn allocate_user_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.get_and_increment_id(USER_REPLICA_ID_ALLOC_KEY.to_string())?;
+        let id = self.get_and_increment_id(&[USER_REPLICA_ID_ALLOC_KEY])?;
         Ok(ReplicaId::User(id))
     }
 
     pub fn allocate_system_replica_id(&mut self) -> Result<ReplicaId, CatalogError> {
-        let id = self.get_and_increment_id(SYSTEM_REPLICA_ID_ALLOC_KEY.to_string())?;
+        let id = self.get_and_increment_id(&[SYSTEM_REPLICA_ID_ALLOC_KEY])?;
         Ok(ReplicaId::System(id))
     }
 
     pub fn allocate_audit_log_id(&mut self) -> Result<u64, CatalogError> {
-        self.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())
+        self.get_and_increment_id(&[AUDIT_LOG_ID_ALLOC_KEY])
     }
 
     pub fn allocate_storage_usage_ids(&mut self) -> Result<u64, CatalogError> {
-        self.get_and_increment_id(STORAGE_USAGE_ID_ALLOC_KEY.to_string())
+        self.get_and_increment_id(&[STORAGE_USAGE_ID_ALLOC_KEY])
     }
 
     /// Allocates `amount` OIDs. OIDs can be recycled if they aren't currently assigned to any

@@ -98,7 +98,7 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
 
     let start_id = state.get_next_id(id_type).await.unwrap();
     let commit_ts = state.current_upper().await;
-    let ids = state.allocate_id(id_type, 3, commit_ts).await.unwrap();
+    let ids = state.allocate_id(&[id_type], 3, commit_ts).await.unwrap();
     assert_eq!(ids, (start_id..(start_id + 3)).collect::<Vec<_>>());
 
     let snapshot_id_allocs: Vec<_> = state

@@ -61,10 +61,6 @@ pub const SCHEMA_ID_ALLOC_KEY: &str = "schema";
 pub const USER_ITEM_ALLOC_KEY: &str = "user";
 pub const SYSTEM_ITEM_ALLOC_KEY: &str = "system";
 pub const USER_ROLE_ID_ALLOC_KEY: &str = "user_role";
-pub const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
-pub const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
-pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
-pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 pub const AUDIT_LOG_ID_ALLOC_KEY: &str = "auditlog";
 pub const STORAGE_USAGE_ID_ALLOC_KEY: &str = "storage_usage";
 pub const USER_NETWORK_POLICY_ID_ALLOC_KEY: &str = "user_network_policy";
@@ -73,6 +69,13 @@ pub(crate) const CATALOG_CONTENT_VERSION_KEY: &str = "catalog_content_version";
 pub const BUILTIN_MIGRATION_SHARD_KEY: &str = "builtin_migration_shard";
 pub const EXPRESSION_CACHE_SHARD_KEY: &str = "expression_cache_shard";
 pub const MOCK_AUTHENTICATION_NONCE_KEY: &str = "mock_authentication_nonce";
+
+// Note: these ID types are generally merged with the main system and user item keys,
+// but are kept separate here for backwards-compatibility reasons.
+pub const USER_CLUSTER_ID_ALLOC_KEY: &str = "user_compute";
+pub const SYSTEM_CLUSTER_ID_ALLOC_KEY: &str = "system_compute";
+pub const USER_REPLICA_ID_ALLOC_KEY: &str = "replica";
+pub const SYSTEM_REPLICA_ID_ALLOC_KEY: &str = "system_replica";
 
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
@@ -319,7 +322,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
     #[mz_ore::instrument(level = "debug")]
     async fn allocate_id(
         &mut self,
-        id_type: &str,
+        id_type: &[&str],
         amount: u64,
         commit_ts: Timestamp,
     ) -> Result<Vec<u64>, CatalogError> {
@@ -327,7 +330,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
             return Ok(Vec::new());
         }
         let mut txn = self.transaction().await?;
-        let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
+        let ids = txn.get_and_increment_id_by(id_type, amount)?;
         txn.commit_internal(commit_ts).await?;
         Ok(ids)
     }
@@ -341,7 +344,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         let ids = self
-            .allocate_id(USER_ITEM_ALLOC_KEY, amount, commit_ts)
+            .allocate_id(&[USER_ITEM_ALLOC_KEY], amount, commit_ts)
             .await?;
         let ids = ids
             .iter()
@@ -357,7 +360,9 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         commit_ts: Timestamp,
     ) -> Result<(CatalogItemId, GlobalId), CatalogError> {
-        let id = self.allocate_id(USER_ITEM_ALLOC_KEY, 1, commit_ts).await?;
+        let id = self
+            .allocate_id(&[USER_ITEM_ALLOC_KEY], 1, commit_ts)
+            .await?;
         let id = id.into_element();
         Ok((CatalogItemId::User(id), GlobalId::User(id)))
     }
@@ -370,7 +375,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<ClusterId, CatalogError> {
         let id = self
-            .allocate_id(USER_CLUSTER_ID_ALLOC_KEY, 1, commit_ts)
+            .allocate_id(&[USER_CLUSTER_ID_ALLOC_KEY], 1, commit_ts)
             .await?
             .into_element();
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)
