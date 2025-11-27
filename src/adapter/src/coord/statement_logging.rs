@@ -116,7 +116,7 @@ impl PreparedStatementLoggingInfo {
 #[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
 pub struct StatementLoggingId(Uuid);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct PreparedStatementEvent {
     prepared_statement: Row,
     sql_text: Row,
@@ -230,6 +230,281 @@ impl StatementLogging {
     }
 }
 
+/// Helper function to decide whether to sample a statement execution.
+/// Returns `true` if the statement should be sampled based on the sample rate.
+pub(crate) fn should_sample_statement(
+    sample_rate: f64,
+    use_reproducible_rng: bool,
+    reproducible_rng: &mut rand_chacha::ChaCha8Rng,
+) -> bool {
+    let distribution = Bernoulli::new(sample_rate).expect("rate must be in range [0, 1]");
+    if use_reproducible_rng {
+        distribution.sample(reproducible_rng)
+    } else {
+        distribution.sample(&mut thread_rng())
+    }
+}
+
+/// Helper function to serialize statement parameters for logging.
+fn serialize_params(params: &Params) -> Vec<Option<String>> {
+    std::iter::zip(params.execute_types.iter(), params.datums.iter())
+        .map(|(r#type, datum)| {
+            mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
+                let mut buf = BytesMut::new();
+                val.encode_text(&mut buf);
+                String::from_utf8(Into::<Vec<u8>>::into(buf))
+                    .expect("Serialization shouldn't produce non-UTF-8 strings.")
+            })
+        })
+        .collect()
+}
+
+/// Helper function to log a prepared statement.
+/// 
+/// This function processes prepared statement logging and performs throttling checks.
+/// It can be called from both the old Coordinator-based sequencing and the new frontend sequencing.
+///
+/// # Arguments
+/// * `session` - The session executing the statement
+/// * `logging` - Prepared statement logging info
+/// * `throttling_state` - Shared throttling state
+/// * `target_data_rate` - Optional target data rate for throttling
+/// * `max_data_credit` - Optional max data credit for throttling
+///
+/// # Returns
+/// * `None` if throttling prevents logging
+/// * `Some((prepared_statement_event, session_id, uuid))` if logging should proceed
+///   - `prepared_statement_event` is `Some` if this is the first time logging this statement
+///   - `session_id` is the session that prepared the statement (for session history lookup)
+///   - `uuid` is the prepared statement UUID
+pub(crate) fn log_prepared_statement_inner(
+    session: &mut Session,
+    logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+    throttling_state: &Arc<Mutex<ThrottlingState>>,
+    target_data_rate: Option<u64>,
+    max_data_credit: Option<u64>,
+) -> Option<(Option<PreparedStatementEvent>, Uuid, Uuid)> {
+    let logging_ref = session.qcell_rw(&*logging);
+    let mut prepared_statement_event = None;
+
+    let (ps_uuid, session_id) = match logging_ref {
+        PreparedStatementLoggingInfo::AlreadyLogged { uuid } => (*uuid, session.uuid()),
+        PreparedStatementLoggingInfo::StillToLog {
+            sql,
+            redacted_sql,
+            prepared_at,
+            name,
+            session_id,
+            accounted,
+            kind,
+            _sealed: _,
+        } => {
+            assert!(
+                *accounted,
+                "accounting for logging should be done in `begin_statement_execution`"
+            );
+            let uuid = epoch_to_uuid_v7(prepared_at);
+            let sql = std::mem::take(sql);
+            let redacted_sql = std::mem::take(redacted_sql);
+            let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
+            
+            // Copy session_id before mutating logging_ref
+            let sid = *session_id;
+            
+            let record = StatementPreparedRecord {
+                id: uuid,
+                sql_hash,
+                name: std::mem::take(name),
+                session_id: sid,
+                prepared_at: *prepared_at,
+                kind: *kind,
+            };
+
+            let mut mpsh_row = Row::default();
+            let mut mpsh_packer = mpsh_row.packer();
+            Coordinator::pack_statement_prepared_update(&record, &mut mpsh_packer);
+            
+            let sql_row = Row::pack([
+                Datum::TimestampTz(
+                    to_datetime(*prepared_at)
+                        .truncate_day()
+                        .try_into()
+                        .expect("must fit"),
+                ),
+                Datum::Bytes(sql_hash.as_slice()),
+                Datum::String(sql.as_str()),
+                Datum::String(redacted_sql.as_str()),
+            ]);
+
+            let cost = mpsh_packer.byte_len() + sql_row.byte_len();
+            
+            // Check throttling
+            let throttled_count = if let Some(target_data_rate) = target_data_rate {
+                let mut state = throttling_state.lock().expect("throttling state lock");
+                state.throttling_check(
+                    cost.cast_into(),
+                    target_data_rate.cast_into(),
+                    max_data_credit.map(CastInto::cast_into),
+                )?
+            } else {
+                let mut state = throttling_state.lock().expect("throttling state lock");
+                std::mem::take(&mut state.throttled_count)
+            };
+            
+            mpsh_packer.push(Datum::UInt64(throttled_count.try_into().expect("must fit")));
+
+            prepared_statement_event = Some(PreparedStatementEvent {
+                prepared_statement: mpsh_row,
+                sql_text: sql_row,
+            });
+
+            *logging_ref = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
+            (uuid, sid)
+        }
+    };
+    
+    Some((prepared_statement_event, session_id, ps_uuid))
+}
+
+/// Helper function to create a `StatementBeganExecutionRecord`.
+pub(crate) fn create_began_execution_record(
+    execution_uuid: Uuid,
+    prepared_statement_uuid: Uuid,
+    sample_rate: f64,
+    params: &Params,
+    session: &Session,
+    began_at: EpochMillis,
+    build_info_version: String,
+) -> StatementBeganExecutionRecord {
+    let params = serialize_params(params);
+    StatementBeganExecutionRecord {
+        id: execution_uuid,
+        prepared_statement_id: prepared_statement_uuid,
+        sample_rate,
+        params,
+        began_at,
+        application_name: session.application_name().to_string(),
+        transaction_isolation: session.vars().transaction_isolation().to_string(),
+        transaction_id: session
+            .transaction()
+            .inner()
+            .expect("Every statement runs in an explicit or implicit transaction")
+            .id,
+        mz_version: build_info_version,
+        // These are not known yet; we'll fill them in later.
+        cluster_id: None,
+        cluster_name: None,
+        execution_timestamp: None,
+        transient_index_id: None,
+        database_name: session.vars().database().into(),
+        search_path: session
+            .vars()
+            .search_path()
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect(),
+    }
+}
+
+/// Events that need to be logged for a statement execution.
+/// These can be buffered and sent to the Coordinator later.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct StatementLoggingEvents {
+    pub prepared_statement: Option<PreparedStatementEvent>,
+    pub session_history: Option<SessionHistoryEvent>,
+    pub began_execution: StatementBeganExecutionRecord,
+}
+
+/// Sketch of a frontend version of `begin_statement_execution` that doesn't require
+/// direct access to Coordinator state. This is not yet fully wired up.
+///
+/// This function demonstrates how statement logging can be done from the frontend
+/// peek sequencing by:
+/// 1. Using the same helper functions as the Coordinator version
+/// 2. Returning events in a structured way instead of pushing to pending vectors
+/// 3. Allowing the events to be buffered and sent to the Coordinator asynchronously
+///
+/// # Arguments
+/// * `session` - The session executing the statement
+/// * `params` - The statement parameters
+/// * `logging` - Prepared statement logging info
+/// * `lifecycle_timestamps` - Optional timestamps from the frontend
+/// * `sample_rate` - The sampling rate for this statement
+/// * `use_reproducible_rng` - Whether to use reproducible RNG (for testing)
+/// * `reproducible_rng` - The reproducible RNG (if enabled)
+/// * `unlogged_sessions` - Map of sessions that haven't been logged yet
+/// * `throttling_state` - Shared throttling state
+/// * `build_info_version` - Version string from build info
+/// * `now` - Function to get current time
+///
+/// # Returns
+/// * `None` if the statement should not be logged (not sampled or throttled)
+/// * `Some((StatementLoggingId, StatementLoggingEvents))` if logging should proceed
+#[allow(dead_code)]
+pub(crate) fn begin_statement_execution_frontend(
+    session: &mut Session,
+    params: &Params,
+    logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+    lifecycle_timestamps: Option<LifecycleTimestamps>,
+    sample_rate: f64,
+    use_reproducible_rng: bool,
+    reproducible_rng: &mut rand_chacha::ChaCha8Rng,
+    unlogged_sessions: &BTreeMap<Uuid, SessionHistoryEvent>,
+    throttling_state: &Arc<Mutex<ThrottlingState>>,
+    target_data_rate: Option<u64>,
+    max_data_credit: Option<u64>,
+    build_info_version: String,
+    now: NowFn,
+) -> Option<(StatementLoggingId, StatementLoggingEvents)> {
+    // Use the same sampling helper as Coordinator version
+    let sample = should_sample_statement(sample_rate, use_reproducible_rng, reproducible_rng);
+    
+    if !sample {
+        return None;
+    }
+
+    // Process prepared statement logging using the shared helper
+    let (prepared_statement_event, session_id, ps_uuid) = log_prepared_statement_inner(
+        session,
+        logging,
+        throttling_state,
+        target_data_rate,
+        max_data_credit,
+    )?;
+
+    // Check if we need to log the session
+    let session_history_event = unlogged_sessions.get(&session_id).cloned();
+
+    // Determine began_at timestamp
+    let began_at = lifecycle_timestamps
+        .map(|lt| lt.received)
+        .unwrap_or_else(|| now());
+    
+    let current_time = now();
+    let execution_uuid = epoch_to_uuid_v7(&current_time);
+
+    // Use the same record creation helper as Coordinator version
+    let began_execution = create_began_execution_record(
+        execution_uuid,
+        ps_uuid,
+        sample_rate,
+        params,
+        session,
+        began_at,
+        build_info_version,
+    );
+
+    Some((
+        StatementLoggingId(execution_uuid),
+        StatementLoggingEvents {
+            prepared_statement: prepared_statement_event,
+            session_history: session_history_event,
+            began_execution,
+        },
+    ))
+}
+
 impl Coordinator {
     pub(crate) fn spawn_statement_logging_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
@@ -289,40 +564,6 @@ impl Coordinator {
         }
     }
 
-    /// Check whether we need to do throttling (i.e., whether `STATEMENT_LOGGING_TARGET_DATA_RATE` is set).
-    /// If so, actually do the check.
-    ///
-    /// Returns `None` if we must throttle this statement, and `Some(n)` otherwise, where `n`
-    /// is the number of statements that were dropped due to throttling before this one.
-    fn statement_logging_throttling_check(&mut self, cost: usize) -> Option<usize> {
-        let Some(target_data_rate) = self
-            .catalog
-            .system_config()
-            .statement_logging_target_data_rate()
-        else {
-            let mut throttling_state = self
-                .statement_logging
-                .throttling_state
-                .lock()
-                .expect("throttling state lock");
-            return Some(std::mem::take(&mut throttling_state.throttled_count));
-        };
-        let max_data_credit = self
-            .catalog
-            .system_config()
-            .statement_logging_max_data_credit();
-        let mut throttling_state = self
-            .statement_logging
-            .throttling_state
-            .lock()
-            .expect("throttling state lock");
-        throttling_state.throttling_check(
-            cost.cast_into(),
-            target_data_rate.cast_into(),
-            max_data_credit.map(CastInto::cast_into),
-        )
-    }
-
     /// Returns any statement logging events needed for a particular
     /// prepared statement. Possibly mutates the `PreparedStatementLoggingInfo` metadata.
     ///
@@ -337,68 +578,40 @@ impl Coordinator {
         Option<(StatementPreparedRecord, PreparedStatementEvent)>,
         Uuid,
     )> {
-        let logging = session.qcell_rw(&*logging);
-        let mut out = None;
-
-        let uuid = match logging {
-            PreparedStatementLoggingInfo::AlreadyLogged { uuid } => *uuid,
-            PreparedStatementLoggingInfo::StillToLog {
-                sql,
-                redacted_sql,
-                prepared_at,
-                name,
+        let target_data_rate = self
+            .catalog
+            .system_config()
+            .statement_logging_target_data_rate()
+            .map(|rate| rate.cast_into());
+        let max_data_credit = self
+            .catalog
+            .system_config()
+            .statement_logging_max_data_credit()
+            .map(|credit| credit.cast_into());
+        
+        let (prepared_statement_event, session_id, ps_uuid) = log_prepared_statement_inner(
+            session,
+            logging,
+            &self.statement_logging.throttling_state,
+            target_data_rate,
+            max_data_credit,
+        )?;
+        
+        // Convert the result to include StatementPreparedRecord if this is a new statement
+        // The record is only used for its session_id field in begin_statement_execution
+        let out = prepared_statement_event.map(|event| {
+            let record = StatementPreparedRecord {
+                id: ps_uuid,
+                sql_hash: [0; 32], // Not used by caller
+                name: String::new(), // Not used by caller
                 session_id,
-                accounted,
-                kind,
-                _sealed: _,
-            } => {
-                assert!(
-                    *accounted,
-                    "accounting for logging should be done in `begin_statement_execution`"
-                );
-                let uuid = epoch_to_uuid_v7(prepared_at);
-                let sql = std::mem::take(sql);
-                let redacted_sql = std::mem::take(redacted_sql);
-                let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
-                let record = StatementPreparedRecord {
-                    id: uuid,
-                    sql_hash,
-                    name: std::mem::take(name),
-                    session_id: *session_id,
-                    prepared_at: *prepared_at,
-                    kind: *kind,
-                };
-                let mut mpsh_row = Row::default();
-                let mut mpsh_packer = mpsh_row.packer();
-                Self::pack_statement_prepared_update(&record, &mut mpsh_packer);
-                let sql_row = Row::pack([
-                    Datum::TimestampTz(
-                        to_datetime(*prepared_at)
-                            .truncate_day()
-                            .try_into()
-                            .expect("must fit"),
-                    ),
-                    Datum::Bytes(sql_hash.as_slice()),
-                    Datum::String(sql.as_str()),
-                    Datum::String(redacted_sql.as_str()),
-                ]);
-
-                let cost = mpsh_packer.byte_len() + sql_row.byte_len();
-                let throttled_count = self.statement_logging_throttling_check(cost)?;
-                mpsh_packer.push(Datum::UInt64(throttled_count.try_into().expect("must fit")));
-                out = Some((
-                    record,
-                    PreparedStatementEvent {
-                        prepared_statement: mpsh_row,
-                        sql_text: sql_row,
-                    },
-                ));
-
-                *logging = PreparedStatementLoggingInfo::AlreadyLogged { uuid };
-                uuid
-            }
-        };
-        Some((out, uuid))
+                prepared_at: 0, // Not used by caller
+                kind: None, // Not used by caller
+            };
+            (record, event)
+        });
+        
+        Some((out, ps_uuid))
     }
     /// The rate at which statement execution should be sampled.
     /// This is the value of the session var `statement_logging_sample_rate`,
@@ -715,16 +928,15 @@ impl Coordinator {
         }
         let sample_rate = self.statement_execution_sample_rate(session);
 
-        let distribution = Bernoulli::new(sample_rate).expect("rate must be in range [0, 1]");
-        let sample = if self
+        let use_reproducible_rng = self
             .catalog()
             .system_config()
-            .statement_logging_use_reproducible_rng()
-        {
-            distribution.sample(&mut self.statement_logging.reproducible_rng)
-        } else {
-            distribution.sample(&mut thread_rng())
-        };
+            .statement_logging_use_reproducible_rng();
+        let sample = should_sample_statement(
+            sample_rate,
+            use_reproducible_rng,
+            &mut self.statement_logging.reproducible_rng,
+        );
 
         // Track how many statements we're recording.
         let sampled_label = sample.then_some("true").unwrap_or("false");
@@ -769,48 +981,21 @@ impl Coordinator {
             began_at,
         );
 
-        let params = std::iter::zip(params.execute_types.iter(), params.datums.iter())
-            .map(|(r#type, datum)| {
-                mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
-                    let mut buf = BytesMut::new();
-                    val.encode_text(&mut buf);
-                    String::from_utf8(Into::<Vec<u8>>::into(buf))
-                        .expect("Serialization shouldn't produce non-UTF-8 strings.")
-                })
-            })
-            .collect();
-        let record = StatementBeganExecutionRecord {
-            id: execution_uuid,
-            prepared_statement_id: ps_uuid,
+        let build_info_version = self
+            .catalog()
+            .state()
+            .config()
+            .build_info
+            .human_version(None);
+        let record = create_began_execution_record(
+            execution_uuid,
+            ps_uuid,
             sample_rate,
             params,
+            session,
             began_at,
-            application_name: session.application_name().to_string(),
-            transaction_isolation: session.vars().transaction_isolation().to_string(),
-            transaction_id: session
-                .transaction()
-                .inner()
-                .expect("Every statement runs in an explicit or implicit transaction")
-                .id,
-            mz_version: self
-                .catalog()
-                .state()
-                .config()
-                .build_info
-                .human_version(None),
-            // These are not known yet; we'll fill them in later.
-            cluster_id: None,
-            cluster_name: None,
-            execution_timestamp: None,
-            transient_index_id: None,
-            database_name: session.vars().database().into(),
-            search_path: session
-                .vars()
-                .search_path()
-                .iter()
-                .map(|s| s.as_str().to_string())
-                .collect(),
-        };
+            build_info_version,
+        );
         let mseh_update = Self::pack_statement_began_execution_update(&record);
         self.statement_logging
             .pending_statement_execution_events
