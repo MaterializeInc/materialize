@@ -217,6 +217,15 @@ impl PeekClient {
                     // It will be logged when handle_peek_notification is called.
                     return result;
                 }
+                Ok(Some(ExecuteResponse::EmptyQuery)) => {
+                    // Empty query completed successfully with no data
+                    // Match old sequencing behavior: use None for all fields
+                    StatementEndedExecutionReason::Success {
+                        result_size: None,
+                        rows_returned: None,
+                        execution_strategy: None,
+                    }
+                }
                 Ok(Some(_)) => unimplemented!(), // TODO(peek-seq): Are there other cases we need to handle here?
                 Ok(None) => {
                     // Bailout case - don't log
