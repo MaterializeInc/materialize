@@ -426,6 +426,22 @@ impl PeekClient {
         );
     }
 
+    /// Log transient index ID for a statement.
+    pub(crate) fn log_set_transient_index_id(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        transient_index_id: mz_repr::GlobalId,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::SetTransientIndex {
+                    id,
+                    transient_index_id,
+                }
+            )
+        );
+    }
+
     /// Log a statement lifecycle event.
     pub(crate) fn log_lifecycle_event(
         &self,

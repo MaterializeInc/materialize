@@ -1029,6 +1029,10 @@ impl PeekClient {
                         .await?
                     }
                     PeekPlan::SlowPath(dataflow_plan) => {
+                        if let Some(logging_id) = &statement_logging_id {
+                            self.log_set_transient_index_id(*logging_id, dataflow_plan.id);
+                        }
+                        
                         self.call_coordinator(|tx| Command::ExecuteSlowPathPeek {
                             dataflow_plan: Box::new(dataflow_plan),
                             determination,
