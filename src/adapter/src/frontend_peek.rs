@@ -109,8 +109,8 @@ impl PeekClient {
             let logging = Arc::clone(&portal.logging);
             (stmt, params, logging)
         };
-        
-        // BEGIN STATEMENT LOGGING
+
+        // Set up statement logging, and log the beginning of execution.
         let statement_logging_id = {
             let result = self.statement_logging_frontend.begin_statement_execution(
                 session,
@@ -120,7 +120,6 @@ impl PeekClient {
             );
 
             if let Some((logging_id, events)) = result {
-                // Send the BeganExecution event (fire-and-forget)
                 self.log_began_execution(
                     events.began_execution,
                     events.prepared_statement,
@@ -130,7 +129,6 @@ impl PeekClient {
                 None
             }
         };
-        // END STATEMENT LOGGING SETUP
 
         let stmt = match stmt {
             Some(stmt) => stmt,

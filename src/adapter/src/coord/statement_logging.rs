@@ -265,11 +265,12 @@ impl StatementLogging {
 impl StatementLoggingFrontend {
     /// Begin statement execution logging from the frontend.
     ///
-    /// This is a convenience wrapper that encapsulates all the statement logging setup:
+    /// This encapsulates all the statement logging setup:
     /// - Retrieves sample_rate from session vars
     /// - Retrieves system config values
     /// - Locks the RNG
-    /// - Calls begin_statement_execution_frontend with the provided config values
+    /// - Performs sampling and throttling checks
+    /// - Creates statement logging records
     ///
     /// Returns None if the statement should not be logged (not sampled or throttled),
     /// or Some((StatementLoggingId, StatementLoggingEvents)) if logging should proceed.
@@ -292,20 +293,63 @@ impl StatementLoggingFrontend {
 
         let mut rng = self.reproducible_rng.lock().expect("rng lock");
 
-        begin_statement_execution_frontend(
+        // Set the accounted flag before sampling to avoid assertion failure
+        // This mirrors the logic in Coordinator::begin_statement_execution
+        if let Some((_, accounted)) = match session.qcell_rw(logging) {
+            PreparedStatementLoggingInfo::AlreadyLogged { .. } => None,
+            PreparedStatementLoggingInfo::StillToLog { sql: _, accounted, .. } => {
+                Some(((), accounted))
+            }
+        } {
+            if !*accounted {
+                // Note: We don't record metrics here in the frontend path.
+                // Metrics recording happens in the coordinator's begin_statement_execution.
+                *accounted = true;
+            }
+        }
+        
+        // Use the same sampling helper as Coordinator version
+        let sample = should_sample_statement(sample_rate, use_reproducible_rng, &mut *rng);
+        
+        if !sample {
+            return None;
+        }
+
+        // Process prepared statement logging using the shared helper
+        let (prepared_statement_event, _session_id, ps_uuid) = log_prepared_statement_inner(
             session,
-            params,
             logging,
-            None, // lifecycle_timestamps - not available in frontend
-            sample_rate,
-            use_reproducible_rng,
-            &mut *rng,
             &self.throttling_state,
             target_data_rate,
             max_data_credit,
+            &self.now,
+        )?;
+
+        // Determine began_at timestamp
+        // lifecycle_timestamps are not available in frontend, so use current time
+        let began_at = (self.now)();
+        
+        let current_time = (self.now)();
+        let execution_uuid = epoch_to_uuid_v7(&current_time);
+
+        // Use the same record creation helper as Coordinator version
+        let began_execution = create_began_execution_record(
+            execution_uuid,
+            ps_uuid,
+            sample_rate,
+            params,
+            session,
+            began_at,
             self.build_info_human_version.clone(),
-            self.now.clone(),
-        )
+        );
+
+        Some((
+            StatementLoggingId(execution_uuid),
+            StatementLoggingEvents {
+                prepared_statement: prepared_statement_event,
+                began_execution,
+            },
+        ))
     }
 }
 
@@ -534,103 +578,6 @@ pub enum FrontendStatementLoggingEvent {
     },
 }
 
-/// Sketch of a frontend version of `begin_statement_execution` that doesn't require
-/// direct access to Coordinator state. This is not yet fully wired up.
-///
-/// This function demonstrates how statement logging can be done from the frontend
-/// peek sequencing by:
-/// 1. Using the same helper functions as the Coordinator version
-/// 2. Returning events in a structured way instead of pushing to pending vectors
-/// 3. Allowing the events to be buffered and sent to the Coordinator asynchronously
-///
-/// # Arguments
-/// * `session` - The session executing the statement
-/// * `params` - The statement parameters
-/// * `logging` - Prepared statement logging info
-/// * `lifecycle_timestamps` - Optional timestamps from the frontend
-/// * `sample_rate` - The sampling rate for this statement
-/// * `use_reproducible_rng` - Whether to use reproducible RNG (for testing)
-/// * `reproducible_rng` - The reproducible RNG (if enabled)
-/// * `throttling_state` - Shared throttling state
-/// * `build_info_version` - Version string from build info
-/// * `now` - Function to get current time
-///
-/// # Returns
-/// * `None` if the statement should not be logged (not sampled or throttled)
-/// * `Some((StatementLoggingId, StatementLoggingEvents))` if logging should proceed
-pub(crate) fn begin_statement_execution_frontend(
-    session: &mut Session,
-    params: &Params,
-    logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
-    lifecycle_timestamps: Option<LifecycleTimestamps>,
-    sample_rate: f64,
-    use_reproducible_rng: bool,
-    reproducible_rng: &mut rand_chacha::ChaCha8Rng,
-    throttling_state: &Arc<Mutex<ThrottlingState>>,
-    target_data_rate: Option<u64>,
-    max_data_credit: Option<u64>,
-    build_info_version: String,
-    now: NowFn,
-) -> Option<(StatementLoggingId, StatementLoggingEvents)> {
-    // Set the accounted flag before sampling to avoid assertion failure
-    // This mirrors the logic in Coordinator::begin_statement_execution
-    if let Some((_, accounted)) = match session.qcell_rw(logging) {
-        PreparedStatementLoggingInfo::AlreadyLogged { .. } => None,
-        PreparedStatementLoggingInfo::StillToLog { sql: _, accounted, .. } => {
-            Some(((), accounted))
-        }
-    } {
-        if !*accounted {
-            // Note: We don't record metrics here in the frontend path.
-            // Metrics recording happens in the coordinator's begin_statement_execution.
-            *accounted = true;
-        }
-    }
-    
-    // Use the same sampling helper as Coordinator version
-    let sample = should_sample_statement(sample_rate, use_reproducible_rng, reproducible_rng);
-    
-    if !sample {
-        return None;
-    }
-
-    // Process prepared statement logging using the shared helper
-    let (prepared_statement_event, _session_id, ps_uuid) = log_prepared_statement_inner(
-        session,
-        logging,
-        throttling_state,
-        target_data_rate,
-        max_data_credit,
-        &now,
-    )?;
-
-    // Determine began_at timestamp
-    let began_at = lifecycle_timestamps
-        .map(|lt| lt.received)
-        .unwrap_or_else(|| now());
-    
-    let current_time = now();
-    let execution_uuid = epoch_to_uuid_v7(&current_time);
-
-    // Use the same record creation helper as Coordinator version
-    let began_execution = create_began_execution_record(
-        execution_uuid,
-        ps_uuid,
-        sample_rate,
-        params,
-        session,
-        began_at,
-        build_info_version,
-    );
-
-    Some((
-        StatementLoggingId(execution_uuid),
-        StatementLoggingEvents {
-            prepared_statement: prepared_statement_event,
-            began_execution,
-        },
-    ))
-}
 
 impl Coordinator {
     /// Helper to write began execution events to pending buffers.
