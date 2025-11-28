@@ -20,7 +20,7 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::EpochMillis;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, IntoRowIterator, RowIterator, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{self, Plan, QueryWhen};
 use mz_sql::rbac;
@@ -204,36 +204,51 @@ impl PeekClient {
         // Log the result (if we already know it)
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
-                Ok(Some(ExecuteResponse::SendingRowsImmediate { rows })) => {
-                    let result_size: usize = rows.box_clone().map(|row| row.byte_len()).sum();
-                    StatementEndedExecutionReason::Success {
-                        result_size: Some(u64::cast_from(result_size)),
-                        rows_returned: Some(u64::cast_from(rows.count())),
-                        execution_strategy: Some(crate::statement_logging::StatementExecutionStrategy::Constant),
-                    }
-                }
+                // Streaming results are handled asynchronously by the coordinator
                 Ok(Some(ExecuteResponse::SendingRowsStreaming { .. })) => {
                     // Don't log here - the peek is still executing.
                     // It will be logged when handle_peek_notification is called.
                     return result;
                 }
-                Ok(Some(ExecuteResponse::EmptyQuery)) => {
-                    // Empty query completed successfully with no data
-                    // Match old sequencing behavior: use None for all fields
-                    StatementEndedExecutionReason::Success {
-                        result_size: None,
-                        rows_returned: None,
-                        execution_strategy: None,
+                // COPY TO with streaming inner response must also be handled asynchronously
+                Ok(Some(ExecuteResponse::CopyTo { resp, .. })) => {
+                    match resp.as_ref() {
+                        ExecuteResponse::SendingRowsStreaming { .. } => {
+                            // Don't log here - the peek is still executing.
+                            // It will be logged when handle_peek_notification is called.
+                            return result;
+                        }
+                        _ => {
+                            // For non-streaming COPY TO responses, use the From implementation
+                            // Unwrap the Option and convert using From<&ExecuteResponse>
+                            match result.as_ref() {
+                                Ok(Some(resp)) => resp.into(),
+                                Err(e) => StatementEndedExecutionReason::Errored {
+                                    error: e.to_string(),
+                                },
+                                Ok(None) => unreachable!("None case handled above"),
+                            }
+                        }
                     }
                 }
-                Ok(Some(_)) => unimplemented!(), // TODO(peek-seq): Are there other cases we need to handle here?
+                // Bailout case - don't log
                 Ok(None) => {
-                    // Bailout case - don't log
                     return result;
                 }
-                Err(e) => StatementEndedExecutionReason::Errored {
-                    error: e.to_string(),
-                },
+                // All other cases (success responses, errors) - use the From implementation
+                // TODO(peek-seq): After we delete the old peek sequencing, we'll be able to adjust
+                // the From implementation to do exactly what we need in the frontend peek
+                // sequencing, so that the above special cases won't be needed here.
+                _ => {
+                    // Unwrap the Option and convert using From<&ExecuteResponse> or construct error
+                    match result.as_ref() {
+                        Ok(Some(resp)) => resp.into(),
+                        Err(e) => StatementEndedExecutionReason::Errored {
+                            error: e.to_string(),
+                        },
+                        Ok(None) => unreachable!("None case handled above"),
+                    }
+                }
             };
             
             self.log_ended_execution(
