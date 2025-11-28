@@ -281,6 +281,12 @@ impl StatementLoggingFrontend {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         system_config: &mz_sql::session::vars::SystemVars,
     ) -> Option<(StatementLoggingId, StatementLoggingEvents)> {
+        // Skip logging for internal users unless explicitly enabled
+        let enable_internal_statement_logging = system_config.enable_internal_statement_logging();
+        if session.user().is_internal() && !enable_internal_statement_logging {
+            return None;
+        }
+
         let sample_rate: f64 = session.vars().get_statement_logging_sample_rate()
             .try_into()
             .expect("sample rate must be convertible to f64");
