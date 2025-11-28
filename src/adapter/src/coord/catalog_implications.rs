@@ -373,18 +373,18 @@ impl Coordinator {
                     compute_gids_to_drop.push((ct.cluster_id, ct.global_id()));
                     sources_to_drop.push((catalog_id, ct.global_id()));
                 }
-                CatalogImplication::Secret(CatalogImplicationKind::Added(secret)) => {
-                    tracing::debug!(?secret, "not handling AddSecret in here yet");
+                CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
+                    // No action needed: the secret payload is stored in
+                    // secrets_controller.ensure() BEFORE the catalog transaction.
+                    // By the time we see this update, the secret is already stored.
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Altered {
-                    prev: prev_secret,
-                    new: new_secret,
+                    prev: _prev_secret,
+                    new: _new_secret,
                 }) => {
-                    tracing::debug!(
-                        ?prev_secret,
-                        ?new_secret,
-                        "not handling AlterSecret in here yet"
-                    );
+                    // No action needed: altering a secret updates the payload via
+                    // secrets_controller.ensure() without a catalog transaction,
+                    // so we shouldn't see AlterSecret updates here.
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Dropped(
                     _secret,
