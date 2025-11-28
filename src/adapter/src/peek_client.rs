@@ -233,6 +233,7 @@ impl PeekClient {
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,
         statement_logging_id: Option<crate::coord::statement_logging::StatementLoggingId>,
+        depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -326,22 +327,8 @@ impl PeekClient {
         let (rows_tx, rows_rx) = oneshot::channel();
         let uuid = Uuid::new_v4();
 
-        // Register this streaming peek with the Coordinator BEFORE issuing the peek.
-        // This prevents a race condition where fast peeks complete before registration,
-        // causing the coordinator to ignore the notification.
-        let depends_on: std::collections::BTreeSet<mz_repr::GlobalId> = input_read_holds
-            .storage_holds
-            .keys()
-            .chain(input_read_holds.compute_holds.iter().map(|((_, id), _)| id))
-            .copied()
-            .collect();
-        
-        // Create ExecuteContextExtra for coordinator tracking of this streaming peek.
-        // We only create it here (not for constant fast-path peeks) because only the
-        // ExecuteResponse::SendingRowsStreaming case needs coordinator tracking for completion
-        // logging and cancellation.
+        // Register coordinator tracking of this peek. This has to complete before issuing the peek.
         let ctx_extra = crate::coord::ExecuteContextExtra::new(statement_logging_id);
-        
         self.coordinator_client.send(Command::RegisterFrontendPeek {
             uuid,
             conn_id: conn_id.clone(),

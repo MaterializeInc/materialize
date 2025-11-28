@@ -1103,6 +1103,7 @@ impl PeekClient {
                             peek_stash_read_memory_budget_bytes,
                             session.conn_id().clone(),
                             statement_logging_id,
+                            source_ids,
                         )
                         .await?
                     }
