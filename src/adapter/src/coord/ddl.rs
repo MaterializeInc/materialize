@@ -16,12 +16,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use fail::fail_point;
-use maplit::{btreemap, btreeset};
 use mz_adapter_types::compaction::SINCE_GRANULARITY;
 use mz_adapter_types::connection::ConnectionId;
 use mz_audit_log::VersionedEvent;
 use mz_catalog::SYSTEM_CONN_ID;
-use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Sink};
+use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc};
 use mz_cluster_client::ReplicaId;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::ClusterId;
@@ -42,10 +41,7 @@ use mz_sql::session::vars::{
     MAX_REPLICAS_PER_CLUSTER, MAX_ROLES, MAX_SCHEMAS_PER_DATABASE, MAX_SECRETS, MAX_SINKS,
     MAX_SOURCES, MAX_SQL_SERVER_CONNECTIONS, MAX_TABLES, SystemVars, Var,
 };
-use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
-use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::read_policy::ReadPolicy;
-use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
@@ -939,86 +935,6 @@ impl Coordinator {
             .webhook_concurrent_request_limit();
         self.webhook_concurrency_limit
             .set_limit(webhook_request_limit);
-    }
-
-    pub(crate) async fn create_storage_export(
-        &mut self,
-        id: GlobalId,
-        sink: &Sink,
-    ) -> Result<(), AdapterError> {
-        // Validate `sink.from` is in fact a storage collection
-        self.controller.storage.check_exists(sink.from)?;
-
-        // The AsOf is used to determine at what time to snapshot reading from
-        // the persist collection.  This is primarily relevant when we do _not_
-        // want to include the snapshot in the sink.
-        //
-        // We choose the smallest as_of that is legal, according to the sinked
-        // collection's since.
-        let id_bundle = crate::CollectionIdBundle {
-            storage_ids: btreeset! {sink.from},
-            compute_ids: btreemap! {},
-        };
-
-        // We're putting in place read holds, such that create_exports, below,
-        // which calls update_read_capabilities, can successfully do so.
-        // Otherwise, the since of dependencies might move along concurrently,
-        // pulling the rug from under us!
-        //
-        // TODO: Maybe in the future, pass those holds on to storage, to hold on
-        // to them and downgrade when possible?
-        let read_holds = self.acquire_read_holds(&id_bundle);
-        let as_of = read_holds.least_valid_read();
-
-        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
-        let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
-            from: sink.from,
-            from_desc: storage_sink_from_entry
-                .relation_desc()
-                .expect("sinks can only be built on items with descs")
-                .into_owned(),
-            connection: sink
-                .connection
-                .clone()
-                .into_inline_connection(self.catalog().state()),
-            envelope: sink.envelope,
-            as_of,
-            with_snapshot: sink.with_snapshot,
-            version: sink.version,
-            from_storage_metadata: (),
-            to_storage_metadata: (),
-            commit_interval: sink.commit_interval,
-        };
-
-        let collection_desc = CollectionDescription {
-            // TODO(sinks): make generic once we have more than one sink type.
-            desc: KAFKA_PROGRESS_DESC.clone(),
-            data_source: DataSource::Sink {
-                desc: ExportDescription {
-                    sink: storage_sink_desc,
-                    instance_id: sink.cluster_id,
-                },
-            },
-            since: None,
-            status_collection_id: None,
-            timeline: None,
-            primary: None,
-        };
-        let collections = vec![(id, collection_desc)];
-
-        // Create the collections.
-        let storage_metadata = self.catalog.state().storage_metadata();
-        let res = self
-            .controller
-            .storage
-            .create_collections(storage_metadata, None, collections)
-            .await;
-
-        // Drop read holds after the export has been created, at which point
-        // storage will have put in its own read holds.
-        drop(read_holds);
-
-        Ok(res?)
     }
 
     /// Validate all resource limits in a catalog transaction and return an error if that limit is

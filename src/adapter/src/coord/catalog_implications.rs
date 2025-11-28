@@ -50,10 +50,11 @@ use mz_ore::str::StrExt;
 use mz_ore::task;
 use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector, Timestamp};
 use mz_sql::plan::ConnectionDetails;
-use mz_storage_client::controller::{CollectionDescription, DataSource};
+use mz_storage_client::controller::{CollectionDescription, DataSource, ExportDescription};
 use mz_storage_types::connections::PostgresConnection;
 use mz_storage_types::connections::inline::{InlinedConnection, IntoInlineConnection};
 use mz_storage_types::sinks::StorageSinkConnection;
+use mz_storage_types::sources::kafka::KAFKA_PROGRESS_DESC;
 use mz_storage_types::sources::{GenericSourceConnection, SourceExport, SourceExportDataConfig};
 use tracing::{Instrument, info_span, warn};
 
@@ -188,6 +189,7 @@ impl Coordinator {
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
         let mut vpc_endpoints_to_create: Vec<(CatalogItemId, VpcEndpointConfig)> = vec![];
+        let mut sinks_to_create: Vec<(CatalogItemId, Sink)> = vec![];
 
         // Replacing a materialized view causes the replacement's catalog entry
         // to be dropped. Its compute and storage collections are transferred to
@@ -301,7 +303,7 @@ impl Coordinator {
                     }
                 }
                 CatalogImplication::Sink(CatalogImplicationKind::Added(sink)) => {
-                    tracing::debug!(?sink, "not handling AddSink in here yet");
+                    sinks_to_create.push((catalog_id, sink));
                 }
                 CatalogImplication::Sink(CatalogImplicationKind::Altered {
                     prev: prev_sink,
@@ -559,6 +561,14 @@ impl Coordinator {
             self.create_table_collections(table_collections_to_create, execution_timestamps_to_set)
                 .await?;
         }
+
+        // Create sinks (storage exports) - must happen before initializing read
+        // policies so sink global_ids are included in storage_policies_to_initialize.
+        for (_item_id, sink) in sinks_to_create {
+            self.handle_create_sink(&mut storage_policies_to_initialize, sink)
+                .await?;
+        }
+
         // It is _very_ important that we only initialize read policies after we
         // have created all the sources/collections. Some of the sources created
         // in this collection might have dependencies on other sources, so the
@@ -1445,6 +1455,94 @@ impl Coordinator {
                 }
             }
         }
+    }
+
+    #[instrument(level = "debug")]
+    async fn handle_create_sink(
+        &mut self,
+        storage_policies_to_initialize: &mut BTreeMap<CompactionWindow, BTreeSet<GlobalId>>,
+        sink: Sink,
+    ) -> Result<(), AdapterError> {
+        let global_id = sink.global_id();
+
+        // Validate `sink.from` is in fact a storage collection
+        self.controller.storage.check_exists(sink.from)?;
+
+        // The AsOf is used to determine at what time to snapshot reading from
+        // the persist collection. This is primarily relevant when we do _not_
+        // want to include the snapshot in the sink.
+        //
+        // We choose the smallest as_of that is legal, according to the sinked
+        // collection's since.
+        let id_bundle = crate::CollectionIdBundle {
+            storage_ids: BTreeSet::from([sink.from]),
+            compute_ids: BTreeMap::new(),
+        };
+
+        // We're putting in place read holds, such that create_collections, below,
+        // which calls update_read_capabilities, can successfully do so.
+        // Otherwise, the since of dependencies might move along concurrently,
+        // pulling the rug from under us!
+
+        // TODO: Maybe in the future, pass those holds on to storage, to hold on
+        // to them and downgrade when possible?
+        let read_holds = self.acquire_read_holds(&id_bundle);
+        let as_of = read_holds.least_valid_read();
+
+        let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
+        let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
+            from: sink.from,
+            from_desc: storage_sink_from_entry
+                .relation_desc()
+                .expect("sinks can only be built on items with descs")
+                .into_owned(),
+            connection: sink
+                .connection
+                .clone()
+                .into_inline_connection(self.catalog().state()),
+            envelope: sink.envelope,
+            as_of,
+            with_snapshot: sink.with_snapshot,
+            version: sink.version,
+            from_storage_metadata: (),
+            to_storage_metadata: (),
+            commit_interval: sink.commit_interval,
+        };
+
+        let collection_desc = CollectionDescription {
+            // TODO(sinks): make generic once we have more than one sink type.
+            desc: KAFKA_PROGRESS_DESC.clone(),
+            data_source: DataSource::Sink {
+                desc: ExportDescription {
+                    sink: storage_sink_desc,
+                    instance_id: sink.cluster_id,
+                },
+            },
+            since: None,
+            status_collection_id: None,
+            timeline: None,
+            primary: None,
+        };
+
+        // Create the collection.
+        let storage_metadata = self.catalog.state().storage_metadata();
+        self.controller
+            .storage
+            .create_collections(storage_metadata, None, vec![(global_id, collection_desc)])
+            .await
+            .unwrap_or_terminate("cannot fail to create exports");
+
+        // Drop read holds after the export has been created, at which point
+        // storage will have put in its own read holds.
+        drop(read_holds);
+
+        // Initialize read policies for the sink
+        storage_policies_to_initialize
+            .entry(CompactionWindow::Default)
+            .or_default()
+            .insert(global_id);
+
+        Ok(())
     }
 }
 
