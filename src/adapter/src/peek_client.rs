@@ -217,9 +217,6 @@ impl PeekClient {
     /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
-    ///
-    /// TODO(peek-seq): register streaming peeks in pending_peeks (for non-constant peeks),
-    /// to support cancellation and final result logging.
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -235,7 +232,7 @@ impl PeekClient {
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
         conn_id: mz_adapter_types::connection::ConnectionId,
-        ctx_extra: crate::coord::ExecuteContextExtra,
+        statement_logging_id: Option<crate::coord::statement_logging::StatementLoggingId>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -338,6 +335,12 @@ impl PeekClient {
             .chain(input_read_holds.compute_holds.iter().map(|((_, id), _)| id))
             .copied()
             .collect();
+        
+        // Create ExecuteContextExtra for coordinator tracking of this streaming peek.
+        // We only create it here (not for constant fast-path peeks) because only the
+        // ExecuteResponse::SendingRowsStreaming case needs coordinator tracking for completion
+        // logging and cancellation.
+        let ctx_extra = crate::coord::ExecuteContextExtra::new(statement_logging_id);
         
         self.coordinator_client.send(Command::RegisterFrontendPeek {
             uuid,

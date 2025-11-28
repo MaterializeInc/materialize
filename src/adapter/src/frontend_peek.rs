@@ -1109,7 +1109,7 @@ impl PeekClient {
                             peek_stash_read_batch_size_bytes,
                             peek_stash_read_memory_budget_bytes,
                             session.conn_id().clone(),
-                            ExecuteContextExtra::new(statement_logging_id),
+                            statement_logging_id,
                         )
                         .await?
                     }
