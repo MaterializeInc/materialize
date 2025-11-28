@@ -5433,10 +5433,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
 def workflow_test_constant_sink(c: Composition) -> None:
     """
     Test how we handle constant sinks.
-
-    This test reflects the current behavior, though not the desired behavior,
-    as described in database-issues#8842. Once we fix that issue, this can
-    become a regression test.
+    Regression test for database-issues#8842.
     """
 
     with c.override(Testdrive(no_reset=True)):
@@ -5472,7 +5469,8 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk' AND write_frontier IS NOT NULL
+                  WHERE name = 'snk'
+                <null>
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
@@ -5491,7 +5489,8 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk' AND write_frontier IS NOT NULL
+                  WHERE name = 'snk'
+                <null>
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
