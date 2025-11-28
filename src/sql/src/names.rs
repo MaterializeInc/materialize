@@ -1763,40 +1763,13 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
             } => {
                 let item = self.catalog.get_item(id).at_version(*version);
                 let name = normalize::column_name(column_name.column.clone());
-                let desc = match item.item_type() {
-                    CatalogItemType::Type => {
-                        let details = item
-                            .type_details()
-                            .expect("type items must carry type details");
-                        match details.typ.desc(self.catalog) {
-                            Ok(Some(desc)) => Cow::Owned(desc),
-                            Ok(None) => {
-                                if self.status.is_ok() {
-                                    self.status = Err(PlanError::TypeWithoutColumns {
-                                        type_name: full_name.clone().into(),
-                                    });
-                                }
-                                return ast::ColumnName {
-                                    relation: ResolvedItemName::Error,
-                                    column: ResolvedColumnReference::Error,
-                                };
-                            }
-                            Err(e) => {
-                                if self.status.is_ok() {
-                                    self.status = Err(e);
-                                }
-                                return ast::ColumnName {
-                                    relation: ResolvedItemName::Error,
-                                    column: ResolvedColumnReference::Error,
-                                };
-                            }
-                        }
-                    }
-                    _ => match item.desc(full_name) {
-                        Ok(desc) => desc,
+
+                let maybe_desc = match item.type_details() {
+                    Some(details) => match details.typ.desc(self.catalog) {
+                        Ok(desc) => desc.map(Cow::Owned),
                         Err(e) => {
                             if self.status.is_ok() {
-                                self.status = Err(e.into());
+                                self.status = Err(e);
                             }
                             return ast::ColumnName {
                                 relation: ResolvedItemName::Error,
@@ -1804,6 +1777,19 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             };
                         }
                     },
+                    None => item.desc_opt(),
+                };
+                let Some(desc) = maybe_desc else {
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::ItemWithoutColumns {
+                            name: full_name.to_string(),
+                            item_type: item.item_type(),
+                        });
+                    }
+                    return ast::ColumnName {
+                        relation: ResolvedItemName::Error,
+                        column: ResolvedColumnReference::Error,
+                    };
                 };
 
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
