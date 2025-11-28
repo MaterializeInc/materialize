@@ -1527,8 +1527,14 @@ pub fn describe_subscribe(
     let relation_desc = match stmt.relation {
         SubscribeRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
-            item.desc(&scx.catalog.resolve_full_name(item.name()))?
-                .into_owned()
+            match item.desc_opt() {
+                Some(desc) => desc.into_owned(),
+                None => sql_bail!(
+                    "'{}' cannot be subscribed to because it is a {}",
+                    name.full_name_str(),
+                    item.item_type(),
+                ),
+            }
         }
         SubscribeRelation::Query(query) => {
             let query::PlannedRootQuery { desc, .. } =
@@ -1624,14 +1630,13 @@ pub fn plan_subscribe(
 ) -> Result<Plan, PlanError> {
     let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
-            let entry = scx.get_item_by_resolved_name(&name)?;
-            let desc = match entry.desc(&scx.catalog.resolve_full_name(entry.name())) {
-                Ok(desc) => desc,
-                Err(..) => sql_bail!(
+            let item = scx.get_item_by_resolved_name(&name)?;
+            let Some(desc) = item.desc_opt() else {
+                sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",
                     name.full_name_str(),
-                    entry.item_type(),
-                ),
+                    item.item_type(),
+                );
             };
             let item_name = match name {
                 ResolvedItemName::Item { full_name, .. } => Some(full_name.into()),
@@ -1639,7 +1644,7 @@ pub fn plan_subscribe(
             };
             let scope = Scope::from_source(item_name, desc.iter().map(|(name, _type)| name));
             (
-                SubscribeFrom::Id(entry.global_id()),
+                SubscribeFrom::Id(item.global_id()),
                 desc.into_owned(),
                 scope,
             )

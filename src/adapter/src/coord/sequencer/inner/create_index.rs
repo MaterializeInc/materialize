@@ -550,7 +550,7 @@ impl Coordinator {
             let on_entry = self.catalog.get_entry_by_global_id(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
             let on_desc = on_entry
-                .desc(&full_name)
+                .desc_opt()
                 .expect("can only create indexes on items with a valid description");
 
             let transient_items = btreemap! {
