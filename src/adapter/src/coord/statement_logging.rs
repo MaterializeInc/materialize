@@ -335,7 +335,7 @@ pub(crate) fn log_prepared_statement_inner(
         } => {
             assert!(
                 *accounted,
-                "accounting for logging should be done in `begin_statement_execution`"
+                "accounting for logging should be done in `begin_statement_execution` or `begin_statement_execution_frontend`"
             );
             let uuid = epoch_to_uuid_v7(prepared_at);
             let sql = std::mem::take(sql);
@@ -526,6 +526,21 @@ pub(crate) fn begin_statement_execution_frontend(
     build_info_version: String,
     now: NowFn,
 ) -> Option<(StatementLoggingId, StatementLoggingEvents)> {
+    // Set the accounted flag before sampling to avoid assertion failure
+    // This mirrors the logic in Coordinator::begin_statement_execution
+    if let Some((_, accounted)) = match session.qcell_rw(logging) {
+        PreparedStatementLoggingInfo::AlreadyLogged { .. } => None,
+        PreparedStatementLoggingInfo::StillToLog { sql: _, accounted, .. } => {
+            Some(((), accounted))
+        }
+    } {
+        if !*accounted {
+            // Note: We don't record metrics here in the frontend path.
+            // Metrics recording happens in the coordinator's begin_statement_execution.
+            *accounted = true;
+        }
+    }
+    
     // Use the same sampling helper as Coordinator version
     let sample = should_sample_statement(sample_rate, use_reproducible_rng, reproducible_rng);
     
