@@ -3119,8 +3119,8 @@ pub fn plan_create_continual_task(
                     // guess that the CT has the same shape as the input. It's
                     // fine if this is wrong, we'll get an error below after
                     // planning the query.
-                    let input_name = scx.catalog.resolve_full_name(input.name());
-                    input.desc(&input_name)?.into_owned()
+                    let desc = input.desc_opt().expect("item type checked above");
+                    desc.into_owned()
                 }
             };
             qcx.ctes.insert(
@@ -3424,7 +3424,8 @@ fn plan_sink(
     if from.id().is_system() {
         bail_unsupported!("creating a sink directly on a catalog object");
     }
-    let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
+
+    let desc = from.desc_opt().expect("item type checked above");
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
         | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
@@ -4121,16 +4122,14 @@ pub fn plan_create_index(
         )
     }
 
-    let on_desc = on.desc(&scx.catalog.resolve_full_name(on.name()))?;
+    let on_desc = on.desc_opt().expect("item type checked above");
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
             // `key_parts` is None if we're creating a "default" index.
-            on.desc(&scx.catalog.resolve_full_name(on.name()))?
-                .typ()
-                .default_key()
-                .iter()
+            let key = on_desc.typ().default_key();
+            key.iter()
                 .map(|i| match on_desc.get_unambiguous_name(*i) {
                     Some(n) => Expr::Identifier(vec![n.clone().into()]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
@@ -7315,7 +7314,7 @@ pub fn plan_alter_table_add_column(
                 // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
                 let item = item.at_version(RelationVersionSelector::Latest);
-                let desc = item.desc(&item_name)?.into_owned();
+                let desc = item.desc_opt().expect("table has desc").into_owned();
                 (item.id(), item_name, desc)
             }
             None => {

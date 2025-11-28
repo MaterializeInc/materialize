@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use differential_dataflow::lattice::Lattice;
-use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
@@ -53,8 +52,6 @@ pub struct Optimizer {
     /// A transient GlobalId to be used when constructing a dataflow for
     /// `SUBSCRIBE FROM <SELECT>` variants.
     view_id: GlobalId,
-    /// The id of the session connection in which the optimizer will run.
-    conn_id: Option<ConnectionId>,
     /// Should the plan produce an initial snapshot?
     with_snapshot: bool,
     /// Sink timestamp.
@@ -88,7 +85,6 @@ impl Optimizer {
         compute_instance: ComputeInstanceSnapshot,
         view_id: GlobalId,
         sink_id: GlobalId,
-        conn_id: Option<ConnectionId>,
         with_snapshot: bool,
         up_to: Option<Timestamp>,
         debug_name: String,
@@ -101,7 +97,6 @@ impl Optimizer {
             compute_instance,
             view_id,
             sink_id,
-            conn_id,
             with_snapshot,
             up_to,
             debug_name,
@@ -203,11 +198,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
-                    .desc(
-                        &self
-                            .catalog
-                            .resolve_full_name(from.name(), self.conn_id.as_ref()),
-                    )
+                    .desc_opt()
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
 

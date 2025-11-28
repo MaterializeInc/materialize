@@ -45,9 +45,7 @@ impl Staged for SubscribeStage {
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
-            SubscribeStage::OptimizeMir(stage) => {
-                coord.subscribe_optimize_mir(ctx.session(), stage)
-            }
+            SubscribeStage::OptimizeMir(stage) => coord.subscribe_optimize_mir(stage),
             SubscribeStage::TimestampOptimizeLir(stage) => {
                 coord.subscribe_timestamp_optimize_lir(ctx, stage).await
             }
@@ -172,7 +170,6 @@ impl Coordinator {
     #[instrument]
     fn subscribe_optimize_mir(
         &self,
-        session: &Session,
         SubscribeOptimizeMir {
             mut validity,
             plan,
@@ -194,7 +191,6 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();
-        let conn_id = session.conn_id().clone();
         let debug_name = format!("subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster_id).config.features());
@@ -205,7 +201,6 @@ impl Coordinator {
             compute_instance,
             view_id,
             sink_id,
-            Some(conn_id),
             *with_snapshot,
             *up_to,
             debug_name,

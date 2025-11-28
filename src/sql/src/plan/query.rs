@@ -286,7 +286,7 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
+    let desc = table.desc_opt().expect("table has desc");
     let mut defaults = table
         .writable_table_details()
         .ok_or_else(|| {
@@ -660,7 +660,6 @@ pub fn plan_copy_from_rows(
         .try_get_item(&target_id)
         .ok_or_else(|| PlanError::CopyFromTargetTableDropped { target_name })?
         .at_version(RelationVersionSelector::Latest);
-    let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
         .writable_table_details()
@@ -671,6 +670,7 @@ pub fn plan_copy_from_rows(
         transform_ast::transform(&scx, default)?;
     }
 
+    let desc = table.desc_opt().expect("table has desc");
     let column_types = columns
         .iter()
         .map(|x| desc.get_type(x).clone())
@@ -805,7 +805,7 @@ pub fn plan_mutation_query_inner(
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
-    let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
+    let desc = item.desc_opt().expect("table has desc");
     let relation_type = qcx.relation_type(&get);
 
     if using.is_empty() {

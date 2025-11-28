@@ -2841,10 +2841,7 @@ impl Coordinator {
                 CatalogItem::Sink(sink) => {
                     let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
                     let from_desc = storage_sink_from_entry
-                        .desc(&self.catalog().resolve_full_name(
-                            storage_sink_from_entry.name(),
-                            storage_sink_from_entry.conn_id(),
-                        ))
+                        .desc_opt()
                         .expect("sinks can only be built on items with descs")
                         .into_owned();
                     let collection_desc = CollectionDescription {

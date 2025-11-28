@@ -810,6 +810,7 @@ impl Coordinator {
     ///
     /// # Panics
     ///
+    /// Panics if `target_id` doesn't refer to a table.
     /// Panics if `constants` is not an `MirRelationExpr::Constant`.
     pub(crate) fn insert_constant(
         catalog: &Catalog,
@@ -820,9 +821,8 @@ impl Coordinator {
         // Insert can be queued, so we need to re-verify the id exists.
         let desc = match catalog.try_get_entry(&target_id) {
             Some(table) => {
-                let full_name = catalog.resolve_full_name(table.name(), Some(session.conn_id()));
                 // Inserts always happen at the latest version of a table.
-                table.desc_latest(&full_name)?
+                table.desc_opt_latest().expect("table has desc")
             }
             None => {
                 return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {

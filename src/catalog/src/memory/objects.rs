@@ -675,10 +675,6 @@ pub struct CatalogCollectionEntry {
 }
 
 impl CatalogCollectionEntry {
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.item().desc(name, self.version)
-    }
-
     pub fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>> {
         self.item().desc_opt(self.version)
     }
@@ -686,7 +682,11 @@ impl CatalogCollectionEntry {
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
     fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        CatalogCollectionEntry::desc(self, name)
+        self.item().desc(name, self.version)
+    }
+
+    fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().desc_opt(self.version)
     }
 
     fn global_id(&self) -> GlobalId {

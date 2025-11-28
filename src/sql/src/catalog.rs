@@ -869,6 +869,12 @@ pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
     /// an index), it returns an error.
     fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, CatalogError>;
 
+    /// Returns a description of the result set produced by the catalog item.
+    ///
+    /// If the catalog item is not of a type that produces data (e.g., a sink or
+    /// an index), it returns `None`.
+    fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>>;
+
     /// The [`GlobalId`] for this item.
     fn global_id(&self) -> GlobalId;
 }
