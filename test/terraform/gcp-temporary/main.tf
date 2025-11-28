@@ -29,7 +29,7 @@ provider "helm" {
 }
 
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.6.1"
+  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.8.2"
 
   project_id = var.project_id
   region     = var.region
@@ -51,6 +51,20 @@ module "materialize" {
     environment = "simple"
     example     = "true"
   }
+
+  # System node group configuration
+  system_node_group_node_count   = 2
+  system_node_group_machine_type = "n2-standard-4"
+  system_node_group_disk_size_gb = 100
+  system_node_group_min_nodes    = 2
+  system_node_group_max_nodes    = 2
+
+  # Materialize node group configuration
+  materialize_node_group_machine_type    = "n2-highmem-8"
+  materialize_node_group_disk_size_gb    = 100
+  materialize_node_group_min_nodes       = 1
+  materialize_node_group_max_nodes       = 2
+  materialize_node_group_local_ssd_count = 1
 
   install_materialize_operator = true
   use_local_chart              = true
