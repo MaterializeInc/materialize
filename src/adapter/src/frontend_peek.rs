@@ -194,7 +194,6 @@ impl PeekClient {
         };
 
         let result = self.try_frontend_peek_inner(
-            portal_name,
             session,
             catalog,
             stmt,
@@ -202,7 +201,7 @@ impl PeekClient {
             statement_logging_id,
         ).await;
 
-        // Log the result (success or error)
+        // Log the result (if we already know it)
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
                 Ok(Some(ExecuteResponse::SendingRowsImmediate { rows })) => {
@@ -242,7 +241,6 @@ impl PeekClient {
 
     async fn try_frontend_peek_inner(
         &mut self,
-        _portal_name: &str,
         session: &mut Session,
         catalog: Arc<Catalog>,
         stmt: Option<Arc<Statement<Raw>>>,
