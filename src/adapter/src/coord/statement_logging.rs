@@ -114,7 +114,7 @@ impl PreparedStatementLoggingInfo {
 }
 
 #[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
-pub struct StatementLoggingId(Uuid);
+pub struct StatementLoggingId(pub Uuid);
 
 #[derive(Debug, Clone)]
 pub struct PreparedStatementEvent {

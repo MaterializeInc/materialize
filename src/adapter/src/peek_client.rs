@@ -373,4 +373,86 @@ impl PeekClient {
             strategy,
         })
     }
+
+    // Statement logging helper methods
+
+    /// Log the beginning of statement execution.
+    pub(crate) fn log_began_execution(
+        &self,
+        record: statement_logging::StatementBeganExecutionRecord,
+        prepared_statement: Option<crate::coord::statement_logging::PreparedStatementEvent>,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::BeganExecution {
+                    record,
+                    prepared_statement,
+                }
+            )
+        );
+    }
+
+    /// Log cluster selection for a statement.
+    pub(crate) fn log_set_cluster(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        cluster_id: mz_controller_types::ClusterId,
+        cluster_name: String,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::SetCluster {
+                    id,
+                    cluster_id,
+                    cluster_name,
+                }
+            )
+        );
+    }
+
+    /// Log timestamp determination for a statement.
+    pub(crate) fn log_set_timestamp(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        timestamp: mz_repr::Timestamp,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::SetTimestamp {
+                    id,
+                    timestamp,
+                }
+            )
+        );
+    }
+
+    /// Log a statement lifecycle event.
+    pub(crate) fn log_lifecycle_event(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        event: statement_logging::StatementLifecycleEvent,
+        when: mz_ore::now::EpochMillis,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::Lifecycle {
+                    id,
+                    event,
+                    when,
+                }
+            )
+        );
+    }
+
+    /// Log the end of statement execution.
+    pub(crate) fn log_ended_execution(
+        &self,
+        record: statement_logging::StatementEndedExecutionRecord,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::EndedExecution(record)
+            )
+        );
+    }
 }
