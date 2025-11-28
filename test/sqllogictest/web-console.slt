@@ -104,7 +104,7 @@ DROP MATERIALIZED VIEW temp_view;
 query TTTTT
 SELECT id, cluster_id, object_type, created_at, dropped_at FROM mz_internal.mz_object_history WHERE id LIKE 'u%';
 ----
-u1  u1  materialized-view  1970-01-01␠00:00:00.666+00  1970-01-01␠00:00:00.666+00
+u2  u1  materialized-view  1970-01-01␠00:00:00.666+00  1970-01-01␠00:00:00.666+00
 
 # ---- mz_cluster_replica_name_history
 

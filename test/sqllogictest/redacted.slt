@@ -95,7 +95,7 @@ CREATE INDEX t_idx_i ON t (i)
 query T multiline
 SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_idx_i'
 ----
-CREATE INDEX t_idx_i IN CLUSTER [u1] ON [u1 AS materialize.public.t] (i)
+CREATE INDEX t_idx_i IN CLUSTER [u1] ON [u2 AS materialize.public.t] (i)
 EOF
 
 query T multiline
@@ -175,7 +175,7 @@ SELECT i+i+5 FROM t;
 query T multiline
 SELECT regexp_replace(redacted_create_sql, 'AS OF [0-9]+', 'AS OF xxxxxxx', 'g') FROM mz_materialized_views WHERE name = 'mv1'
 ----
-CREATE MATERIALIZED VIEW materialize.public.mv1 IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t] AS OF xxxxxxx
+CREATE MATERIALIZED VIEW materialize.public.mv1 IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT i + i + '<REDACTED>' FROM [u2 AS materialize.public.t] AS OF xxxxxxx
 EOF
 
 query T multiline
@@ -193,7 +193,7 @@ SELECT pretty_sql(redacted_create_sql) FROM mz_materialized_views WHERE name = '
 CREATE MATERIALIZED VIEW materialize.public.mv1
     IN CLUSTER [u1]
     WITH (REFRESH = ON COMMIT)
-    AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t];
+    AS SELECT i + i + '<REDACTED>' FROM [u2 AS materialize.public.t];
 EOF
 
 query T multiline

@@ -355,9 +355,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         amount: u64,
         commit_ts: Timestamp,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
-        let ids = self
-            .allocate_id(&[USER_ITEM_ALLOC_KEY], amount, commit_ts)
-            .await?;
+        let ids = self.allocate_id(USER_ALLOC_KEYS, amount, commit_ts).await?;
         let ids = ids
             .iter()
             .map(|id| (CatalogItemId::User(*id), GlobalId::User(*id)))
@@ -372,9 +370,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         &mut self,
         commit_ts: Timestamp,
     ) -> Result<(CatalogItemId, GlobalId), CatalogError> {
-        let id = self
-            .allocate_id(&[USER_ITEM_ALLOC_KEY], 1, commit_ts)
-            .await?;
+        let id = self.allocate_id(USER_ALLOC_KEYS, 1, commit_ts).await?;
         let id = id.into_element();
         Ok((CatalogItemId::User(id), GlobalId::User(id)))
     }

@@ -65,8 +65,8 @@ use crate::durable::{
     DATABASE_ID_ALLOC_KEY, DefaultPrivilege, DurableCatalogError, DurableCatalogState,
     EXPRESSION_CACHE_SHARD_KEY, MOCK_AUTHENTICATION_NONCE_KEY, NetworkPolicy, OID_ALLOC_KEY,
     SCHEMA_ID_ALLOC_KEY, STORAGE_USAGE_ID_ALLOC_KEY, SYSTEM_ALLOC_KEYS, SYSTEM_ITEM_ALLOC_KEY,
-    Snapshot, SystemConfiguration, USER_ALLOC_KEYS, USER_ITEM_ALLOC_KEY,
-    USER_NETWORK_POLICY_ID_ALLOC_KEY, USER_ROLE_ID_ALLOC_KEY,
+    Snapshot, SystemConfiguration, USER_ALLOC_KEYS, USER_NETWORK_POLICY_ID_ALLOC_KEY,
+    USER_ROLE_ID_ALLOC_KEY,
 };
 use crate::memory::objects::{StateDiff, StateUpdate, StateUpdateKind};
 
@@ -889,7 +889,7 @@ impl<'a> Transaction<'a> {
         amount: u64,
     ) -> Result<Vec<(CatalogItemId, GlobalId)>, CatalogError> {
         Ok(self
-            .get_and_increment_id_by(&[USER_ITEM_ALLOC_KEY], amount)?
+            .get_and_increment_id_by(USER_ALLOC_KEYS, amount)?
             .into_iter()
             // TODO(alter_table): Use separate ID allocators.
             .map(|x| (CatalogItemId::User(x), GlobalId::User(x)))

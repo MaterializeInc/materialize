@@ -1461,8 +1461,8 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         FROM mz_views;
         CREATE DEFAULT INDEX ON v_mz_views;
 
-        > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u2
+        > SELECT name FROM mz_indexes WHERE id like 'u%';
+        v_mz_views_primary_idx
     """
             )
         )
@@ -1476,8 +1476,8 @@ def workflow_test_system_table_indexes(c: Composition) -> None:
         c.testdrive(
             input=dedent(
                 """
-        > SELECT id FROM mz_indexes WHERE id like 'u%';
-        u2
+        > SELECT name FROM mz_indexes WHERE id like 'u%';
+        v_mz_views_primary_idx
     """
             )
         )
@@ -4794,7 +4794,7 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx1'
         """
     )
-    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
+    assert output[0][1:] == ("mz_tables", "mz_catalog_server"), output
     output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 9")
     assert "mz_test_idx1" in output[0][0], output
     output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 9")
@@ -4823,7 +4823,7 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx2'
         """
     )
-    assert output[0] == ("u2", "mz_hydration_statuses", "mz_catalog_server"), output
+    assert output[0][1:] == ("mz_hydration_statuses", "mz_catalog_server"), output
     output = c.sql_query(
         "EXPLAIN SELECT * FROM mz_internal.mz_hydration_statuses WHERE hydrated"
     )
@@ -4848,8 +4848,8 @@ def workflow_test_adhoc_system_indexes(
         ORDER BY id
         """
     )
-    assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
-    assert output[1] == ("u2", "mz_hydration_statuses", "mz_catalog_server"), output
+    assert output[0][1:] == ("mz_tables", "mz_catalog_server"), output
+    assert output[1][1:] == ("mz_hydration_statuses", "mz_catalog_server"), output
 
     # Make sure the new indexes can be dropped again.
     c.sql(
