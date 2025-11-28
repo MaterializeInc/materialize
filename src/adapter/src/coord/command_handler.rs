@@ -640,16 +640,25 @@ impl Coordinator {
                 }
                 let notify = self.builtin_table_update().background(updates);
 
+                let catalog = self.owned_catalog();
+                let build_info_human_version = catalog
+                    .state()
+                    .config()
+                    .build_info
+                    .human_version(None);
+                
+                let statement_logging_frontend = self.statement_logging.create_frontend(build_info_human_version);
+                
                 let resp = Ok(StartupResponse {
                     role_id,
                     write_notify: notify,
                     session_defaults,
-                    catalog: self.owned_catalog(),
+                    catalog,
                     storage_collections: Arc::clone(&self.controller.storage_collections),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
-                    throttling_state: Arc::clone(&self.statement_logging.throttling_state),
+                    statement_logging_frontend,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate

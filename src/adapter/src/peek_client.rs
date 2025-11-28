@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
 use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
@@ -32,7 +32,7 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
-use crate::coord::statement_logging::ThrottlingState;
+use crate::coord::statement_logging::StatementLoggingFrontend;
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
@@ -60,8 +60,8 @@ pub struct PeekClient {
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     persist_client: PersistClient,
-    /// Shared throttling state for statement logging.
-    pub throttling_state: Arc<Mutex<ThrottlingState>>,
+    /// Statement logging state for frontend peek sequencing.
+    pub statement_logging_frontend: StatementLoggingFrontend,
 }
 
 impl PeekClient {
@@ -72,7 +72,7 @@ impl PeekClient {
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
-        throttling_state: Arc<Mutex<ThrottlingState>>,
+        statement_logging_frontend: StatementLoggingFrontend,
     ) -> Self {
         Self {
             coordinator_client,
@@ -80,9 +80,9 @@ impl PeekClient {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
+            statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
-            throttling_state,
         }
     }
 

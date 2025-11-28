@@ -10,7 +10,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use derivative::Derivative;
@@ -47,7 +47,7 @@ use crate::coord::ExecuteContextExtra;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
-use crate::coord::statement_logging::ThrottlingState;
+use crate::coord::statement_logging::StatementLoggingFrontend;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -314,7 +314,7 @@ pub struct StartupResponse {
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
-    pub throttling_state: Arc<Mutex<ThrottlingState>>,
+    pub statement_logging_frontend: StatementLoggingFrontend,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).

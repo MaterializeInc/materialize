@@ -134,19 +134,15 @@ pub struct ThrottlingState {
     last_logged_ts_seconds: u64,
     /// The number of statements that have been throttled since the last successfully logged statement.
     throttled_count: usize,
-    /// Function to get the current time.
-    now: NowFn,
 }
 
 impl ThrottlingState {
     /// Create a new throttling state.
-    pub(crate) fn new(now: NowFn) -> Self {
-        let last_logged_ts_seconds = (now)() / 1000;
+    pub(crate) fn new(now: &NowFn) -> Self {
         Self {
             tokens: 0,
-            last_logged_ts_seconds,
+            last_logged_ts_seconds: (now)() / 1000,
             throttled_count: 0,
-            now,
         }
     }
 
@@ -160,8 +156,9 @@ impl ThrottlingState {
         cost: u64,
         target_data_rate: u64,
         max_data_credit: Option<u64>,
+        now: &NowFn,
     ) -> Option<usize> {
-        let ts = (self.now)() / 1000;
+        let ts = (now)() / 1000;
         // We use saturating_sub here because system time isn't monotonic, causing cases
         // when last_logged_ts_seconds is greater than ts.
         let elapsed = ts.saturating_sub(self.last_logged_ts_seconds);
@@ -185,6 +182,23 @@ impl ThrottlingState {
             None
         }
     }
+}
+
+/// Encapsulates statement logging state needed by frontend peek sequencing.
+/// 
+/// This struct bundles together all the statement logging-related state that
+/// the frontend peek sequencing needs to perform statement logging independently
+/// of the Coordinator's main thread.
+#[derive(Debug, Clone)]
+pub struct StatementLoggingFrontend {
+    /// Shared throttling state for rate-limiting statement logging.
+    pub throttling_state: Arc<Mutex<ThrottlingState>>,
+    /// Reproducible RNG for statement sampling (used in tests).
+    pub reproducible_rng: Arc<Mutex<rand_chacha::ChaCha8Rng>>,
+    /// Cached human version string from build info.
+    pub build_info_human_version: String,
+    /// Function to get current time for statement logging.
+    pub now: NowFn,
 }
 
 #[derive(Debug)]
@@ -214,6 +228,9 @@ pub(crate) struct StatementLogging {
 
     /// Shared throttling state for rate-limiting statement logging.
     pub(crate) throttling_state: Arc<Mutex<ThrottlingState>>,
+    
+    /// Function to get the current time.
+    pub(crate) now: NowFn,
 }
 
 impl StatementLogging {
@@ -226,7 +243,21 @@ impl StatementLogging {
             pending_prepared_statement_events: Vec::new(),
             pending_session_events: Vec::new(),
             pending_statement_lifecycle_events: Vec::new(),
-            throttling_state: Arc::new(Mutex::new(ThrottlingState::new(now))),
+            throttling_state: Arc::new(Mutex::new(ThrottlingState::new(&now))),
+            now,
+        }
+    }
+
+    /// Create a `StatementLoggingFrontend` for use by frontend peek sequencing.
+    /// 
+    /// This provides the frontend with all the state it needs to perform statement
+    /// logging without direct access to the Coordinator.
+    pub(crate) fn create_frontend(&self, build_info_human_version: String) -> StatementLoggingFrontend {
+        StatementLoggingFrontend {
+            throttling_state: Arc::clone(&self.throttling_state),
+            reproducible_rng: Arc::new(Mutex::new(rand_chacha::ChaCha8Rng::seed_from_u64(42))),
+            build_info_human_version,
+            now: self.now.clone(),
         }
     }
 }
@@ -271,6 +302,7 @@ fn serialize_params(params: &Params) -> Vec<Option<String>> {
 /// * `throttling_state` - Shared throttling state
 /// * `target_data_rate` - Optional target data rate for throttling
 /// * `max_data_credit` - Optional max data credit for throttling
+/// * `now` - Function to get the current time
 ///
 /// # Returns
 /// * `None` if throttling prevents logging
@@ -284,6 +316,7 @@ pub(crate) fn log_prepared_statement_inner(
     throttling_state: &Arc<Mutex<ThrottlingState>>,
     target_data_rate: Option<u64>,
     max_data_credit: Option<u64>,
+    now: &NowFn,
 ) -> Option<(Option<PreparedStatementEvent>, Uuid, Uuid)> {
     let logging_ref = session.qcell_rw(&*logging);
     let mut prepared_statement_event = None;
@@ -346,6 +379,7 @@ pub(crate) fn log_prepared_statement_inner(
                     cost.cast_into(),
                     target_data_rate.cast_into(),
                     max_data_credit.map(CastInto::cast_into),
+                    now,
                 )?
             } else {
                 let mut state = throttling_state.lock().expect("throttling state lock");
@@ -506,6 +540,7 @@ pub(crate) fn begin_statement_execution_frontend(
         throttling_state,
         target_data_rate,
         max_data_credit,
+        &now,
     )?;
 
     // Determine began_at timestamp
@@ -697,6 +732,7 @@ impl Coordinator {
             &self.statement_logging.throttling_state,
             target_data_rate,
             max_data_credit,
+            &self.statement_logging.now,
         )?;
         
         // Convert the result to include StatementPreparedRecord if this is a new statement
