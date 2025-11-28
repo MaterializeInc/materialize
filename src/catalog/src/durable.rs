@@ -83,6 +83,12 @@ pub const SYSTEM_ALLOC_KEYS: &[&str] = &[
     SYSTEM_REPLICA_ID_ALLOC_KEY,
 ];
 
+pub const USER_ALLOC_KEYS: &[&str] = &[
+    USER_ITEM_ALLOC_KEY,
+    USER_CLUSTER_ID_ALLOC_KEY,
+    USER_REPLICA_ID_ALLOC_KEY,
+];
+
 #[derive(Clone, Debug)]
 pub struct BootstrapArgs {
     pub cluster_replica_size_map: ClusterReplicaSizeMap,
@@ -381,7 +387,7 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         commit_ts: Timestamp,
     ) -> Result<ClusterId, CatalogError> {
         let id = self
-            .allocate_id(&[USER_CLUSTER_ID_ALLOC_KEY], 1, commit_ts)
+            .allocate_id(USER_ALLOC_KEYS, 1, commit_ts)
             .await?
             .into_element();
         Ok(ClusterId::user(id).ok_or(SqlCatalogError::IdExhaustion)?)

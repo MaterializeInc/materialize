@@ -912,7 +912,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
   "cluster": {
     "name": "other",
     "id": {
-      "User": 2
+      "User": 3
     }
   },
   "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
@@ -1176,7 +1176,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
   "cluster": {
     "name": "other",
     "id": {
-      "User": 2
+      "User": 3
     }
   },
   "redacted_sql": "SELECT pg_catalog.count(*) FROM [u1 AS materialize.public.t]"
