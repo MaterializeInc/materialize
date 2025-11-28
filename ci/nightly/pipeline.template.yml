@@ -1520,7 +1520,6 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *gcp* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "https://github.com/MaterializeInc/terraform-google-materialize/issues/11"
 
     - id: terraform-azure
       label: "Terraform + Helm Chart E2E on Azure"
