@@ -38,6 +38,7 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, ContinualTask, DataSourceDesc, Index,
     MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
+use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
@@ -185,6 +186,7 @@ impl Coordinator {
         let mut source_collections_to_create = BTreeMap::new();
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
+        let mut vpc_endpoints_to_create: Vec<(CatalogItemId, VpcEndpointConfig)> = vec![];
 
         // Replacing a materialized view causes the replacement's catalog entry
         // to be dropped. Its compute and storage collections are transferred to
@@ -393,17 +395,29 @@ impl Coordinator {
                     secrets_to_drop.push(catalog_id);
                 }
                 CatalogImplication::Connection(CatalogImplicationKind::Added(connection)) => {
-                    tracing::debug!(?connection, "not handling AddConnection in here yet");
+                    match &connection.details {
+                        // SSH connections: key pair is stored in secrets_controller
+                        // BEFORE the catalog transaction, so no action needed here.
+                        ConnectionDetails::Ssh { .. } => {}
+                        // AWS PrivateLink connections: create the VPC endpoint
+                        ConnectionDetails::AwsPrivatelink(privatelink) => {
+                            let spec = VpcEndpointConfig {
+                                aws_service_name: privatelink.service_name.to_owned(),
+                                availability_zone_ids: privatelink.availability_zones.to_owned(),
+                            };
+                            vpc_endpoints_to_create.push((catalog_id, spec));
+                        }
+                        // Other connection types don't require post-transaction actions
+                        _ => {}
+                    }
                 }
                 CatalogImplication::Connection(CatalogImplicationKind::Altered {
-                    prev: prev_connection,
-                    new: new_connection,
+                    prev: _prev_connection,
+                    new: _new_connection,
                 }) => {
-                    tracing::debug!(
-                        ?prev_connection,
-                        ?new_connection,
-                        "not handling AlterConnection in here yet"
-                    );
+                    // Connection alterations (like rotate keys) are handled via
+                    // secrets_controller without catalog changes to the connection
+                    // details structure, so no action needed here.
                 }
                 CatalogImplication::Connection(CatalogImplicationKind::Dropped(
                     connection,
@@ -537,6 +551,24 @@ impl Coordinator {
         // policy that might make the since advance.
         self.initialize_storage_collections(storage_policies_to_initialize)
             .await?;
+
+        // Create VPC endpoints for AWS PrivateLink connections
+        if !vpc_endpoints_to_create.is_empty() {
+            if let Some(cloud_resource_controller) = self.cloud_resource_controller.as_ref() {
+                for (connection_id, spec) in vpc_endpoints_to_create {
+                    if let Err(err) = cloud_resource_controller
+                        .ensure_vpc_endpoint(connection_id, spec)
+                        .await
+                    {
+                        tracing::warn!(?err, "failed to ensure vpc endpoint!");
+                    }
+                }
+            } else {
+                tracing::warn!(
+                    "AWS PrivateLink connections unsupported without cloud_resource_controller"
+                );
+            }
+        }
 
         let collections_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
