@@ -70,8 +70,9 @@ pub enum PlanError {
         table: Option<PartialItemName>,
         column: ColumnName,
     },
-    TypeWithoutColumns {
-        type_name: PartialItemName,
+    ItemWithoutColumns {
+        name: String,
+        item_type: CatalogItemType,
     },
     WrongJoinTypeForLateralColumn {
         table: Option<PartialItemName>,
@@ -540,11 +541,10 @@ impl fmt::Display for PlanError {
                 "column {} must appear in the GROUP BY clause or be used in an aggregate function",
                 ColumnDisplay { table, column },
             ),
-            Self::TypeWithoutColumns { type_name } => write!(
-                f,
-                "type {} does not have addressable columns",
-                type_name.item.quoted(),
-            ),
+            Self::ItemWithoutColumns { name, item_type } => {
+                let name = name.quoted();
+                write!(f, "{item_type} {name} does not have columns")
+            }
             Self::WrongJoinTypeForLateralColumn { table, column } => write!(
                 f,
                 "column {} cannot be referenced from this part of the query: \
