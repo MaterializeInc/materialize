@@ -1116,7 +1116,7 @@ impl SessionClient {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek_inner(portal_name, session)
+                .try_frontend_peek(portal_name, session)
                 .await
         } else {
             Ok(None)

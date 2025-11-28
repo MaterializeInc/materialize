@@ -57,7 +57,7 @@ use crate::{
 use crate::{coord, metrics};
 
 impl PeekClient {
-    pub(crate) async fn try_frontend_peek_inner(
+    pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
         session: &mut Session,
@@ -132,7 +132,7 @@ impl PeekClient {
             }
         };
 
-        let result = self.try_frontend_peek_inner_inner(
+        let result = self.try_frontend_peek_inner(
             portal_name,
             session,
             catalog,
@@ -144,14 +144,8 @@ impl PeekClient {
         // Log the result (success or error)
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
-                Ok(Some(ExecuteResponse::SendingRowsImmediate { .. })) => {
-                    StatementEndedExecutionReason::Success {
-                        result_size: None,  // TODO: extract from response
-                        rows_returned: None,  // TODO: extract from response
-                        execution_strategy: None,  // TODO: determine strategy
-                    }
-                }
                 Ok(Some(_)) => StatementEndedExecutionReason::Success {
+                    // TODO: fill these
                     result_size: None,
                     rows_returned: None,
                     execution_strategy: None,
@@ -177,7 +171,7 @@ impl PeekClient {
         result
     }
 
-    async fn try_frontend_peek_inner_inner(
+    async fn try_frontend_peek_inner(
         &mut self,
         _portal_name: &str,
         session: &mut Session,
