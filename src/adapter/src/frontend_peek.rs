@@ -16,7 +16,7 @@ use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, ResultSpec};
-use mz_ore::cast::{CastFrom, CastInto, CastLossy};
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::EpochMillis;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
@@ -39,10 +39,6 @@ use crate::coord::peek::PeekPlan;
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::statement_logging::{
-    begin_statement_execution_frontend,
-    should_sample_statement,
-};
 use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
 use crate::statement_logging::{
@@ -116,46 +112,22 @@ impl PeekClient {
         
         // BEGIN STATEMENT LOGGING
         let statement_logging_id = {
-            let sample_rate: f64 = session.vars().get_statement_logging_sample_rate()
-                .try_into()
-                .expect("sample rate must be convertible to f64");
-            let use_reproducible_rng = catalog.system_config().statement_logging_use_reproducible_rng();
-            
-            let mut rng = self.statement_logging_frontend.reproducible_rng.lock().expect("rng lock");
-            
-            if !should_sample_statement(sample_rate, use_reproducible_rng, &mut *rng) {
-                None
-            } else {
-                let target_data_rate = catalog.system_config().statement_logging_target_data_rate()
-                    .map(|rate| rate.cast_into());
-                let max_data_credit = catalog.system_config().statement_logging_max_data_credit()
-                    .map(|credit| credit.cast_into());
-                
-                let result = begin_statement_execution_frontend(
-                    session,
-                    &params,
-                    &logging,
-                    None, // lifecycle_timestamps - not available in frontend
-                    sample_rate,
-                    use_reproducible_rng,
-                    &mut *rng,
-                    &self.statement_logging_frontend.throttling_state,
-                    target_data_rate,
-                    max_data_credit,
-                    self.statement_logging_frontend.build_info_human_version.clone(),
-                    self.statement_logging_frontend.now.clone(),
+            let result = self.statement_logging_frontend.begin_statement_execution(
+                session,
+                &params,
+                &logging,
+                catalog.system_config(),
+            );
+
+            if let Some((logging_id, events)) = result {
+                // Send the BeganExecution event (fire-and-forget)
+                self.log_began_execution(
+                    events.began_execution,
+                    events.prepared_statement,
                 );
-                
-                if let Some((logging_id, events)) = result {
-                    // Send the BeganExecution event (fire-and-forget)
-                    self.log_began_execution(
-                        events.began_execution,
-                        events.prepared_statement,
-                    );
-                    Some(logging_id)
-                } else {
-                    None
-                }
+                Some(logging_id)
+            } else {
+                None
             }
         };
         // END STATEMENT LOGGING SETUP

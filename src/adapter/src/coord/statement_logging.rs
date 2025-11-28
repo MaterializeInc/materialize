@@ -262,6 +262,53 @@ impl StatementLogging {
     }
 }
 
+impl StatementLoggingFrontend {
+    /// Begin statement execution logging from the frontend.
+    ///
+    /// This is a convenience wrapper that encapsulates all the statement logging setup:
+    /// - Retrieves sample_rate from session vars
+    /// - Retrieves system config values
+    /// - Locks the RNG
+    /// - Calls begin_statement_execution_frontend with the provided config values
+    ///
+    /// Returns None if the statement should not be logged (not sampled or throttled),
+    /// or Some((StatementLoggingId, StatementLoggingEvents)) if logging should proceed.
+    pub(crate) fn begin_statement_execution(
+        &self,
+        session: &mut Session,
+        params: &Params,
+        logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
+        system_config: &mz_sql::session::vars::SystemVars,
+    ) -> Option<(StatementLoggingId, StatementLoggingEvents)> {
+        let sample_rate: f64 = session.vars().get_statement_logging_sample_rate()
+            .try_into()
+            .expect("sample rate must be convertible to f64");
+
+        let use_reproducible_rng = system_config.statement_logging_use_reproducible_rng();
+        let target_data_rate = system_config.statement_logging_target_data_rate()
+            .map(|rate| rate.cast_into());
+        let max_data_credit = system_config.statement_logging_max_data_credit()
+            .map(|credit| credit.cast_into());
+
+        let mut rng = self.reproducible_rng.lock().expect("rng lock");
+
+        begin_statement_execution_frontend(
+            session,
+            params,
+            logging,
+            None, // lifecycle_timestamps - not available in frontend
+            sample_rate,
+            use_reproducible_rng,
+            &mut *rng,
+            &self.throttling_state,
+            target_data_rate,
+            max_data_credit,
+            self.build_info_human_version.clone(),
+            self.now.clone(),
+        )
+    }
+}
+
 /// Helper function to decide whether to sample a statement execution.
 /// Returns `true` if the statement should be sampled based on the sample rate.
 pub(crate) fn should_sample_statement(
@@ -335,7 +382,7 @@ pub(crate) fn log_prepared_statement_inner(
         } => {
             assert!(
                 *accounted,
-                "accounting for logging should be done in `begin_statement_execution` or `begin_statement_execution_frontend`"
+                "accounting for logging should be done in `begin_statement_execution`"
             );
             let uuid = epoch_to_uuid_v7(prepared_at);
             let sql = std::mem::take(sql);
@@ -511,7 +558,6 @@ pub enum FrontendStatementLoggingEvent {
 /// # Returns
 /// * `None` if the statement should not be logged (not sampled or throttled)
 /// * `Some((StatementLoggingId, StatementLoggingEvents))` if logging should proceed
-#[allow(dead_code)]
 pub(crate) fn begin_statement_execution_frontend(
     session: &mut Session,
     params: &Params,
