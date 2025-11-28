@@ -123,7 +123,7 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
 
         // Desugar the test
         let sql_statements =
-            unit_test::desugar_unit_test(&test, &target_obj.hir_object.stmt, &hir_fqn);
+            unit_test::desugar_unit_test(test, &target_obj.hir_object.stmt, &hir_fqn);
 
         // Execute all SQL statements except the last one (which is the test query)
         let mut execution_failed = false;

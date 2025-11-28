@@ -4,9 +4,8 @@
 
 use super::ast::Cluster;
 use super::deployment_snapshot::DeploymentSnapshot;
-use super::mir::{self, Project, extract_external_indexes};
+use super::mir::{self, Project};
 use crate::project::object_id::ObjectId;
-use mz_sql_parser::ast::{CreateIndexStatement, Raw};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 

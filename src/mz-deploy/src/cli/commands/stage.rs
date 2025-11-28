@@ -206,7 +206,7 @@ pub async fn run(
     let mut external_indexes: Vec<_> = mir_project
         .iter_objects()
         .filter(|object| !objects_to_deploy_set.contains(&object.id))
-        .flat_map(|object| extract_external_indexes(object))
+        .flat_map(extract_external_indexes)
         .filter_map(|(cluster, index)| cluster_set.contains(&cluster.name).then_some(index))
         .collect();
 

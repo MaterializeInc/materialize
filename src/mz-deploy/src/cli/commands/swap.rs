@@ -5,7 +5,6 @@ use crate::client::Profile;
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
 use std::collections::HashSet;
-use std::path::Path;
 use std::time::SystemTime;
 
 /// Promote a staging environment to production using ALTER SWAP.
@@ -163,7 +162,7 @@ pub async fn run(
         .await
         .map_err(|e| CliError::SqlExecutionFailed {
             statement: "BEGIN".to_string(),
-            source: e.into(),
+            source: e,
         })?;
 
     // Swap schemas
@@ -179,7 +178,7 @@ pub async fn run(
             let _ = client.execute("ROLLBACK", &[]).await;
             return Err(CliError::SqlExecutionFailed {
                 statement: swap_sql,
-                source: e.into(),
+                source: e,
             });
         }
     }
@@ -197,7 +196,7 @@ pub async fn run(
             let _ = client.execute("ROLLBACK", &[]).await;
             return Err(CliError::SqlExecutionFailed {
                 statement: swap_sql,
-                source: e.into(),
+                source: e,
             });
         }
     }
@@ -208,7 +207,7 @@ pub async fn run(
         .await
         .map_err(|e| CliError::SqlExecutionFailed {
             statement: "COMMIT".to_string(),
-            source: e.into(),
+            source: e,
         })?;
 
     // Promote staging to production with promoted_at timestamps
