@@ -44,7 +44,7 @@ use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, ExecuteContextExtra, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
 use crate::statement_logging::{
-    StatementEndedExecutionReason, StatementEndedExecutionRecord, StatementLifecycleEvent,
+    StatementEndedExecutionReason, StatementLifecycleEvent,
 };
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
@@ -251,13 +251,7 @@ impl PeekClient {
                 }
             };
             
-            self.log_ended_execution(
-                StatementEndedExecutionRecord {
-                    id: logging_id.0,
-                    reason,
-                    ended_at: (self.statement_logging_frontend.now)(),
-                }
-            );
+            self.log_ended_execution(logging_id, reason);
         }
 
         result
@@ -975,7 +969,6 @@ impl PeekClient {
             self.log_lifecycle_event(
                 *logging_id,
                 StatementLifecycleEvent::OptimizationFinished,
-                (self.statement_logging_frontend.now)(),
             );
         }
 

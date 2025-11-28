@@ -471,8 +471,8 @@ impl PeekClient {
         &self,
         id: crate::coord::statement_logging::StatementLoggingId,
         event: statement_logging::StatementLifecycleEvent,
-        when: mz_ore::now::EpochMillis,
     ) {
+        let when = (self.statement_logging_frontend.now)();
         self.coordinator_client.send(
             Command::FrontendStatementLogging(
                 crate::coord::statement_logging::FrontendStatementLoggingEvent::Lifecycle {
@@ -487,8 +487,15 @@ impl PeekClient {
     /// Log the end of statement execution.
     pub(crate) fn log_ended_execution(
         &self,
-        record: statement_logging::StatementEndedExecutionRecord,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        reason: statement_logging::StatementEndedExecutionReason,
     ) {
+        let ended_at = (self.statement_logging_frontend.now)();
+        let record = statement_logging::StatementEndedExecutionRecord {
+            id: id.0,
+            reason,
+            ended_at,
+        };
         self.coordinator_client.send(
             Command::FrontendStatementLogging(
                 crate::coord::statement_logging::FrontendStatementLoggingEvent::EndedExecution(record)
