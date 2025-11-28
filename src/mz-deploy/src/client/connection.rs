@@ -3,15 +3,11 @@ use crate::client::models::{
     Cluster, ClusterOptions, ConflictRecord, DeploymentMetadata, DeploymentObjectRecord,
     SchemaDeploymentRecord,
 };
-use crate::project::ast::Statement;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
-use crate::project::hir::FullyQualifiedName;
 use crate::project::mir;
-use crate::project::normalize::NormalizingVisitor;
 use crate::project::object_id::ObjectId;
 use crate::types::{ColumnType, Types};
 use crate::utils::sql_utils::quote_identifier;
-use mz_sql_parser::ast::{CreateViewStatement, IfExistsBehavior, ViewDefinition};
 use owo_colors::OwoColorize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;

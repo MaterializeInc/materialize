@@ -180,7 +180,7 @@ pub async fn run(
                         .await
                         .map_err(|e| CliError::SqlExecutionFailed {
                             statement: statement.to_string(),
-                            source: e.into(),
+                            source: e,
                         })?;
                 }
                 project::ModStatement::Schema {
@@ -194,7 +194,7 @@ pub async fn run(
                         .await
                         .map_err(|e| CliError::SqlExecutionFailed {
                             statement: statement.to_string(),
-                            source: e.into(),
+                            source: e,
                         })?;
                 }
             }
