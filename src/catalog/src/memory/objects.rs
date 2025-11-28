@@ -681,10 +681,6 @@ impl CatalogCollectionEntry {
 }
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
-    fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.item().desc(name, self.version)
-    }
-
     fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>> {
         self.item().desc_opt(self.version)
     }
@@ -1780,19 +1776,7 @@ impl CatalogItem {
     /// matches a specific [`GlobalId`] or historical definition. Other relation
     /// types ignore `version` because they have a single shape. Non-relational
     /// items ( for example functions, indexes, sinks, secrets, and connections)
-    /// return [`SqlCatalogError::InvalidDependency`].
-    pub fn desc(
-        &self,
-        name: &FullItemName,
-        version: RelationVersionSelector,
-    ) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.desc_opt(version)
-            .ok_or_else(|| SqlCatalogError::InvalidDependency {
-                name: name.to_string(),
-                typ: self.typ(),
-            })
-    }
-
+    /// return `None`.
     pub fn desc_opt(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
@@ -2509,17 +2493,6 @@ impl CatalogItem {
 }
 
 impl CatalogEntry {
-    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`],
-    /// returning an error if this [`CatalogEntry`] does not produce rows.
-    ///
-    /// If you need to get the [`RelationDesc`] for a specific version, see [`CatalogItem::desc`].
-    pub fn desc_latest(
-        &self,
-        name: &FullItemName,
-    ) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.item.desc(name, RelationVersionSelector::Latest)
-    }
-
     /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`], if it
     /// produces rows.
     pub fn desc_opt_latest(&self) -> Option<Cow<'_, RelationDesc>> {

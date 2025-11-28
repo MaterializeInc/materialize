@@ -503,7 +503,15 @@ pub fn plan_copy_item(
 > {
     let item = scx.get_item_by_resolved_name(&item_name)?;
     let fullname = scx.catalog.resolve_full_name(item.name());
-    let table_desc = item.desc(&fullname)?.into_owned();
+    let table_desc = match item.desc_opt() {
+        Some(desc) => desc.into_owned(),
+        None => {
+            return Err(PlanError::InvalidDependency {
+                name: fullname.to_string(),
+                item_type: item.item_type(),
+            });
+        }
+    };
     let mut ordering = Vec::with_capacity(columns.len());
 
     // TODO(cf2): The logic here to create the `source_desc` and the MFP are a bit duplicated and
@@ -6564,16 +6572,22 @@ impl<'a> QueryContext<'a> {
                 version,
                 ..
             } => {
-                let name = full_name.into();
                 let item = self.scx.get_item(&id).at_version(version);
-                let desc = item
-                    .desc(&self.scx.catalog.resolve_full_name(item.name()))?
-                    .clone();
+                let desc = match item.desc_opt() {
+                    Some(desc) => desc.clone(),
+                    None => {
+                        return Err(PlanError::InvalidDependency {
+                            name: full_name.to_string(),
+                            item_type: item.item_type(),
+                        });
+                    }
+                };
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.global_id()),
                     typ: desc.typ().clone(),
                 };
 
+                let name = full_name.into();
                 let scope = Scope::from_source(Some(name), desc.iter_names().cloned());
 
                 Ok((expr, scope))
