@@ -1,3 +1,10 @@
+[graph]
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+
 [bans]
 multiple-versions = "deny"
 # Try to avoid exemptions for duplicate dependencies! Duplicate dependencies
@@ -27,22 +34,6 @@ skip = [
     { name = "ordered-float", version = "4.6.0" },
     # held back by 'ciborium' which is depended on by 'criterion'
     { name = "half", version = "1.6.0" },
-    { name = "windows-link", version = "0.1.1" },
-    { name = "windows-targets", version = "0.48.0" },
-    { name = "windows-sys", version = "0.48.0" },
-    { name = "windows_aarch64_gnullvm", version = "0.48.0" },
-    { name = "windows_aarch64_msvc", version = "0.48.0" },
-    { name = "windows_i686_gnu", version = "0.48.0" },
-    { name = "windows_i686_msvc", version = "0.48.0" },
-    { name = "windows_x86_64_gnullvm", version = "0.48.0" },
-    { name = "windows_x86_64_gnu", version = "0.48.0" },
-    { name = "windows_x86_64_msvc", version = "0.48.0" },
-    { name = "windows-sys", version = "0.52.0" },
-    { name = "windows-sys", version = "0.59.0" },
-    # Newer versions of crates like `tempfile` are held back by crates like `atty`.
-    # This is very Unfortunate as we don't actually use these platforms.
-    { name = "redox_syscall", version = "0.2.10" },
-    { name = "redox_syscall", version = "0.4.1" },
 
     # Will require updating many crates
     { name = "indexmap", version = "1.9.1" },
@@ -95,8 +86,6 @@ skip = [
 
     { name = "memmap2", version = "0.5.4" },
 
-    { name = "wasi", version = "0.9.0+wasi-snapshot-preview1" },
-    { name = "wasi", version = "0.11.0+wasi-snapshot-preview1" },
     { name = "async-channel", version = "1.9.0" },
     { name = "event-listener", version = "2.5.3" },
     { name = "fastrand", version = "1.9.0" },
@@ -128,15 +117,6 @@ skip = [
     { name = "tower", version = "0.4.13" },
     # Used by tracing-capture
     { name = "predicates", version = "2.1.5" },
-    # Used by launchdarkly-server-sdk (via moka)
-    { name = "windows-targets", version = "0.52.6" },
-    { name = "windows_aarch64_gnullvm", version = "0.52.6" },
-    { name = "windows_aarch64_msvc", version = "0.52.6" },
-    { name = "windows_i686_gnu", version = "0.52.6" },
-    { name = "windows_i686_msvc", version = "0.52.6" },
-    { name = "windows_x86_64_gnu", version = "0.52.6" },
-    { name = "windows_x86_64_gnullvm", version = "0.52.6" },
-    { name = "windows_x86_64_msvc", version = "0.52.6" },
     # Used by aws-config
     { name = "aws-smithy-http", version = "0.60.10" },
     # Used by aws-sdk-s3
@@ -231,7 +211,6 @@ wrappers = [
     "tracing",
     "tungstenite",
     "want",
-    "wasm-bindgen-backend",
     "workspace-hack",
 ]
 
@@ -252,7 +231,6 @@ wrappers = [
     "prometheus",
     "proptest",
     "rayon-core",
-    "schannel",
     "sharded-slab",
 ]
 
@@ -281,8 +259,6 @@ ignore = [
     "RUSTSEC-2024-0370",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
-    # `instant` is unmaintained, and the author recommends using the maintained [`web-time`] crate instead.
-    "RUSTSEC-2024-0384",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
     "RUSTSEC-2024-0436",
 ]
