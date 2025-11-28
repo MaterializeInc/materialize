@@ -27,13 +27,15 @@ use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, Statement};
+use mz_sql::ast::Raw;
+use mz_sql::plan::Params;
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use tracing::{Span, debug};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::Command;
 use crate::coord::peek::PeekPlan;
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
@@ -130,6 +132,60 @@ impl PeekClient {
             }
         };
 
+        let result = self.try_frontend_peek_inner_inner(
+            portal_name,
+            session,
+            catalog,
+            stmt,
+            params,
+            statement_logging_id,
+        ).await;
+
+        // Log the result (success or error)
+        if let Some(logging_id) = statement_logging_id {
+            let reason = match &result {
+                Ok(Some(ExecuteResponse::SendingRowsImmediate { .. })) => {
+                    StatementEndedExecutionReason::Success {
+                        result_size: None,  // TODO: extract from response
+                        rows_returned: None,  // TODO: extract from response
+                        execution_strategy: None,  // TODO: determine strategy
+                    }
+                }
+                Ok(Some(_)) => StatementEndedExecutionReason::Success {
+                    result_size: None,
+                    rows_returned: None,
+                    execution_strategy: None,
+                },
+                Ok(None) => {
+                    // Bailout case - don't log
+                    return result;
+                }
+                Err(e) => StatementEndedExecutionReason::Errored {
+                    error: e.to_string(),
+                },
+            };
+            
+            self.log_ended_execution(
+                StatementEndedExecutionRecord {
+                    id: logging_id.0,
+                    reason,
+                    ended_at: (self.statement_logging_frontend.now)(),
+                }
+            );
+        }
+
+        result
+    }
+
+    async fn try_frontend_peek_inner_inner(
+        &mut self,
+        _portal_name: &str,
+        session: &mut Session,
+        catalog: Arc<Catalog>,
+        stmt: Option<Arc<Statement<Raw>>>,
+        params: Params,
+        statement_logging_id: Option<crate::coord::statement_logging::StatementLoggingId>,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
             None => {
@@ -1050,21 +1106,6 @@ impl PeekClient {
                     }
                 };
 
-                // Log successful execution
-                if let Some(logging_id) = statement_logging_id {
-                    self.log_ended_execution(
-                        StatementEndedExecutionRecord {
-                            id: logging_id.0,
-                            reason: StatementEndedExecutionReason::Success {
-                                result_size: None,  // TODO: extract from response
-                                rows_returned: None,  // TODO: extract from response
-                                execution_strategy: None,  // TODO: determine strategy
-                            },
-                            ended_at: (self.statement_logging_frontend.now)(),
-                        }
-                    );
-                }
-
                 Ok(Some(match select_plan.copy_to {
                     None => response,
                     // COPY TO STDOUT
@@ -1096,21 +1137,6 @@ impl PeekClient {
                         tx,
                     })
                     .await?;
-
-                // Log successful execution
-                if let Some(logging_id) = statement_logging_id {
-                    self.log_ended_execution(
-                        StatementEndedExecutionRecord {
-                            id: logging_id.0,
-                            reason: StatementEndedExecutionReason::Success {
-                                result_size: None,
-                                rows_returned: None,
-                                execution_strategy: None,
-                            },
-                            ended_at: (self.statement_logging_frontend.now)(),
-                        }
-                    );
-                }
 
                 Ok(Some(response))
             }
