@@ -211,6 +211,7 @@ pub enum Command {
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
+        ctx_extra: ExecuteContextExtra,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 
@@ -221,6 +222,17 @@ pub enum Command {
         source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    /// Register a pending peek initiated by frontend sequencing.
+    /// The Coordinator will track this peek and log its final result when it completes.
+    RegisterFrontendPeek {
+        uuid: uuid::Uuid,
+        conn_id: ConnectionId,
+        cluster_id: mz_controller_types::ClusterId,
+        depends_on: BTreeSet<GlobalId>,
+        ctx_extra: crate::coord::ExecuteContextExtra,
+        is_fast_path: bool,
     },
 
     /// Statement logging event from frontend peek sequencing.
@@ -253,6 +265,7 @@ impl Command {
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
             | Command::ExecuteCopyTo { .. }
+            | Command::RegisterFrontendPeek { .. }
             | Command::FrontendStatementLogging(..) => None,
         }
     }
@@ -281,6 +294,7 @@ impl Command {
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
             | Command::ExecuteCopyTo { .. }
+            | Command::RegisterFrontendPeek { .. }
             | Command::FrontendStatementLogging(..) => None,
         }
     }

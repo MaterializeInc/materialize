@@ -339,6 +339,7 @@ impl Coordinator {
                     conn_id,
                     max_result_size,
                     max_query_result_size,
+                    ctx_extra,
                     tx,
                 } => {
                     let result = self
@@ -353,6 +354,7 @@ impl Coordinator {
                             conn_id,
                             max_result_size,
                             max_query_result_size,
+                            ctx_extra,
                         )
                         .await;
 
@@ -379,6 +381,23 @@ impl Coordinator {
                         tx,
                     )
                     .await;
+                }
+                Command::RegisterFrontendPeek {
+                    uuid,
+                    conn_id,
+                    cluster_id,
+                    depends_on,
+                    ctx_extra,
+                    is_fast_path,
+                } => {
+                    self.handle_register_frontend_peek(
+                        uuid,
+                        conn_id,
+                        cluster_id,
+                        depends_on,
+                        ctx_extra,
+                        is_fast_path,
+                    );
                 }
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
@@ -1811,5 +1830,38 @@ impl Coordinator {
             }
         });
         let _ = tx.send(response);
+    }
+
+    /// Handle registration of a frontend peek.
+    /// This stores the peek in pending_peeks so that when the peek completes,
+    /// the coordinator can log the final result.
+    fn handle_register_frontend_peek(
+        &mut self,
+        uuid: uuid::Uuid,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        cluster_id: mz_controller_types::ClusterId,
+        depends_on: BTreeSet<mz_repr::GlobalId>,
+        ctx_extra: ExecuteContextExtra,
+        is_fast_path: bool,
+    ) {
+        use crate::coord::peek::PendingPeek;
+
+        // Store the peek in pending_peeks for later retrieval when results arrive
+        self.pending_peeks.insert(
+            uuid,
+            PendingPeek {
+                conn_id: conn_id.clone(),
+                cluster_id,
+                depends_on,
+                ctx_extra,
+                is_fast_path,
+            },
+        );
+
+        // Also track it by connection ID for cancellation support
+        self.client_pending_peeks
+            .entry(conn_id)
+            .or_default()
+            .insert(uuid, cluster_id.into());
     }
 }

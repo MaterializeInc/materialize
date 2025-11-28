@@ -218,9 +218,8 @@ impl PeekClient {
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
     ///
-    /// TODO(peek-seq): add statement logging
-    /// TODO(peek-seq): cancellation (see pending_peeks/client_pending_peeks wiring in the old
-    /// sequencing)
+    /// TODO(peek-seq): register streaming peeks in pending_peeks (for non-constant peeks),
+    /// to support cancellation and final result logging.
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -235,6 +234,8 @@ impl PeekClient {
         input_read_holds: ReadHolds<Timestamp>,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        ctx_extra: crate::coord::ExecuteContextExtra,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -328,6 +329,25 @@ impl PeekClient {
         let (rows_tx, rows_rx) = oneshot::channel();
         let uuid = Uuid::new_v4();
 
+        // Register this streaming peek with the Coordinator BEFORE issuing the peek.
+        // This prevents a race condition where fast peeks complete before registration,
+        // causing the coordinator to ignore the notification.
+        let depends_on: std::collections::BTreeSet<mz_repr::GlobalId> = input_read_holds
+            .storage_holds
+            .keys()
+            .chain(input_read_holds.compute_holds.iter().map(|((_, id), _)| id))
+            .copied()
+            .collect();
+        
+        self.coordinator_client.send(Command::RegisterFrontendPeek {
+            uuid,
+            conn_id: conn_id.clone(),
+            cluster_id: compute_instance.into(),
+            depends_on,
+            ctx_extra,
+            is_fast_path: true,
+        });
+
         // At this stage we don't know column names for the result because we
         // only know the peek's result type as a bare SqlRelationType.
         let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
@@ -367,6 +387,7 @@ impl PeekClient {
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
         );
+        
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
             rows: Box::pin(peek_response_stream),
             instance_id: compute_instance,

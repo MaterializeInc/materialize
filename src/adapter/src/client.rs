@@ -1022,6 +1022,7 @@ impl SessionClient {
                 | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
                 | Command::ExecuteCopyTo { .. }
+                | Command::RegisterFrontendPeek { .. }
                 | Command::FrontendStatementLogging(..) => {}
             };
             cmd

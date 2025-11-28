@@ -20,7 +20,7 @@ use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::now::EpochMillis;
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
+use mz_repr::{Datum, GlobalId, IntoRowIterator, RowIterator, Timestamp};
 use mz_sql::catalog::CatalogCluster;
 use mz_sql::plan::{self, Plan, QueryWhen};
 use mz_sql::rbac;
@@ -41,7 +41,7 @@ use crate::coord::peek::PeekPlan;
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
+use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, ExecuteContextExtra, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
 use crate::statement_logging::{
     StatementEndedExecutionReason, StatementEndedExecutionRecord, StatementLifecycleEvent,
@@ -144,12 +144,20 @@ impl PeekClient {
         // Log the result (success or error)
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
-                Ok(Some(_)) => StatementEndedExecutionReason::Success {
-                    // TODO: fill these
-                    result_size: None,
-                    rows_returned: None,
-                    execution_strategy: None,
-                },
+                Ok(Some(ExecuteResponse::SendingRowsImmediate { rows })) => {
+                    let result_size: usize = rows.box_clone().map(|row| row.byte_len()).sum();
+                    StatementEndedExecutionReason::Success {
+                        result_size: Some(u64::cast_from(result_size)),
+                        rows_returned: Some(u64::cast_from(rows.count())),
+                        execution_strategy: Some(crate::statement_logging::StatementExecutionStrategy::Constant),
+                    }
+                }
+                Ok(Some(ExecuteResponse::SendingRowsStreaming { .. })) => {
+                    // Don't log here - the peek is still executing.
+                    // It will be logged when handle_peek_notification is called.
+                    return result;
+                }
+                Ok(Some(_)) => unimplemented!(), // TODO(peek-seq): Are there other cases we need to handle here?
                 Ok(None) => {
                     // Bailout case - don't log
                     return result;
@@ -1075,6 +1083,8 @@ impl PeekClient {
                             read_holds,
                             peek_stash_read_batch_size_bytes,
                             peek_stash_read_memory_budget_bytes,
+                            session.conn_id().clone(),
+                            ExecuteContextExtra::new(statement_logging_id),
                         )
                         .await?
                     }
@@ -1094,6 +1104,7 @@ impl PeekClient {
                             conn_id: session.conn_id().clone(),
                             max_result_size,
                             max_query_result_size,
+                            ctx_extra: ExecuteContextExtra::new(statement_logging_id),
                             tx,
                         })
                         .await?

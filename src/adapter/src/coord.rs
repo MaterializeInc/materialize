@@ -372,6 +372,7 @@ impl Message {
                 Command::StoreTransactionReadHolds { .. } => "store-transaction-read-holds",
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
+                Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
             },
             Message::ControllerReady {
