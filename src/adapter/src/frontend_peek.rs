@@ -112,6 +112,67 @@ impl PeekClient {
             (stmt, params, logging)
         };
 
+        // Before planning, check if this is a statement type we can handle.
+        // This must happen BEFORE statement logging setup to avoid orphaned execution records.
+        if let Some(ref stmt) = stmt {
+            match &**stmt {
+                Statement::Select(_)
+                | Statement::ExplainAnalyzeObject(_)
+                | Statement::ExplainAnalyzeCluster(_) => {
+                    // These are always fine, just continue.
+                    // Note: EXPLAIN ANALYZE will `plan` to `Plan::Select`.
+                }
+                Statement::ExplainPlan(explain_stmt) => {
+                    // Only handle ExplainPlan for SELECT statements.
+                    // We don't want to handle e.g. EXPLAIN CREATE MATERIALIZED VIEW here, because that
+                    // requires purification before planning, which the frontend peek sequencing doesn't
+                    // do.
+                    match &explain_stmt.explainee {
+                        mz_sql_parser::ast::Explainee::Select(..) => {
+                            // This is a SELECT, continue
+                        }
+                        _ => {
+                            debug!(
+                                "Bailing out from try_frontend_peek, because EXPLAIN is not for a SELECT query"
+                            );
+                            return Ok(None);
+                        }
+                    }
+                }
+                Statement::ExplainPushdown(explain_stmt) => {
+                    // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
+                    match &explain_stmt.explainee {
+                        mz_sql_parser::ast::Explainee::Select(..) => {}
+                        _ => {
+                            debug!(
+                                "Bailing out from try_frontend_peek, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query"
+                            );
+                            return Ok(None);
+                        }
+                    }
+                }
+                Statement::Copy(copy_stmt) => {
+                    match &copy_stmt.direction {
+                        CopyDirection::To => {
+                            // This is COPY TO, continue
+                        }
+                        CopyDirection::From => {
+                            debug!(
+                                "Bailing out from try_frontend_peek, because COPY FROM is not supported"
+                            );
+                            return Ok(None);
+                        }
+                    }
+                }
+                _ => {
+                    debug!(
+                        "Bailing out from try_frontend_peek, because statement type is not supported"
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+
         // Set up statement logging, and log the beginning of execution.
         let statement_logging_id = {
             let result = self.statement_logging_frontend.begin_statement_execution(
@@ -195,64 +256,6 @@ impl PeekClient {
                 return Ok(Some(ExecuteResponse::EmptyQuery));
             }
         };
-
-        // Before planning, check if this is a statement type we can handle.
-        match &*stmt {
-            Statement::Select(_)
-            | Statement::ExplainAnalyzeObject(_)
-            | Statement::ExplainAnalyzeCluster(_) => {
-                // These are always fine, just continue.
-                // Note: EXPLAIN ANALYZE will `plan` to `Plan::Select`.
-            }
-            Statement::ExplainPlan(explain_stmt) => {
-                // Only handle ExplainPlan for SELECT statements.
-                // We don't want to handle e.g. EXPLAIN CREATE MATERIALIZED VIEW here, because that
-                // requires purification before planning, which the frontend peek sequencing doesn't
-                // do.
-                match &explain_stmt.explainee {
-                    mz_sql_parser::ast::Explainee::Select(..) => {
-                        // This is a SELECT, continue
-                    }
-                    _ => {
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because EXPLAIN is not for a SELECT query"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-            Statement::ExplainPushdown(explain_stmt) => {
-                // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
-                match &explain_stmt.explainee {
-                    mz_sql_parser::ast::Explainee::Select(..) => {}
-                    _ => {
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-            Statement::Copy(copy_stmt) => {
-                match &copy_stmt.direction {
-                    CopyDirection::To => {
-                        // This is COPY TO, continue
-                    }
-                    CopyDirection::From => {
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because COPY FROM is not supported"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-            _ => {
-                debug!(
-                    "Bailing out from try_frontend_peek_inner, because statement type is not supported"
-                );
-                return Ok(None);
-            }
-        }
 
         let session_type = metrics::session_type_label_value(session.user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
