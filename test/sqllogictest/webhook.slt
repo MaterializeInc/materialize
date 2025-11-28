@@ -49,7 +49,7 @@ DROP SOURCE "weird-name-(]%/'"
 query TT
 SELECT id, regexp_match(url, '(/api/webhook/.*)') FROM mz_internal.mz_webhook_sources
 ----
-u1 {/api/webhook/materialize/public/webhook_bytes}
+u4  {/api/webhook/materialize/public/webhook_bytes}
 
 statement ok
 CREATE SOURCE webhook_bytes_include_headers IN CLUSTER webhook_cluster FROM WEBHOOK
