@@ -27,7 +27,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "Get": {
           "id": {
             "Global": {
-              "User": 1
+              "User": 2
             }
           },
           "typ": {
@@ -53,7 +53,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -73,7 +73,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
           "sources": [
             {
               "id": {
-                "User": 1
+                "User": 2
               },
               "op": null
             }
@@ -88,7 +88,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
   },
   "insights": {
     "imports": {
-      "u1": {
+      "u2": {
         "name": {
           "database": "materialize",
           "schema": "public",
@@ -107,7 +107,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       "User": 1
     }
   },
-  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
+  "redacted_sql": "SELECT * FROM [u2 AS materialize.public.t]"
 }
 EOF
 
@@ -128,7 +128,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "Get": {
           "id": {
             "Global": {
-              "User": 1
+              "User": 2
             }
           },
           "typ": {
@@ -154,7 +154,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -174,7 +174,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
           "sources": [
             {
               "id": {
-                "User": 1
+                "User": 2
               },
               "op": null
             }
@@ -189,7 +189,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
   },
   "insights": {
     "imports": {
-      "u1": {
+      "u2": {
         "name": {
           "database": "materialize",
           "schema": "public",
@@ -208,7 +208,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       "User": 1
     }
   },
-  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
+  "redacted_sql": "SELECT * FROM [u2 AS materialize.public.t]"
 }
 EOF
 
@@ -225,7 +225,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
             "Get": {
               "id": {
                 "Global": {
-                  "User": 1
+                  "User": 2
                 }
               },
               "typ": {
@@ -243,7 +243,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
             "Get": {
               "id": {
                 "Global": {
-                  "User": 1
+                  "User": 2
                 }
               },
               "typ": {
@@ -291,7 +291,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "typ": {
@@ -405,7 +405,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
           "sources": [
             {
               "id": {
-                "User": 1
+                "User": 2
               },
               "op": null
             }
@@ -420,7 +420,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
   },
   "insights": {
     "imports": {
-      "u1": {
+      "u2": {
         "name": {
           "database": "materialize",
           "schema": "public",
@@ -439,7 +439,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
       "User": 1
     }
   },
-  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t] AS t1, [u1 AS materialize.public.t] AS t2"
+  "redacted_sql": "SELECT * FROM [u2 AS materialize.public.t] AS t1, [u2 AS materialize.public.t] AS t2"
 }
 EOF
 
@@ -457,7 +457,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "Get": {
           "id": {
             "Global": {
-              "User": 1
+              "User": 2
             }
           },
           "typ": {
@@ -483,7 +483,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -499,7 +499,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                     "Index": [
                       [
                         {
-                          "User": 2
+                          "User": 3
                         },
                         "FullScan"
                       ]
@@ -521,10 +521,10 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
               "plan": {
                 "PeekExisting": [
                   {
-                    "User": 1
+                    "User": 2
                   },
                   {
-                    "User": 2
+                    "User": 3
                   },
                   null,
                   {
@@ -548,7 +548,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
   },
   "insights": {
     "imports": {
-      "u2": {
+      "u3": {
         "name": {
           "database": "materialize",
           "schema": "public",
@@ -567,7 +567,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
       "User": 1
     }
   },
-  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
+  "redacted_sql": "SELECT * FROM [u2 AS materialize.public.t]"
 }
 EOF
 
@@ -584,7 +584,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
             "Get": {
               "id": {
                 "Global": {
-                  "User": 1
+                  "User": 2
                 }
               },
               "typ": {
@@ -602,7 +602,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
             "Get": {
               "id": {
                 "Global": {
-                  "User": 1
+                  "User": 2
                 }
               },
               "typ": {
@@ -650,7 +650,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "typ": {
@@ -666,7 +666,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
                             "Index": [
                               [
                                 {
-                                  "User": 2
+                                  "User": 3
                                 },
                                 "FullScan"
                               ]
@@ -781,7 +781,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
   },
   "insights": {
     "imports": {
-      "u2": {
+      "u3": {
         "name": {
           "database": "materialize",
           "schema": "public",
@@ -800,7 +800,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t t1, t t2
       "User": 1
     }
   },
-  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t] AS t1, [u1 AS materialize.public.t] AS t2"
+  "redacted_sql": "SELECT * FROM [u2 AS materialize.public.t] AS t1, [u2 AS materialize.public.t] AS t2"
 }
 EOF
 
@@ -822,7 +822,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
         "Get": {
           "id": {
             "Global": {
-              "User": 1
+              "User": 2
             }
           },
           "typ": {
@@ -848,7 +848,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -868,7 +868,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
           "sources": [
             {
               "id": {
-                "User": 1
+                "User": 2
               },
               "op": null
             }
@@ -883,7 +883,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
   },
   "insights": {
     "imports": {
-      "u1": {
+      "u2": {
         "name": {
           "database": "materialize",
           "schema": "public",
@@ -912,10 +912,10 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT * FROM t
   "cluster": {
     "name": "other",
     "id": {
-      "User": 3
+      "User": 4
     }
   },
-  "redacted_sql": "SELECT * FROM [u1 AS materialize.public.t]"
+  "redacted_sql": "SELECT * FROM [u2 AS materialize.public.t]"
 }
 EOF
 
@@ -933,7 +933,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
             "Get": {
               "id": {
                 "Global": {
-                  "User": 1
+                  "User": 2
                 }
               },
               "typ": {
@@ -990,7 +990,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
                             "Get": {
                               "id": {
                                 "Global": {
-                                  "User": 1
+                                  "User": 2
                                 }
                               },
                               "typ": {
@@ -1139,7 +1139,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
           "sources": [
             {
               "id": {
-                "User": 1
+                "User": 2
               },
               "op": null
             }
@@ -1154,7 +1154,7 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
   },
   "insights": {
     "imports": {
-      "u1": {
+      "u2": {
         "name": {
           "database": "materialize",
           "schema": "public",
@@ -1176,10 +1176,10 @@ EXPLAIN PLAN INSIGHTS AS JSON FOR SELECT count(*) FROM t
   "cluster": {
     "name": "other",
     "id": {
-      "User": 3
+      "User": 4
     }
   },
-  "redacted_sql": "SELECT pg_catalog.count(*) FROM [u1 AS materialize.public.t]"
+  "redacted_sql": "SELECT pg_catalog.count(*) FROM [u2 AS materialize.public.t]"
 }
 EOF
 

@@ -192,7 +192,7 @@ SELECT * FROM t
           "Get": {
             "id": {
               "Global": {
-                "User": 1
+                "User": 2
               }
             },
             "keys": {
@@ -242,7 +242,7 @@ SELECT * FROM u
           "Get": {
             "id": {
               "Global": {
-                "User": 2
+                "User": 3
               }
             },
             "keys": {
@@ -258,7 +258,7 @@ SELECT * FROM u
   "sources": [
     {
       "id": {
-        "User": 2
+        "User": 3
       },
       "op": null
     }
@@ -281,7 +281,7 @@ SELECT a + b, 1 FROM t
           "Get": {
             "id": {
               "Global": {
-                "User": 1
+                "User": 2
               }
             },
             "keys": {
@@ -388,7 +388,7 @@ SELECT c + d, 1 FROM u
           "Get": {
             "id": {
               "Global": {
-                "User": 2
+                "User": 3
               }
             },
             "keys": {
@@ -414,7 +414,7 @@ SELECT c + d, 1 FROM u
   "sources": [
     {
       "id": {
-        "User": 2
+        "User": 3
       },
       "op": {
         "expressions": [
@@ -497,7 +497,7 @@ SELECT * FROM ov
                       "Get": {
                         "id": {
                           "Global": {
-                            "User": 1
+                            "User": 2
                           }
                         },
                         "keys": {
@@ -615,7 +615,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                               "Get": {
                                 "id": {
                                   "Global": {
-                                    "User": 1
+                                    "User": 2
                                   }
                                 },
                                 "keys": {
@@ -674,7 +674,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                                     "Get": {
                                       "id": {
                                         "Global": {
-                                          "User": 7
+                                          "User": 8
                                         }
                                       },
                                       "keys": {
@@ -758,7 +758,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
   "sources": [
     {
       "id": {
-        "User": 7
+        "User": 8
       },
       "op": {
         "expressions": [],
@@ -803,7 +803,7 @@ SELECT * FROM ov
                       "Get": {
                         "id": {
                           "Global": {
-                            "User": 1
+                            "User": 2
                           }
                         },
                         "keys": {
@@ -927,7 +927,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                     "Get": {
                                       "id": {
                                         "Global": {
-                                          "User": 1
+                                          "User": 2
                                         }
                                       },
                                       "keys": {
@@ -986,7 +986,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           "Get": {
                                             "id": {
                                               "Global": {
-                                                "User": 7
+                                                "User": 8
                                               }
                                             },
                                             "keys": {
@@ -1243,7 +1243,7 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
   "sources": [
     {
       "id": {
-        "User": 7
+        "User": 8
       },
       "op": {
         "expressions": [],
@@ -1297,7 +1297,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                             "Get": {
                                               "id": {
                                                 "Global": {
-                                                  "User": 1
+                                                  "User": 2
                                                 }
                                               },
                                               "keys": {
@@ -1446,7 +1446,7 @@ SELECT x * 5 FROM cte WHERE x = 5
                                           "Get": {
                                             "id": {
                                               "Global": {
-                                                "User": 7
+                                                "User": 8
                                               }
                                             },
                                             "keys": {
@@ -1569,7 +1569,7 @@ SELECT x * 5 FROM cte WHERE x = 5
   "sources": [
     {
       "id": {
-        "User": 7
+        "User": 8
       },
       "op": {
         "expressions": [],
@@ -1644,7 +1644,7 @@ SELECT generate_series(a, b) from t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "keys": {
@@ -1748,7 +1748,7 @@ SELECT DISTINCT a, b FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "keys": {
@@ -1849,7 +1849,7 @@ GROUP BY a
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "keys": {
@@ -2006,7 +2006,7 @@ FROM t
                       "Get": {
                         "id": {
                           "Global": {
-                            "User": 1
+                            "User": 2
                           }
                         },
                         "keys": {
@@ -2361,7 +2361,7 @@ SELECT * FROM hierarchical_group_by
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "keys": {
@@ -2472,7 +2472,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                       "Get": {
                         "id": {
                           "Global": {
-                            "User": 1
+                            "User": 2
                           }
                         },
                         "keys": {
@@ -2790,7 +2790,7 @@ SELECT * FROM hierarchical_global
                       "Get": {
                         "id": {
                           "Global": {
-                            "User": 1
+                            "User": 2
                           }
                         },
                         "keys": {
@@ -3112,7 +3112,7 @@ GROUP BY a
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -3372,7 +3372,7 @@ GROUP BY a
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -3701,7 +3701,7 @@ FROM t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "keys": {
@@ -4430,7 +4430,7 @@ MATERIALIZED VIEW collated_group_by_mv
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -4536,7 +4536,7 @@ MATERIALIZED VIEW collated_group_by_mv
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -4677,7 +4677,7 @@ MATERIALIZED VIEW collated_group_by_mv
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -4937,7 +4937,7 @@ MATERIALIZED VIEW collated_group_by_mv
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -5859,7 +5859,7 @@ SELECT * FROM collated_group_by
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -5957,7 +5957,7 @@ SELECT * FROM collated_group_by
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -6098,7 +6098,7 @@ SELECT * FROM collated_group_by
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -6358,7 +6358,7 @@ SELECT * FROM collated_group_by
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "keys": {
@@ -7268,7 +7268,7 @@ MATERIALIZED VIEW collated_global_mv
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "keys": {
@@ -8632,7 +8632,7 @@ SELECT * FROM collated_global
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "keys": {
@@ -9990,7 +9990,7 @@ WHERE a = c AND d = e AND b + d > 42
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 2
                       }
                     },
                     "keys": {
@@ -10030,7 +10030,7 @@ WHERE a = c AND d = e AND b + d > 42
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 2
+                              "User": 3
                             }
                           },
                           "keys": {
@@ -10113,7 +10113,7 @@ WHERE a = c AND d = e AND b + d > 42
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 3
+                              "User": 4
                             }
                           },
                           "keys": {
@@ -10737,7 +10737,7 @@ WHERE a = c AND d = e AND b + d > 42
   "sources": [
     {
       "id": {
-        "User": 2
+        "User": 3
       },
       "op": {
         "expressions": [],
@@ -10798,7 +10798,7 @@ WHERE a = c AND d = e AND b + d > 42
     },
     {
       "id": {
-        "User": 3
+        "User": 4
       },
       "op": {
         "expressions": [],
@@ -10870,7 +10870,7 @@ WHERE a = c AND d = e AND f = a
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 2
                       }
                     },
                     "keys": {
@@ -10910,7 +10910,7 @@ WHERE a = c AND d = e AND f = a
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 2
+                              "User": 3
                             }
                           },
                           "keys": {
@@ -11073,7 +11073,7 @@ WHERE a = c AND d = e AND f = a
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 3
+                              "User": 4
                             }
                           },
                           "keys": {
@@ -11639,7 +11639,7 @@ WHERE a = c and a = e
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 1
+                        "User": 2
                       }
                     },
                     "keys": {
@@ -11674,7 +11674,7 @@ WHERE a = c and a = e
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 2
+                        "User": 3
                       }
                     },
                     "keys": {
@@ -11709,7 +11709,7 @@ WHERE a = c and a = e
                   "Get": {
                     "id": {
                       "Global": {
-                        "User": 3
+                        "User": 4
                       }
                     },
                     "keys": {

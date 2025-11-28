@@ -194,7 +194,12 @@ def workflow_inspect_shard(c: Composition) -> None:
             """
         )
     )
-    json_dict = c.sql_query("INSPECT SHARD 'u1'", port=6877, user="mz_system")[0][0]
+    object_id = c.sql_query(
+        "SELECT id from mz_objects where name = 'foo'", port=6877, user="mz_system"
+    )[0][0]
+    json_dict = c.sql_query(
+        f"INSPECT SHARD '{object_id}'", port=6877, user="mz_system"
+    )[0][0]
     parts = [
         part
         for batch in json_dict["batches"]

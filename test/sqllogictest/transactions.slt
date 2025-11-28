@@ -189,7 +189,7 @@ COMPLETE 0
 simple
 COMMIT
 ----
-db error: ERROR: unknown catalog item 'u1'
+db error: ERROR: unknown catalog item 'u2'
 
 # Verify SUBSCRIBE must be only read statement in a transaction.
 # We use FETCH 0 with SUBSCRIBE below so that we don't need to worry about
@@ -432,7 +432,7 @@ COMPLETE 0
 simple conn=t1
 COMMIT;
 ----
-db error: ERROR: unknown catalog item 'u8'
+db error: ERROR: unknown catalog item 'u9'
 
 # Test transaction syntax that we don't support.
 
@@ -1273,8 +1273,8 @@ SELECT * FROM blue_mv1;
 query TT
 SELECT name, id FROM mz_clusters WHERE id LIKE 'u%' AND name != 'quickstart' ORDER BY name;
 ----
-blue_compute  u10
-c  u5
+blue_compute  u11
+c  u6
 
 statement ok
 BEGIN;

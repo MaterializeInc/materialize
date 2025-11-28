@@ -148,10 +148,10 @@ SELECT 1, a + b as c FROM t WHERE a > 0 and b < 0 and a + b > 0
       "plan": {
         "PeekExisting": [
           {
-            "User": 1
+            "User": 2
           },
           {
-            "User": 4
+            "User": 5
           },
           null,
           {
@@ -322,7 +322,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
                     "Get": {
                       "id": {
                         "Global": {
-                          "User": 8
+                          "User": 9
                         }
                       },
                       "typ": {
@@ -479,7 +479,7 @@ SELECT 1, a + b as c FROM mv WHERE a > 0 and b < 0 and a + b > 0
   "sources": [
     {
       "id": {
-        "User": 8
+        "User": 9
       },
       "op": {
         "expressions": [],
@@ -619,7 +619,7 @@ SELECT generate_series(a, b) from t
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -639,7 +639,7 @@ SELECT generate_series(a, b) from t
                     "Index": [
                       [
                         {
-                          "User": 4
+                          "User": 5
                         },
                         "FullScan"
                       ]
@@ -712,7 +712,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                         "Get": {
                           "id": {
                             "Global": {
-                              "User": 1
+                              "User": 2
                             }
                           },
                           "typ": {
@@ -732,7 +732,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                             "Index": [
                               [
                                 {
-                                  "User": 4
+                                  "User": 5
                                 },
                                 "FullScan"
                               ]
@@ -769,7 +769,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
                               "Get": {
                                 "id": {
                                   "Global": {
-                                    "User": 8
+                                    "User": 9
                                   }
                                 },
                                 "typ": {
@@ -818,7 +818,7 @@ SELECT a FROM t EXCEPT SELECT b FROM mv
   "sources": [
     {
       "id": {
-        "User": 8
+        "User": 9
       },
       "op": null
     }
@@ -845,7 +845,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                     "Get": {
                       "id": {
                         "Global": {
-                          "User": 1
+                          "User": 2
                         }
                       },
                       "typ": {
@@ -865,7 +865,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                         "Index": [
                           [
                             {
-                              "User": 4
+                              "User": 5
                             },
                             "FullScan"
                           ]
@@ -887,7 +887,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 8
+                                "User": 9
                               }
                             },
                             "typ": {
@@ -923,7 +923,7 @@ SELECT a FROM t EXCEPT ALL SELECT b FROM mv
   "sources": [
     {
       "id": {
-        "User": 8
+        "User": 9
       },
       "op": null
     }
@@ -946,7 +946,7 @@ SELECT * FROM ov
             "Get": {
               "id": {
                 "Global": {
-                  "User": 1
+                  "User": 2
                 }
               },
               "typ": {
@@ -966,7 +966,7 @@ SELECT * FROM ov
                 "Index": [
                   [
                     {
-                      "User": 4
+                      "User": 5
                     },
                     "FullScan"
                   ]
@@ -1026,10 +1026,10 @@ SELECT * FROM t ORDER BY b asc, a desc LIMIT 5
       "plan": {
         "PeekExisting": [
           {
-            "User": 1
+            "User": 2
           },
           {
-            "User": 4
+            "User": 5
           },
           null,
           {
@@ -1071,7 +1071,7 @@ SELECT abs(min(a) - max(a)) FROM t
                     "Get": {
                       "id": {
                         "Global": {
-                          "User": 1
+                          "User": 2
                         }
                       },
                       "typ": {
@@ -1091,7 +1091,7 @@ SELECT abs(min(a) - max(a)) FROM t
                         "Index": [
                           [
                             {
-                              "User": 4
+                              "User": 5
                             },
                             "FullScan"
                           ]
@@ -1318,7 +1318,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                     "Get": {
                       "id": {
                         "Global": {
-                          "User": 1
+                          "User": 2
                         }
                       },
                       "typ": {
@@ -1338,7 +1338,7 @@ SELECT abs(min(a) - max(a)) FROM t GROUP BY b
                         "Index": [
                           [
                             {
-                              "User": 4
+                              "User": 5
                             },
                             "FullScan"
                           ]
@@ -1444,7 +1444,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 1
+                                "User": 2
                               }
                             },
                             "typ": {
@@ -1464,7 +1464,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                               "Index": [
                                 [
                                   {
-                                    "User": 4
+                                    "User": 5
                                   },
                                   "DifferentialJoin"
                                 ]
@@ -1505,7 +1505,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                         "Get": {
                                                           "id": {
                                                             "Global": {
-                                                              "User": 1
+                                                              "User": 2
                                                             }
                                                           },
                                                           "typ": {
@@ -1525,7 +1525,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                             "Index": [
                                                               [
                                                                 {
-                                                                  "User": 4
+                                                                  "User": 5
                                                                 },
                                                                 "FullScan"
                                                               ]
@@ -1564,7 +1564,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                     "Get": {
                                                       "id": {
                                                         "Global": {
-                                                          "User": 8
+                                                          "User": 9
                                                         }
                                                       },
                                                       "typ": {
@@ -1890,7 +1890,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
                                                     "Get": {
                                                       "id": {
                                                         "Global": {
-                                                          "User": 8
+                                                          "User": 9
                                                         }
                                                       },
                                                       "typ": {
@@ -2114,7 +2114,7 @@ SELECT * FROM t WHERE EXISTS(SELECT * FROM mv WHERE t.a < mv.a) AND EXISTS(SELEC
   "sources": [
     {
       "id": {
-        "User": 8
+        "User": 9
       },
       "op": null
     }
@@ -2140,7 +2140,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -2160,7 +2160,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                     "Index": [
                       [
                         {
-                          "User": 4
+                          "User": 5
                         },
                         "FullScan"
                       ]
@@ -2285,7 +2285,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                               "Get": {
                                                 "id": {
                                                   "Global": {
-                                                    "User": 6
+                                                    "User": 7
                                                   }
                                                 },
                                                 "typ": {
@@ -2305,7 +2305,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                   "Index": [
                                                     [
                                                       {
-                                                        "User": 7
+                                                        "User": 8
                                                       },
                                                       "FullScan"
                                                     ]
@@ -2498,7 +2498,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
                                                   "Get": {
                                                     "id": {
                                                       "Global": {
-                                                        "User": 8
+                                                        "User": 9
                                                       }
                                                     },
                                                     "typ": {
@@ -3175,7 +3175,7 @@ SELECT (SELECT iv.a FROM iv WHERE iv.b = t.b LIMIT 1), (SELECT mv.a FROM mv WHER
   "sources": [
     {
       "id": {
-        "User": 8
+        "User": 9
       },
       "op": {
         "expressions": [],
@@ -3236,7 +3236,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -3256,7 +3256,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                     "Index": [
                       [
                         {
-                          "User": 4
+                          "User": 5
                         },
                         "FullScan"
                       ]
@@ -3824,7 +3824,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                           "Get": {
                                             "id": {
                                               "Global": {
-                                                "User": 1
+                                                "User": 2
                                               }
                                             },
                                             "typ": {
@@ -3844,7 +3844,7 @@ RIGHT JOIN t as t3 ON t2.b = t3.b
                                               "Index": [
                                                 [
                                                   {
-                                                    "User": 4
+                                                    "User": 5
                                                   },
                                                   "FullScan"
                                                 ]
@@ -3979,7 +3979,7 @@ FROM
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -3999,7 +3999,7 @@ FROM
                     "Index": [
                       [
                         {
-                          "User": 4
+                          "User": 5
                         },
                         "FullScan"
                       ]
@@ -4055,7 +4055,7 @@ FROM
                                       "Get": {
                                         "id": {
                                           "Global": {
-                                            "User": 1
+                                            "User": 2
                                           }
                                         },
                                         "typ": {
@@ -4075,7 +4075,7 @@ FROM
                                           "Index": [
                                             [
                                               {
-                                                "User": 4
+                                                "User": 5
                                               },
                                               "DifferentialJoin"
                                             ]
@@ -4731,7 +4731,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                     "Get": {
                       "id": {
                         "Global": {
-                          "User": 1
+                          "User": 2
                         }
                       },
                       "typ": {
@@ -4751,7 +4751,7 @@ SELECT t1.a, t2.a FROM t as t1, t as t2
                         "Index": [
                           [
                             {
-                              "User": 4
+                              "User": 5
                             },
                             "FullScan"
                           ]
@@ -4887,7 +4887,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 1
+                      "User": 2
                     }
                   },
                   "typ": {
@@ -4907,7 +4907,7 @@ WHERE t1.b = t2.b AND t2.b = t3.b
                     "Index": [
                       [
                         {
-                          "User": 4
+                          "User": 5
                         },
                         "FullScan"
                       ]
@@ -5314,7 +5314,7 @@ WHERE a = c and d = e and b = f
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 1
+                                "User": 2
                               }
                             },
                             "typ": {
@@ -5334,7 +5334,7 @@ WHERE a = c and d = e and b = f
                               "Index": [
                                 [
                                   {
-                                    "User": 4
+                                    "User": 5
                                   },
                                   "FullScan"
                                 ]
@@ -5418,7 +5418,7 @@ WHERE a = c and d = e and b = f
                       "Get": {
                         "id": {
                           "Global": {
-                            "User": 2
+                            "User": 3
                           }
                         },
                         "typ": {
@@ -5438,7 +5438,7 @@ WHERE a = c and d = e and b = f
                           "Index": [
                             [
                               {
-                                "User": 9
+                                "User": 10
                               },
                               {
                                 "DeltaJoin": "Lookup"
@@ -5446,7 +5446,7 @@ WHERE a = c and d = e and b = f
                             ],
                             [
                               {
-                                "User": 10
+                                "User": 11
                               },
                               {
                                 "DeltaJoin": "Lookup"
@@ -5484,7 +5484,7 @@ WHERE a = c and d = e and b = f
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 3
+                                "User": 4
                               }
                             },
                             "typ": {
@@ -5504,7 +5504,7 @@ WHERE a = c and d = e and b = f
                               "Index": [
                                 [
                                   {
-                                    "User": 11
+                                    "User": 12
                                   },
                                   "FullScan"
                                 ]
@@ -5856,7 +5856,7 @@ WHERE b = c and d = e
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 1
+                                "User": 2
                               }
                             },
                             "typ": {
@@ -5876,7 +5876,7 @@ WHERE b = c and d = e
                               "Index": [
                                 [
                                   {
-                                    "User": 12
+                                    "User": 13
                                   },
                                   {
                                     "DeltaJoin": "FirstInputFullScan"
@@ -5904,7 +5904,7 @@ WHERE b = c and d = e
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 2
+                                "User": 3
                               }
                             },
                             "typ": {
@@ -5924,7 +5924,7 @@ WHERE b = c and d = e
                               "Index": [
                                 [
                                   {
-                                    "User": 9
+                                    "User": 10
                                   },
                                   {
                                     "DeltaJoin": "Lookup"
@@ -5932,7 +5932,7 @@ WHERE b = c and d = e
                                 ],
                                 [
                                   {
-                                    "User": 10
+                                    "User": 11
                                   },
                                   {
                                     "DeltaJoin": "Lookup"
@@ -5968,7 +5968,7 @@ WHERE b = c and d = e
                           "Get": {
                             "id": {
                               "Global": {
-                                "User": 3
+                                "User": 4
                               }
                             },
                             "typ": {
@@ -5988,7 +5988,7 @@ WHERE b = c and d = e
                               "Index": [
                                 [
                                   {
-                                    "User": 11
+                                    "User": 12
                                   },
                                   {
                                     "DeltaJoin": "Lookup"
@@ -6300,7 +6300,7 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
                 "Get": {
                   "id": {
                     "Global": {
-                      "User": 13
+                      "User": 14
                     }
                   },
                   "typ": {
@@ -6354,7 +6354,7 @@ SELECT s FROM t2 WHERE s ~ 'a.*';
   "sources": [
     {
       "id": {
-        "User": 13
+        "User": 14
       },
       "op": {
         "expressions": [],

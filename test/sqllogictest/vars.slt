@@ -245,7 +245,7 @@ COMPLETE 0
 simple conn=1
 COMMIT;
 ----
-db error: ERROR: unknown catalog item 'u1'
+db error: ERROR: unknown catalog item 'u2'
 
 simple conn=1
 SHOW extra_float_digits
