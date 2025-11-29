@@ -32,7 +32,7 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
-use crate::coord::statement_logging::StatementLoggingFrontend;
+use crate::coord::statement_logging::{IdsToWatch, StatementLoggingFrontend};
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
@@ -234,6 +234,7 @@ impl PeekClient {
         conn_id: mz_adapter_types::connection::ConnectionId,
         statement_logging_id: Option<crate::coord::statement_logging::StatementLoggingId>,
         depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
+        ids_to_watch: Option<IdsToWatch>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
@@ -336,6 +337,7 @@ impl PeekClient {
             depends_on,
             ctx_extra,
             is_fast_path: true,
+            ids_to_watch,
         });
 
         // At this stage we don't know column names for the result because we

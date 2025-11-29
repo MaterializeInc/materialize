@@ -55,6 +55,7 @@ use crate::{
     TimelineContext, TimestampContext, TimestampProvider, optimize,
 };
 use crate::{coord, metrics};
+use crate::coord::statement_logging::IdsToWatch;
 
 impl PeekClient {
     pub(crate) async fn try_frontend_peek(
@@ -1080,6 +1081,16 @@ impl PeekClient {
 
                 // TODO(peek-seq): statement logging
 
+                let ids_to_watch = if statement_logging_id.is_some() {
+                    Some(IdsToWatch::new(
+                        catalog.state(),
+                        &input_id_bundle,
+                        determination.timestamp_context.timestamp_or_default(),
+                    ))
+                } else {
+                    None
+                };
+
                 let max_result_size = catalog.system_config().max_result_size();
 
                 let response = match peek_plan {
@@ -1129,6 +1140,7 @@ impl PeekClient {
                             session.conn_id().clone(),
                             statement_logging_id,
                             source_ids,
+                            ids_to_watch,
                         )
                         .await?
                     }
@@ -1149,6 +1161,7 @@ impl PeekClient {
                             max_result_size,
                             max_query_result_size,
                             ctx_extra: ExecuteContextExtra::new(statement_logging_id),
+                            ids_to_watch,
                             tx,
                         })
                         .await?

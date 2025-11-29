@@ -25,7 +25,7 @@ use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
-use mz_ore::task;
+use mz_ore::{soft_assert_eq_or_log, task};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
@@ -78,7 +78,8 @@ use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
-
+use crate::coord::peek::PendingPeek;
+use crate::coord::statement_logging::IdsToWatch;
 use super::ExecuteContextExtra;
 
 impl Coordinator {
@@ -340,8 +341,14 @@ impl Coordinator {
                     max_result_size,
                     max_query_result_size,
                     ctx_extra,
+                    ids_to_watch,
                     tx,
                 } => {
+                    soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
+                    if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+                        self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+                    }
+
                     let result = self
                         .implement_slow_path_peek(
                             *dataflow_plan,
@@ -389,6 +396,7 @@ impl Coordinator {
                     depends_on,
                     ctx_extra,
                     is_fast_path,
+                    ids_to_watch,
                 } => {
                     self.handle_register_frontend_peek(
                         uuid,
@@ -397,6 +405,7 @@ impl Coordinator {
                         depends_on,
                         ctx_extra,
                         is_fast_path,
+                        ids_to_watch,
                     );
                 }
                 Command::FrontendStatementLogging(event) => {
@@ -1843,8 +1852,12 @@ impl Coordinator {
         depends_on: BTreeSet<mz_repr::GlobalId>,
         ctx_extra: ExecuteContextExtra,
         is_fast_path: bool,
+        ids_to_watch: Option<IdsToWatch>,
     ) {
-        use crate::coord::peek::PendingPeek;
+        soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
+        if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+        }
 
         // Store the peek in pending_peeks for later retrieval when results arrive
         self.pending_peeks.insert(

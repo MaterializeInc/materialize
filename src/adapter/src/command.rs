@@ -47,7 +47,7 @@ use crate::coord::ExecuteContextExtra;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
-use crate::coord::statement_logging::StatementLoggingFrontend;
+use crate::coord::statement_logging::{IdsToWatch, StatementLoggingFrontend};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -212,6 +212,8 @@ pub enum Command {
         max_result_size: u64,
         max_query_result_size: Option<u64>,
         ctx_extra: ExecuteContextExtra,
+        /// If statement logging is enabled, contains the info necessary for installing watch sets.
+        ids_to_watch: Option<IdsToWatch>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 
@@ -227,12 +229,14 @@ pub enum Command {
     /// Register a pending peek initiated by frontend sequencing.
     /// The Coordinator will track this peek and log its final result when it completes.
     RegisterFrontendPeek {
-        uuid: uuid::Uuid,
+        uuid: Uuid,
         conn_id: ConnectionId,
         cluster_id: mz_controller_types::ClusterId,
         depends_on: BTreeSet<GlobalId>,
-        ctx_extra: crate::coord::ExecuteContextExtra,
+        ctx_extra: ExecuteContextExtra,
         is_fast_path: bool,
+        /// If statement logging is enabled, contains the info necessary for installing watch sets.
+        ids_to_watch: Option<IdsToWatch>,
     },
 
     /// Statement logging event from frontend peek sequencing.

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use bytes::BytesMut;
@@ -31,8 +31,8 @@ use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
 use uuid::Uuid;
-
-use crate::coord::{ConnMeta, Coordinator};
+use mz_adapter_types::connection::ConnectionId;
+use crate::coord::{ConnMeta, Coordinator, WatchSetResponse};
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
@@ -288,9 +288,7 @@ impl StatementLoggingFrontend {
             return None;
         }
 
-        let sample_rate: f64 = session.vars().get_statement_logging_sample_rate()
-            .try_into()
-            .expect("sample rate must be convertible to f64");
+        let sample_rate = effective_sample_rate(session, system_config);
 
         let use_reproducible_rng = system_config.statement_logging_use_reproducible_rng();
         let target_data_rate = system_config.statement_logging_target_data_rate()
@@ -360,6 +358,25 @@ impl StatementLoggingFrontend {
             },
         ))
     }
+}
+
+/// The effective rate at which statement execution should be sampled.
+/// This is the value of the session var `statement_logging_sample_rate`,
+/// constrained by the system var `statement_logging_max_sample_rate`.
+pub(crate) fn effective_sample_rate(
+    session: &Session,
+    system_vars: &mz_sql::session::vars::SystemVars,
+) -> f64 {
+    let system_max: f64 = system_vars
+        .statement_logging_max_sample_rate()
+        .try_into()
+        .expect("value constrained to be convertible to f64");
+    let user_rate: f64 = session
+        .vars()
+        .get_statement_logging_sample_rate()
+        .try_into()
+        .expect("value constrained to be convertible to f64");
+    f64::min(system_max, user_rate)
 }
 
 /// Helper function to decide whether to sample a statement execution.
@@ -768,23 +785,6 @@ impl Coordinator {
         
         Some((out, ps_uuid))
     }
-    /// The rate at which statement execution should be sampled.
-    /// This is the value of the session var `statement_logging_sample_rate`,
-    /// constrained by the system var `statement_logging_max_sample_rate`.
-    fn statement_execution_sample_rate(&self, session: &Session) -> f64 {
-        let system: f64 = self
-            .catalog()
-            .system_config()
-            .statement_logging_max_sample_rate()
-            .try_into()
-            .expect("value constrained to be convertible to f64");
-        let user: f64 = session
-            .vars()
-            .get_statement_logging_sample_rate()
-            .try_into()
-            .expect("value constrained to be convertible to f64");
-        f64::min(system, user)
-    }
 
     /// Record the end of statement execution for a statement whose beginning was logged.
     /// It is an error to call this function for a statement whose beginning was not logged
@@ -1081,8 +1081,8 @@ impl Coordinator {
         if session.user().is_internal() && !enable_internal_statement_logging {
             return None;
         }
-        let sample_rate = self.statement_execution_sample_rate(session);
 
+        let sample_rate = effective_sample_rate(session, self.catalog().system_config());
         let use_reproducible_rng = self
             .catalog()
             .system_config()
@@ -1200,4 +1200,94 @@ mod sealed {
     /// enum.
     #[derive(Debug, Copy, Clone)]
     pub struct Private;
+}
+
+/// Bundles the information needed to install watch sets for statement lifecycle logging.
+/// This is used by frontend peek sequencing to pass transitive dependencies to the coordinator.
+#[derive(Debug)]
+pub struct IdsToWatch {
+    /// The timestamp at which to watch for dependencies becoming ready.
+    pub timestamp: mz_repr::Timestamp,
+    /// Transitive storage dependencies (tables, sources) to watch.
+    pub storage_ids: BTreeSet<GlobalId>,
+    /// Transitive compute dependencies (materialized views, indexes) to watch.
+    pub compute_ids: BTreeSet<GlobalId>,
+}
+
+impl IdsToWatch {
+    /// Compute transitive dependencies for watch sets from an input ID bundle, categorized into
+    /// storage and compute IDs.
+    pub fn new(
+        catalog_state: &crate::catalog::CatalogState,
+        input_id_bundle: &crate::coord::id_bundle::CollectionIdBundle,
+        timestamp: mz_repr::Timestamp,
+    ) -> Self {
+        use mz_catalog::memory::objects::CatalogItem;
+
+        let mut storage_ids = BTreeSet::new();
+        let mut compute_ids = BTreeSet::new();
+
+        for item_id in input_id_bundle
+            .iter()
+            .map(|gid| catalog_state.get_entry_by_global_id(&gid).id())
+            .flat_map(|id| catalog_state.transitive_uses(id))
+        {
+            let entry = catalog_state.get_entry(&item_id);
+            match entry.item() {
+                CatalogItem::Table(_) | CatalogItem::Source(_) => {
+                    storage_ids.extend(entry.global_ids());
+                }
+                CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
+                    compute_ids.extend(entry.global_ids());
+                }
+                _ => {}
+            }
+        }
+
+        Self {
+            timestamp,
+            storage_ids,
+            compute_ids,
+        }
+    }
+}
+
+impl Coordinator {
+    /// Install watch sets for statement lifecycle logging.
+    ///
+    /// This installs both storage and compute watch sets that will fire
+    /// `StatementLifecycleEvent::StorageDependenciesFinished` and
+    /// `StatementLifecycleEvent::ComputeDependenciesFinished` respectively
+    /// when the dependencies are ready at the given timestamp.
+    pub fn install_peek_watch_sets(
+        &mut self,
+        conn_id: ConnectionId,
+        logging_id: StatementLoggingId,
+        ids_to_watch: IdsToWatch,
+    ) {
+        let IdsToWatch {
+            timestamp,
+            storage_ids,
+            compute_ids,
+        } = ids_to_watch;
+
+        self.install_storage_watch_set(
+            conn_id.clone(),
+            storage_ids,
+            timestamp,
+            WatchSetResponse::StatementDependenciesReady(
+                logging_id,
+                StatementLifecycleEvent::StorageDependenciesFinished,
+            ),
+        );
+        self.install_compute_watch_set(
+            conn_id,
+            compute_ids,
+            timestamp,
+            WatchSetResponse::StatementDependenciesReady(
+                logging_id,
+                StatementLifecycleEvent::ComputeDependenciesFinished,
+            ),
+        );
+    }
 }
