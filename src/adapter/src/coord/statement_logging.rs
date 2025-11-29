@@ -652,7 +652,11 @@ impl Coordinator {
     ) {
         match event {
             FrontendStatementLoggingEvent::BeganExecution { record, prepared_statement } => {
-                // Use the shared helper to write began execution events
+                self.record_statement_lifecycle_event(
+                    &StatementLoggingId(record.id),
+                    &StatementLifecycleEvent::ExecutionBegan,
+                    record.began_at,
+                );
                 self.write_began_execution_events(record, prepared_statement);
             }
             FrontendStatementLoggingEvent::EndedExecution(ended_record) => {
