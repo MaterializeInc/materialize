@@ -238,6 +238,19 @@ impl PeekClient {
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
+            // For constant queries with statement logging, immediately log that
+            // dependencies are "ready" (trivially, because there are none).
+            if let Some(logging_id) = statement_logging_id {
+                self.log_lifecycle_event(
+                    logging_id,
+                    statement_logging::StatementLifecycleEvent::StorageDependenciesFinished,
+                );
+                self.log_lifecycle_event(
+                    logging_id,
+                    statement_logging::StatementLifecycleEvent::ComputeDependenciesFinished,
+                );
+            }
+
             let mut rows = match rows_res {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
