@@ -1740,6 +1740,9 @@ class Composition:
     def test_parts(self, parts: list[T], process_func: Callable[[T], Any]) -> None:
         priority: dict[str, int] = {}
 
+        if not parts:
+            raise ValueError("No parts to test selected, check your parameters")
+
         # TODO(def-): Revisit if this is worth enabling, currently adds ~15 seconds to each run
         # if buildkite.is_in_buildkite():
         #     print("~~~ Fetching part priorities")
