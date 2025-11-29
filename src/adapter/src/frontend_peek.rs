@@ -700,11 +700,8 @@ impl PeekClient {
             }
         };
 
-        // Log timestamp determination
         if let Some(logging_id) = &statement_logging_id {
-            if let Some(timestamp) = determination.timestamp_context.timestamp() {
-                self.log_set_timestamp(*logging_id, *timestamp);
-            }
+            self.log_set_timestamp(*logging_id, determination.timestamp_context.timestamp_or_default());
         }
 
         // (TODO(peek-seq): The below TODO is copied from the old peek sequencing. We should resolve
