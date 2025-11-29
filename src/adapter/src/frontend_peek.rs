@@ -700,10 +700,6 @@ impl PeekClient {
             }
         };
 
-        if let Some(logging_id) = &statement_logging_id {
-            self.log_set_timestamp(*logging_id, determination.timestamp_context.timestamp_or_default());
-        }
-
         // (TODO(peek-seq): The below TODO is copied from the old peek sequencing. We should resolve
         // this when we decide what to with `AS OF` in transactions.)
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
@@ -1088,6 +1084,25 @@ impl PeekClient {
 
                 let response = match peek_plan {
                     PeekPlan::FastPath(fast_path_plan) => {
+                        if let Some(logging_id) = &statement_logging_id {
+                            // TODO(peek-seq): Actually, we should log it also for
+                            // FastPathPlan::Constant. The only reason we are not doing so at the
+                            // moment is to match the old peek sequencing, so that statement logging
+                            // tests pass with the frontend peek sequencing turned both on and off.
+                            //
+                            // When the old sequencing is removed, we should make a couple of
+                            // changes in how we log timestamps:
+                            // - Move this up to just after timestamp determination, so that it
+                            //   appears in the log as soon as possible.
+                            // - Do it also for Constant peeks.
+                            // - Currently, slow-path peeks' timestamp logging is done by
+                            //   `implement_peek_plan`. We could remove it from there, and just do
+                            //   it here.
+                            if !matches!(fast_path_plan, crate::coord::peek::FastPathPlan::Constant(..)) {
+                                self.log_set_timestamp(*logging_id, determination.timestamp_context.timestamp_or_default());
+                            }
+                        }
+
                         let row_set_finishing_seconds =
                             session.metrics().row_set_finishing_seconds().clone();
 
