@@ -61,6 +61,7 @@ impl PeekClient {
         &mut self,
         portal_name: &str,
         session: &mut Session,
+        outer_ctx_extra: &mut Option<ExecuteContextExtra>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if session.vars().emit_timestamp_notice() {
             // TODO(peek-seq): implement this. See end of peek_finish
@@ -175,7 +176,9 @@ impl PeekClient {
         }
 
         // Set up statement logging, and log the beginning of execution.
-        let statement_logging_id = {
+        // BUT only if we're not executing in the context of another statement.
+        let statement_logging_id = if outer_ctx_extra.is_none() {
+            // This is a new statement, so begin statement logging
             let result = self.statement_logging_frontend.begin_statement_execution(
                 session,
                 &params,
@@ -193,6 +196,14 @@ impl PeekClient {
             } else {
                 None
             }
+        } else {
+            // We're executing in the context of another statement (e.g., FETCH),
+            // so extract the statement logging ID from the outer context if present.
+            // We take ownership and retire the outer context here. The end of execution will be
+            // logged in one of the following ways:
+            // - At the end of this function, if the execution is finished by then.
+            // - Later by the Coordinator, either due to RegisterFrontendPeek or ExecuteSlowPathPeek.
+            outer_ctx_extra.take().and_then(|extra| extra.retire())
         };
 
         let result = self.try_frontend_peek_inner(
@@ -203,7 +214,7 @@ impl PeekClient {
             statement_logging_id,
         ).await;
 
-        // Log the result (if we already know it)
+        // Log the end of execution (if execution already ended).
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
                 // Streaming results are handled asynchronously by the coordinator
@@ -252,7 +263,7 @@ impl PeekClient {
                     }
                 }
             };
-            
+
             self.log_ended_execution(logging_id, reason);
         }
 

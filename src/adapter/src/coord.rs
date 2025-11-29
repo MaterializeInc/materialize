@@ -1332,7 +1332,7 @@ impl ExecuteContextExtra {
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
     #[must_use]
-    fn retire(mut self) -> Option<StatementLoggingId> {
+    pub(crate) fn retire(mut self) -> Option<StatementLoggingId> {
         let Self { statement_uuid } = &mut self;
         statement_uuid.take()
     }
