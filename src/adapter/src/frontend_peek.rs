@@ -99,8 +99,8 @@ impl PeekClient {
             return Ok(None);
         }
 
-        // Extract statement, params, and logging metadata from portal
-        let (stmt, params, logging) = {
+        // Extract things from the portal.
+        let (stmt, params, logging, lifecycle_timestamps) = {
             let portal = session
                 .get_portal_unverified(portal_name)
                 // The portal is a session-level thing, so it couldn't have concurrently disappeared
@@ -109,7 +109,8 @@ impl PeekClient {
             let params = portal.parameters.clone();
             let stmt = portal.stmt.clone();
             let logging = Arc::clone(&portal.logging);
-            (stmt, params, logging)
+            let lifecycle_timestamps = portal.lifecycle_timestamps.clone();
+            (stmt, params, logging, lifecycle_timestamps)
         };
 
         // Before planning, check if this is a statement type we can handle.
@@ -180,6 +181,7 @@ impl PeekClient {
                 &params,
                 &logging,
                 catalog.system_config(),
+                lifecycle_timestamps,
             );
 
             if let Some((logging_id, events)) = result {
@@ -238,7 +240,7 @@ impl PeekClient {
                 // All other cases (success responses, errors) - use the From implementation
                 // TODO(peek-seq): After we delete the old peek sequencing, we'll be able to adjust
                 // the From implementation to do exactly what we need in the frontend peek
-                // sequencing, so that the above special cases won't be needed here.
+                // sequencing, so that the above special cases won't be needed.
                 _ => {
                     // Unwrap the Option and convert using From<&ExecuteResponse> or construct error
                     match result.as_ref() {

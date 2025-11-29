@@ -280,6 +280,7 @@ impl StatementLoggingFrontend {
         params: &Params,
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         system_config: &mz_sql::session::vars::SystemVars,
+        lifecycle_timestamps: Option<crate::session::LifecycleTimestamps>,
     ) -> Option<(StatementLoggingId, StatementLoggingEvents)> {
         // Skip logging for internal users unless explicitly enabled
         let enable_internal_statement_logging = system_config.enable_internal_statement_logging();
@@ -331,9 +332,11 @@ impl StatementLoggingFrontend {
             &self.now,
         )?;
 
-        // Determine began_at timestamp
-        // lifecycle_timestamps are not available in frontend, so use current time
-        let began_at = (self.now)();
+        let began_at = if let Some(lifecycle_timestamps) = lifecycle_timestamps {
+            lifecycle_timestamps.received
+        } else {
+            (self.now)()
+        };
         
         let current_time = (self.now)();
         let execution_uuid = epoch_to_uuid_v7(&current_time);
