@@ -93,7 +93,7 @@ module "materialize_infrastructure" {
   cluster_version           = "1.32"
   system_node_group_instance_types = ["r8g.xlarge"]
   system_node_group_desired_size   = 2
-  system_node_group_min_size       = 1
+  system_node_group_min_size       = 2
   system_node_group_max_size       = 3
   materialize_node_group_instance_types = ["r8gd.xlarge"]
   materialize_node_group_desired_size   = 2
