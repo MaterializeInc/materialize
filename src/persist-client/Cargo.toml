@@ -53,7 +53,7 @@ mz-postgres-client = { path = "../postgres-client" }
 num_cpus = "1.17.0"
 prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 sentry-tracing = "0.38.1"
 semver = { version = "1.0.27", features = ["serde"] }

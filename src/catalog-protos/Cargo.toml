@@ -18,7 +18,7 @@ mz-sql = { path = "../sql" }
 mz-storage-types = { path = "../storage-types" }
 paste = "1.0.11"
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = "0.13.5"
 serde = { version = "1.0.219", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

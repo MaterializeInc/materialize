@@ -19,7 +19,7 @@ http = "1.2.0"
 mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test", "overflowing"] }
 num = "0.4.3"
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 regex = "1.12.2"
 serde = { version = "1.0.219", features = ["derive", "rc"] }

@@ -55,7 +55,7 @@ postgres-openssl = { version = "0.5.0" }
 postgres-protocol = { version = "0.6.5" }
 prometheus = { version = "0.14.0", default-features = false }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rand = { version = "0.8.5", features = ["small_rng"] }
 reqwest = { version = "0.12", features = ["blocking", "json", "default-tls", "charset", "http2"], default-features = false }
