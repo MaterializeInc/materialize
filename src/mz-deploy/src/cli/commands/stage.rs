@@ -57,7 +57,7 @@ pub async fn run(
     let stage_name = match stage_name {
         Some(name) => name.to_string(),
         None => get_git_commit(directory)
-            .map(|commit| commit.chars().take(5).collect())
+            .map(|commit| commit.chars().take(7).collect())
             .ok_or(CliError::GitShaFailed)?,
     };
 

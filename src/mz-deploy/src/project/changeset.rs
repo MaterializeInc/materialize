@@ -1,6 +1,6 @@
-//! Change detection for incremental deployment using Datalog.
+//! Change detection for incremental deployment.
 //!
-//! This module implements the Dirty Propagation Algorithm using Datalog to determine
+//! This module implements a Dirty Propagation Algorithm to determine
 //! which database objects, schemas, and clusters need redeployment after changes.
 //!
 //! ## Algorithm Overview
@@ -371,10 +371,6 @@ fn compute_dirty_datalog(
 
     (dirty_stmts, dirty_cluster_structs, dirty_schemas)
 }
-
-//
-// INDEX BUILDERS FOR EFFICIENT LOOKUP
-//
 
 fn build_stmt_cluster_index(facts: &[(ObjectId, String)]) -> HashMap<ObjectId, Vec<String>> {
     let mut index: HashMap<ObjectId, Vec<String>> = HashMap::new();
