@@ -24,7 +24,7 @@ prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 regex = "1.12.2"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.145", features = ["arbitrary_precision"] }
-url = { version = "2.3.1", features = ["serde"] }
+url = { version = "2.5.7", features = ["serde"] }
 uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
