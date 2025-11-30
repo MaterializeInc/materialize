@@ -2,10 +2,10 @@
 
 use crate::client::Client;
 use crate::project::ast::Statement;
-use crate::project::typed::FullyQualifiedName;
-use crate::project::planned::Project;
 use crate::project::normalize::NormalizingVisitor;
 use crate::project::object_id::ObjectId;
+use crate::project::planned::Project;
+use crate::project::typed::FullyQualifiedName;
 use crate::verbose;
 use mz_sql_parser::ast::{
     CreateViewStatement, Ident, IfExistsBehavior, UnresolvedItemName, ViewDefinition,

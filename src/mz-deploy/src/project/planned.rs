@@ -85,12 +85,6 @@ pub struct Schema {
     pub mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
 }
 
-impl Hash for Schema {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        todo!()
-    }
-}
-
 /// A database containing schemas with dependency information.
 #[derive(Debug)]
 pub struct Database {
@@ -966,8 +960,8 @@ mod tests {
 
     #[test]
     fn test_get_sorted_objects_filtered() {
-        use crate::project::typed;
         use crate::project::raw;
+        use crate::project::typed;
         use std::fs;
         use tempfile::TempDir;
 
@@ -1015,7 +1009,9 @@ mod tests {
         filter.insert(view1_id.clone());
 
         // Get filtered objects
-        let filtered = planned_project.get_sorted_objects_filtered(&filter).unwrap();
+        let filtered = planned_project
+            .get_sorted_objects_filtered(&filter)
+            .unwrap();
 
         // Should only contain view1
         assert_eq!(filtered.len(), 1);

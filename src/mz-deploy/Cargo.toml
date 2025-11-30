@@ -22,7 +22,7 @@ toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"
 serde_json = "1.0.145"
-datatoad = { git = "https://github.com/frankmcsherry/datatoad" }
+sha2 = "0.10"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

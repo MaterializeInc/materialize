@@ -584,8 +584,8 @@ mod tests {
     #[test]
     fn test_cluster_dependencies_through_full_pipeline() {
         use crate::project::ast::Cluster;
-        use crate::project::typed;
         use crate::project::planned;
+        use crate::project::typed;
 
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();

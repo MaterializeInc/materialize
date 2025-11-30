@@ -4,8 +4,8 @@ use crate::client::models::{
     SchemaDeploymentRecord,
 };
 use crate::project::deployment_snapshot::DeploymentSnapshot;
-use crate::project::planned;
 use crate::project::object_id::ObjectId;
+use crate::project::planned;
 use crate::types::{ColumnType, Types};
 use crate::utils::sql_utils::quote_identifier;
 use owo_colors::OwoColorize;
@@ -570,8 +570,7 @@ impl Client {
         "#;
 
         for cluster in clusters {
-            self.execute(insert_sql, &[&environment, &cluster])
-                .await?;
+            self.execute(insert_sql, &[&environment, &cluster]).await?;
         }
 
         Ok(())

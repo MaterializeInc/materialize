@@ -6146,6 +6146,7 @@ dependencies = [
  "owo-colors",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "testcontainers",
  "thiserror 2.0.17",

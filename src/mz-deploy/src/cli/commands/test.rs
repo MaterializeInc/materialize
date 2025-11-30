@@ -115,11 +115,12 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
         };
 
         // Convert planned::ObjectId to typed::FullyQualifiedName for unit test processing
-        let typed_fqn = typed::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
-            Ident::new(&object_id.database).unwrap(),
-            Ident::new(&object_id.schema).unwrap(),
-            Ident::new(&object_id.object).unwrap(),
-        ]));
+        let typed_fqn =
+            typed::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
+                Ident::new(&object_id.database).unwrap(),
+                Ident::new(&object_id.schema).unwrap(),
+                Ident::new(&object_id.object).unwrap(),
+            ]));
 
         // Desugar the test
         let sql_statements =

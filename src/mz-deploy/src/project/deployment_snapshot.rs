@@ -8,12 +8,46 @@
 //! enabling change detection (like git diff but for database objects) and supporting
 //! blue/green deployment workflows.
 
-use std::collections::{BTreeMap, HashSet, hash_map::DefaultHasher};
+use std::collections::{BTreeMap, HashSet};
 use std::hash::{Hash, Hasher};
+
+use sha2::{Digest, Sha256};
 
 use crate::client::{Client, ConnectionError};
 use crate::project::object_id::ObjectId;
-use crate::project::{typed, planned};
+use crate::project::{planned, typed};
+
+/// A wrapper that bridges `std::hash::Hasher` to `sha2::Digest`.
+///
+/// This allows us to use the `Hash` trait on AST nodes while using SHA256 for stability.
+struct Sha256Hasher {
+    digest: Sha256,
+}
+
+impl Sha256Hasher {
+    fn new() -> Self {
+        Self {
+            digest: Sha256::new(),
+        }
+    }
+
+    fn finalize(self) -> String {
+        let result = self.digest.finalize();
+        format!("sha256:{:x}", result)
+    }
+}
+
+impl Hasher for Sha256Hasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.digest.update(bytes);
+    }
+
+    fn finish(&self) -> u64 {
+        // This is never called when using Hash trait, but required by trait
+        // We use finalize() instead to get the full hash
+        panic!("Sha256Hasher::finish() should not be called, use finalize() instead");
+    }
+}
 
 /// Represents a point-in-time snapshot of deployment state.
 ///
@@ -69,46 +103,49 @@ impl Default for DeploymentSnapshot {
 }
 
 /// Compute a deterministic hash of a typed DatabaseObject.
-///
-/// This hashes the normalized AST representation by converting to stable string form, which means:
-/// - Formatting and whitespace changes are ignored
-/// - SQL comments are ignored (not part of the AST)
-/// - Semantic changes (column types, query logic, etc.) are detected
-///
 /// The hash includes:
 /// - The main CREATE statement
 /// - All indexes
-/// - All grants
-/// - (Optionally) Comments - currently excluded since they're documentation
+///
+/// Uses SHA256 for stable, deterministic hashing across platforms and Rust versions.
 pub fn compute_typed_hash(db_obj: &typed::DatabaseObject) -> String {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = Sha256Hasher::new();
 
-    // Hash the main statement by converting to stable string representation
-    // This ensures consistent output regardless of formatting
-    let stmt_string = db_obj.stmt.to_string();
-    stmt_string.hash(&mut hasher);
+    // Hash the main statement directly using its Hash implementation
+    db_obj.stmt.hash(&mut hasher);
 
-    // Hash all indexes
-    for index in &db_obj.indexes {
-        let index_string = index.to_string();
-        index_string.hash(&mut hasher);
+    let mut indexes = db_obj.indexes.clone();
+
+    // Ensure hash is stable by sorting indexes deterministically
+    indexes.sort_by(|a, b| {
+        a.in_cluster
+            .cmp(&b.in_cluster)
+            .then(a.on_name.cmp(&b.on_name))
+            .then(a.name.cmp(&b.name))
+            .then_with(|| {
+                let key_a = a.key_parts.as_ref().map(|ks| {
+                    ks.iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                });
+                let key_b = b.key_parts.as_ref().map(|ks| {
+                    ks.iter()
+                        .map(|e| e.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                });
+
+                key_a.cmp(&key_b)
+            })
+    });
+
+    // Hash all indexes directly using their Hash implementation
+    for index in &indexes {
+        index.hash(&mut hasher);
     }
 
-    // Hash all grants
-    for grant in &db_obj.grants {
-        let grant_string = grant.to_string();
-        grant_string.hash(&mut hasher);
-    }
-
-    // Note: We intentionally skip comments from the hash computation.
-    // Comments are documentation and shouldn't trigger redeployment.
-    // for comment in &db_obj.comments {
-    //     let comment_string = comment.to_string();
-    //     comment_string.hash(&mut hasher);
-    // }
-
-    // Format as hex string with "hash:" prefix for clarity
-    format!("hash:{:016x}", hasher.finish())
+    hasher.finalize()
 }
 
 /// Build a deployment snapshot from a planned Project by hashing all typed objects.

@@ -4,12 +4,12 @@ pub mod ast;
 pub mod changeset;
 pub mod deployment_snapshot;
 pub mod error;
-pub mod typed;
-pub mod planned;
 pub mod normalize;
 pub mod object_id;
 mod parser;
+pub mod planned;
 pub mod raw;
+pub mod typed;
 
 // Re-export commonly used types
 pub use planned::ModStatement;
