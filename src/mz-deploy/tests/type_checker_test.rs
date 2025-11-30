@@ -3,7 +3,6 @@
 #[cfg(test)]
 mod tests {
     use mz_deploy::project;
-    use mz_deploy::types::TypeChecker;
     use std::fs;
     use tempfile::TempDir;
 
