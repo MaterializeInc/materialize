@@ -166,7 +166,7 @@ pub async fn run(
 
     // Execute module setup statements
     if !filtered_mod_stmts.is_empty() {
-        println!("Applying module setup statements...\n");
+        println!("Applying module setup statements...");
 
         for mod_stmt in filtered_mod_stmts {
             match mod_stmt {
@@ -174,7 +174,7 @@ pub async fn run(
                     database,
                     statement,
                 } => {
-                    println!("Applying database setup for: {}", database);
+                    verbose!("Applying database setup for: {}", database);
                     client
                         .execute(&statement.to_string(), &[])
                         .await
@@ -188,7 +188,7 @@ pub async fn run(
                     schema,
                     statement,
                 } => {
-                    println!("Applying schema setup for: {}.{}", database, schema);
+                    verbose!("Applying schema setup for: {}.{}", database, schema);
                     client
                         .execute(&statement.to_string(), &[])
                         .await
@@ -199,8 +199,6 @@ pub async fn run(
                 }
             }
         }
-
-        println!();
     }
 
     // Get objects to deploy (either all or filtered by changeset)
