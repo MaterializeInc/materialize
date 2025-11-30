@@ -7,7 +7,7 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = "**New: Self-Managed v26!** New features include source versioning, SASL/SCRAM support, and more! For details on v26 features, see [Release Notes](/releases/).<br>**Note**: To upgrade from v25.2 to v26.0, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216)."
+bannerMessage = "**New: Self-Managed v26!** For details, see [Release Notes](/releases/).<br>**Note**: To upgrade from v25 to v26, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216)."
 bannerLink = ""
 
 [frontmatter]
