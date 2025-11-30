@@ -28,7 +28,7 @@ mz-ccsr = { path = "../ccsr" }
 mz-ore = { path = "../ore", features = ["network", "cli"] }
 mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
-ordered-float = { version = "5.0.0", features = ["serde"] }
+ordered-float = { version = "5.1.0", features = ["serde"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 prost-reflect = "0.15.3"
 seahash = "4"

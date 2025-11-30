@@ -18,7 +18,7 @@ mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["differential-dataflow"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-sql = { path = "../sql" }
-ordered-float = { version = "5.0.0", features = ["serde"] }
+ordered-float = { version = "5.1.0", features = ["serde"] }
 paste = "1.0.11"
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.5.1" }
