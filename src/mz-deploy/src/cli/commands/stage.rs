@@ -4,7 +4,7 @@ use crate::cli::{CliError, helpers};
 use crate::client::{ClusterOptions, Profile};
 use crate::project::changeset::ChangeSet;
 use crate::project::planned::extract_external_indexes;
-use crate::project::{self, typed::FullyQualifiedName, normalize::NormalizingVisitor};
+use crate::project::{self, normalize::NormalizingVisitor, typed::FullyQualifiedName};
 use crate::utils::git;
 use crate::utils::git::get_git_commit;
 use crate::verbose;

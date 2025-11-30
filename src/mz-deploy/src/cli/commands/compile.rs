@@ -40,7 +40,10 @@ impl Default for CompileArgs {
 ///
 /// # Errors
 /// Returns `CliError::Project` if compilation or validation fails
-pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::planned::Project, CliError> {
+pub async fn run(
+    directory: &Path,
+    args: CompileArgs,
+) -> Result<project::planned::Project, CliError> {
     let now = SystemTime::now();
 
     let planned_project = project::plan(directory)?;
