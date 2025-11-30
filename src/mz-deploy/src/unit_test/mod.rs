@@ -31,7 +31,7 @@
 //! 4. Test query that returns rows with status column indicating failures
 
 use crate::project::ast::Statement;
-use crate::project::hir::FullyQualifiedName;
+use crate::project::typed::FullyQualifiedName;
 use crate::project::normalize::NormalizingVisitor;
 use mz_sql_parser::ast::{CreateViewStatement, IfExistsBehavior, ViewDefinition};
 

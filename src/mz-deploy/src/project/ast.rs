@@ -120,7 +120,7 @@ impl std::fmt::Display for Cluster {
 ///
 /// This enum wraps all supported CREATE statements from Materialize's SQL dialect.
 /// Each variant contains the parsed AST node with the `Raw` resolution state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash)]
 pub enum Statement {
     /// CREATE CONNECTION statement
     CreateConnection(CreateConnectionStatement<Raw>),

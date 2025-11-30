@@ -1,24 +1,24 @@
-//! High-Level Intermediate Representation (HIR) for Materialize projects.
+//! Typed representation for Materialize projects.
 //!
 //! This module provides a validated, type-safe representation of a Materialize project
 //! structure. It transforms the raw parsed AST from the `raw` module into a semantically
-//! validated HIR that enforces structural constraints and relationships.
+//! validated typed representation that enforces structural constraints and relationships.
 //!
 //! # Transformation Flow
 //!
 //! ```text
-//! File System → raw::Project → hir::Project (validated)
+//! File System → raw::Project → typed::Project (validated)
 //!                  ↓              ↓
-//!              raw::Database → hir::Database
+//!              raw::Database → typed::Database
 //!                  ↓              ↓
-//!              raw::Schema   → hir::Schema
+//!              raw::Schema   → typed::Schema
 //!                  ↓              ↓
-//!          raw::DatabaseObject → hir::DatabaseObject
+//!          raw::DatabaseObject → typed::DatabaseObject
 //! ```
 //!
 //! # Validation Rules
 //!
-//! During transformation from raw to HIR, the following validations are performed:
+//! During transformation from raw to typed, the following validations are performed:
 //!
 //! - **Object Identity**: Each file must contain exactly one primary CREATE statement
 //!   (table, view, source, etc.), and the object name must match the file name.
@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 /// Represents the canonical `database.schema.object` name based on directory structure.
 /// File path format: `<root>/<database>/<schema>/<object>.sql`
 ///
-/// This struct is created during HIR validation and is used to:
+/// This struct is created during typed validation and is used to:
 /// - Normalize statement names to be fully qualified
 /// - Validate that SQL statement names match the directory structure
 /// - Provide a consistent FQN for error messages and validation

@@ -21,7 +21,7 @@ use std::time::SystemTime;
 /// * `directory` - Project directory
 /// * `stage_name` - Staging environment name
 /// * `force` - Force promotion despite conflicts
-/// * `mir_project` - Compiled project (for cluster dependencies)
+/// * `planned_project` - Compiled project (for cluster dependencies)
 ///
 /// # Returns
 /// Ok(()) if promotion succeeds

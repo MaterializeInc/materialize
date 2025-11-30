@@ -1,7 +1,7 @@
 //! Deployment snapshot tracking.
 //!
 //! This module provides functionality for capturing and comparing deployment state snapshots.
-//! Instead of hashing raw files, we hash the normalized HIR (High-level Intermediate Representation)
+//! Instead of hashing raw files, we hash the normalized typed representation
 //! objects, so formatting and comment changes don't trigger unnecessary redeployments.
 //!
 //! A deployment snapshot captures the state of all deployed objects with their content hashes,
@@ -13,12 +13,12 @@ use std::hash::{Hash, Hasher};
 
 use crate::client::{Client, ConnectionError};
 use crate::project::object_id::ObjectId;
-use crate::project::{hir, mir};
+use crate::project::{typed, planned};
 
 /// Represents a point-in-time snapshot of deployment state.
 ///
 /// Maps object IDs to their content hashes, where the hash is computed from
-/// the normalized HIR representation (not raw file contents).
+/// the normalized typed representation (not raw file contents).
 /// Also tracks which schemas were deployed as atomic units.
 #[derive(Debug, Clone)]
 pub struct DeploymentSnapshot {
@@ -43,8 +43,8 @@ pub enum DeploymentSnapshotError {
     #[error("failed to connect to database: {0}")]
     Connection(#[from] ConnectionError),
 
-    #[error("failed to build snapshot from MIR: {0}")]
-    MirAccess(String),
+    #[error("failed to build snapshot from planned representation: {0}")]
+    PlannedAccess(String),
 
     #[error("invalid object FQN: {0}")]
     InvalidFqn(String),
@@ -68,7 +68,7 @@ impl Default for DeploymentSnapshot {
     }
 }
 
-/// Compute a deterministic hash of a HIR DatabaseObject.
+/// Compute a deterministic hash of a typed DatabaseObject.
 ///
 /// This hashes the normalized AST representation by converting to stable string form, which means:
 /// - Formatting and whitespace changes are ignored
@@ -80,7 +80,7 @@ impl Default for DeploymentSnapshot {
 /// - All indexes
 /// - All grants
 /// - (Optionally) Comments - currently excluded since they're documentation
-pub fn compute_hir_hash(db_obj: &hir::DatabaseObject) -> String {
+pub fn compute_typed_hash(db_obj: &typed::DatabaseObject) -> String {
     let mut hasher = DefaultHasher::new();
 
     // Hash the main statement by converting to stable string representation
@@ -111,24 +111,24 @@ pub fn compute_hir_hash(db_obj: &hir::DatabaseObject) -> String {
     format!("hash:{:016x}", hasher.finish())
 }
 
-/// Build a deployment snapshot from a MIR Project by hashing all HIR objects.
+/// Build a deployment snapshot from a planned Project by hashing all typed objects.
 ///
 /// This iterates through all objects in the project and computes their
-/// content hashes based on the normalized HIR representation.
-pub fn build_snapshot_from_mir(
-    mir_project: &mir::Project,
+/// content hashes based on the normalized typed representation.
+pub fn build_snapshot_from_planned(
+    planned_project: &planned::Project,
 ) -> Result<DeploymentSnapshot, DeploymentSnapshotError> {
     let mut objects = BTreeMap::new();
     let mut schemas = HashSet::new();
 
     // Get all objects in topological order
-    let sorted_objects = mir_project
+    let sorted_objects = planned_project
         .get_sorted_objects()
-        .map_err(|e| DeploymentSnapshotError::MirAccess(e.to_string()))?;
+        .map_err(|e| DeploymentSnapshotError::PlannedAccess(e.to_string()))?;
 
     // Compute hash for each object and collect schemas
-    for (object_id, hir_obj) in sorted_objects {
-        let hash = compute_hir_hash(hir_obj);
+    for (object_id, typed_obj) in sorted_objects {
+        let hash = compute_typed_hash(typed_obj);
         objects.insert(object_id.clone(), hash);
 
         // Track which schema this object belongs to

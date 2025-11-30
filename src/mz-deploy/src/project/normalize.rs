@@ -21,7 +21,7 @@
 //! let visitor = NormalizingVisitor::flattening(&fqn);
 //! ```
 
-use super::hir::FullyQualifiedName;
+use super::typed::FullyQualifiedName;
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
 

@@ -4,7 +4,7 @@
 //! with external dependencies already staged as temporary tables.
 
 use crate::client::{Client, Profile};
-use crate::project::mir::Project;
+use crate::project::planned::Project;
 use crate::types::{TypeCheckError, Types};
 use crate::verbose;
 use tokio::process::Command;

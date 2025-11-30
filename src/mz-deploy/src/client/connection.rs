@@ -4,7 +4,7 @@ use crate::client::models::{
     SchemaDeploymentRecord,
 };
 use crate::project::deployment_snapshot::DeploymentSnapshot;
-use crate::project::mir;
+use crate::project::planned;
 use crate::project::object_id::ObjectId;
 use crate::types::{ColumnType, Types};
 use crate::utils::sql_utils::quote_identifier;
@@ -328,7 +328,7 @@ impl Client {
     /// Query SHOW COLUMNS for all external dependencies and return their schemas as a Types object
     pub async fn query_external_types(
         &mut self,
-        project: &mir::Project,
+        project: &planned::Project,
     ) -> Result<Types, ConnectionError> {
         let mut objects = BTreeMap::new();
         for oid in &project.external_dependencies {
@@ -1233,7 +1233,7 @@ impl Client {
     /// Validate that all required databases, schemas, and external dependencies exist
     pub async fn validate_project(
         &mut self,
-        mir_project: &mir::Project,
+        planned_project: &planned::Project,
         project_root: &Path,
     ) -> Result<(), DatabaseValidationError> {
         let mut missing_databases = Vec::new();
@@ -1242,21 +1242,21 @@ impl Client {
 
         // Collect all required databases
         let mut required_databases = HashSet::new();
-        for db in &mir_project.databases {
+        for db in &planned_project.databases {
             required_databases.insert(db.name.clone());
         }
-        for ext_dep in &mir_project.external_dependencies {
+        for ext_dep in &planned_project.external_dependencies {
             required_databases.insert(ext_dep.database.clone());
         }
 
         // Collect all required schemas (database, schema) pairs
         let mut required_schemas = HashSet::new();
-        for db in &mir_project.databases {
+        for db in &planned_project.databases {
             for schema in &db.schemas {
                 required_schemas.insert((db.name.clone(), schema.name.clone()));
             }
         }
-        for ext_dep in &mir_project.external_dependencies {
+        for ext_dep in &planned_project.external_dependencies {
             required_schemas.insert((ext_dep.database.clone(), ext_dep.schema.clone()));
         }
 
@@ -1290,7 +1290,7 @@ impl Client {
         }
 
         // Check clusters exist
-        for cluster in &mir_project.cluster_dependencies {
+        for cluster in &planned_project.cluster_dependencies {
             let query = "SELECT name FROM mz_clusters WHERE name = $1";
             let rows = self
                 .client
@@ -1305,7 +1305,7 @@ impl Client {
         // Build ObjectId to file path mapping by reconstructing paths from ObjectIds
         // Path format: <root>/<database>/<schema>/<object>.sql
         let mut object_paths: HashMap<ObjectId, PathBuf> = HashMap::new();
-        for db in &mir_project.databases {
+        for db in &planned_project.databases {
             for schema in &db.schemas {
                 for obj in &schema.objects {
                     let file_path = project_root
@@ -1319,7 +1319,7 @@ impl Client {
 
         // Check external dependencies and group missing ones by file
         let mut missing_external_deps = HashSet::new();
-        for ext_dep in &mir_project.external_dependencies {
+        for ext_dep in &planned_project.external_dependencies {
             let query = r#"
                 SELECT mo.name
                 FROM mz_objects mo
@@ -1344,7 +1344,7 @@ impl Client {
         // Group missing dependencies by the files that reference them
         let mut file_missing_deps: HashMap<PathBuf, (ObjectId, Vec<ObjectId>)> = HashMap::new();
 
-        for db in &mir_project.databases {
+        for db in &planned_project.databases {
             for schema in &db.schemas {
                 for obj in &schema.objects {
                     let mut missing_for_this_object = Vec::new();

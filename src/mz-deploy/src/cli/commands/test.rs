@@ -1,7 +1,7 @@
 //! Test command - run unit tests against the database.
 
 use crate::cli::CliError;
-use crate::project::{self, hir};
+use crate::project::{self, typed};
 use crate::types::TypeCheckError;
 use crate::unit_test;
 use crate::utils::docker_runtime::DockerRuntime;
@@ -53,7 +53,7 @@ use std::path::Path;
 /// Returns error if tests fail (exits with code 1)
 pub async fn run(directory: &Path) -> Result<(), CliError> {
     // Load the project (tests are loaded during compilation)
-    let mir_project = project::plan(directory)?;
+    let planned_project = project::plan(directory)?;
 
     // Load types.lock if it exists
     let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
@@ -66,7 +66,7 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
 
     // Create Docker runtime and get connected client
     let runtime = DockerRuntime::new();
-    if mir_project.tests.is_empty() {
+    if planned_project.tests.is_empty() {
         println!("No tests found in {}", directory.display());
         return Ok(());
     }
@@ -80,8 +80,8 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
     let mut failed_tests = 0;
 
     // Run each test from the compiled project
-    for (object_id, test) in &mir_project.tests {
-        let client = match runtime.get_client(&mir_project, &types).await {
+    for (object_id, test) in &planned_project.tests {
+        let client = match runtime.get_client(&planned_project, &types).await {
             Ok(client) => client,
             Err(TypeCheckError::ContainerStartFailed(e)) => {
                 return Err(CliError::Message(format!(
@@ -100,7 +100,7 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
         print!("{} {} ... ", "test".cyan(), test.name.cyan());
 
         // Find the target object in the project
-        let target_obj = match mir_project.find_object(object_id) {
+        let target_obj = match planned_project.find_object(object_id) {
             Some(obj) => obj,
             None => {
                 println!("{}", "FAILED".red().bold());
@@ -114,8 +114,8 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
             }
         };
 
-        // Convert mir::ObjectId to hir::FullyQualifiedName for unit test processing
-        let hir_fqn = hir::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
+        // Convert planned::ObjectId to typed::FullyQualifiedName for unit test processing
+        let typed_fqn = typed::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
             Ident::new(&object_id.database).unwrap(),
             Ident::new(&object_id.schema).unwrap(),
             Ident::new(&object_id.object).unwrap(),
@@ -123,7 +123,7 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
 
         // Desugar the test
         let sql_statements =
-            unit_test::desugar_unit_test(test, &target_obj.hir_object.stmt, &hir_fqn);
+            unit_test::desugar_unit_test(test, &target_obj.typed_object.stmt, &typed_fqn);
 
         // Execute all SQL statements except the last one (which is the test query)
         let mut execution_failed = false;

@@ -1,17 +1,62 @@
-//! Change detection for incremental deployment.
+//! Change detection for incremental deployment using Datalog.
 //!
-//! This module compares deployment snapshots to determine which objects need redeployment.
+//! This module implements the Dirty Propagation Algorithm using Datalog to determine
+//! which database objects, schemas, and clusters need redeployment after changes.
+//!
+//! ## Algorithm Overview
+//!
+//! The algorithm computes three result sets via fixed-point iteration:
+//! - `DirtyStmt(object)` - All objects that must be reprocessed
+//! - `DirtyCluster(cluster)` - All clusters that must be refreshed
+//! - `DirtySchema(database, schema)` - All schemas containing dirty objects
+//!
+//! ## Propagation Rules
+//!
+//! The algorithm distinguishes between two types of object dirtiness:
+//! - **Schema-propagating dirty**: Objects dirty due to statement changes, dependencies, or schema propagation
+//! - **Index-only dirty**: Objects dirty ONLY because their indexes use dirty clusters
+//!
+//! ### Rule Category 1 — Statement Dirtiness
+//! ```datalog
+//! DirtyStmt(O) :- ChangedStmt(O)                             # Changed objects are dirty (propagates to schema)
+//! DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)     # Objects on dirty clusters are dirty (propagates to schema)
+//! DirtyStmt(O) :- IndexUsesCluster(O, _, C), DirtyCluster(C) # Objects with indexes on dirty clusters are dirty (does NOT propagate to schema)
+//! DirtyStmt(O) :- DependsOn(O, P), SchemaPropagatingStmt(P)  # Downstream dependents are dirty if parent is schema-propagating (propagates to schema)
+//! DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch) # Objects in dirty schemas are dirty (propagates to schema)
+//! ```
+//!
+//! **Key Insight:** Dependencies only propagate from schema-propagating objects, not from index-only dirty objects.
+//! This ensures that if object A is dirty only due to its index cluster, its dependents don't become dirty.
+//!
+//! ### Rule Category 2 — Cluster Dirtiness
+//! ```datalog
+//! DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C)   # Clusters of changed statements are dirty
+//! DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C) # Clusters of changed indexes are dirty
+//! ```
+//!
+//! **Note:** Both statement clusters and index clusters are only marked dirty when the STATEMENT itself changes,
+//! not when the object is dirty for other reasons (schema propagation, dependencies, etc.).
+//! This prevents cascading cluster dirtiness from schema-level changes.
+//!
+//! ### Rule Category 3 — Schema Dirtiness
+//! ```datalog
+//! DirtySchema(Db, Sch) :- SchemaPropagatingStmt(O), ObjectInSchema(O, Db, Sch)  # Only schema-propagating objects make schemas dirty
+//! ```
+//!
+//! **Key Property:** Index-driven dirtiness does NOT propagate to schemas. If a table's index
+//! uses a dirty cluster, the table needs redeployment to update its index, but other objects
+//! in the same schema are unaffected.
 
 use super::ast::Cluster;
 use super::deployment_snapshot::DeploymentSnapshot;
-use super::mir::{self, Project};
+use super::planned::{self, Project};
 use crate::project::object_id::ObjectId;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 
 /// Represents the set of changes between two project states.
 ///
-/// Used to determine which objects need redeployment based on file changes.
+/// Used to determine which objects need redeployment based on snapshot comparison.
 #[derive(Debug, Clone)]
 pub struct ChangeSet {
     /// Files that have changed (added, modified, or deleted)
@@ -21,7 +66,7 @@ pub struct ChangeSet {
     pub changed_objects: HashSet<ObjectId>,
 
     /// Schemas where ANY file changed (entire schema is dirty)
-    pub dirty_schemas: HashSet<(String, String)>, // (database, schema)
+    pub dirty_schemas: HashSet<(String, String)>,
 
     /// Clusters used by objects in dirty schemas
     pub dirty_clusters: HashSet<Cluster>,
@@ -31,10 +76,10 @@ pub struct ChangeSet {
 }
 
 impl ChangeSet {
-    /// Create a ChangeSet by comparing old and new deployment snapshots.
+    /// Create a ChangeSet by comparing old and new deployment snapshots using Datalog.
     ///
-    /// This method compares two deployment snapshots (object-based hashing)
-    /// to determine which objects have changed.
+    /// This method uses Datalog fixed-point computation to determine the transitive
+    /// closure of all objects, clusters, and schemas affected by changes.
     ///
     /// # Arguments
     /// * `old_snapshot` - Previous deployment snapshot
@@ -49,161 +94,21 @@ impl ChangeSet {
         project: &Project,
     ) -> Self {
         // Step 1: Find changed objects by comparing hashes
-        let mut changed_objects = HashSet::new();
+        let changed_objects = find_changed_objects(old_snapshot, new_snapshot);
 
-        // Objects with different hashes or newly added
-        for (object_id, new_hash) in &new_snapshot.objects {
-            if old_snapshot.objects.get(object_id) != Some(new_hash) {
-                changed_objects.insert(object_id.clone());
-            }
-        }
+        // Step 2: Extract base facts from project
+        let base_facts = extract_base_facts(project);
 
-        // Deleted objects
-        for object_id in old_snapshot.objects.keys() {
-            if !new_snapshot.objects.contains_key(object_id) {
-                changed_objects.insert(object_id.clone());
-            }
-        }
-
-        // Step 2: Map changed objects to schemas
-        let dirty_schemas = Self::map_objects_to_schemas(&changed_objects, project);
-
-        // Step 3: Find all objects in dirty schemas
-        let mut objects_in_dirty_schemas = HashSet::new();
-        for db in &project.databases {
-            for schema in &db.schemas {
-                if dirty_schemas.contains(&(db.name.clone(), schema.name.clone())) {
-                    for obj in &schema.objects {
-                        objects_in_dirty_schemas.insert(obj.id.clone());
-                    }
-                }
-            }
-        }
-
-        // Step 4: Extract clusters used by dirty objects
-        let dirty_clusters = Self::extract_dirty_clusters(&objects_in_dirty_schemas, project);
-
-        // Step 5: Find all objects in dirty clusters
-        let objects_in_dirty_clusters = Self::find_objects_in_clusters(&dirty_clusters, project);
-
-        // Step 6: Compute transitive closure (downstream dependencies)
-        let mut objects_to_deploy = HashSet::new();
-        objects_to_deploy.extend(objects_in_dirty_schemas.iter().cloned());
-        objects_to_deploy.extend(objects_in_dirty_clusters.iter().cloned());
-
-        let reverse_deps = project.build_reverse_dependency_graph();
-        Self::add_downstream_dependencies(&mut objects_to_deploy, &reverse_deps);
+        // Step 3: Run Datalog fixed-point computation
+        let (dirty_stmts, dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_objects, &base_facts);
 
         ChangeSet {
-            changed_files: HashSet::new(),
-            changed_objects,
-            dirty_schemas,
-            dirty_clusters,
-            objects_to_deploy,
-        }
-    }
-
-    /// Map changed objects to schemas.
-    ///
-    /// Returns the set of (database, schema) tuples that contain changed objects.
-    fn map_objects_to_schemas(
-        changed_objects: &HashSet<ObjectId>,
-        project: &Project,
-    ) -> HashSet<(String, String)> {
-        let mut dirty_schemas = HashSet::new();
-
-        for obj_id in changed_objects {
-            // Find the object in the project to verify it exists
-            let mut found = false;
-            for db in &project.databases {
-                if db.name == obj_id.database {
-                    for schema in &db.schemas {
-                        if schema.name == obj_id.schema {
-                            // Mark this schema as dirty
-                            dirty_schemas.insert((obj_id.database.clone(), obj_id.schema.clone()));
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if found {
-                    break;
-                }
-            }
-        }
-
-        dirty_schemas
-    }
-
-    /// Extract clusters used by dirty objects.
-    fn extract_dirty_clusters(
-        dirty_objects: &HashSet<ObjectId>,
-        project: &Project,
-    ) -> HashSet<Cluster> {
-        let mut clusters = HashSet::new();
-
-        for db in &project.databases {
-            for schema in &db.schemas {
-                for obj in &schema.objects {
-                    if dirty_objects.contains(&obj.id) {
-                        // Extract clusters from this object
-                        let (_, obj_clusters) =
-                            mir::extract_dependencies(&obj.hir_object.stmt, &db.name, &schema.name);
-                        clusters.extend(obj_clusters);
-                    }
-                }
-            }
-        }
-
-        clusters
-    }
-
-    /// Find all objects that use any of the dirty clusters.
-    fn find_objects_in_clusters(
-        dirty_clusters: &HashSet<Cluster>,
-        project: &Project,
-    ) -> HashSet<ObjectId> {
-        if dirty_clusters.is_empty() {
-            return HashSet::new();
-        }
-
-        let mut objects = HashSet::new();
-
-        for db in &project.databases {
-            for schema in &db.schemas {
-                for obj in &schema.objects {
-                    let (_, obj_clusters) =
-                        mir::extract_dependencies(&obj.hir_object.stmt, &db.name, &schema.name);
-
-                    // If this object uses any dirty cluster, mark it
-                    if obj_clusters.iter().any(|c| dirty_clusters.contains(c)) {
-                        objects.insert(obj.id.clone());
-                    }
-                }
-            }
-        }
-
-        objects
-    }
-
-    /// Add all downstream dependencies (transitive closure).
-    ///
-    /// If object A depends on dirty object B, then A must also be deployed.
-    fn add_downstream_dependencies(
-        objects: &mut HashSet<ObjectId>,
-        reverse_deps: &HashMap<ObjectId, HashSet<ObjectId>>,
-    ) {
-        let mut queue: Vec<ObjectId> = objects.iter().cloned().collect();
-
-        while let Some(obj_id) = queue.pop() {
-            if let Some(dependents) = reverse_deps.get(&obj_id) {
-                for dependent in dependents {
-                    if objects.insert(dependent.clone()) {
-                        // Newly added, need to check its dependents
-                        queue.push(dependent.clone());
-                    }
-                }
-            }
+            changed_files: HashSet::new(), // Not used in snapshot-based comparison
+            changed_objects: changed_objects.into_iter().collect(),
+            dirty_schemas: dirty_schemas.into_iter().collect(),
+            dirty_clusters: dirty_clusters.into_iter().collect(),
+            objects_to_deploy: dirty_stmts.into_iter().collect(),
         }
     }
 
@@ -258,8 +163,296 @@ impl Display for ChangeSet {
     }
 }
 
+//
+// BASE FACT EXTRACTION
+//
+
+/// Base facts extracted from the project for Datalog computation.
+#[derive(Debug)]
+struct BaseFacts {
+    /// ObjectInSchema(object, database, schema)
+    object_in_schema: Vec<(ObjectId, String, String)>,
+
+    /// DependsOn(child, parent) - child depends on parent
+    depends_on: Vec<(ObjectId, ObjectId)>,
+
+    /// StmtUsesCluster(object, cluster_name)
+    stmt_uses_cluster: Vec<(ObjectId, String)>,
+
+    /// IndexUsesCluster(object, index_name, cluster_name)
+    index_uses_cluster: Vec<(ObjectId, String, String)>,
+}
+
+/// Find changed objects by comparing snapshot hashes.
+fn find_changed_objects(
+    old_snapshot: &DeploymentSnapshot,
+    new_snapshot: &DeploymentSnapshot,
+) -> HashSet<ObjectId> {
+    let mut changed = HashSet::new();
+
+    // Objects with different hashes or newly added
+    for (object_id, new_hash) in &new_snapshot.objects {
+        if old_snapshot.objects.get(object_id) != Some(new_hash) {
+            changed.insert(object_id.clone());
+        }
+    }
+
+    // Deleted objects
+    for object_id in old_snapshot.objects.keys() {
+        if !new_snapshot.objects.contains_key(object_id) {
+            changed.insert(object_id.clone());
+        }
+    }
+
+    changed
+}
+
+/// Extract all base facts from the project for Datalog computation.
+fn extract_base_facts(project: &Project) -> BaseFacts {
+    let mut object_in_schema = Vec::new();
+    let mut depends_on = Vec::new();
+    let mut stmt_uses_cluster = Vec::new();
+    let mut index_uses_cluster = Vec::new();
+
+    // Extract facts from each object in the project
+    for db in &project.databases {
+        for schema in &db.schemas {
+            for obj in &schema.objects {
+                let obj_id = obj.id.clone();
+
+                // ObjectInSchema fact
+                object_in_schema.push((
+                    obj_id.clone(),
+                    db.name.clone(),
+                    schema.name.clone(),
+                ));
+
+                // DependsOn facts from dependency graph
+                if let Some(deps) = project.dependency_graph.get(&obj_id) {
+                    for parent in deps {
+                        depends_on.push((obj_id.clone(), parent.clone()));
+                    }
+                }
+
+                // Extract cluster usage from statement
+                let (_, clusters) = planned::extract_dependencies(
+                    &obj.typed_object.stmt,
+                    &db.name,
+                    &schema.name,
+                );
+
+                // StmtUsesCluster facts
+                for cluster in clusters {
+                    stmt_uses_cluster.push((obj_id.clone(), cluster.name.clone()));
+                }
+
+                // IndexUsesCluster facts - extract from indexes
+                for index in &obj.typed_object.indexes {
+                    // Extract cluster directly from CreateIndexStatement
+                    if let Some(cluster_name) = &index.in_cluster {
+                        let index_name = index.name.as_ref()
+                            .map(|n| n.to_string())
+                            .unwrap_or_else(|| "unnamed_index".to_string());
+
+                        // Convert cluster name to string
+                        let cluster_str = cluster_name.to_string();
+
+                        index_uses_cluster.push((
+                            obj_id.clone(),
+                            index_name,
+                            cluster_str,
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    BaseFacts {
+        object_in_schema,
+        depends_on,
+        stmt_uses_cluster,
+        index_uses_cluster,
+    }
+}
+
+//
+// DATALOG COMPUTATION
+//
+
+/// Compute dirty objects, clusters, and schemas using Datalog fixed-point iteration.
+///
+/// This is a simplified implementation that manually computes the fixed point
+/// without using datatoad's interactive shell features.
+fn compute_dirty_datalog(
+    changed_stmts: &HashSet<ObjectId>,
+    base_facts: &BaseFacts,
+) -> (HashSet<ObjectId>, HashSet<Cluster>, HashSet<(String, String)>) {
+
+    // Build indexes for efficient lookup
+    let stmt_cluster_index = build_stmt_cluster_index(&base_facts.stmt_uses_cluster);
+    let index_cluster_index = build_index_cluster_index(&base_facts.index_uses_cluster);
+    let reverse_deps = build_reverse_deps(&base_facts.depends_on);
+    let object_schema_map = build_object_schema_map(&base_facts.object_in_schema);
+
+    // Initialize result sets
+    // Track ALL dirty objects (for deployment)
+    let mut dirty_stmts: HashSet<ObjectId> = changed_stmts.clone();
+
+    // Track objects that should propagate to schema (statement changes, deps, stmt clusters, schema)
+    // Objects dirty ONLY due to index clusters should NOT propagate to schema
+    let mut schema_propagating_stmts: HashSet<ObjectId> = changed_stmts.clone();
+
+    let mut dirty_clusters: HashSet<String> = HashSet::new();
+    let mut dirty_schemas: HashSet<(String, String)> = HashSet::new();
+
+    // Fixed-point iteration (7 Datalog rules)
+    loop {
+        let prev_stmts_size = dirty_stmts.len();
+        let prev_schema_prop_size = schema_propagating_stmts.len();
+        let prev_clusters_size = dirty_clusters.len();
+        let prev_schemas_size = dirty_schemas.len();
+
+        // Rule 1: DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C)
+        // Only mark statement clusters dirty when the STATEMENT itself changed,
+        // not when the object is dirty for other reasons (index clusters, schema, etc.)
+        for obj in changed_stmts {
+            if let Some(clusters) = stmt_cluster_index.get(obj) {
+                dirty_clusters.extend(clusters.iter().cloned());
+            }
+        }
+
+        // Rule 2: DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C)
+        // Only mark index clusters dirty when the STATEMENT itself changed,
+        // not when the object is dirty for other reasons (schema, dependencies, etc.)
+        for obj in changed_stmts {
+            if let Some(clusters) = index_cluster_index.get(obj) {
+                dirty_clusters.extend(clusters.iter().cloned());
+            }
+        }
+
+        // Rule 3: DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)
+        // Objects using dirty statement clusters become dirty AND propagate to schema
+        for (obj, clusters) in &stmt_cluster_index {
+            if clusters.iter().any(|c| dirty_clusters.contains(c)) {
+                dirty_stmts.insert(obj.clone());
+                schema_propagating_stmts.insert(obj.clone());
+            }
+        }
+
+        // Rule 4: DirtyStmt(O) :- IndexUsesCluster(O, _, C), DirtyCluster(C)
+        // Objects with indexes on dirty clusters become dirty but DON'T propagate to schema
+        for (obj, clusters) in &index_cluster_index {
+            if clusters.iter().any(|c| dirty_clusters.contains(c)) {
+                dirty_stmts.insert(obj.clone());
+                // NOTE: Don't add to schema_propagating_stmts - indexes don't make schemas dirty
+            }
+        }
+
+        // Rule 5: DirtyStmt(O) :- DependsOn(O, P), SchemaPropagatingStmt(P)
+        // Dependencies propagate to schema
+        // IMPORTANT: Even if a dependent is already dirty (e.g., due to index cluster),
+        // it should ALSO be marked as schema-propagating if it depends on a schema-propagating object
+        let mut new_dirty = Vec::new();
+        let mut new_schema_propagating = Vec::new();
+        for dirty_obj in &schema_propagating_stmts {
+            if let Some(dependents) = reverse_deps.get(dirty_obj) {
+                for dependent in dependents {
+                    // Add to dirty_stmts if not already there
+                    if !dirty_stmts.contains(dependent) {
+                        new_dirty.push(dependent.clone());
+                    }
+                    // ALWAYS add to schema_propagating_stmts if not already there
+                    // (even if already in dirty_stmts from index clusters)
+                    if !schema_propagating_stmts.contains(dependent) {
+                        new_schema_propagating.push(dependent.clone());
+                    }
+                }
+            }
+        }
+        dirty_stmts.extend(new_dirty);
+        schema_propagating_stmts.extend(new_schema_propagating);
+
+        // Rule 6: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch)
+        // ONLY objects in schema_propagating_stmts make schemas dirty
+        for obj in &schema_propagating_stmts {
+            if let Some((db, sch)) = object_schema_map.get(obj) {
+                dirty_schemas.insert((db.clone(), sch.clone()));
+            }
+        }
+
+        // Rule 7: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch)
+        // All objects in dirty schemas become dirty AND propagate to schema
+        for (obj, (db, sch)) in &object_schema_map {
+            if dirty_schemas.contains(&(db.clone(), sch.clone())) {
+                dirty_stmts.insert(obj.clone());
+                schema_propagating_stmts.insert(obj.clone());
+            }
+        }
+
+        // Check if any set grew (fixed point reached when no changes)
+        if dirty_stmts.len() == prev_stmts_size
+            && schema_propagating_stmts.len() == prev_schema_prop_size
+            && dirty_clusters.len() == prev_clusters_size
+            && dirty_schemas.len() == prev_schemas_size
+        {
+            break;
+        }
+    }
+
+    // Convert cluster names to Cluster structs
+    let dirty_cluster_structs = dirty_clusters
+        .into_iter()
+        .map(|name| Cluster { name })
+        .collect();
+
+    (dirty_stmts, dirty_cluster_structs, dirty_schemas)
+}
+
+//
+// INDEX BUILDERS FOR EFFICIENT LOOKUP
+//
+
+fn build_stmt_cluster_index(facts: &[(ObjectId, String)]) -> HashMap<ObjectId, Vec<String>> {
+    let mut index: HashMap<ObjectId, Vec<String>> = HashMap::new();
+    for (obj, cluster) in facts {
+        index.entry(obj.clone())
+            .or_insert_with(Vec::new)
+            .push(cluster.clone());
+    }
+    index
+}
+
+fn build_index_cluster_index(facts: &[(ObjectId, String, String)]) -> HashMap<ObjectId, Vec<String>> {
+    let mut index: HashMap<ObjectId, Vec<String>> = HashMap::new();
+    for (obj, _index_name, cluster) in facts {
+        index.entry(obj.clone())
+            .or_insert_with(Vec::new)
+            .push(cluster.clone());
+    }
+    index
+}
+
+fn build_reverse_deps(facts: &[(ObjectId, ObjectId)]) -> HashMap<ObjectId, Vec<ObjectId>> {
+    let mut index: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
+    for (child, parent) in facts {
+        index.entry(parent.clone())
+            .or_insert_with(Vec::new)
+            .push(child.clone());
+    }
+    index
+}
+
+fn build_object_schema_map(facts: &[(ObjectId, String, String)]) -> HashMap<ObjectId, (String, String)> {
+    facts.iter()
+        .map(|(obj, db, sch)| (obj.clone(), (db.clone(), sch.clone())))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn test_parse_object_file_path() {
         let path = "materialize/public/users.sql";
@@ -300,5 +493,314 @@ mod tests {
             }
             _ => panic!("Path didn't match expected pattern"),
         }
+    }
+
+    #[test]
+    fn test_schema_propagation_all_objects_in_dirty_schema_are_dirty() {
+        // Test that when one object in a schema becomes dirty,
+        // ALL objects in that schema become dirty (schema-level atomicity)
+
+        // Create base facts for a schema with 3 objects
+        let obj1 = ObjectId::new("db".to_string(), "schema".to_string(), "table1".to_string());
+        let obj2 = ObjectId::new("db".to_string(), "schema".to_string(), "table2".to_string());
+        let obj3 = ObjectId::new("db".to_string(), "schema".to_string(), "view1".to_string());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (obj1.clone(), "db".to_string(), "schema".to_string()),
+                (obj2.clone(), "db".to_string(), "schema".to_string()),
+                (obj3.clone(), "db".to_string(), "schema".to_string()),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![],
+        };
+
+        // Only obj1 is changed
+        let mut changed_stmts = HashSet::new();
+        changed_stmts.insert(obj1.clone());
+
+        // Run Datalog computation
+        let (dirty_stmts, _dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts);
+
+        // Verify schema is dirty
+        assert!(
+            dirty_schemas.contains(&("db".to_string(), "schema".to_string())),
+            "Schema should be marked dirty"
+        );
+
+        // CRITICAL: All objects in the dirty schema should be dirty
+        assert!(
+            dirty_stmts.contains(&obj1),
+            "obj1 (changed) should be dirty"
+        );
+        assert!(
+            dirty_stmts.contains(&obj2),
+            "obj2 (same schema as changed obj1) should be dirty"
+        );
+        assert!(
+            dirty_stmts.contains(&obj3),
+            "obj3 (same schema as changed obj1) should be dirty"
+        );
+
+        println!("Dirty objects: {:?}", dirty_stmts);
+        println!("Dirty schemas: {:?}", dirty_schemas);
+    }
+
+    #[test]
+    fn test_index_cluster_does_not_dirty_parent_object_cluster() {
+        // Critical test: If an index uses a dirty cluster, the index should be redeployed,
+        // but the parent object and its cluster should NOT be marked dirty.
+        //
+        // Scenario:
+        // - winning_bids MV on "staging" cluster
+        // - Index on winning_bids using "quickstart" cluster
+        // - some_other_obj on "quickstart" cluster changes
+        //
+        // Expected:
+        // - quickstart cluster becomes dirty ✓
+        // - Index needs redeployment ✓
+        // - winning_bids needs redeployment (to deploy its index) ✓
+        // - BUT staging cluster should NOT be dirty ✗ (current bug)
+
+        let mv = ObjectId::new("db".to_string(), "schema".to_string(), "winning_bids".to_string());
+        let other = ObjectId::new("db".to_string(), "schema".to_string(), "other_obj".to_string());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (mv.clone(), "db".to_string(), "schema".to_string()),
+                (other.clone(), "db".to_string(), "schema".to_string()),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![
+                (mv.clone(), "staging".to_string()),
+                (other.clone(), "quickstart".to_string()),
+            ],
+            index_uses_cluster: vec![
+                (mv.clone(), "idx_item".to_string(), "quickstart".to_string()),
+            ],
+        };
+
+        // Only other_obj is changed
+        let mut changed_stmts = HashSet::new();
+        changed_stmts.insert(other.clone());
+
+        // Run Datalog computation
+        let (dirty_stmts, dirty_clusters, _dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts);
+
+        println!("Dirty stmts: {:?}", dirty_stmts);
+        println!("Dirty clusters: {:?}", dirty_clusters);
+
+        // Verify quickstart cluster is dirty
+        assert!(
+            dirty_clusters.iter().any(|c| c.name == "quickstart"),
+            "quickstart cluster should be dirty because other_obj changed"
+        );
+
+        // Verify winning_bids needs redeployment (because its index uses dirty cluster)
+        assert!(
+            dirty_stmts.contains(&mv),
+            "winning_bids should be redeployed (its index uses dirty quickstart cluster)"
+        );
+
+        // CRITICAL: staging cluster should NOT be dirty
+        // The MV's statement uses staging, but the MV is only dirty because of its index,
+        // not because its statement changed. Therefore staging should not be marked dirty.
+        assert!(
+            !dirty_clusters.iter().any(|c| c.name == "staging"),
+            "staging cluster should NOT be dirty - winning_bids is only dirty due to its index, not its statement"
+        );
+    }
+
+    #[test]
+    fn test_index_cluster_does_not_dirty_schema() {
+        // Scenario:
+        // - table1 and table2 in the same schema
+        // - table1 has index on cluster "index_cluster"
+        // - some_other_obj uses "index_cluster" and changes
+        //
+        // Expected:
+        // - index_cluster becomes dirty ✓
+        // - table1 becomes dirty (to redeploy its index) ✓
+        // - BUT schema should NOT be dirty ✓
+        // - table2 should NOT be dirty ✓
+
+        let table1 = ObjectId::new("db".to_string(), "schema".to_string(), "table1".to_string());
+        let table2 = ObjectId::new("db".to_string(), "schema".to_string(), "table2".to_string());
+        let other = ObjectId::new("db".to_string(), "other_schema".to_string(), "other_obj".to_string());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (table1.clone(), "db".to_string(), "schema".to_string()),
+                (table2.clone(), "db".to_string(), "schema".to_string()),
+                (other.clone(), "db".to_string(), "other_schema".to_string()),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![
+                (other.clone(), "index_cluster".to_string()),
+            ],
+            index_uses_cluster: vec![
+                (table1.clone(), "idx1".to_string(), "index_cluster".to_string()),
+            ],
+        };
+
+        let mut changed_stmts = HashSet::new();
+        changed_stmts.insert(other.clone());
+
+        let (dirty_stmts, dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts);
+
+        // index_cluster should be dirty
+        assert!(dirty_clusters.iter().any(|c| c.name == "index_cluster"));
+
+        // table1 should be dirty (to redeploy its index)
+        assert!(dirty_stmts.contains(&table1), "table1 should be dirty to redeploy its index");
+
+        // But schema should NOT be dirty
+        assert!(
+            !dirty_schemas.contains(&("db".to_string(), "schema".to_string())),
+            "schema should NOT be dirty - table1 is only dirty due to its index cluster"
+        );
+
+        // And table2 should NOT be dirty
+        assert!(
+            !dirty_stmts.contains(&table2),
+            "table2 should NOT be dirty - not affected by table1's index"
+        );
+    }
+
+    #[test]
+    fn test_schema_propagation_does_not_dirty_index_clusters() {
+        // Scenario from real deployment:
+        // - flip_activities and flippers in materialize.public schema
+        // - flip_activities has index on "quickstart" cluster
+        // - winning_bids in materialize.internal schema has index on "quickstart"
+        // - When flippers changes:
+        //   - materialize.public schema becomes dirty
+        //   - flip_activities becomes dirty (schema propagation)
+        //   - BUT quickstart cluster should NOT become dirty
+        //   - winning_bids should NOT be redeployed
+
+        let flippers = ObjectId::new("materialize".to_string(), "public".to_string(), "flippers".to_string());
+        let flip_activities = ObjectId::new("materialize".to_string(), "public".to_string(), "flip_activities".to_string());
+        let winning_bids = ObjectId::new("materialize".to_string(), "internal".to_string(), "winning_bids".to_string());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (flippers.clone(), "materialize".to_string(), "public".to_string()),
+                (flip_activities.clone(), "materialize".to_string(), "public".to_string()),
+                (winning_bids.clone(), "materialize".to_string(), "internal".to_string()),
+            ],
+            depends_on: vec![],
+            stmt_uses_cluster: vec![],
+            index_uses_cluster: vec![
+                (flip_activities.clone(), "idx_flipper".to_string(), "quickstart".to_string()),
+                (winning_bids.clone(), "idx_item".to_string(), "quickstart".to_string()),
+            ],
+        };
+
+        let mut changed_stmts = HashSet::new();
+        changed_stmts.insert(flippers.clone());
+
+        let (dirty_stmts, dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts);
+
+        // materialize.public schema should be dirty
+        assert!(dirty_schemas.contains(&("materialize".to_string(), "public".to_string())));
+
+        // flip_activities should be dirty due to schema propagation
+        assert!(dirty_stmts.contains(&flip_activities), "flip_activities should be dirty due to schema propagation");
+
+        // CRITICAL: quickstart cluster should NOT be dirty
+        // flip_activities is dirty due to schema propagation, not because its statement changed
+        assert!(
+            !dirty_clusters.iter().any(|c| c.name == "quickstart"),
+            "quickstart cluster should NOT be dirty - flip_activities is dirty due to schema propagation, not statement change"
+        );
+
+        // winning_bids should NOT be dirty
+        assert!(
+            !dirty_stmts.contains(&winning_bids),
+            "winning_bids should NOT be dirty - quickstart cluster is not dirty"
+        );
+    }
+
+    #[test]
+    fn test_dependency_propagation_with_index_cluster_conflict() {
+        // Real-world bug scenario:
+        // - winning_bids changes (has index on quickstart)
+        // - flip_activities depends on winning_bids (also has index on quickstart)
+        // - flippers depends on flip_activities
+        //
+        // What happens:
+        // 1. winning_bids changes → quickstart becomes dirty
+        // 2. flip_activities becomes dirty (index on dirty quickstart)
+        // 3. BUT flip_activities also depends on winning_bids!
+        // 4. So flip_activities should ALSO be schema-propagating
+        // 5. Which should make materialize.public schema dirty
+        // 6. Which should make flippers dirty
+        //
+        // The bug was: step 4 was skipped because flip_activities was already dirty
+
+        let winning_bids = ObjectId::new("materialize".to_string(), "internal".to_string(), "winning_bids".to_string());
+        let flip_activities = ObjectId::new("materialize".to_string(), "public".to_string(), "flip_activities".to_string());
+        let flippers = ObjectId::new("materialize".to_string(), "public".to_string(), "flippers".to_string());
+
+        let base_facts = BaseFacts {
+            object_in_schema: vec![
+                (winning_bids.clone(), "materialize".to_string(), "internal".to_string()),
+                (flip_activities.clone(), "materialize".to_string(), "public".to_string()),
+                (flippers.clone(), "materialize".to_string(), "public".to_string()),
+            ],
+            depends_on: vec![
+                (flip_activities.clone(), winning_bids.clone()),  // flip_activities depends on winning_bids
+                (flippers.clone(), flip_activities.clone()),       // flippers depends on flip_activities
+            ],
+            stmt_uses_cluster: vec![
+                (winning_bids.clone(), "staging".to_string()),
+            ],
+            index_uses_cluster: vec![
+                (winning_bids.clone(), "idx_item".to_string(), "quickstart".to_string()),
+                (flip_activities.clone(), "idx_flipper".to_string(), "quickstart".to_string()),
+            ],
+        };
+
+        let mut changed_stmts = HashSet::new();
+        changed_stmts.insert(winning_bids.clone());
+
+        let (dirty_stmts, dirty_clusters, dirty_schemas) =
+            compute_dirty_datalog(&changed_stmts, &base_facts);
+
+        println!("Dirty stmts: {:?}", dirty_stmts);
+        println!("Dirty schemas: {:?}", dirty_schemas);
+
+        // winning_bids should be dirty (changed)
+        assert!(dirty_stmts.contains(&winning_bids), "winning_bids should be dirty");
+
+        // materialize.internal schema should be dirty
+        assert!(dirty_schemas.contains(&("materialize".to_string(), "internal".to_string())),
+            "materialize.internal schema should be dirty");
+
+        // quickstart cluster should be dirty (winning_bids has index on it)
+        assert!(dirty_clusters.iter().any(|c| c.name == "quickstart"),
+            "quickstart cluster should be dirty");
+
+        // flip_activities should be dirty (depends on winning_bids)
+        assert!(dirty_stmts.contains(&flip_activities),
+            "flip_activities should be dirty - depends on winning_bids");
+
+        // CRITICAL: materialize.public schema should be dirty
+        // flip_activities is dirty due to both:
+        // 1. Its index is on dirty quickstart (index-only dirty)
+        // 2. It depends on winning_bids (schema-propagating dirty)
+        // The second reason should make materialize.public schema dirty
+        assert!(dirty_schemas.contains(&("materialize".to_string(), "public".to_string())),
+            "materialize.public schema should be dirty - flip_activities depends on winning_bids");
+
+        // flippers should be dirty (materialize.public schema is dirty)
+        assert!(dirty_stmts.contains(&flippers),
+            "flippers should be dirty - its schema (materialize.public) is dirty");
     }
 }

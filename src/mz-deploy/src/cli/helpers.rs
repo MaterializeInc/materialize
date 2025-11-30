@@ -5,7 +5,7 @@
 
 use crate::cli::CliError;
 use crate::client::{Client, Profile};
-use crate::project::{self, hir};
+use crate::project::{self, typed};
 use crate::utils::git::get_git_commit;
 use std::path::Path;
 
@@ -96,29 +96,29 @@ impl<'a> DeploymentExecutor<'a> {
     /// grants, and comments associated with the object.
     ///
     /// # Arguments
-    /// * `hir_obj` - The HIR database object to deploy
+    /// * `typed_obj` - The typed database object to deploy
     ///
     /// # Returns
     /// Ok(()) if all statements execute successfully
     ///
     /// # Errors
     /// Returns `CliError::SqlExecutionFailed` if any statement fails
-    pub async fn execute_object(&self, hir_obj: &hir::DatabaseObject) -> Result<(), CliError> {
+    pub async fn execute_object(&self, typed_obj: &typed::DatabaseObject) -> Result<(), CliError> {
         // Execute main statement
-        self.execute_sql(&hir_obj.stmt).await?;
+        self.execute_sql(&typed_obj.stmt).await?;
 
         // Execute indexes
-        for index in &hir_obj.indexes {
+        for index in &typed_obj.indexes {
             self.execute_sql(index).await?;
         }
 
         // Execute grants
-        for grant in &hir_obj.grants {
+        for grant in &typed_obj.grants {
             self.execute_sql(grant).await?;
         }
 
         // Execute comments
-        for comment in &hir_obj.comments {
+        for comment in &typed_obj.comments {
             self.execute_sql(comment).await?;
         }
 

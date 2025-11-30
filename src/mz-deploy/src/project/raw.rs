@@ -5,14 +5,14 @@
 //! mirror the file system structure and contain parsed SQL AST nodes, but do not enforce
 //! semantic validation rules.
 //!
-//! # Raw vs HIR
+//! # Raw vs Typed
 //!
-//! The raw representation is the first stage in a two-stage parsing pipeline:
+//! The raw representation is the first stage in a multi-stage parsing pipeline:
 //!
 //! ```text
 //! File System → raw::Project (parsed but unvalidated)
 //!                    ↓
-//!               hir::Project (validated)
+//!               typed::Project (validated)
 //! ```
 //!
 //! **Raw stage:**
@@ -21,7 +21,7 @@
 //! - Organizes by directory structure
 //! - No semantic validation
 //!
-//! **HIR stage:**
+//! **Typed stage:**
 //! - Validates object names match file names
 //! - Validates qualified names match directory structure
 //! - Validates cross-references between statements
@@ -584,8 +584,8 @@ mod tests {
     #[test]
     fn test_cluster_dependencies_through_full_pipeline() {
         use crate::project::ast::Cluster;
-        use crate::project::hir;
-        use crate::project::mir;
+        use crate::project::typed;
+        use crate::project::planned;
 
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
@@ -632,29 +632,29 @@ mod tests {
         let raw_project = load_project(root).unwrap();
         assert_eq!(raw_project.databases.len(), 1);
 
-        // Convert to HIR
-        let hir_project = hir::Project::try_from(raw_project).unwrap();
-        assert_eq!(hir_project.databases.len(), 1);
+        // Convert to typed
+        let typed_project = typed::Project::try_from(raw_project).unwrap();
+        assert_eq!(typed_project.databases.len(), 1);
 
-        // Convert to MIR
-        let mir_project = mir::Project::from(hir_project);
+        // Convert to planned
+        let planned_project = planned::Project::from(typed_project);
 
         // Verify cluster dependencies
-        assert_eq!(mir_project.cluster_dependencies.len(), 2);
+        assert_eq!(planned_project.cluster_dependencies.len(), 2);
         assert!(
-            mir_project
+            planned_project
                 .cluster_dependencies
                 .contains(&Cluster::new("quickstart".to_string()))
         );
         assert!(
-            mir_project
+            planned_project
                 .cluster_dependencies
                 .contains(&Cluster::new("prod".to_string()))
         );
 
         // Verify objects exist
-        assert_eq!(mir_project.databases.len(), 1);
-        let database = &mir_project.databases[0];
+        assert_eq!(planned_project.databases.len(), 1);
+        let database = &planned_project.databases[0];
         assert_eq!(database.name, "test_db");
         assert_eq!(database.schemas.len(), 1);
 

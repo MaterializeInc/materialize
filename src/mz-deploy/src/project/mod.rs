@@ -4,20 +4,20 @@ pub mod ast;
 pub mod changeset;
 pub mod deployment_snapshot;
 pub mod error;
-pub mod hir;
-pub mod mir;
+pub mod typed;
+pub mod planned;
 pub mod normalize;
 pub mod object_id;
 mod parser;
 pub mod raw;
 
 // Re-export commonly used types
-pub use mir::ModStatement;
+pub use planned::ModStatement;
 
-/// Load, validate, and convert a project to MIR for deployment planning.
-pub fn plan<P: AsRef<Path>>(root: P) -> Result<mir::Project, error::ProjectError> {
+/// Load, validate, and convert a project to a planned deployment representation.
+pub fn plan<P: AsRef<Path>>(root: P) -> Result<planned::Project, error::ProjectError> {
     let raw_project = raw::load_project(root)?;
-    let hir_project = hir::Project::try_from(raw_project)?;
-    let mir_project = mir::Project::from(hir_project);
-    Ok(mir_project)
+    let typed_project = typed::Project::try_from(raw_project)?;
+    let planned_project = planned::Project::from(typed_project);
+    Ok(planned_project)
 }
