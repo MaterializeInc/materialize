@@ -32,7 +32,7 @@ rand = "0.8.5"
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
-tokio = { version = "1.44.1", features = ["macros", "rt", "sync"] }
+tokio = { version = "1.48.0", features = ["macros", "rt", "sync"] }
 thiserror = "2.0.17"
 tracing = "0.1.37"
 url = "2.3.1"

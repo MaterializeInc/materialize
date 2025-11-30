@@ -17,7 +17,7 @@ bytesize = "2.1.0"
 derivative = "2.2.0"
 mz-ore = { path = "../ore", features = ["network"], default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
-tokio = "1.44.1"
+tokio = "1.48.0"
 tokio-openssl = "0.6.5"
 tokio-postgres = { version = "0.7.8" }
 tracing = "0.1.37"

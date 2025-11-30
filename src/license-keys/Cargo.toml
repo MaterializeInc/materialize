@@ -31,7 +31,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 clap = { version = "4.5.23", features = ["derive"] }
 mz-aws-util = { path = "../aws-util" }
-tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = ["workspace-hack"]
