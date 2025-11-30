@@ -38,7 +38,6 @@ use super::typed;
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 
 /// A database object with its dependencies.
 #[derive(Debug)]

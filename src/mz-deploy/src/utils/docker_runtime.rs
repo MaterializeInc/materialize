@@ -270,7 +270,7 @@ impl DockerRuntime {
     /// Create temporary tables for external dependencies
     async fn create_external_dependencies(
         &self,
-        client: &mut Client,
+        client: &Client,
         project: &Project,
         types: &Types,
     ) -> Result<(), TypeCheckError> {
