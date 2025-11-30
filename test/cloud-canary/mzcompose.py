@@ -280,13 +280,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if args.version_check:
             version_check(c)
 
+        # TODO(def-): Reenable when Redpanda fixes "Internal server error"
+        redpanda = None
         # Takes about 40 min to spin up
-        print("--- Spinnung up Redpanda Cloud (takes ~40 min)")
-        redpanda = (
-            Redpanda(c, cleanup=args.cleanup)
-            if any(["redpanda" in filename for filename in files])
-            else None
-        )
+        # print("--- Spinnung up Redpanda Cloud (takes ~40 min)")
+        # redpanda = (
+        #     Redpanda(c, cleanup=args.cleanup)
+        #     if any(["redpanda" in filename for filename in files])
+        #     else None
+        # )
 
         try:
             print("--- Running .td files ...")
