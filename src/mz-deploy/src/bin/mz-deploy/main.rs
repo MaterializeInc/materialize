@@ -9,19 +9,23 @@ use std::sync::LazyLock;
 const BUILD_INFO: BuildInfo = build_info!();
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
-/// Materialize deployment tool
+/// Materialize deployment tool for managing database schemas and objects
 #[derive(Parser, Debug)]
 #[command(name = "mz-deploy", version = VERSION.as_str())]
-#[command(about = "A tool for managing Materialize database deployments", long_about = None)]
+#[command(about = "Manage Materialize database deployments with blue/green staging workflows")]
+#[command(long_about = "mz-deploy helps you manage Materialize database schemas and objects with \
+    git-like workflows. Deploy to staging environments for testing, then promote to production \
+    with atomic schema swaps for zero-downtime deployments.")]
 struct Args {
-    /// Path to the project root directory
+    /// Path to the project root directory containing database schemas
     #[arg(short, long, default_value = ".", global = true)]
     directory: PathBuf,
 
+    /// Enable verbose output for debugging
     #[arg(short, long, global = true)]
     verbose: bool,
 
-    /// Profile name to use (defaults to "default")
+    /// Database connection profile to use (from profiles.toml)
     #[arg(short, long, global = true)]
     profile: Option<String>,
 
@@ -31,52 +35,139 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Compile project and verify dependencies (offline, no database connection needed)
+    /// Compile and validate SQL without connecting to database
+    ///
+    /// Parses all SQL files, validates dependencies, and optionally type-checks SQL
+    /// against a local Materialize Docker container. This is useful for CI/CD pipelines
+    /// to catch errors before deployment.
+    #[command(visible_alias = "build")]
     Compile {
-        /// Skip type checking with Docker
+        /// Skip SQL type checking (faster but less thorough validation)
         #[arg(long)]
         skip_typecheck: bool,
 
-        /// Docker image to use for type checking
-        #[arg(long)]
+        /// Materialize Docker image to use for type checking
+        #[arg(long, value_name = "IMAGE")]
         docker_image: Option<String>,
     },
-    /// Apply project to database (compile and execute SQL)
-    Apply {
-        #[arg(long)]
-        in_place_dangerous_will_cause_downtime: bool,
 
-        /// Force application despite conflicts (skip rebase check)
+    /// Deploy to production directly or promote a staging environment
+    ///
+    /// This command has two modes:
+    ///
+    /// 1. Promote staging (recommended): Atomically swap a tested staging environment
+    ///    with production for zero-downtime deployment.
+    ///
+    /// 2. Direct deployment: Apply changes directly to production. Safe for new objects
+    ///    and initial deployments. Will error if it would overwrite existing objects.
+    ///
+    /// Examples:
+    ///   # Promote staging environment to production (blue/green swap)
+    ///   mz-deploy apply my-staging-env
+    ///
+    ///   # Deploy directly to production (safe for new objects)
+    ///   mz-deploy apply
+    Apply {
+        /// Staging environment to promote to production (blue/green deployment)
+        ///
+        /// Specifies which staging environment to swap with production. The staging
+        /// schemas will become production and vice versa in an atomic operation.
+        #[arg(value_name = "ENV")]
+        staging_env: Option<String>,
+
+        /// Allow deployment with uncommitted git changes
+        #[arg(long)]
+        allow_dirty: bool,
+
+        /// Skip conflict detection when promoting staging environments
+        ///
+        /// When promoting staging, apply normally checks if production schemas were
+        /// modified after staging was created. This flag bypasses that check.
         #[arg(long)]
         force: bool,
 
-        /// Allow deploying with uncommitted changes
-        #[arg(long)]
-        allow_dirty: bool,
-
-        /// Optional staging environment to swap with (blue/green deployment)
-        staging_env: Option<String>,
+        #[arg(long, hide = true)]
+        in_place_dangerous_will_cause_downtime: bool,
     },
-    /// Deploy project to staging environment with renamed schemas and clusters
+
+    /// Create a staging deployment for testing changes
+    ///
+    /// Deploys schemas and objects to a staging environment with suffixed names
+    /// (e.g., 'public_abc123'). This allows testing changes in isolation before
+    /// promoting to production. Staging deployments can be listed with 'deployments'
+    /// command and promoted with 'apply' command.
+    ///
+    /// Example:
+    ///   mz-deploy stage --name my-feature
     Stage {
-        /// Staging environment name (default: first 5 chars of git SHA if in git repo)
-        #[arg(long)]
+        /// Name for this staging environment (default: first 7 chars of git commit SHA)
+        ///
+        /// The name will be used as a suffix for schemas and clusters. Must contain
+        /// only alphanumeric characters, hyphens, and underscores.
+        #[arg(long, value_name = "NAME")]
         name: Option<String>,
 
-        /// Allow deploying with uncommitted changes
+        /// Allow staging with uncommitted git changes
         #[arg(long)]
         allow_dirty: bool,
     },
-    /// Test database connection with a profile
+
+    /// Test database connection and display environment information
+    ///
+    /// Connects to Materialize using the specified profile and displays version,
+    /// environment ID, and current role. Useful for verifying connectivity and
+    /// configuration before running deployments.
     Debug,
-    /// Generate data contracts (types.lock) for external dependencies
+
+    /// Generate types.lock file with external dependency schemas
+    ///
+    /// Queries the database for schema information about external dependencies
+    /// (tables/views not managed by this project but referenced in SQL). This
+    /// creates a types.lock file used for offline type checking.
+    #[command(name = "gen-data-contracts")]
     GenDataContracts,
-    /// Run unit tests
+
+    /// Run SQL unit tests defined in test files
+    ///
+    /// Executes all test files in the project against a temporary Materialize
+    /// Docker container. Tests validate SQL logic without affecting production.
     Test,
-    /// Abort a staged deployment (drop schemas, clusters, and deployment records)
+
+    /// Clean up a staging deployment by dropping all resources
+    ///
+    /// Removes staging schemas, clusters, and deployment tracking records for
+    /// the specified environment. This is the equivalent of 'git branch -D' for
+    /// staging deployments.
+    ///
+    /// Example:
+    ///   mz-deploy abort my-staging-env
     Abort {
-        /// Staging environment name to abort
+        /// Name of the staging environment to remove
+        #[arg(value_name = "ENV")]
         name: String,
+    },
+
+    /// List all active staging deployments
+    ///
+    /// Shows staging environments that have been deployed but not yet promoted,
+    /// similar to 'git branch'. Displays environment names, schemas, who deployed
+    /// them, and when.
+    #[command(visible_alias = "branches")]
+    Deployments,
+
+    /// Show history of promoted deployments
+    ///
+    /// Displays a chronological log of deployments that have been promoted to
+    /// production, similar to 'git log'. Each entry shows the environment name,
+    /// who promoted it, when, and which schemas were included.
+    ///
+    /// Example:
+    ///   mz-deploy history --limit 10
+    #[command(visible_alias = "log")]
+    History {
+        /// Maximum number of deployments to show (default: unlimited)
+        #[arg(short, long, value_name = "N")]
+        limit: Option<usize>,
     },
 }
 
@@ -90,6 +181,8 @@ fn needs_connection(command: &Option<Command>) -> bool {
         Some(Command::GenDataContracts) => true,
         Some(Command::Test) => false, // Test uses Docker, not profile connection
         Some(Command::Abort { .. }) => true,
+        Some(Command::Deployments) => true,
+        Some(Command::History { .. }) => true,
         None => false,
     }
 }
@@ -128,10 +221,10 @@ async fn main() {
                 .map(|_| ())
         }
         Some(Command::Apply {
-            in_place_dangerous_will_cause_downtime,
-            force,
-            allow_dirty,
             staging_env,
+            allow_dirty,
+            force,
+            in_place_dangerous_will_cause_downtime,
         }) => match staging_env {
             None => {
                 cli::commands::apply::run(
@@ -161,6 +254,12 @@ async fn main() {
         Some(Command::Test) => cli::commands::test::run(&args.directory).await,
         Some(Command::Abort { name }) => {
             cli::commands::abort::run(profile.as_ref(), &args.directory, &name).await
+        }
+        Some(Command::Deployments) => {
+            cli::commands::deployments::run(profile.as_ref(), &args.directory).await
+        }
+        Some(Command::History { limit }) => {
+            cli::commands::history::run(profile.as_ref(), &args.directory, limit).await
         }
         None => {
             // No command provided, do nothing

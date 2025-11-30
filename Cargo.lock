@@ -6139,6 +6139,7 @@ name = "mz-deploy"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "clap",
  "dirs 5.0.1",
  "mz-build-info",

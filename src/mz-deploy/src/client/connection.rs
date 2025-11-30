@@ -986,6 +986,139 @@ impl Client {
         }))
     }
 
+    /// List all staging deployments (promoted_at IS NULL), grouped by environment.
+    ///
+    /// Returns a map from environment name to list of (database, schema) tuples and deployment metadata.
+    pub async fn list_staging_deployments(
+        &self,
+    ) -> Result<HashMap<String, (std::time::SystemTime, String, Vec<(String, String)>)>, ConnectionError> {
+        use std::time::UNIX_EPOCH;
+
+        let query = r#"
+            SELECT environment,
+                   CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
+                   deployed_by,
+                   database,
+                   schema
+            FROM deploy.deployments
+            WHERE promoted_at IS NULL
+            ORDER BY environment, database, schema
+        "#;
+
+        let rows = self
+            .client
+            .query(query, &[])
+            .await
+            .map_err(ConnectionError::Query)?;
+
+        let mut deployments: HashMap<String, (std::time::SystemTime, String, Vec<(String, String)>)> =
+            HashMap::new();
+
+        for row in rows {
+            let environment: String = row.get("environment");
+            let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
+            let deployed_by: String = row.get("deployed_by");
+            let database: String = row.get("database");
+            let schema: String = row.get("schema");
+
+            let deployed_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(deployed_at_epoch);
+
+            deployments
+                .entry(environment)
+                .or_insert_with(|| (deployed_at, deployed_by.clone(), Vec::new()))
+                .2
+                .push((database, schema));
+        }
+
+        Ok(deployments)
+    }
+
+    /// List deployment history in chronological order (promoted deployments only).
+    ///
+    /// Returns a map from (environment, promoted_at, deployed_by) to list of schemas,
+    /// representing complete deployments ordered by promotion time.
+    pub async fn list_deployment_history(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)>, ConnectionError> {
+        use std::time::UNIX_EPOCH;
+
+        // We need to limit unique deployments, not individual schema rows
+        // First get distinct deployments, then join with schemas
+        let query = if let Some(limit) = limit {
+            format!(
+                r#"
+                WITH unique_deployments AS (
+                    SELECT DISTINCT environment, promoted_at, deployed_by
+                    FROM deploy.deployments
+                    WHERE promoted_at IS NOT NULL
+                    ORDER BY promoted_at DESC
+                    LIMIT {}
+                )
+                SELECT d.environment,
+                       CAST(EXTRACT(EPOCH FROM d.promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                       d.deployed_by,
+                       d.database,
+                       d.schema
+                FROM deploy.deployments d
+                JOIN unique_deployments u
+                  ON d.environment = u.environment
+                  AND d.promoted_at = u.promoted_at
+                  AND d.deployed_by = u.deployed_by
+                ORDER BY d.promoted_at DESC, d.database, d.schema
+            "#,
+                limit
+            )
+        } else {
+            r#"
+                SELECT environment,
+                       CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                       deployed_by,
+                       database,
+                       schema
+                FROM deploy.deployments
+                WHERE promoted_at IS NOT NULL
+                ORDER BY promoted_at DESC, database, schema
+            "#
+            .to_string()
+        };
+
+        let rows = self
+            .client
+            .query(&query, &[])
+            .await
+            .map_err(ConnectionError::Query)?;
+
+        // Group by (environment, promoted_at, deployed_by)
+        let mut deployments: Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)> = Vec::new();
+        let mut current_key: Option<(String, std::time::SystemTime, String)> = None;
+
+        for row in rows {
+            let environment: String = row.get("environment");
+            let promoted_at_epoch: f64 = row.get("promoted_at_epoch");
+            let deployed_by: String = row.get("deployed_by");
+            let database: String = row.get("database");
+            let schema: String = row.get("schema");
+
+            let promoted_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(promoted_at_epoch);
+            let key = (environment.clone(), promoted_at, deployed_by.clone());
+
+            // Check if this is a new deployment or same as current
+            if current_key.as_ref() != Some(&key) {
+                // Start a new deployment group
+                deployments.push((environment, promoted_at, deployed_by, vec![(database, schema)]));
+                current_key = Some(key);
+            } else {
+                // Add schema to current deployment
+                if let Some(last) = deployments.last_mut() {
+                    last.3.push((database, schema));
+                }
+            }
+        }
+
+        Ok(deployments)
+    }
+
     /// Get staging schema names for a specific environment.
     pub async fn get_staging_schemas(
         &self,

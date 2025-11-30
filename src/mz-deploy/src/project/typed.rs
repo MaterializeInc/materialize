@@ -808,20 +808,20 @@ impl TryFrom<super::raw::Database> for Database {
 /// A fully validated Materialize project.
 ///
 /// Represents the complete validated project structure, containing all databases,
-/// schemas, and objects. This is the top-level HIR type that should be used after
+/// schemas, and objects. This is the top-level typed project that should be used after
 /// successfully loading and validating a project from the file system.
 ///
 /// # Usage
 ///
 /// ```no_run
 /// use mz_deploy::project::raw;
-/// use mz_deploy::project::hir::Project;
+/// use mz_deploy::project::typed::Project;
 ///
 /// // Load raw project from file system
 /// let raw_project = raw::load_project("./my_project").unwrap();
 ///
-/// // Convert to validated HIR
-/// let hir_project = Project::try_from(raw_project).unwrap();
+/// // Convert to validated typed project
+/// let typed_project = Project::try_from(raw_project).unwrap();
 /// ```
 ///
 /// # Validation Guarantees
