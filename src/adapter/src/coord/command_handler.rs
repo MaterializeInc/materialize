@@ -384,6 +384,10 @@ impl Coordinator {
                         self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
                     }
 
+                    // We retire the execution context immediately, as the coordinator doesn't need
+                    // to track the execution for statement logging purposes (the frontend handles that).
+                    let _ = ctx_extra.retire();
+
                     // implement_copy_to spawns a background task that sends the response
                     // through tx when the COPY TO completes (or immediately if setup fails).
                     // We just call it and let it handle all response sending.
@@ -393,7 +397,6 @@ impl Coordinator {
                         target_replica,
                         source_ids,
                         conn_id,
-                        ctx_extra,
                         tx,
                     )
                     .await;

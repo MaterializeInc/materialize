@@ -246,12 +246,6 @@ impl PeekClient {
                         }
                     }
                 }
-                // COPY TO S3 - the coordinator handles retirement via implement_copy_to
-                Ok(Some(ExecuteResponse::Copied(_))) => {
-                    // Don't log here - implement_copy_to already sent Message::RetireExecute
-                    // when the COPY TO S3 completed.
-                    return result;
-                }
                 // Bailout case - don't log
                 Ok(None) => {
                     return result;

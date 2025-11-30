@@ -51,12 +51,11 @@ use mz_repr::{
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
-use crate::coord::Message;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -1260,23 +1259,11 @@ impl crate::coord::Coordinator {
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
-        ctx_extra: ExecuteContextExtra,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     ) {
-        // Helper to send error, retire ctx_extra, and return early
-        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        // Helper to send error and return early
         let send_err = |tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
-                        e: AdapterError,
-                        ctx_extra: ExecuteContextExtra,
-                        internal_cmd_tx: &mpsc::UnboundedSender<Message>| {
-            let reason = StatementEndedExecutionReason::Errored { error: e.to_string() };
-            if !ctx_extra.is_trivial() {
-                let _ = internal_cmd_tx.send(Message::RetireExecute {
-                    otel_ctx: OpenTelemetryContext::obtain(),
-                    data: ctx_extra,
-                    reason,
-                });
-            }
+                        e: AdapterError| {
             let _ = tx.send(Err(e));
         };
 
@@ -1291,8 +1278,6 @@ impl crate::coord::Coordinator {
             send_err(
                 tx,
                 AdapterError::Internal("expected exactly one copy to s3 sink".into()),
-                ctx_extra,
-                &internal_cmd_tx,
             );
             return;
         }
@@ -1312,7 +1297,7 @@ impl crate::coord::Coordinator {
                 )
                 .await
                 {
-                    send_err(tx, e.into(), ctx_extra, &internal_cmd_tx);
+                    send_err(tx, e.into());
                     return;
                 }
             }
@@ -1320,8 +1305,6 @@ impl crate::coord::Coordinator {
                 send_err(
                     tx,
                     AdapterError::Internal("expected copy to s3 oneshot sink".into()),
-                    ctx_extra,
-                    &internal_cmd_tx,
                 );
                 return;
             }
@@ -1353,7 +1336,7 @@ impl crate::coord::Coordinator {
             .await
             .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)
         {
-            send_err(tx, e, ctx_extra, &internal_cmd_tx);
+            send_err(tx, e);
             return;
         }
 
@@ -1361,9 +1344,6 @@ impl crate::coord::Coordinator {
         // We must NOT await sink_rx here directly, as that would block the coordinator's main task
         // from processing the completion message. Instead, we spawn a background task that will
         // send the result through tx when the COPY TO completes.
-        //
-        // The ctx_extra is moved into the spawned task so that statement logging retirement
-        // happens when the COPY TO actually completes, not when the dataflow is shipped.
         let span = Span::current();
         task::spawn(
             || "copy to completion",
@@ -1373,18 +1353,7 @@ impl crate::coord::Coordinator {
                     Ok(res) => res,
                     Err(_) => Err(AdapterError::Internal("copy to sender dropped".into())),
                 };
-                
-                // Retire the statement execution context now that COPY TO has completed.
-                // This logs ExecutionFinished at the correct time (when the operation completes).
-                let reason: StatementEndedExecutionReason = (&result).into();
-                if !ctx_extra.is_trivial() {
-                    let _ = internal_cmd_tx.send(Message::RetireExecute {
-                        otel_ctx: OpenTelemetryContext::obtain(),
-                        data: ctx_extra,
-                        reason,
-                    });
-                }
-                
+
                 let _ = tx.send(result);
             }
             .instrument(span),
