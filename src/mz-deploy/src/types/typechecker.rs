@@ -2,8 +2,8 @@
 
 use crate::client::Client;
 use crate::project::ast::Statement;
-use crate::project::hir::FullyQualifiedName;
-use crate::project::mir::Project;
+use crate::project::typed::FullyQualifiedName;
+use crate::project::planned::Project;
 use crate::project::normalize::NormalizingVisitor;
 use crate::project::object_id::ObjectId;
 use crate::verbose;
@@ -213,7 +213,7 @@ pub async fn typecheck_with_client(
     );
     let mut errors = Vec::new();
 
-    for (object_id, hir_object) in sorted_objects {
+    for (object_id, typed_object) in sorted_objects {
         verbose!("Type checking: {}", object_id);
 
         // Build the FQN from the object_id
@@ -223,7 +223,7 @@ pub async fn typecheck_with_client(
             Ident::new(&object_id.object).expect("valid object"),
         ]));
 
-        if let Some(statement) = create_temporary_view_sql(&hir_object.stmt, &fqn) {
+        if let Some(statement) = create_temporary_view_sql(&typed_object.stmt, &fqn) {
             let sql = statement.to_string();
             match client.execute(&sql.to_string(), &[]).await {
                 Ok(_) => {

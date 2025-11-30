@@ -3,8 +3,8 @@
 use crate::cli::{CliError, helpers};
 use crate::client::{ClusterOptions, Profile};
 use crate::project::changeset::ChangeSet;
-use crate::project::mir::extract_external_indexes;
-use crate::project::{self, hir::FullyQualifiedName, normalize::NormalizingVisitor};
+use crate::project::planned::extract_external_indexes;
+use crate::project::{self, typed::FullyQualifiedName, normalize::NormalizingVisitor};
 use crate::utils::git;
 use crate::utils::git::get_git_commit;
 use crate::verbose;
@@ -66,7 +66,7 @@ pub async fn run(
         typecheck: false, // Skip type checking for staging deployment
         docker_image: None,
     };
-    let mir_project = super::compile::run(directory, compile_args).await?;
+    let planned_project = super::compile::run(directory, compile_args).await?;
 
     let staging_suffix = format!("_{}", stage_name);
 
@@ -87,8 +87,8 @@ pub async fn run(
         });
     }
 
-    // Build new snapshot from current MIR
-    let new_snapshot = project::deployment_snapshot::build_snapshot_from_mir(&mir_project)?;
+    // Build new snapshot from current planned project
+    let new_snapshot = project::deployment_snapshot::build_snapshot_from_planned(&planned_project)?;
 
     // Load PRODUCTION deployment state for comparison (environment=None)
     // Stage always compares against production, not against previous staging deployments
@@ -99,7 +99,7 @@ pub async fn run(
         Some(ChangeSet::from_deployment_snapshot_comparison(
             &production_snapshot,
             &new_snapshot,
-            &mir_project,
+            &planned_project,
         ))
     } else {
         None
@@ -112,19 +112,19 @@ pub async fn run(
         }
 
         verbose!("{}", cs);
-        mir_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?
+        planned_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?
     } else {
         verbose!("Full deployment: no production deployment found");
-        mir_project.get_sorted_objects()?
+        planned_project.get_sorted_objects()?
     };
 
     // Collect schemas and clusters from objects that are actually being deployed
     let mut schema_set = HashSet::new();
     let mut cluster_set = HashSet::new();
 
-    for (object_id, hir_obj) in &objects {
+    for (object_id, typed_obj) in &objects {
         schema_set.insert((object_id.database.clone(), object_id.schema.clone()));
-        cluster_set.extend(hir_obj.clusters());
+        cluster_set.extend(typed_obj.clusters());
     }
 
     // Also include clusters from the changeset if available
@@ -134,7 +134,7 @@ pub async fn run(
         }
     } else {
         // For full deployment, include all project clusters
-        for cluster in &mir_project.cluster_dependencies {
+        for cluster in &planned_project.cluster_dependencies {
             cluster_set.insert(cluster.name.clone());
         }
     }
@@ -203,7 +203,7 @@ pub async fn run(
     let objects_to_deploy_set: HashSet<_> = objects.iter().map(|(oid, _)| oid.clone()).collect();
 
     // Deploy external indexes
-    let mut external_indexes: Vec<_> = mir_project
+    let mut external_indexes: Vec<_> = planned_project
         .iter_objects()
         .filter(|object| !objects_to_deploy_set.contains(&object.id))
         .flat_map(extract_external_indexes)
@@ -221,7 +221,7 @@ pub async fn run(
     }
 
     let mut success_count = 0;
-    for (idx, (object_id, hir_obj)) in objects.iter().enumerate() {
+    for (idx, (object_id, typed_obj)) in objects.iter().enumerate() {
         verbose!(
             "Applying {}/{}: {}{} (to schema {}{})",
             idx + 1,
@@ -245,13 +245,13 @@ pub async fn run(
         let visitor = NormalizingVisitor::staging(
             &original_fqn,
             staging_suffix.clone(),
-            &mir_project.external_dependencies,
+            &planned_project.external_dependencies,
             Some(&objects_to_deploy_set),
         );
 
         // Normalize and deploy main statement
         // The visitor will transform all names and clusters to include the staging suffix
-        let stmt = hir_obj
+        let stmt = typed_obj
             .stmt
             .clone()
             .normalize_name_with(&visitor, &original_fqn.to_item_name())
@@ -267,9 +267,9 @@ pub async fn run(
             })?;
 
         // Deploy indexes, grants, and comments (normalize them with staging transformer)
-        let mut indexes = hir_obj.indexes.clone();
-        let mut grants = hir_obj.grants.clone();
-        let mut comments = hir_obj.comments.clone();
+        let mut indexes = typed_obj.indexes.clone();
+        let mut grants = typed_obj.grants.clone();
+        let mut comments = typed_obj.comments.clone();
 
         // Normalize references to use staging suffix
         visitor.normalize_index_references(&mut indexes);
@@ -316,8 +316,8 @@ pub async fn run(
     // Build a filtered snapshot containing only the objects that were actually deployed
     // This ensures the staging deployment table only tracks staged objects
     let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
-    for (object_id, hir_obj) in &objects {
-        let hash = project::deployment_snapshot::compute_hir_hash(hir_obj);
+    for (object_id, typed_obj) in &objects {
+        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
         staging_snapshot.objects.insert(object_id.clone(), hash);
 
         // Track which schema this object belongs to

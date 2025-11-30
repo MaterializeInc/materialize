@@ -36,25 +36,25 @@ impl Default for CompileArgs {
 /// * `args` - Compile command arguments
 ///
 /// # Returns
-/// Compiled MIR project ready for deployment
+/// Compiled planned project ready for deployment
 ///
 /// # Errors
 /// Returns `CliError::Project` if compilation or validation fails
-pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Project, CliError> {
+pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::planned::Project, CliError> {
     let now = SystemTime::now();
 
-    let mir_project = project::plan(directory)?;
+    let planned_project = project::plan(directory)?;
     println!("Loading project from: {}", directory.display());
 
     // Type checking with Docker if enabled
     if args.typecheck {
-        typecheck_with_docker(directory, &mir_project, args.docker_image).await?;
+        typecheck_with_docker(directory, &planned_project, args.docker_image).await?;
     }
 
     // Display external dependencies
-    if !mir_project.external_dependencies.is_empty() {
+    if !planned_project.external_dependencies.is_empty() {
         verbose!("External Dependencies (not defined in this project):");
-        let mut external: Vec<_> = mir_project.external_dependencies.iter().collect();
+        let mut external: Vec<_> = planned_project.external_dependencies.iter().collect();
         external.sort();
         for dep in external {
             verbose!("  - {}", dep);
@@ -63,9 +63,9 @@ pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Pr
     }
 
     // Display cluster dependencies
-    if !mir_project.cluster_dependencies.is_empty() {
+    if !planned_project.cluster_dependencies.is_empty() {
         verbose!("Cluster Dependencies:");
-        let mut clusters: Vec<_> = mir_project.cluster_dependencies.iter().collect();
+        let mut clusters: Vec<_> = planned_project.cluster_dependencies.iter().collect();
         clusters.sort_by_key(|c| &c.name);
         for cluster in clusters {
             verbose!("  - {}", cluster.name);
@@ -75,12 +75,12 @@ pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Pr
 
     // Display dependency graph
     verbose!("Dependency Graph:");
-    for (object_id, deps) in &mir_project.dependency_graph {
+    for (object_id, deps) in &planned_project.dependency_graph {
         if !deps.is_empty() {
             verbose!("  {} depends on:", object_id);
             for dep in deps {
                 // Mark external dependencies
-                if mir_project.external_dependencies.contains(dep) {
+                if planned_project.external_dependencies.contains(dep) {
                     verbose!("    - {} (external)", dep);
                 } else {
                     verbose!("    - {}", dep);
@@ -90,7 +90,7 @@ pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Pr
     }
 
     verbose!("\nDeployment order:");
-    match mir_project.topological_sort() {
+    match planned_project.topological_sort() {
         Ok(sorted) => {
             for (idx, object_id) in sorted.iter().enumerate() {
                 verbose!("  {}. {}", idx + 1, object_id);
@@ -101,7 +101,7 @@ pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Pr
         }
     }
 
-    let mod_stmts = mir_project.iter_mod_statements();
+    let mod_stmts = planned_project.iter_mod_statements();
     if !mod_stmts.is_empty() {
         verbose!("\nModule Setup Statements:");
         for (idx, mod_stmt) in mod_stmts.iter().enumerate() {
@@ -160,23 +160,23 @@ pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Pr
     }
 
     // Print objects in deployment order
-    let objects = mir_project.get_sorted_objects()?;
-    for (idx, (object_id, hir_obj)) in objects.iter().enumerate() {
+    let objects = planned_project.get_sorted_objects()?;
+    for (idx, (object_id, typed_obj)) in objects.iter().enumerate() {
         verbose!("-- Step {}: {}", idx + 1, object_id);
-        verbose!("{};", hir_obj.stmt);
+        verbose!("{};", typed_obj.stmt);
 
         // Print indexes for this object
-        for index in &hir_obj.indexes {
+        for index in &typed_obj.indexes {
             verbose!("{};", index);
         }
 
         // Print grants for this object
-        for grant in &hir_obj.grants {
+        for grant in &typed_obj.grants {
             verbose!("{};", grant);
         }
 
         // Print comments for this object
-        for comment in &hir_obj.comments {
+        for comment in &typed_obj.comments {
             verbose!("{};", comment);
         }
 
@@ -189,13 +189,13 @@ pub async fn run(directory: &Path, args: CompileArgs) -> Result<project::mir::Pr
         duration.as_secs(),
         duration.subsec_millis()
     );
-    Ok(mir_project)
+    Ok(planned_project)
 }
 
 /// Perform type checking using Docker
 async fn typecheck_with_docker(
     directory: &Path,
-    mir_project: &project::mir::Project,
+    planned_project: &project::planned::Project,
     docker_image: Option<String>,
 ) -> Result<(), CliError> {
     use crate::types::{TypeCheckError, typecheck_with_client};
@@ -220,7 +220,7 @@ async fn typecheck_with_docker(
     }
 
     // Get connected client with staged dependencies
-    let mut client = match runtime.get_client(mir_project, &types).await {
+    let mut client = match runtime.get_client(planned_project, &types).await {
         Ok(client) => client,
         Err(TypeCheckError::ContainerStartFailed(e)) => {
             // Docker not available, warn but don't fail
@@ -234,7 +234,7 @@ async fn typecheck_with_docker(
     };
 
     // Run type checking
-    match typecheck_with_client(&mut client, mir_project, directory).await {
+    match typecheck_with_client(&mut client, planned_project, directory).await {
         Ok(()) => {
             verbose!("✓ Type checking passed");
             Ok(())

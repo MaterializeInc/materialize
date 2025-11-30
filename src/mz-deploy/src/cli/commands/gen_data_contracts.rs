@@ -35,20 +35,20 @@ pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliE
     let mut client = helpers::connect_to_database(profile.unwrap()).await?;
 
     // Load and plan the project
-    let mir_project = project::plan(directory)?;
+    let planned_project = project::plan(directory)?;
 
-    if mir_project.external_dependencies.is_empty() {
+    if planned_project.external_dependencies.is_empty() {
         println!("No external dependencies found - types.lock not needed");
         return Ok(());
     }
 
     println!(
         "Found {} external dependencies",
-        mir_project.external_dependencies.len()
+        planned_project.external_dependencies.len()
     );
 
     // Query external types and write types.lock
-    let types = client.query_external_types(&mir_project).await?;
+    let types = client.query_external_types(&planned_project).await?;
     types.write_types_lock(directory)?;
 
     println!(

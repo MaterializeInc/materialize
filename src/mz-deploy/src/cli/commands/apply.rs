@@ -49,7 +49,7 @@ pub async fn run(
         typecheck: false, // Skip type checking for apply
         docker_image: None,
     };
-    let mir_project = super::compile::run(directory, compile_args).await?;
+    let planned_project = super::compile::run(directory, compile_args).await?;
 
     println!("Applying SQL to database");
 
@@ -58,8 +58,8 @@ pub async fn run(
 
     helpers::initialize_deployment_tracking(&client).await?;
 
-    // Build new snapshot from current MIR
-    let new_snapshot = project::deployment_snapshot::build_snapshot_from_mir(&mir_project)?;
+    // Build new snapshot from current planned project
+    let new_snapshot = project::deployment_snapshot::build_snapshot_from_planned(&planned_project)?;
 
     // Load previous deployment state from database (None = production)
     let old_snapshot = project::deployment_snapshot::load_from_database(&client, None).await?;
@@ -72,7 +72,7 @@ pub async fn run(
         let cs = project::changeset::ChangeSet::from_deployment_snapshot_comparison(
             &old_snapshot,
             &new_snapshot,
-            &mir_project,
+            &planned_project,
         );
 
         // If no changes detected, exit early
@@ -133,7 +133,7 @@ pub async fn run(
     }
 
     // Determine which module statements to execute based on dirty schemas
-    let mod_stmts = mir_project.iter_mod_statements();
+    let mod_stmts = planned_project.iter_mod_statements();
     let mut filtered_mod_stmts = Vec::new();
 
     if let Some(ref cs) = change_set {
@@ -222,18 +222,18 @@ pub async fn run(
             }
         }
 
-        mir_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?
+        planned_project.get_sorted_objects_filtered(&cs.objects_to_deploy)?
     } else {
-        mir_project.get_sorted_objects()?
+        planned_project.get_sorted_objects()?
     };
 
     // Execute SQL for each object in topological order
     let executor = helpers::DeploymentExecutor::new(&client);
     let mut success_count = 0;
-    for (idx, (object_id, hir_obj)) in objects.iter().enumerate() {
+    for (idx, (object_id, typed_obj)) in objects.iter().enumerate() {
         verbose!("Applying {}/{}: {}", idx + 1, objects.len(), object_id);
 
-        executor.execute_object(hir_obj).await?;
+        executor.execute_object(typed_obj).await?;
         success_count += 1;
     }
 

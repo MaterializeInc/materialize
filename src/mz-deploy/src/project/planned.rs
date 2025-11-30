@@ -1,13 +1,13 @@
-//! Mid-Level Intermediate Representation (MIR) for Materialize projects.
+//! Planned representation for Materialize projects.
 //!
 //! This module provides a dependency-aware representation of a Materialize project.
-//! It builds on top of the validated HIR and adds dependency tracking between objects,
+//! It builds on top of the validated typed representation and adds dependency tracking between objects,
 //! enabling topological sorting for deployment order.
 //!
 //! # Transformation Flow
 //!
 //! ```text
-//! raw::Project → hir::Project → mir::Project
+//! raw::Project → typed::Project → planned::Project
 //!                    ↓              ↓
 //!              (validated)    (with dependencies)
 //! ```
@@ -34,18 +34,19 @@
 
 use super::ast::{Cluster, Statement};
 use super::error::DependencyError;
-use super::hir;
+use super::typed;
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 /// A database object with its dependencies.
 #[derive(Debug)]
 pub struct DatabaseObject {
     /// The object identifier
     pub id: ObjectId,
-    /// The validated HIR statement
-    pub hir_object: hir::DatabaseObject,
+    /// The validated typed statement
+    pub typed_object: typed::DatabaseObject,
     /// Set of objects this object depends on
     pub dependencies: HashSet<ObjectId>,
 }
@@ -82,6 +83,12 @@ pub struct Schema {
     pub objects: Vec<DatabaseObject>,
     /// Optional module-level statements (from schema.sql file)
     pub mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
+}
+
+impl Hash for Schema {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        todo!()
+    }
 }
 
 /// A database containing schemas with dependency information.
@@ -167,28 +174,28 @@ impl Project {
         Ok(())
     }
 
-    /// Get all database objects in topological order with their HIR statements.
+    /// Get all database objects in topological order with their typed statements.
     ///
-    /// Returns a vector of (ObjectId, HIR DatabaseObject) tuples in deployment order.
+    /// Returns a vector of (ObjectId, typed DatabaseObject) tuples in deployment order.
     /// This allows access to the fully qualified SQL statements for each object.
     pub fn get_sorted_objects(
         &self,
-    ) -> Result<Vec<(ObjectId, &hir::DatabaseObject)>, DependencyError> {
+    ) -> Result<Vec<(ObjectId, &typed::DatabaseObject)>, DependencyError> {
         let sorted_ids = self.topological_sort()?;
         let mut result = Vec::new();
 
         for object_id in sorted_ids {
-            // Find the corresponding HIR object
-            if let Some(hir_obj) = self.find_hir_object(&object_id) {
-                result.push((object_id, hir_obj));
+            // Find the corresponding typed object
+            if let Some(typed_obj) = self.find_typed_object(&object_id) {
+                result.push((object_id, typed_obj));
             }
         }
 
         Ok(result)
     }
 
-    /// Find the HIR object for a given ObjectId.
-    fn find_hir_object(&self, object_id: &ObjectId) -> Option<&hir::DatabaseObject> {
+    /// Find the typed object for a given ObjectId.
+    fn find_typed_object(&self, object_id: &ObjectId) -> Option<&typed::DatabaseObject> {
         for database in &self.databases {
             if database.name != object_id.database {
                 continue;
@@ -199,7 +206,7 @@ impl Project {
                 }
                 for obj in &schema.objects {
                     if obj.id == *object_id {
-                        return Some(&obj.hir_object);
+                        return Some(&obj.typed_object);
                     }
                 }
             }
@@ -290,11 +297,11 @@ impl Project {
     /// * `filter` - Set of ObjectIds to include in the result
     ///
     /// # Returns
-    /// Vector of (ObjectId, HIR DatabaseObject) tuples in deployment order
+    /// Vector of (ObjectId, typed DatabaseObject) tuples in deployment order
     pub fn get_sorted_objects_filtered(
         &self,
         filter: &HashSet<ObjectId>,
-    ) -> Result<Vec<(ObjectId, &hir::DatabaseObject)>, DependencyError> {
+    ) -> Result<Vec<(ObjectId, &typed::DatabaseObject)>, DependencyError> {
         let sorted_ids = self.topological_sort()?;
 
         // Filter to only include objects in the filter set
@@ -305,8 +312,8 @@ impl Project {
 
         let mut result = Vec::new();
         for object_id in filtered_ids {
-            if let Some(hir_obj) = self.find_hir_object(&object_id) {
-                result.push((object_id, hir_obj));
+            if let Some(typed_obj) = self.find_typed_object(&object_id) {
+                result.push((object_id, typed_obj));
             }
         }
 
@@ -354,8 +361,8 @@ impl Project {
     }
 }
 
-impl From<hir::Project> for Project {
-    fn from(hir_project: hir::Project) -> Self {
+impl From<typed::Project> for Project {
+    fn from(typed_project: typed::Project) -> Self {
         let mut dependency_graph = HashMap::new();
         let mut databases = Vec::new();
         let mut defined_objects = HashSet::new();
@@ -363,13 +370,13 @@ impl From<hir::Project> for Project {
         let mut tests = Vec::new();
 
         // First pass: collect all objects defined in the project
-        for hir_db in &hir_project.databases {
-            for hir_schema in &hir_db.schemas {
-                for hir_obj in &hir_schema.objects {
+        for typed_db in &typed_project.databases {
+            for typed_schema in &typed_db.schemas {
+                for typed_obj in &typed_schema.objects {
                     let object_id = ObjectId::new(
-                        hir_db.name.clone(),
-                        hir_schema.name.clone(),
-                        hir_obj.stmt.ident().object.clone(),
+                        typed_db.name.clone(),
+                        typed_schema.name.clone(),
+                        typed_obj.stmt.ident().object.clone(),
                     );
                     defined_objects.insert(object_id);
                 }
@@ -379,22 +386,22 @@ impl From<hir::Project> for Project {
         // Second pass: build dependency graph and track external dependencies and clusters
         let mut external_dependencies = HashSet::new();
 
-        for hir_db in hir_project.databases {
+        for typed_db in typed_project.databases {
             let mut schemas = Vec::new();
 
-            for hir_schema in hir_db.schemas {
+            for typed_schema in typed_db.schemas {
                 let mut objects = Vec::new();
 
-                for hir_obj in hir_schema.objects {
+                for typed_obj in typed_schema.objects {
                     let object_id = ObjectId::new(
-                        hir_db.name.clone(),
-                        hir_schema.name.clone(),
-                        hir_obj.stmt.ident().object.clone(),
+                        typed_db.name.clone(),
+                        typed_schema.name.clone(),
+                        typed_obj.stmt.ident().object.clone(),
                     );
 
                     // Extract dependencies from the statement
                     let (dependencies, clusters) =
-                        extract_dependencies(&hir_obj.stmt, &hir_db.name, &hir_schema.name);
+                        extract_dependencies(&typed_obj.stmt, &typed_db.name, &typed_schema.name);
 
                     // Track cluster dependencies
                     for cluster in clusters {
@@ -411,7 +418,7 @@ impl From<hir::Project> for Project {
                     dependency_graph.insert(object_id.clone(), dependencies.clone());
 
                     // Collect tests for this object
-                    for test_stmt in &hir_obj.tests {
+                    for test_stmt in &typed_obj.tests {
                         let unit_test = crate::unit_test::UnitTest::from_execute_statement(
                             test_stmt, &object_id,
                         );
@@ -420,22 +427,22 @@ impl From<hir::Project> for Project {
 
                     objects.push(DatabaseObject {
                         id: object_id,
-                        hir_object: hir_obj,
+                        typed_object: typed_obj,
                         dependencies,
                     });
                 }
 
                 schemas.push(Schema {
-                    name: hir_schema.name,
+                    name: typed_schema.name,
                     objects,
-                    mod_statements: hir_schema.mod_statements,
+                    mod_statements: typed_schema.mod_statements,
                 });
             }
 
             databases.push(Database {
-                name: hir_db.name,
+                name: typed_db.name,
                 schemas,
-                mod_statements: hir_db.mod_statements,
+                mod_statements: typed_db.mod_statements,
             });
         }
 
@@ -455,9 +462,9 @@ impl From<hir::Project> for Project {
 pub fn extract_external_indexes(
     object: &DatabaseObject,
 ) -> Vec<(Cluster, CreateIndexStatement<Raw>)> {
-    match &object.hir_object.stmt {
+    match &object.typed_object.stmt {
         Statement::CreateView(_) | Statement::CreateTable(_) => object
-            .hir_object
+            .typed_object
             .indexes
             .iter()
             .map(|index| {
@@ -474,7 +481,7 @@ pub fn extract_external_indexes(
             };
 
             object
-                .hir_object
+                .typed_object
                 .indexes
                 .iter()
                 .filter_map(|index| {
@@ -959,7 +966,7 @@ mod tests {
 
     #[test]
     fn test_get_sorted_objects_filtered() {
-        use crate::project::hir;
+        use crate::project::typed;
         use crate::project::raw;
         use std::fs;
         use tempfile::TempDir;
@@ -993,10 +1000,10 @@ mod tests {
         )
         .unwrap();
 
-        // Load and convert to MIR
+        // Load and convert to planned
         let raw_project = raw::load_project(src_dir).unwrap();
-        let hir_project = hir::Project::try_from(raw_project).unwrap();
-        let mir_project = Project::from(hir_project);
+        let typed_project = typed::Project::try_from(raw_project).unwrap();
+        let planned_project = Project::from(typed_project);
 
         // Create filter that only includes view1
         let mut filter = HashSet::new();
@@ -1008,7 +1015,7 @@ mod tests {
         filter.insert(view1_id.clone());
 
         // Get filtered objects
-        let filtered = mir_project.get_sorted_objects_filtered(&filter).unwrap();
+        let filtered = planned_project.get_sorted_objects_filtered(&filter).unwrap();
 
         // Should only contain view1
         assert_eq!(filtered.len(), 1);
