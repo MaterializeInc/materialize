@@ -374,8 +374,16 @@ impl Coordinator {
                     target_replica,
                     source_ids,
                     conn_id,
+                    ctx_extra,
+                    ids_to_watch,
                     tx,
                 } => {
+                    soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
+                    if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+                        // (The old peek sequencing forgot to do this for COPY TO.)
+                        self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+                    }
+
                     // implement_copy_to spawns a background task that sends the response
                     // through tx when the COPY TO completes (or immediately if setup fails).
                     // We just call it and let it handle all response sending.
@@ -385,6 +393,7 @@ impl Coordinator {
                         target_replica,
                         source_ids,
                         conn_id,
+                        ctx_extra,
                         tx,
                     )
                     .await;

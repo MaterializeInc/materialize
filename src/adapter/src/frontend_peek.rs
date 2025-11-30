@@ -215,7 +215,8 @@ impl PeekClient {
             statement_logging_id,
         ).await;
 
-        // Log the end of execution (if execution already ended).
+        // Log the end of execution if we are logging this statement and execution has already
+        // ended.
         if let Some(logging_id) = statement_logging_id {
             let reason = match &result {
                 // Streaming results are handled asynchronously by the coordinator
@@ -244,6 +245,12 @@ impl PeekClient {
                             }
                         }
                     }
+                }
+                // COPY TO S3 - the coordinator handles retirement via implement_copy_to
+                Ok(Some(ExecuteResponse::Copied(_))) => {
+                    // Don't log here - implement_copy_to already sent Message::RetireExecute
+                    // when the COPY TO S3 completed.
+                    return result;
                 }
                 // Bailout case - don't log
                 Ok(None) => {
@@ -1189,6 +1196,16 @@ impl PeekClient {
                     &df_meta.optimizer_notices,
                 );
 
+                let ids_to_watch = if statement_logging_id.is_some() {
+                    Some(IdsToWatch::new(
+                        catalog.state(),
+                        &input_id_bundle,
+                        determination.timestamp_context.timestamp_or_default(),
+                    ))
+                } else {
+                    None
+                };
+
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteCopyTo {
                         df_desc: Box::new(df_desc),
@@ -1196,6 +1213,8 @@ impl PeekClient {
                         target_replica,
                         source_ids,
                         conn_id: session.conn_id().clone(),
+                        ctx_extra: ExecuteContextExtra::new(statement_logging_id),
+                        ids_to_watch,
                         tx,
                     })
                     .await?;

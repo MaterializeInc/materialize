@@ -223,6 +223,9 @@ pub enum Command {
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
+        ctx_extra: ExecuteContextExtra,
+        /// If statement logging is enabled, contains the info necessary for installing watch sets.
+        ids_to_watch: Option<IdsToWatch>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 
