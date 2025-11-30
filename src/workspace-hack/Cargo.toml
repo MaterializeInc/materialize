@@ -144,15 +144,14 @@ toml_datetime = { version = "0.6.11", default-features = false, features = ["ser
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.7", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
-tracing-core = { version = "0.1.34" }
+tracing-core = { version = "0.1.35" }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
-url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
@@ -293,15 +292,14 @@ toml_datetime = { version = "0.6.11", default-features = false, features = ["ser
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.6", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.7", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.41", features = ["log"] }
-tracing-core = { version = "0.1.34" }
+tracing-core = { version = "0.1.35" }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
-url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
@@ -322,7 +320,7 @@ openssl-sys = { version = "0.9.111", default-features = false, features = ["vend
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
-tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
@@ -338,7 +336,7 @@ openssl-sys = { version = "0.9.111", default-features = false, features = ["vend
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
-tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
@@ -351,7 +349,7 @@ ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
-tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
@@ -364,6 +362,6 @@ ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
-tower-http = { version = "0.6.6", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
 
 ### END HAKARI SECTION

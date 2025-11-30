@@ -12292,9 +12292,9 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.6.6"
+version = "0.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "adc82fd73de2a9722ac5da747f12383d2bfdb93591ee6c58486e0097890f05f2"
+checksum = "9cf146f99d442e8e68e585f5d798ccd3cad9a7835b917e09728880a862706456"
 dependencies = [
  "async-compression",
  "base64 0.22.1",
@@ -12451,9 +12451,9 @@ dependencies = [
 
 [[package]]
 name = "tracing-core"
-version = "0.1.34"
+version = "0.1.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b9d12581f227e93f094d3af2ae690a574abb8a2b9b7a96e7cfe9647b2b617678"
+checksum = "7a04e24fab5c89c6a36eb8558c9656f30d81de51dfa4d3b45f26b21d61fa0a6c"
 dependencies = [
  "once_cell",
  "valuable",
@@ -12784,9 +12784,9 @@ dependencies = [
 
 [[package]]
 name = "url"
-version = "2.5.4"
+version = "2.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32f8b686cadd1473f4bd0117a5d28d36b1ade384ea9b5069a1c40aefed7fda60"
+checksum = "08bc136a29a3d1758e07a9cca267be308aeebf5cfd5a10f3f67ab2097683ef5b"
 dependencies = [
  "form_urlencoded",
  "idna",
@@ -13499,7 +13499,6 @@ dependencies = [
  "uncased",
  "unicode-bidi",
  "unicode-normalization",
- "url",
  "uuid",
  "zeroize",
  "zstd",

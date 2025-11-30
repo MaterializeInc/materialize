@@ -54,7 +54,7 @@ tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util", "time
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.17", features = ["io"] }
 tracing = "0.1.37"
-url = "2.3.1"
+url = "2.5.7"
 uuid = { version = "1.18.1", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

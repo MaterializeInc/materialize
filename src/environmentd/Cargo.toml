@@ -112,7 +112,7 @@ tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tokio-metrics = "0.4.5"
 tower = { version = "0.5.2", features = ["buffer", "limit", "load-shed"] }
-tower-http = { version = "0.6.6", features = [
+tower-http = { version = "0.6.7", features = [
     "cors",
     "decompression-br",
     "decompression-deflate",
@@ -126,7 +126,7 @@ tracing-capture = { version = "0.1.0", optional = true }
 tracing-opentelemetry = { version = "0.25.0" }
 tracing-subscriber = "0.3.19"
 tungstenite = { version = "0.24.0" }
-url = "2.3.1"
+url = "2.5.7"
 uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
