@@ -3,21 +3,6 @@
 //! These types represent objects in the Materialize system catalog and provide
 //! a type-safe interface over raw database rows.
 
-/// A schema in a Materialize database.
-///
-/// Schemas contain database objects like tables, views, and materialized views.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Schema {
-    /// Materialize's unique identifier for the schema
-    pub id: String,
-    /// Schema name (e.g., "public")
-    pub name: String,
-    /// Database ID that contains this schema
-    pub database_id: String,
-    /// Role ID that owns this schema
-    pub owner_id: String,
-}
-
 /// A compute cluster in Materialize.
 ///
 /// Clusters provide the compute resources for materialized views, indexes, and sinks.
@@ -109,24 +94,6 @@ pub struct DeploymentObjectRecord {
     pub object_hash: String,
     /// When this object was deployed
     pub deployed_at: std::time::SystemTime,
-}
-
-/// Legacy deployment record for backwards compatibility.
-/// @deprecated Use SchemaDeploymentRecord and DeploymentObjectRecord instead.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeploymentRecord {
-    /// Fully qualified object name ("database.schema.object")
-    pub object_fqn: String,
-    /// Hash of the HIR DatabaseObject (semantic content hash)
-    pub object_hash: String,
-    /// Environment name (None for production, Some("staging") for staging)
-    pub environment: Option<String>,
-    /// When this object was deployed
-    pub deployed_at: std::time::SystemTime,
-    /// Which Materialize user/role deployed this object
-    pub deployed_by: String,
-    /// Git commit hash if available
-    pub git_commit: Option<String>,
 }
 
 /// Metadata about a deployment environment.

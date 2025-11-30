@@ -1243,7 +1243,7 @@ fn validate_mv_cluster(
 
 fn validate_index_references(
     fqn: &FullyQualifiedName,
-    indexes: &mut [CreateIndexStatement<Raw>],
+    indexes: &[CreateIndexStatement<Raw>],
     main_ident: &DatabaseIdent,
     errors: &mut Vec<ValidationError>,
 ) {
@@ -1298,7 +1298,7 @@ fn validate_index_references(
 /// ```
 fn validate_grant_references(
     fqn: &FullyQualifiedName,
-    grants: &mut [GrantPrivilegesStatement<Raw>],
+    grants: &[GrantPrivilegesStatement<Raw>],
     main_ident: &DatabaseIdent,
     main_object_type: ObjectType,
     errors: &mut Vec<ValidationError>,

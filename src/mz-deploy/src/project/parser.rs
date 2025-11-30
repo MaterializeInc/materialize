@@ -3,6 +3,9 @@ use mz_sql_parser::ast::{Raw, Statement};
 use std::path::PathBuf;
 
 /// Parses one or more SQL statements from an iterable collection of strings.
+///
+/// This function is only used in tests for simple parsing without file context.
+#[cfg(test)]
 pub fn parse_statements<I, S>(raw: I) -> Result<Vec<Statement<Raw>>, ParseError>
 where
     I: IntoIterator<Item = S>,

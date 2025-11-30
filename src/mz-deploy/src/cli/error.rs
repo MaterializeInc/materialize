@@ -73,18 +73,18 @@ pub enum CliError {
     },
 
     /// Failed to create deployment table
-    #[error("failed to create deployment tracking table")]
+    #[error("failed to create deployment tracking table: {source}")]
     DeploymentTableCreationFailed { source: ConnectionError },
 
     /// Failed to execute SQL during deployment
-    #[error("failed to execute SQL statement")]
+    #[error("failed to execute SQL statement: {source}")]
     SqlExecutionFailed {
         statement: String,
         source: ConnectionError,
     },
 
     /// Failed to write deployment state
-    #[error("failed to write deployment state to tracking table")]
+    #[error("failed to write deployment state to tracking table: {source}")]
     DeploymentStateWriteFailed { source: ConnectionError },
 
     /// Invalid staging environment name
@@ -211,8 +211,8 @@ impl CliError {
                     .to_string(),
             ),
             Self::SqlExecutionFailed { statement, .. } => Some(format!(
-                "check the SQL statement for syntax errors:\n  {}",
-                statement.lines().take(3).collect::<Vec<_>>().join("\n  ")
+                "SQL statement:\n  {}",
+                statement.lines().take(5).collect::<Vec<_>>().join("\n  ")
             )),
             Self::DeploymentStateWriteFailed { .. } => Some(
                 "the SQL was applied successfully, but deployment tracking failed.\n\
