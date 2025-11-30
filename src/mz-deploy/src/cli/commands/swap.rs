@@ -121,6 +121,9 @@ pub async fn run(profile: Option<&Profile>, stage_name: &str, force: bool) -> Re
         }
     }
 
+    // Validate that all clusters in the deployment still exist
+    client.validate_deployment_clusters(stage_name).await?;
+
     // Get clusters from deploy.clusters table
     let cluster_names = client.get_deployment_clusters(stage_name).await?;
     for cluster_name in cluster_names {

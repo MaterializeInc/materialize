@@ -455,7 +455,7 @@ impl Client {
         self.execute(
             r#"CREATE TABLE IF NOT EXISTS deploy.clusters (
                 environment TEXT NOT NULL,
-                name TEXT NOT NULL
+                cluster_id TEXT NOT NULL
             ) WITH (
                 PARTITION BY (environment)
             );"#,
@@ -553,6 +553,9 @@ impl Client {
     }
 
     /// Insert cluster records for a staging deployment.
+    ///
+    /// Accepts cluster names and resolves them to cluster IDs internally.
+    /// Fails if any cluster names cannot be resolved (cluster doesn't exist).
     pub async fn insert_deployment_clusters(
         &self,
         environment: &str,
@@ -562,35 +565,121 @@ impl Client {
             return Ok(());
         }
 
+        // Step 1: Query mz_catalog to get cluster IDs for the given names
+        let placeholders: Vec<String> = (1..=clusters.len())
+            .map(|i| format!("${}", i))
+            .collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let select_sql = format!(
+            "SELECT name, id FROM mz_catalog.mz_clusters WHERE name IN ({})",
+            placeholders_str
+        );
+
+        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
+            clusters.iter().map(|c| c as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+
+        let rows = self.client.query(&select_sql, &params).await?;
+
+        // Verify all clusters were found
+        if rows.len() != clusters.len() {
+            let found_names: std::collections::HashSet<String> =
+                rows.iter().map(|row| row.get("name")).collect();
+            let missing: Vec<String> = clusters
+                .iter()
+                .filter(|name| !found_names.contains(*name))
+                .cloned()
+                .collect();
+
+            return Err(ConnectionError::IntrospectionFailed {
+                object_type: "cluster".to_string(),
+                source: format!(
+                    "Failed to resolve cluster names to IDs. The following clusters do not exist: {}",
+                    missing.join(", ")
+                )
+                .into(),
+            });
+        }
+
+        // Step 2: Insert the cluster IDs into deploy.clusters
         let insert_sql = r#"
-            INSERT INTO deploy.clusters
-                (environment, name)
-            VALUES
-                ($1, $2)
+            INSERT INTO deploy.clusters (environment, cluster_id)
+            VALUES ($1, $2)
         "#;
 
-        for cluster in clusters {
-            self.execute(insert_sql, &[&environment, &cluster]).await?;
+        for row in rows {
+            let cluster_id: String = row.get("id");
+            self.execute(insert_sql, &[&environment, &cluster_id])
+                .await?;
         }
 
         Ok(())
     }
 
     /// Get cluster names for a staging deployment.
+    ///
+    /// Returns cluster names by resolving cluster IDs via JOIN with mz_catalog.mz_clusters.
+    /// If a cluster ID exists in deploy.clusters but the cluster was deleted from the catalog,
+    /// that cluster will be silently omitted from results.
     pub async fn get_deployment_clusters(
         &self,
         environment: &str,
     ) -> Result<Vec<String>, ConnectionError> {
+        let query = r#"
+            SELECT c.name
+            FROM deploy.clusters dc
+            JOIN mz_catalog.mz_clusters c ON dc.cluster_id = c.id
+            WHERE dc.environment = $1
+            ORDER BY c.name
+        "#;
+
         let rows = self
             .client
-            .query(
-                "SELECT name FROM deploy.clusters WHERE environment = $1",
-                &[&environment],
-            )
+            .query(query, &[&environment])
             .await
             .map_err(ConnectionError::Query)?;
 
         Ok(rows.iter().map(|row| row.get("name")).collect())
+    }
+
+    /// Validate that all cluster IDs in a deployment still exist in the catalog.
+    ///
+    /// Returns an error if any cluster IDs in deploy.clusters cannot be resolved
+    /// to clusters in mz_catalog.mz_clusters (i.e., clusters were deleted).
+    pub async fn validate_deployment_clusters(
+        &self,
+        environment: &str,
+    ) -> Result<(), ConnectionError> {
+        let query = r#"
+            SELECT dc.cluster_id
+            FROM deploy.clusters dc
+            LEFT JOIN mz_catalog.mz_clusters c ON dc.cluster_id = c.id
+            WHERE dc.environment = $1 AND c.id IS NULL
+        "#;
+
+        let rows = self
+            .client
+            .query(query, &[&environment])
+            .await
+            .map_err(ConnectionError::Query)?;
+
+        if !rows.is_empty() {
+            let missing_ids: Vec<String> = rows.iter().map(|row| row.get("cluster_id")).collect();
+            return Err(ConnectionError::IntrospectionFailed {
+                object_type: "cluster".to_string(),
+                source: format!(
+                    "Deployment '{}' references {} cluster(s) that no longer exist: {}. \
+                     These clusters may have been deleted. Run 'mz-deploy abort {}' to clean up.",
+                    environment,
+                    missing_ids.len(),
+                    missing_ids.join(", "),
+                    environment
+                )
+                .into(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Delete cluster records for a staging deployment.
