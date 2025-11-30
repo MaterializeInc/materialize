@@ -65,7 +65,7 @@ static_assertions = "1.1"
 sha2 = "0.10.9"
 thiserror = "2.0.17"
 timely = "0.25.1"
-tokio = { version = "1.44.1" }
+tokio = { version = "1.48.0" }
 tracing = "0.1.37"
 uuid = "1.18.1"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

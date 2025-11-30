@@ -79,7 +79,7 @@ serde_json = { version = "1.0.145" }
 serde_bytes = { version = "0.11.19" }
 sha2 = "0.10.9"
 timely = "0.25.1"
-tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util"] }
 tokio-postgres = { version = "0.7.8", features = ["serde"] }
 tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.17", features = ["io"] }
@@ -97,7 +97,7 @@ mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.14.0"
 tempfile = "3.23.0"
-tokio = { version = "1.44.1", features = ["test-util"] }
+tokio = { version = "1.48.0", features = ["test-util"] }
 
 [features]
 default = ["workspace-hack"]

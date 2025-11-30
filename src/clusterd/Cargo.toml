@@ -41,7 +41,7 @@ mz-txn-wal = { path = "../txn-wal" }
 nix = { version = "0.30.1", features = ["fs"] }
 num_cpus = "1.17.0"
 serde = { version = "1.0.219", features = ["derive"] }
-tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util"] }
+tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util"] }
 tower = "0.5.2"
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

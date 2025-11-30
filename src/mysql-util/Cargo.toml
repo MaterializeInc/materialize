@@ -55,4 +55,4 @@ default = ["mz-build-tools/default", "workspace-hack"]
 normal = ["workspace-hack"]
 
 [dev-dependencies]
-tokio = { version = "1.44.1", features = ["test-util"] }
+tokio = { version = "1.48.0", features = ["test-util"] }

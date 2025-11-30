@@ -18,7 +18,7 @@ launchdarkly-server-sdk = { version = "2.5.1", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
-tokio = { version = "1.44.1", default-features = false }
+tokio = { version = "1.48.0", default-features = false }
 tracing = "0.1.37"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

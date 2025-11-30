@@ -62,7 +62,7 @@ reqwest = { version = "0.12", features = ["blocking", "json", "default-tls", "ch
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.145", optional = true }
 timely = "0.25.1"
-tokio = { version = "1.44.1", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
+tokio = { version = "1.48.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { version = "0.7.8" }
 tracing = "0.1.37"
 turmoil = { version = "0.7.0", optional = true }

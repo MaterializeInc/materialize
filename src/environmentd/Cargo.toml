@@ -107,7 +107,7 @@ stacker = "0.1.22"
 sysctl = "0.7.1"
 tempfile = "3.23.0"
 thiserror = "2.0.17"
-tokio = { version = "1.44.1", features = ["sync"] }
+tokio = { version = "1.48.0", features = ["sync"] }
 tokio-postgres = { version = "0.7.8" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tokio-metrics = "0.4.5"

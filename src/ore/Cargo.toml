@@ -52,7 +52,7 @@ stacker = { version = "0.1.22", optional = true }
 sentry = { version = "0.38.1", optional = true, default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
 sentry-panic = { version = "0.38.1", optional = true }
 serde = { version = "1.0.219", features = ["derive"] }
-tokio = { version = "1.44.1", features = [
+tokio = { version = "1.48.0", features = [
     "io-util",
     "net",
     "rt-multi-thread",
@@ -102,7 +102,7 @@ mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
 scopeguard = "1.2.0"
 serde_json = "1.0.145"
-tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 tokio-test = "0.4.4"
 tracing-subscriber = "0.3.19"
 
