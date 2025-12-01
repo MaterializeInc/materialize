@@ -162,6 +162,7 @@ impl fmt::Display for DatabaseValidationError {
             } => {
                 let mut has_errors = false;
 
+                writeln!(f, "Missing dependencies")?;
                 if !databases.is_empty() {
                     writeln!(f, "Missing databases: {}", databases.join(", "))?;
                     has_errors = true;
