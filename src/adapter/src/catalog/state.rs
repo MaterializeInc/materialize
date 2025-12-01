@@ -1419,6 +1419,9 @@ impl CatalogState {
                 cluster_id: in_cluster,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
+                // Even if we don't need the `RelationDesc` here, error out
+                // early and eagerly, as a kind of soft assertion that we _can_
+                // build the `RelationDesc` when needed.
                 if let Err(err) = typ.inner.desc(&session_catalog) {
                     return Err((err.into(), cached_expr));
                 }
