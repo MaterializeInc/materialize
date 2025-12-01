@@ -159,6 +159,11 @@ button.show-topics {
         display: flex;
     }
 
+    @media(max-width: 500px) {
+        display: flex;
+        margin-top: 100px !important;
+    }
+
     svg {
         height: 20px;
         margin-right: var(--micro);
