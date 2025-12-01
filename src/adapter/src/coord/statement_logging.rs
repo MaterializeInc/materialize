@@ -324,6 +324,12 @@ impl Coordinator {
     ///
     /// This function does not do a sampling check, and assumes we did so in a higher layer.
     ///
+    ///
+    /// Returns A tuple containing:
+    /// - `Option<(StatementPreparedRecord, PreparedStatementEvent)>`: If the prepared statement
+    ///   has not yet been logged, returns the prepared statement record, the packed row of the
+    ///   prepared statement record, and a row for the SQL text.
+    /// - `Uuid`: The UUID of the prepared statement if the prepared statement has been logged
     pub(crate) fn get_prepared_statement_info(
         &self,
         session: &Session,
@@ -351,8 +357,6 @@ impl Coordinator {
                     "accounting for logging should be done in `begin_statement_execution`"
                 );
                 let uuid = epoch_to_uuid_v7(prepared_at);
-                // let sql = std::mem::take(sql);
-                // let redacted_sql = std::mem::take(redacted_sql);
                 let sql_hash: [u8; 32] = Sha256::digest(sql.as_bytes()).into();
                 let record = StatementPreparedRecord {
                     id: uuid,
@@ -804,13 +808,16 @@ impl Coordinator {
         };
         let mseh_update = Self::pack_statement_began_execution_update(&record);
 
-        let (maybe_ps_event, maybe_sh_update) = if let Some((ps_record, ps_event)) = maybe_ps {
+        let (maybe_ps_event, maybe_sh_event) = if let Some((ps_record, ps_event)) = maybe_ps {
             if let Some(sh) = self
                 .statement_logging
                 .unlogged_sessions
-                .remove(&ps_record.session_id)
+                .get(&ps_record.session_id)
             {
-                (Some(ps_event), Some(Self::pack_session_history_update(&sh)))
+                (
+                    Some(ps_event),
+                    Some((Self::pack_session_history_update(sh), ps_record.session_id)),
+                )
             } else {
                 (Some(ps_event), None)
             }
@@ -825,7 +832,7 @@ impl Coordinator {
             Some(&mseh_update),
             maybe_ps_prepared_statement,
             maybe_ps_sql_text,
-            maybe_sh_update.as_ref(),
+            maybe_sh_event.as_ref().map(|(row, _)| row),
         ]) {
             self.statement_logging.throttled_count += 1;
             return None;
@@ -853,10 +860,12 @@ impl Coordinator {
             .executions_begun
             .insert(execution_uuid, record);
 
-        if let Some(sh_update) = maybe_sh_update {
+        if let Some((sh_update, session_id)) = maybe_sh_event {
             self.statement_logging
                 .pending_session_events
                 .push(sh_update);
+            // Mark the session as logged to avoid logging it again in the future
+            self.statement_logging.unlogged_sessions.remove(&session_id);
         }
         if let Some(ps_event) = maybe_ps_event {
             self.statement_logging

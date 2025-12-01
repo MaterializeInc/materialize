@@ -414,6 +414,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 5  value_format  text
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_session_history' ORDER BY position
+----
+1  session_id  uuid
+2  connected_at  timestamp␠with␠time␠zone
+3  initial_application_name  text
+4  authenticated_user  text
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_sessions' ORDER BY position
 ----
 1  id  uuid

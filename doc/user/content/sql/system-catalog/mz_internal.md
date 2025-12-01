@@ -87,7 +87,7 @@ granted the [`mz_monitor` role](/security/appendix/appendix-built-in-roles/#syst
 | `session_id`               | [`uuid`]                     | An ID that is unique for each session. Corresponds to [mz_sessions.id](#mz_sessions). |
 | `prepared_at`              | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                                                                                                                                                                 |
 | `statement_type`           | [`text`]                     | The _type_ of the statement, e.g. `select` for a `SELECT` query, or `NULL` if the statement was empty.                                                                                                                                                                        |
-| `throttled_count`          | [`uint8`]                    | The number of statements that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](/support/).                                   |
+| `throttled_count`          | [`uint8`]                    | The number of statement executions that were dropped due to throttling before the current one was seen. If you have a very high volume of queries and need to log them without throttling, [contact our team](/support/).                                   |
 | `connected_at`       | [`timestamp with time zone`]                     | The time at which the session was established.                                                                                                                                                                                                                   |
 | `initial_application_name` | [`text`]                     | The initial value of `application_name` at the beginning of the session.                                                                                                                                                                                                      |
 | `authenticated_user`       | [`text`]                     | The name of the user for which the session was established.                                                                                                                                                                                                                   |
@@ -726,21 +726,27 @@ have one or more corresponding executions in
 | `prepared_at` | [`timestamp with time zone`] | The time at which the statement was prepared.                                                                                     |
 -->
 
-<!--
+
 ## `mz_session_history`
 
 The `mz_session_history` table contains all the sessions that have
 been established in the last 30 days, or (even if older) that are
 referenced from
-[`mz_prepared_statement_history`](#mz_prepared_statement_history).
+[`mz_recent_activity_log`](#mz_recent_activity_log).
 
+{{< warning >}}
+Do not rely on all sessions being logged in this view. Materialize
+controls the maximum rate at which statements are sampled, and may change
+this rate at any time.
+{{< /warning >}}
+
+<!-- RELATION_SPEC mz_internal.mz_session_history -->
 | Field                | Type                         | Meaning                                                                                                                           |
 |----------------------|------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
 | `session_id`         | [`uuid`]                     | The globally unique ID of the session. Corresponds to [`mz_sessions.id`](#mz_sessions).                                           |
 | `connected_at`       | [`timestamp with time zone`] | The time at which the session was established.                                                                                    |
-| `application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
+| `initial_application_name`   | [`text`]                     | The `application_name` session metadata field.                                                                                    |
 | `authenticated_user` | [`text`]                     | The name of the user for which the session was established.                                                                       |
--->
 
 {{< if-unreleased "v0.113" >}}
 ### `mz_recent_storage_usage`
@@ -1338,7 +1344,6 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_prepared_statement_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_recent_sql_text_redacted -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_session_history -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_all_objects -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_clusters -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_show_cluster_replicas -->
