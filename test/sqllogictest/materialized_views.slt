@@ -75,12 +75,12 @@ CREATE MATERIALIZED VIEW error (name, age) AS SELECT 'jon'
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name      cluster     comment
-mv        quickstart  (empty)
-other_mv  other       (empty)
+name      cluster     comment  replacing
+mv        quickstart  (empty)  NULL
+other_mv  other       (empty)  NULL
 
 statement ok
 DROP MATERIALIZED VIEW other_mv
@@ -389,18 +389,18 @@ COMPLETE 1
 statement ok
 CREATE MATERIALIZED VIEW other_mv IN CLUSTER other AS SELECT 1
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name      cluster     comment
-mv        quickstart  (empty)
-other_mv  other       (empty)
+name      cluster     comment  replacing
+mv        quickstart  (empty)  NULL
+other_mv  other       (empty)  NULL
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS IN CLUSTER other
 ----
-name      cluster  comment
-other_mv  other    (empty)
+name      cluster  comment  replacing
+other_mv  other    (empty)  NULL
 
 statement ok
 DROP MATERIALIZED VIEW other_mv

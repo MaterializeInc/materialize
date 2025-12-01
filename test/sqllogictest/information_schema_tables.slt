@@ -505,6 +505,10 @@ mz_recent_sql_text_redacted
 VIEW
 materialize
 mz_internal
+mz_replacements
+BASE TABLE
+materialize
+mz_internal
 mz_session_history
 SOURCE
 materialize
