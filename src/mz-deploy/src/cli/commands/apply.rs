@@ -56,7 +56,7 @@ pub async fn run(
     // Connect to the database
     let client = helpers::connect_to_database(profile).await?;
 
-    helpers::initialize_deployment_tracking(&client).await?;
+    project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Build new snapshot from current planned project
     let new_snapshot = project::deployment_snapshot::build_snapshot_from_planned(&planned_project)?;

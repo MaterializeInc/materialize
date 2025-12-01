@@ -37,8 +37,7 @@ pub async fn run(profile: &Profile, stage_name: &str, force: bool) -> Result<(),
     // Connect to the database
     let client = helpers::connect_to_database(profile).await?;
 
-    // Initialize deployment tracking infrastructure
-    helpers::initialize_deployment_tracking(&client).await?;
+    project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Validate deployment exists and is not promoted
     let metadata = client.get_deployment_metadata(stage_name).await?;

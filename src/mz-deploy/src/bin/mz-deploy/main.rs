@@ -118,6 +118,10 @@ enum Command {
         /// Allow staging with uncommitted git changes
         #[arg(long)]
         allow_dirty: bool,
+
+        /// Skip automatic rollback on failure (leaves resources for debugging)
+        #[arg(long)]
+        no_rollback: bool,
     },
 
     /// Test database connection and display environment information
@@ -261,12 +265,12 @@ async fn run(args: Args) -> Result<(), CliError> {
                 }
             }
         }
-        Some(Command::Stage { name, allow_dirty }) => {
+        Some(Command::Stage { name, allow_dirty, no_rollback }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
 
-            cli::commands::stage::run(&profile, name.as_deref(), &args.directory, allow_dirty).await
+            cli::commands::stage::run(&profile, name.as_deref(), &args.directory, allow_dirty, no_rollback).await
         }
         Some(Command::Debug) => {
             let profile =
