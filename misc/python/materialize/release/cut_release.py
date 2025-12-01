@@ -83,7 +83,8 @@ def main():
         spawn.runv(["git", "push", "origin", version], cwd=console_dir)
 
         print("Waiting for console version to be released on DockerHub (~15 min)")
-        console_image = f"materialize/console:{version[1:]}"
+        console_version = version[1:]
+        console_image = f"materialize/console:{console_version}"
         time.sleep(15 * 60)
         while True:
             try:
@@ -113,6 +114,14 @@ def main():
                 "-i",
                 f"s#FROM materialize/console:.* AS console#FROM {console_image} AS console#",
                 "misc/images/materialized-base/Dockerfile",
+            ]
+        )
+        spawn.runv(
+            [
+                "sed",
+                "-i",
+                f's#"--console-image-tag-default=.*"#"--console-image-tag-default={console_version}"#',
+                "misc/helm-charts/operator/templates/deployment.yaml",
             ]
         )
         # Commit here instead of in bump-version so we have access to the correct git author
