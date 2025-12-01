@@ -1,8 +1,9 @@
 # Replacement materialized views
 
 Associated:
-- https://github.com/MaterializeInc/materialize/pull/34032 (MVP)
+- https://github.com/MaterializeInc/materialize/pull/34032 (MVP: `CREATE REPLACEMENT`)
 - https://github.com/MaterializeInc/materialize/pull/34039 (Per-object read only mode)
+- https://github.com/MaterializeInc/materialize/pull/34234 (MVP: `CREATE MATERIALIZED VIEW ... REPLACING`)
 
 ## Problem
 
@@ -19,7 +20,7 @@ This would move us closer to a loosely coupled system, which is easier to mainta
 We allow users to change the definition and output columns of a materialized view without needing to drop and recreate it.
 We preserve existing dependencies on the materialized view when doing so, and we ensure that the system remains consistent.
 
-Changing a running materialized can cause additional work for downstream consumers.
+Changing a running materialized view can cause additional work for downstream consumers.
 While we cannot avoid this work, we aim to provide tools to quantify the amount of changed data.
 
 We provide a mechanism that allows cutting over to a new definition with minimal downtime.
@@ -56,32 +57,33 @@ The following solution uses this principle to apply changes to materialized view
 
 ## Solution proposal
 
-We introduce the notion of a "replacement" for maintained SQL objects, starting with materialized views.
-A replacement allows users to stage the change of definition and output columns of a materialized view.
+We introduce the notion of a "replacement materialized view".
+A replacement materialized view allows users to stage the change of definition and output columns of a materialized view.
 The user can then inspect the replacement, and decide to apply or discard it.
 
-We add the following SQL commands:
-* `CREATE REPLACEMENT replacement_name FOR MATERIALIZED VIEW mv_name AS SELECT ...`
+We add the following SQL syntax:
+* `CREATE MATERIALIZED VIEW replacement_name REPLACING mv_name AS SELECT ...`
     Creates a replacement for the specified materialized view with the new definition.
     The usual properties for materialized views apply, such as the cluster and its options.
 * `ALTER MATERIALIZED VIEW mv_name APPLY REPLACEMENT replacement_name`
     Applies the specified replacement to the materialized view.
     This updates the definition and output columns of the materialized view to match those of the replacement.
     Existing dependencies on the materialized view are preserved.
-* `DROP REPLACEMENT replacement_name`
-    Discards the specified replacement without applying it.
+    The replacement materialized view is dropped.
 
-When a replacement is created, we validate that the new definition is compatible with the existing materialized view.
+When a replacement materialized view is created, we validate that the new definition is compatible with the existing materialized view.
+Replacement materialized views are "read-only":
+Their dataflows hydrate normally, but their storage sinks are configured to not perform writes to the output shard.
+Only when a replacement is applied is the dataflow given permission to start writing to the output.
 
-We provide introspection commands:
-* `SHOW REPLACEMENTS`
-    Lists all replacements in the system.
-* `SHOW [REDACTED] CREATE REPLACEMENT <replacement_name>`
-    Shows the SQL command that would recreate the specified replacement.
-* The `mz_replacement_materialized_views` catalog relation, which contains metadata about all replacements for materialized views.
-* The `mz_show_replacements` view and index for serving the show replacements commands.
+Compared to regular materialized views, replacement materialized views are more limited:
+* It is not possible to select from or depend on replacement materialized views.
+* For each materialized view, at most one replacement can exist at any point in time.
 
-More specifically, we change the definition of a materialized view as follows:
+Replacement materialized views can be inspected like regular materialized views, using `SHOW CREATE MATERIALIZED VIEW`, `mz_materialized_views`, `EXPLAIN MATERIALIZED VIEW`, etc.
+Additionally, a new system relation `mz_replacements` is provided, specifying the replacement targets for all replacements in the system.
+
+Internally, we change the definition of a materialized view as follows:
 * A materialized view is uniquely identified by its name and catalog item ID.
 * A materialized view uniquely identifies a persist shard.
 * A materialized view has a current definition and output columns, identified by a unique global ID.
@@ -107,7 +109,7 @@ mv'_updates = append(mv-updates, upper', diff(upper', mv-updates, r-updates))
 
 From this moment, onwards, the materialized view `mv` will reflect the updates from `mv'`.
 
-### Schema evolution and multiple version
+### Schema evolution and multiple versions
 
 When applying a replacement, we need to ensure that the new schema is compatible with the existing schema.
 We define compatibility as follows:
@@ -145,9 +147,7 @@ An issue with implementing this is that the materialized view dataflow would nee
 
 * Update the parser to support the above syntax.
 * Implement planning and sequencing for the new commands.
-* Support `SHOW REPLACEMENTS`, `SHOW CREATE REPLACEMENT` commands.
-* Add catalog relations for `replacements`: `mz_replacement_materialized_views`.
-* Treat a replacement as a first-class object in the catalog.
+* Add catalog relations for replacements: `mz_replacements`.
 * Record replacements and state transitions in the audit log.
 * Do not support schema evolution in the MVP.
 * Implement "correct" timestamp selection for replacements, starting at the write frontier of the existing materialized view.
@@ -155,15 +155,6 @@ An issue with implementing this is that the materialized view dataflow would nee
     * Surface metadata about the amount of staged changes (records, bytes) between the current and replacement definitions.
     * Document how users can observe hydration progress, or implement new ways to do so.
       Specifically, users should be able to monitor progress through the `mz_frontiers` and `mz_arrangement_sizes` introspection views.
-
-The syntax allows users to create multiple replacements for the same target.
-This has some interesting implications:
-* Creating two replacements and applying them in reverse order creates versions where the more recent version has a smaller global ID than an older version.
-    We're not relying on global ID's partial ordering for correctness, so this is acceptable.
-* We need to check the schema once when creating the replacement, and once when applying it.
-    This is to ensure that the replacement is still valid at the time of application.
-* Alternatively, we could restrict to a single replacement per target at any time.
-    This would simplify the implementation, but would also limit the user's ability to stage multiple changes.
 
 ## Future work
 
@@ -176,25 +167,25 @@ This has some interesting implications:
 
 ## Alternatives
 
-### Hooking into `CREATE MATERIALIZED VIEW`
+### Replacements as first-class catalog items
 
-We could extend the existing `CREATE MATERIALIZED VIEW` command to support replacing an existing materialized view.
-
-```
-CREATE MATERIALIZED VIEW <replacement_mv_name> REPLACES <mv_name> AS SELECT ...
-```
-
-And later:
+Instead of modelling replacements as special materialized views, we could make them separate catalog items instead.
 
 ```
-ALTER MATERIALIZED VIEW <mv_name> APPLY REPLACEMENT <replacement_mv_name>;
+CREATE REPLACEMENT <replacement_mv_name> FOR MATERIALIZED VIEW <mv_name> AS SELECT ...
 ```
 
-While this design looks appealing at first, it has several drawbacks:
-* A materialized view binds a persist shard.
-  Creating a new materialized view would create a new shard, and we have no mechanism to reconcile two shards.
+We seriously considered this approach and there exists an MVP implementing it.
+However, it seems inferior to the special-materialized-views approach:
+* Implementation-wise, it requires a lot of new code to support the new item type.
+  This includes a significant amount of duplication in planning and sequencing.
+* UX-wise, having a new item type is a potential source of user confusion.
+  Existing monitoring for materialized views wouldn't work for replacements out of the box.
 
-## Multi-output materialized views
+It is worth pointing out that the limitations of replacement materialized views, particularly the inability to select from them, is a source of user confusion as well.
+We are hopeful that it will be possible to reduce these limitations in the future.
+
+### Multi-output materialized views
 
 The MVP design lets the replacement write at the same shard as the original materialized view.
 This comes with limitations, most importantly that we need to ensure that we don't write until cut-over time.
