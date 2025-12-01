@@ -30,6 +30,8 @@ use crate::crd::generated::cert_manager::certificates::{
     CertificateIssuerRef, CertificateSecretTemplate,
 };
 
+const V26_0_0: Version = Version::new(26, 0, 0);
+
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
 
@@ -479,6 +481,38 @@ pub mod v1alpha1 {
             }
         }
 
+        /// Checks if the current environmentd image ref is within the upgrade window of the last
+        /// successful rollout.
+        ///
+        /// This check isn't strictly required since environmentd will still be able to determine
+        /// if the upgrade is allowed or not. However, doing this check allows us to provide
+        /// the error as soon as possible and in a more user friendly way.
+        pub fn within_upgrade_window(&self) -> bool {
+            let current_environmentd_version = self
+                .status
+                .as_ref()
+                .and_then(|status| {
+                    status
+                        .last_completed_rollout_environmentd_image_ref
+                        .as_ref()
+                })
+                .and_then(|image_ref| parse_image_ref(image_ref));
+
+            if let (Some(new_environmentd_version), Some(current_environmentd_version)) = (
+                parse_image_ref(&self.spec.environmentd_image_ref),
+                current_environmentd_version,
+            ) {
+                if current_environmentd_version >= V26_0_0 {
+                    // We deny upgrades past 1 major version of the last successful rollout
+                    return new_environmentd_version.major
+                        <= current_environmentd_version.major + 1;
+                }
+            }
+            // If we fail any of the preconditions for the check (e.g. we couldn't parse either version),
+            // we still allow the upgrade since environmentd will still error if the upgrade is not allowed.
+            true
+        }
+
         pub fn managed_resource_meta(&self, name: String) -> ObjectMeta {
             ObjectMeta {
                 namespace: Some(self.namespace()),
@@ -516,6 +550,11 @@ pub mod v1alpha1 {
                         .expect("valid int generation");
                 }
 
+                // Initialize the last completed rollout environmentd image ref to
+                // the current image ref if not already set.
+                status.last_completed_rollout_environmentd_image_ref =
+                    Some(self.spec.environmentd_image_ref.clone());
+
                 status
             })
         }
@@ -530,6 +569,10 @@ pub mod v1alpha1 {
         pub active_generation: u64,
         /// The UUID of the last successfully completed rollout.
         pub last_completed_rollout_request: Uuid,
+        /// The image ref of the environmentd image that was last successfully rolled out.
+        /// Used to deny upgrades past 1 major version from the last successful rollout.
+        /// When None, we upgrade anyways.
+        pub last_completed_rollout_environmentd_image_ref: Option<String>,
         /// A hash calculated from the spec of resources to be created based on this Materialize
         /// spec. This is used for detecting when the existing resources are up to date.
         /// If you want to trigger a rollout without making other changes that would cause this
@@ -629,5 +672,52 @@ mod tests {
         assert!(!mz.meets_minimum_version(&Version::parse("1.0.0").unwrap()));
         mz.spec.environmentd_image_ref = "my.private.registry:5000:v0.33.3".to_owned();
         assert!(!mz.meets_minimum_version(&Version::parse("0.34.0").unwrap()));
+    }
+
+    #[mz_ore::test]
+    fn within_upgrade_window() {
+        use super::v1alpha1::MaterializeStatus;
+
+        let mut mz = Materialize {
+            spec: MaterializeSpec {
+                environmentd_image_ref: "materialize/environmentd:v26.0.0".to_owned(),
+                ..Default::default()
+            },
+            metadata: ObjectMeta {
+                ..Default::default()
+            },
+            status: Some(MaterializeStatus {
+                last_completed_rollout_environmentd_image_ref: Some(
+                    "materialize/environmentd:v26.0.0".to_owned(),
+                ),
+                ..Default::default()
+            }),
+        };
+
+        // Pass: upgrading from 26.0.0 to 27.7.3 (within 1 major version)
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v27.7.3".to_owned();
+        assert!(mz.within_upgrade_window());
+
+        // Pass: upgrading from 26.0.0 to 27.7.8-dev.0 (within 1 major version, pre-release)
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v27.7.8-dev.0".to_owned();
+        assert!(mz.within_upgrade_window());
+
+        // Fail: upgrading from 26.0.0 to 28.0.1 (more than 1 major version)
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v28.0.1".to_owned();
+        assert!(!mz.within_upgrade_window());
+
+        // Pass: upgrading from 26.0.0 to 28.0.1.not_a_valid_version (invalid version, defaults to true)
+        mz.spec.environmentd_image_ref =
+            "materialize/environmentd:v28.0.1.not_a_valid_version".to_owned();
+        assert!(mz.within_upgrade_window());
+
+        // Pass: upgrading from 0.147.5 to 26.1.0 (any version before 26.0.0 passes)
+        mz.status
+            .as_mut()
+            .unwrap()
+            .last_completed_rollout_environmentd_image_ref =
+            Some("materialize/environmentd:v0.147.5".to_owned());
+        mz.spec.environmentd_image_ref = "materialize/environmentd:v26.1.0".to_owned();
+        assert!(mz.within_upgrade_window());
     }
 }

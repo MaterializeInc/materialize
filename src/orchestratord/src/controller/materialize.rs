@@ -360,6 +360,9 @@ impl Context {
             MaterializeStatus {
                 active_generation: desired_generation,
                 last_completed_rollout_request: mz.requested_reconciliation_id(),
+                last_completed_rollout_environmentd_image_ref: Some(
+                    mz.spec.environmentd_image_ref.clone(),
+                ),
                 resource_id: mz.status().resource_id,
                 resources_hash,
                 conditions: vec![Condition {
@@ -591,7 +594,7 @@ impl k8s_controller::Context for Context {
                 )
                 .await
             }
-            // There are changes pending, and we want to appy them.
+            // There are changes pending, and we want to apply them.
             (false, true, true) => {
                 // we remove the environment resources hash annotation here
                 // because if we fail halfway through applying the resources,
@@ -615,6 +618,8 @@ impl k8s_controller::Context for Context {
                             // we fail later on, we want to ensure that the
                             // rollout gets retried.
                             last_completed_rollout_request: status.last_completed_rollout_request,
+                            last_completed_rollout_environmentd_image_ref: status
+                                .last_completed_rollout_environmentd_image_ref,
                             resource_id: status.resource_id,
                             resources_hash: String::new(),
                             conditions: vec![Condition {
@@ -633,6 +638,38 @@ impl k8s_controller::Context for Context {
                     .await?;
                 let mz = &mz;
                 let status = mz.status();
+
+                if !mz.within_upgrade_window() {
+                    let last_completed_rollout_environmentd_image_ref =
+                        status.last_completed_rollout_environmentd_image_ref;
+
+                    self.update_status(
+                        &mz_api,
+                        mz,
+                        MaterializeStatus {
+                            active_generation,
+                            last_completed_rollout_request: status.last_completed_rollout_request,
+                            last_completed_rollout_environmentd_image_ref: last_completed_rollout_environmentd_image_ref.clone(),
+                            resource_id: status.resource_id,
+                            resources_hash: status.resources_hash,
+                            conditions: vec![Condition {
+                                type_: "UpToDate".into(),
+                                status: "False".into(),
+                                last_transition_time: Time(chrono::offset::Utc::now()),
+                                message: format!(
+                        "Refusing to upgrade from {} to {}. More than one major version from last successful rollout.",
+                        last_completed_rollout_environmentd_image_ref.expect("should be set if upgrade window check fails"),
+                        &mz.spec.environmentd_image_ref,
+                    ),
+                                observed_generation: mz.meta().generation,
+                                reason: "FailedDeploy".into(),
+                            }],
+                        },
+                        active_generation != desired_generation,
+                    )
+                    .await?;
+                    return Ok(None);
+                }
 
                 if mz.spec.rollout_strategy
                     == MaterializeRolloutStrategy::ImmediatelyPromoteCausingDowntime
@@ -673,6 +710,8 @@ impl k8s_controller::Context for Context {
                                 // rollout gets retried.
                                 last_completed_rollout_request: status
                                     .last_completed_rollout_request,
+                                last_completed_rollout_environmentd_image_ref: status
+                                    .last_completed_rollout_environmentd_image_ref,
                                 resource_id: status.resource_id,
                                 resources_hash: resources_hash.clone(),
                                 conditions: vec![Condition {
@@ -710,6 +749,8 @@ impl k8s_controller::Context for Context {
                                 // the rollout and we want to ensure it gets
                                 // retried.
                                 last_completed_rollout_request: status.last_completed_rollout_request,
+                                last_completed_rollout_environmentd_image_ref: status
+                                    .last_completed_rollout_environmentd_image_ref,
                                 resource_id: status.resource_id,
                                 resources_hash: status.resources_hash,
                                 conditions: vec![Condition {
@@ -746,6 +787,8 @@ impl k8s_controller::Context for Context {
                         MaterializeStatus {
                             active_generation,
                             last_completed_rollout_request: mz.requested_reconciliation_id(),
+                            last_completed_rollout_environmentd_image_ref: status
+                                .last_completed_rollout_environmentd_image_ref,
                             resource_id: status.resource_id,
                             resources_hash: status.resources_hash,
                             conditions: vec![Condition {
@@ -786,6 +829,8 @@ impl k8s_controller::Context for Context {
                         MaterializeStatus {
                             active_generation,
                             last_completed_rollout_request: mz.requested_reconciliation_id(),
+                            last_completed_rollout_environmentd_image_ref: status
+                                .last_completed_rollout_environmentd_image_ref,
                             resource_id: status.resource_id,
                             resources_hash: status.resources_hash,
                             conditions: vec![Condition {
