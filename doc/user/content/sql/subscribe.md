@@ -36,6 +36,7 @@ SUBSCRIBE [TO] <object_name | (SELECT ...)>
 [WITH (<option_name> [= <option_value>], ...)]
 [AS OF [AT LEAST] <timestamp_expression>]
 [UP TO <timestamp_expression>]
+;
 
 ```
 
@@ -49,7 +50,7 @@ where:
 The generated schemas have a Debezium-style diff envelope to capture changes in
 the input view or source.
 
-| Option                            | Description                                                                                                                                      |
+| Syntax element                  | Description                                                                                                                                      |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | **ENVELOPE UPSERT (KEY (**\<key1\>, ...**))**                | If specified, use the upsert envelope, which takes a list of `KEY` columns. The upsert envelope supports inserts, updates and deletes in the subscription output. For more information, see [Modifying the output format](#modifying-the-output-format). |
 | **ENVELOPE DEBEZIUM (KEY (**\<key1\>, ...**))**           | If specified, use a [Debezium-style diff envelope](/sql/create-sink/kafka/#debezium-envelope), which takes a list of `KEY` columns. The Debezium envelope supports inserts, updates and deletes in the subscription output along with the previous state of the key. For more information, see [Modifying the output format](#modifying-the-output-format). |

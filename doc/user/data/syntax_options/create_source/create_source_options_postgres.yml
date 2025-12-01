@@ -1,19 +1,19 @@
 columns:
-  - column: "Parameter"
+  - column: "Syntax element"
   - column: "Description"
 rows:
-  - "Parameter": "**IF NOT EXISTS**"
+  - "Syntax element": "**IF NOT EXISTS**"
     "Description": |
       *Optional.* If specified, do not throw an error if a source with the same
       name already exists. Instead, issue a notice and skip the source creation.
 
-  - "Parameter": "`<source_name>`"
+  - "Syntax element": "`<source_name>`"
     "Description": |
 
       The name of the source to create. Names for sources must follow the
       [naming guidelines](/sql/identifiers/#naming-restrictions).
 
-  - "Parameter": "**IN CLUSTER** `<cluster_name>`"
+  - "Syntax element": "**IN CLUSTER** `<cluster_name>`"
     "Description": |
       *Optional.* The [cluster](/sql/create-cluster) to maintain this source. Otherwise, the source will be created in the active cluster.
 
@@ -22,7 +22,7 @@ rows:
       [Operational guidelines](/manage/operational-guidelines/#sources).
       {{< /tip >}}
 
-  - "Parameter": "`<connection_name>`"
+  - "Syntax element": "`<connection_name>`"
     "Description": |
       The name of the PostgreSQL connection to use for the source. For details
       on creating connections, check the [`CREATE
@@ -30,7 +30,7 @@ rows:
 
       A connection is **reusable** across multiple `CREATE SOURCE` statements.
 
-  - "Parameter": "`<publication_name>`"
+  - "Syntax element": "`<publication_name>`"
     "Description": |
       The name of the PostgreSQL publication to associate with the source. For
       details on creating a publication in your PostgreSQL database, see the

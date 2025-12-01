@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```mzsql
-VALUES ( expr [, ...] ) [, ( expr [, ...] ) ... ]
+VALUES ( expr [, ...] ) [, ( expr [, ...] ) ... ];
 ```
 
 Each parenthesis represents a single row. The comma-delimited expressions in

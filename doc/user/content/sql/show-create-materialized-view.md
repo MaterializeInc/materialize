@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW [REDACTED] CREATE MATERIALIZED VIEW <view_name>
+SHOW [REDACTED] CREATE MATERIALIZED VIEW <view_name>;
 ```
 
 {{< yaml-table data="show_create_redacted_option" >}}

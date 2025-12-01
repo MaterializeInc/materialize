@@ -14,7 +14,7 @@ configuration parameters.
 ## Syntax
 
 ```sql
-SHOW [ <name> | ALL ]
+SHOW [ <name> | ALL ];
 ```
 
 ### Aliased configuration parameters

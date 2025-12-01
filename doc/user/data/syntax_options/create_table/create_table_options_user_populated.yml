@@ -1,8 +1,8 @@
 columns:
-  - column: "Parameter"
+  - column: "Syntax element"
   - column: "Description"
 rows:
-  - "Parameter": "**TEMP** / **TEMPORARY**"
+  - "Syntax element": "**TEMP** / **TEMPORARY**"
     "Description": |
       *Optional.* If specified, mark the table as temporary.
 
@@ -14,35 +14,35 @@ rows:
       Temporary tables may depend upon other temporary database objects, but
       non-temporary tables may not depend on temporary objects.
 
-  - "Parameter": "**IF NOT EXISTS**"
+  - "Syntax element": "**IF NOT EXISTS**"
     "Description": |
       *Optional.* If specified, do not throw an error if the table with the same
       name already exists. Instead, issue a notice and skip the table creation.
 
-  - "Parameter": "`<table_name>`"
+  - "Syntax element": "`<table_name>`"
     "Description": |
 
       The name of the table to create. Names for tables must follow the [naming
       guidelines](/sql/identifiers/#naming-restrictions).
 
-  - "Parameter": "`<column_name>`"
+  - "Syntax element": "`<column_name>`"
     "Description": |
 
       The name of a column to be created in the new table. Names for columns
       must follow the [naming guidelines](/sql/identifiers/#naming-restrictions).
 
-  - "Parameter": "`<column_type>`"
+  - "Syntax element": "`<column_type>`"
     "Description": |
 
       The type of the column. For supported types, see [SQL data types](/sql/types/).
 
-  - "Parameter": "**NOT NULL**"
+  - "Syntax element": "**NOT NULL**"
     "Description": |
       *Optional.* If specified, disallow  _NULL_ values for the column. Columns without this constraint can contain _NULL_ values.
-  - "Parameter": "**DEFAULT <default_expr>**"
+  - "Syntax element": "**DEFAULT <default_expr>**"
     "Description": |
       *Optional.* If specified, use the `<default_expr>` as the default value for the column. If not specified, `NULL` is used as the default value.
-  - "Parameter": "**WITH (<with_option>[,...])**"
+  - "Syntax element": "**WITH (<with_option>[,...])**"
     "Description": |
 
       The following `<with_option>`s are supported:

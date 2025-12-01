@@ -1,26 +1,26 @@
 columns:
-  - column: "Parameter"
+  - column: "Syntax element"
   - column: "Description"
 rows:
-  - "Parameter": "**IF NOT EXISTS**"
+  - "Syntax element": "**IF NOT EXISTS**"
     "Description": |
       *Optional.* If specified, do not throw an error if the table with the same
       name already exists. Instead, issue a notice and skip the table creation.
 
       {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
-  - "Parameter": "`<table_name>`"
+  - "Syntax element": "`<table_name>`"
     "Description": |
 
       The name of the table to create. Names for tables must follow the [naming
       guidelines](/sql/identifiers/#naming-restrictions).
 
-  - "Parameter": "`<source_name>`"
+  - "Syntax element": "`<source_name>`"
     "Description": |
 
       The name of the [source](/sql/create-source/) associated with the
       reference object from which to create the table.
 
-  - "Parameter": "**(REFERENCE <upstream_table>)**"
+  - "Syntax element": "**(REFERENCE <upstream_table>)**"
     "Description": |
 
       The name of the upstream table from which to create the
@@ -39,7 +39,7 @@ rows:
       AND refs.source_id = s.id;
       ```
 
-  - "Parameter": "**WITH (<with_option>[,...])**"
+  - "Syntax element": "**WITH (<with_option>[,...])**"
     "Description": |
       The following `<with_option>`s are supported:
 

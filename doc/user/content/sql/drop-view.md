@@ -18,14 +18,16 @@ rely on a source before you can [drop the source](../drop-source) itself. You ca
 
 ## Syntax
 
-{{< diagram "drop-view.svg" >}}
+```mzsql
+DROP VIEW [IF EXISTS] <view_name> [RESTRICT|CASCADE];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the named view does not exist.
-_view&lowbar;name_ | The view you want to drop. You can find available view names through [`SHOW VIEWS`](../show-views).
-**RESTRICT** | Do not drop this view if any other views depend on it. _(Default)_
-**CASCADE** | Drop all views that depend on this view.
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the named view does not exist.
+`<view_name>` | The view you want to drop. You can find available view names through [`SHOW VIEWS`](../show-views).
+**RESTRICT** | Optional. Do not drop this view if any other views depend on it. _(Default)_
+**CASCADE** | Optional. Drop all views that depend on this view.
 
 ## Examples
 

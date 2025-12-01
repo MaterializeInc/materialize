@@ -10,12 +10,13 @@ menu:
 
 ## Syntax
 
-{{< diagram "deallocate.svg" >}}
+```mzsql
+DEALLOCATE <name>|ALL ;
+```
 
-Field | Use
-------|-----
-**PREPARE** | Disregarded.
-**name**  | The name of the prepared statement to clear.
+Syntax element | Description
+---------------|------------
+`<name>`  | The name of the prepared statement to clear.
 **ALL**  |  Clear all prepared statements from this session.
 
 ## Example

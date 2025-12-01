@@ -16,13 +16,15 @@ all objects across all databases, including the database itself.
 
 ## Syntax
 
-{{< diagram "drop-owned.svg" >}}
+```mzsql
+DROP OWNED BY <role_name> [, ...] [RESTRICT|CASCADE];
+```
 
-Field | Use
-------|-----
-_role_name_   | The role name whose owned objects will be dropped.
-**CASCADE** | Remove all dependent objects.
-**RESTRICT**  | Don't remove anything if any non-index objects depencies exist. _(Default.)_
+Syntax element | Description
+---------------|------------
+`<role_name>`   | The role name whose owned objects will be dropped.
+**CASCADE** | Optional. If specified, remove all dependent objects.
+**RESTRICT**  | Optional. Do not drop anything if any non-index objects depencies exist. _(Default.)_
 
 ## Examples
 

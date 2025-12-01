@@ -45,3 +45,7 @@ Commands related with session state and configurations:
 ## Validations
 
 {{< yaml-list data="sql_commands_all" label="other" >}}
+
+## Prepared Statements
+
+{{< yaml-list data="sql_commands_all" label="prepared statements" >}}

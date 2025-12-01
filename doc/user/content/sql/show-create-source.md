@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW [REDACTED] CREATE SOURCE <source_name>
+SHOW [REDACTED] CREATE SOURCE <source_name>;
 ```
 
 {{< yaml-table data="show_create_redacted_option" >}}

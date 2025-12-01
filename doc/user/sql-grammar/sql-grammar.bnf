@@ -247,10 +247,6 @@ create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
-deallocate ::=
-  'DEALLOCATE' ('PREPARE')?  (name | 'ALL')?
-declare ::=
-  'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=
   'INSERT' 'INTO' table_name ('AS'? alias)
   ( '(' (col_name) ( ',' col_name )* ')' )?
@@ -259,44 +255,6 @@ insert ::=
     | query
   )
   ( 'RETURNING' ( '*' | output_expression ( AS? output_name )? ) ( ',' ( '*' | output_expression ( AS? output_name )? ) )* )?
-delete_stmt ::=
-  'DELETE FROM' table_name ('AS'? alias)?
-  'USING' (from_item) ( ( ',' from_item ) )*
-  'WHERE' condition
-discard ::=
-  'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
-drop_connection ::=
-    'DROP' 'CONNECTION' ('IF EXISTS')? connection_name ('CASCADE' | 'RESTRICT')?
-drop_cluster ::=
-  'DROP' 'CLUSTER' ('IF EXISTS')? cluster_name ('CASCADE' | 'RESTRICT')?
-drop_cluster_replica ::=
-  'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name
-drop_database ::=
-    'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
-drop_materialized_view ::=
-  'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
-drop_network_policy ::=
-  'DROP' 'NETWORK POLICY' 'IF EXISTS'? name
-drop_owned ::=
-  'DROP' 'OWNED' 'BY' role_name ( ',' role_name )* ('RESTRICT' | 'CASCADE')?
-drop_role ::=
-    'DROP' 'ROLE' ('IF EXISTS')? role_name
-drop_secret ::=
-    'DROP' 'SECRET' ('IF EXISTS')? secret_name ('CASCADE' | 'RESTRICT')?
-drop_schema ::=
-    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
-drop_sink ::=
-  'DROP' 'SINK' ('IF' 'EXISTS')? sink_name
-drop_source ::=
-  'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
-  drop_table ::=
-    'DROP' 'TABLE' ('IF' 'EXISTS')? table_name ('RESTRICT' | 'CASCADE')?
-drop_type ::=
-  'DROP' 'TYPE' ('IF' 'EXISTS')? data_type_name ('RESTRICT' | 'CASCADE')?
-drop_view ::=
-  'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
-drop_user ::=
-    'DROP' 'USER' ('IF EXISTS')? role_name
 execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain_filter_pushdown ::=
