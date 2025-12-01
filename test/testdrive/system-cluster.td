@@ -71,7 +71,7 @@ ALTER SYSTEM SET enable_rbac_checks TO true
 > SET CLUSTER TO mz_catalog_server
 
 > SHOW MATERIALIZED VIEWS
-mv quickstart ""
+mv quickstart "" <null>
 
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:system cluster 'mz_catalog_server' cannot be modified
@@ -80,7 +80,7 @@ mv quickstart ""
 
 # Query gets automatically run on mz_catalog_server, despite mz_system being set
 > SHOW MATERIALIZED VIEWS
-mv quickstart ""
+mv quickstart "" <null>
 
 #! CREATE MATERIALIZED VIEW mv1 AS SELECT MIN(1)
 #contains:must be owner of CLUSTER mz_system

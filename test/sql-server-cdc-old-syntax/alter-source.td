@@ -178,9 +178,9 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SHOW MATERIALIZED VIEWS
-mv_e quickstart ""
-mv_f quickstart ""
+> SELECT name FROM mz_materialized_views
+mv_e
+mv_f
 
 # RESTRICT works
 ! DROP SOURCE table_e RESTRICT;
@@ -200,7 +200,7 @@ contains:cannot drop source "table_e": still depended upon by materialized view 
 mz_source_progress    progress
 table_g               subsource
 
-> SHOW MATERIALIZED VIEWS
+> SELECT name FROM mz_materialized_views
 
 > DROP SOURCE table_g;
 
