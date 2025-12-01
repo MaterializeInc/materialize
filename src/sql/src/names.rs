@@ -1777,7 +1777,7 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             };
                         }
                     },
-                    None => item.desc_opt(),
+                    None => item.relation_desc(),
                 };
                 let Some(desc) = maybe_desc else {
                     if self.status.is_ok() {

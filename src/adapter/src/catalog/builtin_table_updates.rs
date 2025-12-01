@@ -829,7 +829,7 @@ impl CatalogState {
         }
 
         // Always report the latest for an objects columns.
-        if let Some(desc) = entry.desc_opt_latest() {
+        if let Some(desc) = entry.relation_desc_latest() {
             let defaults = match entry.item() {
                 CatalogItem::Table(Table {
                     data_source: TableDataSource::TableWrites { defaults },
@@ -1726,7 +1726,7 @@ impl CatalogState {
         for (i, key) in index.keys.iter().enumerate() {
             let on_entry = self.get_entry_by_global_id(&index.on);
             let on_desc = on_entry
-                .desc_opt()
+                .relation_desc()
                 .expect("can only create indexes on items with a valid description");
             let nullable = key.typ(&on_desc.typ().column_types).nullable;
             let seq_in_index = u64::cast_from(i + 1);
