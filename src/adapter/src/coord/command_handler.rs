@@ -25,7 +25,7 @@ use futures::future::LocalBoxFuture;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::memory::objects::{CatalogItem, DataSourceDesc, Source, Table, TableDataSource};
-use mz_ore::task;
+use mz_ore::{soft_assert_eq_or_log, task};
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
@@ -78,7 +78,8 @@ use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
-
+use crate::coord::peek::PendingPeek;
+use crate::coord::statement_logging::IdsToWatch;
 use super::ExecuteContextExtra;
 
 impl Coordinator {
@@ -339,8 +340,15 @@ impl Coordinator {
                     conn_id,
                     max_result_size,
                     max_query_result_size,
+                    ctx_extra,
+                    ids_to_watch,
                     tx,
                 } => {
+                    soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
+                    if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+                        self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+                    }
+
                     let result = self
                         .implement_slow_path_peek(
                             *dataflow_plan,
@@ -353,6 +361,7 @@ impl Coordinator {
                             conn_id,
                             max_result_size,
                             max_query_result_size,
+                            ctx_extra,
                         )
                         .await;
 
@@ -365,8 +374,20 @@ impl Coordinator {
                     target_replica,
                     source_ids,
                     conn_id,
+                    ctx_extra,
+                    ids_to_watch,
                     tx,
                 } => {
+                    soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
+                    if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+                        // (The old peek sequencing forgot to do this for COPY TO.)
+                        self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+                    }
+
+                    // We retire the execution context immediately, as the coordinator doesn't need
+                    // to track the execution for statement logging purposes (the frontend handles that).
+                    let _ = ctx_extra.retire();
+
                     // implement_copy_to spawns a background task that sends the response
                     // through tx when the COPY TO completes (or immediately if setup fails).
                     // We just call it and let it handle all response sending.
@@ -379,6 +400,28 @@ impl Coordinator {
                         tx,
                     )
                     .await;
+                }
+                Command::RegisterFrontendPeek {
+                    uuid,
+                    conn_id,
+                    cluster_id,
+                    depends_on,
+                    ctx_extra,
+                    is_fast_path,
+                    ids_to_watch,
+                } => {
+                    self.handle_register_frontend_peek(
+                        uuid,
+                        conn_id,
+                        cluster_id,
+                        depends_on,
+                        ctx_extra,
+                        is_fast_path,
+                        ids_to_watch,
+                    );
+                }
+                Command::FrontendStatementLogging(event) => {
+                    self.handle_frontend_statement_logging_event(event);
                 }
             }
         }
@@ -637,15 +680,25 @@ impl Coordinator {
                 }
                 let notify = self.builtin_table_update().background(updates);
 
+                let catalog = self.owned_catalog();
+                let build_info_human_version = catalog
+                    .state()
+                    .config()
+                    .build_info
+                    .human_version(None);
+                
+                let statement_logging_frontend = self.statement_logging.create_frontend(build_info_human_version);
+                
                 let resp = Ok(StartupResponse {
                     role_id,
                     write_notify: notify,
                     session_defaults,
-                    catalog: self.owned_catalog(),
+                    catalog,
                     storage_collections: Arc::clone(&self.controller.storage_collections),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
+                    statement_logging_frontend,
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -1798,5 +1851,42 @@ impl Coordinator {
             }
         });
         let _ = tx.send(response);
+    }
+
+    /// Handle registration of a frontend peek.
+    /// This stores the peek in pending_peeks so that when the peek completes,
+    /// the coordinator can log the final result.
+    fn handle_register_frontend_peek(
+        &mut self,
+        uuid: uuid::Uuid,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        cluster_id: mz_controller_types::ClusterId,
+        depends_on: BTreeSet<mz_repr::GlobalId>,
+        ctx_extra: ExecuteContextExtra,
+        is_fast_path: bool,
+        ids_to_watch: Option<IdsToWatch>,
+    ) {
+        soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
+        if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+        }
+
+        // Store the peek in pending_peeks for later retrieval when results arrive
+        self.pending_peeks.insert(
+            uuid,
+            PendingPeek {
+                conn_id: conn_id.clone(),
+                cluster_id,
+                depends_on,
+                ctx_extra,
+                is_fast_path,
+            },
+        );
+
+        // Also track it by connection ID for cancellation support
+        self.client_pending_peeks
+            .entry(conn_id)
+            .or_default()
+            .insert(uuid, cluster_id.into());
     }
 }

@@ -47,6 +47,7 @@ use crate::coord::ExecuteContextExtra;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
+use crate::coord::statement_logging::{IdsToWatch, StatementLoggingFrontend};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
@@ -210,6 +211,9 @@ pub enum Command {
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
+        ctx_extra: ExecuteContextExtra,
+        /// If statement logging is enabled, contains the info necessary for installing watch sets.
+        ids_to_watch: Option<IdsToWatch>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 
@@ -219,8 +223,28 @@ pub enum Command {
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
+        ctx_extra: ExecuteContextExtra,
+        /// If statement logging is enabled, contains the info necessary for installing watch sets.
+        ids_to_watch: Option<IdsToWatch>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
+
+    /// Register a pending peek initiated by frontend sequencing.
+    /// The Coordinator will track this peek and log its final result when it completes.
+    RegisterFrontendPeek {
+        uuid: Uuid,
+        conn_id: ConnectionId,
+        cluster_id: mz_controller_types::ClusterId,
+        depends_on: BTreeSet<GlobalId>,
+        ctx_extra: ExecuteContextExtra,
+        is_fast_path: bool,
+        /// If statement logging is enabled, contains the info necessary for installing watch sets.
+        ids_to_watch: Option<IdsToWatch>,
+    },
+
+    /// Statement logging event from frontend peek sequencing.
+    /// No response channel needed - this is fire-and-forget.
+    FrontendStatementLogging(crate::coord::statement_logging::FrontendStatementLoggingEvent),
 }
 
 impl Command {
@@ -247,7 +271,9 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
-            | Command::ExecuteCopyTo { .. } => None,
+            | Command::ExecuteCopyTo { .. }
+            | Command::RegisterFrontendPeek { .. }
+            | Command::FrontendStatementLogging(..) => None,
         }
     }
 
@@ -274,7 +300,9 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
-            | Command::ExecuteCopyTo { .. } => None,
+            | Command::ExecuteCopyTo { .. }
+            | Command::RegisterFrontendPeek { .. }
+            | Command::FrontendStatementLogging(..) => None,
         }
     }
 }
@@ -307,6 +335,7 @@ pub struct StartupResponse {
     pub transient_id_gen: Arc<TransientIdGen>,
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
+    pub statement_logging_frontend: StatementLoggingFrontend,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).

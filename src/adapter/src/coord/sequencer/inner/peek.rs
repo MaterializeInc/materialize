@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use itertools::Either;
 use mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION;
-use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
@@ -45,8 +44,9 @@ use crate::coord::{
     Coordinator, CopyToContext, ExecuteContext, ExplainContext, ExplainPlanContext, Message,
     PeekStage, PeekStageCopyTo, PeekStageExplainPlan, PeekStageExplainPushdown, PeekStageFinish,
     PeekStageLinearizeTimestamp, PeekStageOptimize, PeekStageRealTimeRecency,
-    PeekStageTimestampReadHold, PlanValidity, StageResult, Staged, TargetCluster, WatchSetResponse,
+    PeekStageTimestampReadHold, PlanValidity, StageResult, Staged, TargetCluster,
 };
+use crate::coord::statement_logging::IdsToWatch;
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
@@ -845,48 +845,13 @@ impl Coordinator {
             }
         }
 
-        if let Some(uuid) = ctx.extra().contents() {
-            let ts = determination.timestamp_context.timestamp_or_default();
-            let mut transitive_storage_deps = BTreeSet::new();
-            let mut transitive_compute_deps = BTreeSet::new();
-            for item_id in id_bundle
-                .iter()
-                .map(|gid| self.catalog.state().get_entry_by_global_id(&gid).id())
-                .flat_map(|id| self.catalog.state().transitive_uses(id))
-            {
-                let entry = self.catalog.state().get_entry(&item_id);
-                match entry.item() {
-                    // TODO(alter_table): Adding all of the GlobalIds for an object is incorrect.
-                    // For example, this peek may depend on just a single version of a table, but
-                    // we would add dependencies on all versions of said table. Doing this is okay
-                    // for now since we can't yet version tables, but should get fixed.
-                    CatalogItem::Table(_) | CatalogItem::Source(_) => {
-                        transitive_storage_deps.extend(entry.global_ids());
-                    }
-                    CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
-                        transitive_compute_deps.extend(entry.global_ids());
-                    }
-                    _ => {}
-                }
-            }
-            self.install_storage_watch_set(
-                conn_id.clone(),
-                transitive_storage_deps,
-                ts,
-                WatchSetResponse::StatementDependenciesReady(
-                    uuid,
-                    StatementLifecycleEvent::StorageDependenciesFinished,
-                ),
+        if let Some(logging_id) = ctx.extra().contents() {
+            let ids_to_watch = IdsToWatch::new(
+                self.catalog.state(),
+                &id_bundle,
+                determination.timestamp_context.timestamp_or_default(),
             );
-            self.install_compute_watch_set(
-                conn_id,
-                transitive_compute_deps,
-                ts,
-                WatchSetResponse::StatementDependenciesReady(
-                    uuid,
-                    StatementLifecycleEvent::ComputeDependenciesFinished,
-                ),
-            )
+            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
         }
 
         let max_result_size = self.catalog().system_config().max_result_size();

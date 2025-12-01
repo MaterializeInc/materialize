@@ -3702,7 +3702,7 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
             input=dedent(
                 """
                 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
+                ALTER SYSTEM SET enable_frontend_peek_sequencing = true;
                 """
             )
         )

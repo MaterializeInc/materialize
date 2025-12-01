@@ -372,6 +372,8 @@ impl Message {
                 Command::StoreTransactionReadHolds { .. } => "store-transaction-read-holds",
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
+                Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
+                Command::FrontendStatementLogging(..) => "frontend-statement-logging",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -1330,7 +1332,7 @@ impl ExecuteContextExtra {
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
     #[must_use]
-    fn retire(mut self) -> Option<StatementLoggingId> {
+    pub(crate) fn retire(mut self) -> Option<StatementLoggingId> {
         let Self { statement_uuid } = &mut self;
         statement_uuid.take()
     }

@@ -32,6 +32,7 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
+use crate::coord::statement_logging::{IdsToWatch, StatementLoggingFrontend};
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
@@ -59,6 +60,8 @@ pub struct PeekClient {
     /// Per-timeline oracles from the coordinator. Lazily populated.
     oracles: BTreeMap<Timeline, Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
     persist_client: PersistClient,
+    /// Statement logging state for frontend peek sequencing.
+    pub statement_logging_frontend: StatementLoggingFrontend,
 }
 
 impl PeekClient {
@@ -69,6 +72,7 @@ impl PeekClient {
         transient_id_gen: Arc<TransientIdGen>,
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
+        statement_logging_frontend: StatementLoggingFrontend,
     ) -> Self {
         Self {
             coordinator_client,
@@ -76,6 +80,7 @@ impl PeekClient {
             storage_collections,
             transient_id_gen,
             optimizer_metrics,
+            statement_logging_frontend,
             oracles: Default::default(), // lazily populated
             persist_client,
         }
@@ -212,10 +217,6 @@ impl PeekClient {
     /// Note: `input_read_holds` has holds for all inputs. For fast-path peeks, this includes the
     /// peek target. For slow-path peeks (to be implemented later), we'll need to additionally call
     /// into the Controller to acquire a hold on the peek target after we create the dataflow.
-    ///
-    /// TODO(peek-seq): add statement logging
-    /// TODO(peek-seq): cancellation (see pending_peeks/client_pending_peeks wiring in the old
-    /// sequencing)
     pub async fn implement_fast_path_peek_plan(
         &mut self,
         fast_path: FastPathPlan,
@@ -230,9 +231,26 @@ impl PeekClient {
         input_read_holds: ReadHolds<Timestamp>,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        statement_logging_id: Option<crate::coord::statement_logging::StatementLoggingId>,
+        depends_on: std::collections::BTreeSet<mz_repr::GlobalId>,
+        ids_to_watch: Option<IdsToWatch>,
     ) -> Result<crate::ExecuteResponse, AdapterError> {
         // If the dataflow optimizes to a constant expression, we can immediately return the result.
         if let FastPathPlan::Constant(rows_res, _) = fast_path {
+            // For constant queries with statement logging, immediately log that
+            // dependencies are "ready" (trivially, because there are none).
+            if let Some(logging_id) = statement_logging_id {
+                self.log_lifecycle_event(
+                    logging_id,
+                    statement_logging::StatementLifecycleEvent::StorageDependenciesFinished,
+                );
+                self.log_lifecycle_event(
+                    logging_id,
+                    statement_logging::StatementLifecycleEvent::ComputeDependenciesFinished,
+                );
+            }
+
             let mut rows = match rows_res {
                 Ok(rows) => rows,
                 Err(e) => return Err(e.into()),
@@ -323,6 +341,18 @@ impl PeekClient {
         let (rows_tx, rows_rx) = oneshot::channel();
         let uuid = Uuid::new_v4();
 
+        // Register coordinator tracking of this peek. This has to complete before issuing the peek.
+        let ctx_extra = crate::coord::ExecuteContextExtra::new(statement_logging_id);
+        self.coordinator_client.send(Command::RegisterFrontendPeek {
+            uuid,
+            conn_id: conn_id.clone(),
+            cluster_id: compute_instance.into(),
+            depends_on,
+            ctx_extra,
+            is_fast_path: true,
+            ids_to_watch,
+        });
+
         // At this stage we don't know column names for the result because we
         // only know the peek's result type as a bare SqlRelationType.
         let cols = (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
@@ -362,10 +392,117 @@ impl PeekClient {
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
         );
+        
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
             rows: Box::pin(peek_response_stream),
             instance_id: compute_instance,
             strategy,
         })
     }
+
+    // Statement logging helper methods
+
+    /// Log the beginning of statement execution.
+    pub(crate) fn log_began_execution(
+        &self,
+        record: statement_logging::StatementBeganExecutionRecord,
+        prepared_statement: Option<crate::coord::statement_logging::PreparedStatementEvent>,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::BeganExecution {
+                    record,
+                    prepared_statement,
+                }
+            )
+        );
+    }
+
+    /// Log cluster selection for a statement.
+    pub(crate) fn log_set_cluster(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        cluster_id: mz_controller_types::ClusterId,
+        cluster_name: String,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::SetCluster {
+                    id,
+                    cluster_id,
+                    cluster_name,
+                }
+            )
+        );
+    }
+
+    /// Log timestamp determination for a statement.
+    pub(crate) fn log_set_timestamp(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        timestamp: mz_repr::Timestamp,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::SetTimestamp {
+                    id,
+                    timestamp,
+                }
+            )
+        );
+    }
+
+    /// Log transient index ID for a statement.
+    pub(crate) fn log_set_transient_index_id(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        transient_index_id: mz_repr::GlobalId,
+    ) {
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::SetTransientIndex {
+                    id,
+                    transient_index_id,
+                }
+            )
+        );
+    }
+
+    /// Log a statement lifecycle event.
+    pub(crate) fn log_lifecycle_event(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        event: statement_logging::StatementLifecycleEvent,
+    ) {
+        let when = (self.statement_logging_frontend.now)();
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::Lifecycle {
+                    id,
+                    event,
+                    when,
+                }
+            )
+        );
+    }
+
+    /// Log the end of statement execution.
+    pub(crate) fn log_ended_execution(
+        &self,
+        id: crate::coord::statement_logging::StatementLoggingId,
+        reason: statement_logging::StatementEndedExecutionReason,
+    ) {
+        let ended_at = (self.statement_logging_frontend.now)();
+        let record = statement_logging::StatementEndedExecutionRecord {
+            id: id.0,
+            reason,
+            ended_at,
+        };
+        self.coordinator_client.send(
+            Command::FrontendStatementLogging(
+                crate::coord::statement_logging::FrontendStatementLoggingEvent::EndedExecution(record)
+            )
+        );
+    }
+
 }
