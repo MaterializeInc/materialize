@@ -4108,7 +4108,7 @@ pub fn plan_create_index(
                 .collect()
         }
     };
-    let keys = query::plan_index_exprs(scx, &on_desc, filled_key_parts.clone())?;
+    let key = query::plan_index_exprs(scx, &on_desc, filled_key_parts.clone())?;
 
     let index_name = if let Some(name) = name {
         QualifiedItemName {
@@ -4126,7 +4126,7 @@ pub fn plan_create_index(
         } else {
             // Use PG schema for automatically naming indexes:
             // `<table>_<_-separated indexed expressions>_idx`
-            let index_name_col_suffix = keys
+            let index_name_col_suffix = key
                 .iter()
                 .map(|k| match k {
                     mz_expr::MirScalarExpr::Column(i, name) => {
@@ -4203,7 +4203,7 @@ pub fn plan_create_index(
         index: Index {
             create_sql,
             on: on.global_id(),
-            keys,
+            key,
             cluster_id,
             compaction_window,
         },

@@ -342,7 +342,7 @@ impl Coordinator {
                     let _dispatch_guard = explain_ctx.dispatch_guard();
 
                     let index_plan =
-                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.keys.clone());
+                        optimize::index::Index::new(plan.name.clone(), plan.index.on, plan.index.key.clone());
 
                     // MIR ⇒ MIR optimization (global)
                     let global_mir_plan = optimizer.catch_unwind_optimize(index_plan)?;
@@ -423,7 +423,7 @@ impl Coordinator {
                         plan::Index {
                             create_sql,
                             on,
-                            keys,
+                            key,
                             cluster_id,
                             compaction_window,
                         },
@@ -442,7 +442,7 @@ impl Coordinator {
             item: CatalogItem::Index(Index {
                 create_sql,
                 global_id,
-                keys: keys.into(),
+                key: key.into(),
                 on,
                 conn_id: None,
                 resolved_ids,

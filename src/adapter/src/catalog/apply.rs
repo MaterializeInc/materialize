@@ -1744,7 +1744,7 @@ impl CatalogState {
         let index = CatalogItem::Index(Index {
             global_id,
             on: log_global_id,
-            keys: log
+            key: log
                 .variant
                 .index_by()
                 .into_iter()
