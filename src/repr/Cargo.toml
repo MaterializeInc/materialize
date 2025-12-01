@@ -74,7 +74,7 @@ tracing-core = "0.1.35"
 url = { version = "2.5.7", features = ["serde"] }
 uuid = { version = "1.18.1", features = ["serde"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 thiserror = "2.0.17"
 tracing = { version = "0.1.37" }
 

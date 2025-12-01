@@ -30,7 +30,7 @@ mz-ssh-util = { path = "../ssh-util" }
 mz-cloud-resources = { path = "../cloud-resources" }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.218", features = ["derive"] }
 smallvec = { version = "1.15.1", features = ["union"] }
