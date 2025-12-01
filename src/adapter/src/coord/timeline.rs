@@ -411,9 +411,13 @@ pub(crate) fn timedomain_for<'a, I>(
 where
     I: IntoIterator<Item = &'a GlobalId>,
 {
+    let mut orig_uses_ids = Vec::new();
+
     // Gather all the used schemas.
     let mut schemas = BTreeSet::new();
     for id in uses_ids {
+        orig_uses_ids.push(id.clone());
+
         let entry = catalog.get_entry_by_global_id(id);
         let name = entry.name();
         schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
@@ -450,6 +454,15 @@ where
             .values()
             .map(|item_id| catalog.get_entry(item_id).latest_global_id());
         collection_ids.extend(global_ids);
+    }
+
+    {
+        // Assert that we got back a superset of the original ids.
+        // This should be true, because the query is able to reference only the latest version of
+        // each object.
+        for id in orig_uses_ids.iter() {
+            assert!(collection_ids.contains(id));
+        }
     }
 
     // Gather the dependencies of those items.
