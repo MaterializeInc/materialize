@@ -2814,7 +2814,7 @@ mod tests {
                     .expect("unable to resolve item")
                     .at_version(RelationVersionSelector::Latest);
 
-                let actual_desc = item.desc_opt().expect("invalid item type");
+                let actual_desc = item.relation_desc().expect("invalid item type");
                 for (index, ((actual_name, actual_typ), (expected_name, expected_typ))) in
                     actual_desc.iter().zip_eq(expected_desc.iter()).enumerate()
                 {
@@ -3574,7 +3574,8 @@ mod tests {
                     // TODO(alter_table)
                     .at_version(RelationVersionSelector::Latest);
                 let full_name = conn_catalog.resolve_full_name(item.name());
-                for col_type in item.desc_opt().expect("invalid item type").iter_types() {
+                let desc = item.relation_desc().expect("invalid item type");
+                for col_type in desc.iter_types() {
                     match &col_type.scalar_type {
                         typ @ SqlScalarType::UInt16
                         | typ @ SqlScalarType::UInt32

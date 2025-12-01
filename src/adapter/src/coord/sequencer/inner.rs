@@ -2489,7 +2489,8 @@ impl Coordinator {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
                     Some(table) => {
                         // Inserts always occur at the latest version of the table.
-                        table.desc_opt_latest().expect("table has a desc").arity()
+                        let desc = table.relation_desc_latest().expect("table has a desc");
+                        desc.arity()
                     }
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
@@ -2597,7 +2598,7 @@ impl Coordinator {
             Some(table) => {
                 // Inserts always occur at the latest version of the table.
                 table
-                    .desc_opt_latest()
+                    .relation_desc_latest()
                     .expect("table has a desc")
                     .into_owned()
             }
@@ -3434,7 +3435,7 @@ impl Coordinator {
         let storage_sink_desc = StorageSinkDesc {
             from: sink_plan.from,
             from_desc: from_entry
-                .desc_opt()
+                .relation_desc()
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink_plan

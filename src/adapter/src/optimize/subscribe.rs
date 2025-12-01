@@ -198,7 +198,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
             SubscribeFrom::Id(from_id) => {
                 let from = self.catalog.get_entry(&from_id);
                 let from_desc = from
-                    .desc_opt()
+                    .relation_desc()
                     .expect("subscribes can only be run on items with descs")
                     .into_owned();
 

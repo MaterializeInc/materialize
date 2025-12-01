@@ -675,14 +675,14 @@ pub struct CatalogCollectionEntry {
 }
 
 impl CatalogCollectionEntry {
-    pub fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>> {
-        self.item().desc_opt(self.version)
+    pub fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
     }
 }
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
-    fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>> {
-        self.item().desc_opt(self.version)
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
     }
 
     fn global_id(&self) -> GlobalId {
@@ -1777,7 +1777,7 @@ impl CatalogItem {
     /// types ignore `version` because they have a single shape. Non-relational
     /// items ( for example functions, indexes, sinks, secrets, and connections)
     /// return `None`.
-    pub fn desc_opt(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
+    pub fn relation_desc(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
@@ -2495,8 +2495,8 @@ impl CatalogItem {
 impl CatalogEntry {
     /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`], if it
     /// produces rows.
-    pub fn desc_opt_latest(&self) -> Option<Cow<'_, RelationDesc>> {
-        self.item.desc_opt(RelationVersionSelector::Latest)
+    pub fn relation_desc_latest(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item.relation_desc(RelationVersionSelector::Latest)
     }
 
     /// Reports if the item has columns.
@@ -2505,7 +2505,7 @@ impl CatalogEntry {
             CatalogItem::Type(Type { details, .. }) => {
                 matches!(details.typ, CatalogType::Record { .. })
             }
-            _ => self.desc_opt_latest().is_some(),
+            _ => self.relation_desc_latest().is_some(),
         }
     }
 

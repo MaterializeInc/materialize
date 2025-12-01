@@ -399,7 +399,7 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 // column.
                 let column_descs = match item.type_details() {
                     Some(details) => details.typ.desc(catalog).unwrap_or_default(),
-                    None => item.desc_opt().map(|d| d.into_owned()),
+                    None => item.relation_desc().map(|d| d.into_owned()),
                 };
 
                 if let Some(desc) = column_descs {

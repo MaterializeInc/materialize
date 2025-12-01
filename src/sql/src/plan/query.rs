@@ -286,7 +286,7 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.desc_opt().expect("table has desc");
+    let desc = table.relation_desc().expect("table has desc");
     let mut defaults = table
         .writable_table_details()
         .ok_or_else(|| {
@@ -503,7 +503,7 @@ pub fn plan_copy_item(
 > {
     let item = scx.get_item_by_resolved_name(&item_name)?;
     let fullname = scx.catalog.resolve_full_name(item.name());
-    let table_desc = match item.desc_opt() {
+    let table_desc = match item.relation_desc() {
         Some(desc) => desc.into_owned(),
         None => {
             return Err(PlanError::InvalidDependency {
@@ -678,7 +678,7 @@ pub fn plan_copy_from_rows(
         transform_ast::transform(&scx, default)?;
     }
 
-    let desc = table.desc_opt().expect("table has desc");
+    let desc = table.relation_desc().expect("table has desc");
     let column_types = columns
         .iter()
         .map(|x| desc.get_type(x).clone())
@@ -813,7 +813,7 @@ pub fn plan_mutation_query_inner(
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
-    let desc = item.desc_opt().expect("table has desc");
+    let desc = item.relation_desc().expect("table has desc");
     let relation_type = qcx.relation_type(&get);
 
     if using.is_empty() {
@@ -6573,7 +6573,7 @@ impl<'a> QueryContext<'a> {
                 ..
             } => {
                 let item = self.scx.get_item(&id).at_version(version);
-                let desc = match item.desc_opt() {
+                let desc = match item.relation_desc() {
                     Some(desc) => desc.clone(),
                     None => {
                         return Err(PlanError::InvalidDependency {

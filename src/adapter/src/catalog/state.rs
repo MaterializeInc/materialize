@@ -848,7 +848,7 @@ impl CatalogState {
         let desc = match entry.item() {
             CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
             // TODO(alter_table): Support schema evolution on sources.
-            other => other.desc_opt(RelationVersionSelector::Latest)?,
+            other => other.relation_desc(RelationVersionSelector::Latest)?,
         };
         Some(desc)
     }

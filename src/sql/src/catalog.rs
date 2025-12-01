@@ -867,7 +867,7 @@ pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
     ///
     /// If the catalog item is not of a type that produces data (e.g., a sink or
     /// an index), it returns `None`.
-    fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>>;
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>>;
 
     /// The [`GlobalId`] for this item.
     fn global_id(&self) -> GlobalId;

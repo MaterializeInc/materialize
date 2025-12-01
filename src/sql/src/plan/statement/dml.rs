@@ -1526,7 +1526,7 @@ pub fn describe_subscribe(
     let relation_desc = match stmt.relation {
         SubscribeRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
-            match item.desc_opt() {
+            match item.relation_desc() {
                 Some(desc) => desc.into_owned(),
                 None => sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",
@@ -1630,7 +1630,7 @@ pub fn plan_subscribe(
     let (from, desc, scope) = match relation {
         SubscribeRelation::Name(name) => {
             let item = scx.get_item_by_resolved_name(&name)?;
-            let Some(desc) = item.desc_opt() else {
+            let Some(desc) = item.relation_desc() else {
                 sql_bail!(
                     "'{}' cannot be subscribed to because it is a {}",
                     name.full_name_str(),

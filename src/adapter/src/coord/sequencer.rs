@@ -822,7 +822,7 @@ impl Coordinator {
         let desc = match catalog.try_get_entry(&target_id) {
             Some(table) => {
                 // Inserts always happen at the latest version of a table.
-                table.desc_opt_latest().expect("table has desc")
+                table.relation_desc_latest().expect("table has desc")
             }
             None => {
                 return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
@@ -1085,7 +1085,7 @@ pub(crate) async fn explain_pushdown_future_inner<
             .resolve_full_name(&catalog_entry.name);
         let name = format!("{}", full_name);
         let relation_desc = catalog_entry
-            .desc_opt()
+            .relation_desc()
             .expect("source should have a proper desc")
             .into_owned();
         let stats_future = storage_collections

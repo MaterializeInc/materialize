@@ -974,7 +974,7 @@ impl Coordinator {
         let storage_sink_desc = mz_storage_types::sinks::StorageSinkDesc {
             from: sink.from,
             from_desc: storage_sink_from_entry
-                .desc_opt()
+                .relation_desc()
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink

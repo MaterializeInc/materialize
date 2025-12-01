@@ -3119,7 +3119,7 @@ pub fn plan_create_continual_task(
                     // guess that the CT has the same shape as the input. It's
                     // fine if this is wrong, we'll get an error below after
                     // planning the query.
-                    let desc = input.desc_opt().expect("item type checked above");
+                    let desc = input.relation_desc().expect("item type checked above");
                     desc.into_owned()
                 }
             };
@@ -3425,7 +3425,7 @@ fn plan_sink(
         bail_unsupported!("creating a sink directly on a catalog object");
     }
 
-    let desc = from.desc_opt().expect("item type checked above");
+    let desc = from.relation_desc().expect("item type checked above");
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
         | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
@@ -4122,7 +4122,7 @@ pub fn plan_create_index(
         )
     }
 
-    let on_desc = on.desc_opt().expect("item type checked above");
+    let on_desc = on.relation_desc().expect("item type checked above");
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
@@ -7314,7 +7314,7 @@ pub fn plan_alter_table_add_column(
                 // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
                 let item = item.at_version(RelationVersionSelector::Latest);
-                let desc = item.desc_opt().expect("table has desc").into_owned();
+                let desc = item.relation_desc().expect("table has desc").into_owned();
                 (item.id(), item_name, desc)
             }
             None => {
