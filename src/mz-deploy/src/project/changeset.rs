@@ -32,7 +32,6 @@
 //!
 //! **Note:** Clusters are only marked dirty when the STATEMENT itself changes,
 //! not when the object is dirty for other reasons (dependencies, schema propagation, etc.).
-//! This prevents cascading cluster dirtiness from schema-level changes.
 //!
 //! ### Rule Category 3 — Schema Dirtiness
 //! ```datalog
@@ -54,9 +53,6 @@ use std::fmt::{Display, Formatter};
 /// Used to determine which objects need redeployment based on snapshot comparison.
 #[derive(Debug, Clone)]
 pub struct ChangeSet {
-    /// Files that have changed (added, modified, or deleted)
-    pub changed_files: HashSet<String>,
-
     /// Objects that exist in changed files
     pub changed_objects: HashSet<ObjectId>,
 
@@ -99,7 +95,6 @@ impl ChangeSet {
             compute_dirty_datalog(&changed_objects, &base_facts);
 
         ChangeSet {
-            changed_files: HashSet::new(), // Not used in snapshot-based comparison
             changed_objects: changed_objects.into_iter().collect(),
             dirty_schemas: dirty_schemas.into_iter().collect(),
             dirty_clusters: dirty_clusters.into_iter().collect(),
@@ -262,14 +257,7 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
     }
 }
 
-//
-// DATALOG COMPUTATION
-//
-
-/// Compute dirty objects, clusters, and schemas using Datalog fixed-point iteration.
-///
-/// This is a simplified implementation that manually computes the fixed point
-/// without using datatoad's interactive shell features.
+/// Compute dirty objects, clusters, and schemas
 fn compute_dirty_datalog(
     changed_stmts: &HashSet<ObjectId>,
     base_facts: &BaseFacts,

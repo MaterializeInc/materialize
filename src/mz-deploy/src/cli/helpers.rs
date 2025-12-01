@@ -32,20 +32,6 @@ pub async fn connect_to_database(profile: &Profile) -> Result<Client, CliError> 
     Ok(client)
 }
 
-/// Initialize the deployment tracking infrastructure in the database.
-///
-/// This creates the `deploy` schema and tables if they don't exist.
-///
-/// # Arguments
-/// * `client` - Database client
-///
-/// # Errors
-/// Returns `CliError::DeploymentSnapshot` if initialization fails
-pub async fn initialize_deployment_tracking(client: &Client) -> Result<(), CliError> {
-    project::deployment_snapshot::initialize_deployment_table(client).await?;
-    Ok(())
-}
-
 /// Collect deployment metadata (user and git commit).
 ///
 /// This function retrieves the current database user and git commit hash
