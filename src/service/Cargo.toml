@@ -24,7 +24,7 @@ mz-secrets = { path = "../secrets", default-features = false }
 mz-orchestrator-process = { path = "../orchestrator-process", default-features = false }
 mz-orchestrator-kubernetes = { path = "../orchestrator-kubernetes", default-features = false }
 mz-ore = { path = "../ore", default-features = false }
-os_info = "3.11.0"
+os_info = "3.13.0"
 pin-project = "1.1.10"
 prometheus = { version = "0.14.0", default-features = false }
 semver = { version = "1.0.27", features = ["serde"] }
