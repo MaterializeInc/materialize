@@ -119,7 +119,7 @@ def get_upgrade_target(
             and version.minor == 0
         ):
             return version
-        if current_version.major >= 26 and current_version.major + 1 <= version.major:
+        if current_version.major >= 26 and current_version.major + 1 >= version.major:
             return version
     raise ValueError(
         f"No potential upgrade target for {current_version} found in {versions}"
