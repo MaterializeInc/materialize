@@ -2977,7 +2977,7 @@ fn test_invalid_webhook_body() {
 
     // No matter what is in the body, we should always succeed.
     let mut data = [0u8; 128];
-    rand::thread_rng().fill_bytes(&mut data);
+    rand::rng().fill_bytes(&mut data);
     println!("Random bytes: {data:?}");
     let resp = http_client
         .post(webhook_url)

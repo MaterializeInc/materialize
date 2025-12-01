@@ -33,7 +33,7 @@ mz-orchestrator-tracing = { path = "../orchestrator-tracing", default-features =
 mz-prof-http = { path = "../prof-http", default-features = false }
 mz-server-core = { path = "../server-core", default-features = false }
 prometheus = { version = "0.14.0", default-features = false }
-rand = "0.8.5"
+rand = "0.9.2"
 reqwest = { version = "0.12", features = ["cookies", "json"] }
 semver = "1.0.27"
 serde = { version = "1.0.219", features = ["derive"] }

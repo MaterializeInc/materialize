@@ -314,7 +314,7 @@ impl Coordinator {
             EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
                 .expect("storage usage collection interval must fit into u64");
         let offset =
-            rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
+            rngs::SmallRng::from_seed(seed).random_range(0..storage_usage_collection_interval_ms);
         let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.

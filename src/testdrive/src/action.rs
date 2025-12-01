@@ -39,7 +39,6 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use rand::Rng;
 use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
@@ -937,7 +936,7 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
+    let seed = config.seed.unwrap_or_else(rand::random);
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {

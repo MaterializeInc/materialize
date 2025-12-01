@@ -83,7 +83,7 @@ iceberg-catalog-rest = "0.6.0"
 criterion = { version = "0.6.0" }
 insta = { version = "1.43", features = ["json"] }
 mz-persist = { path = "../persist" }
-rand = "0.8.5"
+rand = "0.9.2"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }

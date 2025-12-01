@@ -22,7 +22,7 @@ k8s-openapi = { version = "0.26.0", features = ["schemars", "v1_31"] }
 kube = { version = "2.0.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws", "runtime"] }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-server-core = { path = "../server-core", default-features = false }
-rand = "0.8.5"
+rand = "0.9.2"
 schemars = { version = "1.1.0", features = ["uuid1"] }
 semver = "1.0.27"
 serde = "1.0.219"

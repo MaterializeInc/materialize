@@ -89,7 +89,7 @@ impl RetryStream {
     /// accidental mis-use.
     pub async fn sleep(mut self) -> Self {
         // Should the jitter be configurable?
-        let jitter = self.rng.gen_range(0.9..=1.1);
+        let jitter = self.rng.random_range(0.9..=1.1);
         let sleep = self.backoff.mul_f64(jitter);
         tokio::time::sleep(sleep).await;
         self.attempt += 1;

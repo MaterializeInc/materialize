@@ -292,8 +292,8 @@ async fn port_forward(session: &Session, host: &str, port: u16) -> Result<u16, a
     // Loop trying to find an open port.
     for _ in 0..50 {
         // Choose a dynamic port according to RFC 6335.
-        let mut rng = StdRng::from_entropy();
-        let local_port: u16 = rng.gen_range(49152..65535);
+        let mut rng = StdRng::from_os_rng();
+        let local_port: u16 = rng.random_range(49152..65535);
 
         // Force use of IPv4 loopback. Do not use the hostname `localhost`,
         // as that can resolve to IPv6, and the SSH tunnel is only listening

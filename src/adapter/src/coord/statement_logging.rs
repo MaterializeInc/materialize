@@ -26,7 +26,7 @@ use mz_sql_parser::ast::{StatementKind, statement_kind_label_value};
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
-use rand::{distributions::Bernoulli, prelude::Distribution, thread_rng};
+use rand::distr::{Bernoulli, Distribution};
 use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
 use tracing::debug;
@@ -138,7 +138,7 @@ pub(crate) struct StatementLogging {
     unlogged_sessions: BTreeMap<Uuid, SessionHistoryEvent>,
 
     /// A reproducible RNG for deciding whether to sample statement executions.
-    /// Only used by tests; otherwise, `rand::thread_rng()` is used.
+    /// Only used by tests; otherwise, `rand::rng()` is used.
     /// Controlled by the system var `statement_logging_use_reproducible_rng`.
     reproducible_rng: rand_chacha::ChaCha8Rng,
 
@@ -697,7 +697,7 @@ impl Coordinator {
         {
             distribution.sample(&mut self.statement_logging.reproducible_rng)
         } else {
-            distribution.sample(&mut thread_rng())
+            distribution.sample(&mut rand::rng())
         };
 
         // Track how many statements we're recording.
