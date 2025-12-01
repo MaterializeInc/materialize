@@ -21,9 +21,7 @@ use owo_colors::OwoColorize;
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(
-    profile: &Profile,
-) -> Result<(), CliError> {
+pub async fn run(profile: &Profile) -> Result<(), CliError> {
     // Connect to database
     let client = helpers::connect_to_database(profile).await?;
 

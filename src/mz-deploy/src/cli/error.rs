@@ -116,6 +116,10 @@ pub enum CliError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// Clusters are not yet hydrated
+    #[error("some clusters are still hydrating")]
+    ClustersHydrating,
+
     /// Generic error message
     #[error("{0}")]
     Message(String),
@@ -253,6 +257,7 @@ impl CliError {
                  - Check cluster replica status with: mz-deploy ready <env> --snapshot"
                     .to_string(),
             ),
+            Self::ClustersHydrating => Some("check cluster replica status with: mz-deploy ready <env>".to_string()),
             Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {
                 // These errors provide their own context via transparent wrapping
                 None

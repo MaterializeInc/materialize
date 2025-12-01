@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
-use mz_build_info::{build_info, BuildInfo};
+use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
 use mz_deploy::cli::CliError;
-use mz_deploy::client::config::ProfilesConfig;
 use mz_deploy::client::ConnectionError;
+use mz_deploy::client::config::ProfilesConfig;
 use mz_deploy::utils::log;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -15,9 +15,11 @@ static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(Non
 #[derive(Parser, Debug)]
 #[command(name = "mz-deploy", version = VERSION.as_str())]
 #[command(about = "Manage Materialize database deployments with blue/green staging workflows")]
-#[command(long_about = "mz-deploy helps you manage Materialize database schemas and objects with \
+#[command(
+    long_about = "mz-deploy helps you manage Materialize database schemas and objects with \
     git-like workflows. Deploy to staging environments for testing, then promote to production \
-    with atomic schema swaps for zero-downtime deployments.")]
+    with atomic schema swaps for zero-downtime deployments."
+)]
 struct Args {
     /// Path to the project root directory containing database schemas
     #[arg(short, long, default_value = ".", global = true)]
@@ -87,6 +89,10 @@ enum Command {
         /// modified after staging was created. This flag bypasses that check.
         #[arg(long)]
         force: bool,
+
+        /// Skip cluster hydration when promoting staging environments
+        #[arg(long)]
+        skip_ready: bool,
 
         #[arg(long, hide = true)]
         in_place_dangerous_will_cause_downtime: bool,
@@ -206,7 +212,7 @@ enum Command {
 async fn main() {
     let args = Args::parse();
     log::set_verbose(args.verbose);
-    
+
     if let Err(e) = run(args).await {
         cli::display_error(&e);
     }
@@ -215,9 +221,9 @@ async fn main() {
 async fn run(args: Args) -> Result<(), CliError> {
     match args.command {
         Some(Command::Compile {
-                 skip_typecheck,
-                 docker_image,
-             }) => {
+            skip_typecheck,
+            docker_image,
+        }) => {
             let compile_args = cli::commands::compile::CompileArgs {
                 typecheck: !skip_typecheck,
                 docker_image,
@@ -227,15 +233,15 @@ async fn run(args: Args) -> Result<(), CliError> {
                 .map(|_| ())
         }
         Some(Command::Apply {
-                 staging_env,
-                 allow_dirty,
-                 force,
-                 in_place_dangerous_will_cause_downtime,
-             }) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
+            staging_env,
+            allow_dirty,
+            force,
+            skip_ready,
+            in_place_dangerous_will_cause_downtime,
+        }) => {
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             match staging_env {
                 None => {
                     cli::commands::apply::run(
@@ -244,69 +250,65 @@ async fn run(args: Args) -> Result<(), CliError> {
                         in_place_dangerous_will_cause_downtime,
                         allow_dirty,
                     )
-                        .await
+                    .await
                 }
 
-                Some(stage_env) => cli::commands::swap::run(&profile, &stage_env, force).await,
+                Some(stage_env) => {
+                    if !skip_ready {
+                        cli::commands::ready::run(&profile, &stage_env, true, None).await?;
+                    }
+                    cli::commands::swap::run(&profile, &stage_env, force).await
+                }
             }
-        },
+        }
         Some(Command::Stage { name, allow_dirty }) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
-            
-            cli::commands::stage::run(
-                &profile,
-                name.as_deref(),
-                &args.directory,
-                allow_dirty,
-            )
-                .await
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+
+            cli::commands::stage::run(&profile, name.as_deref(), &args.directory, allow_dirty).await
         }
         Some(Command::Debug) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
-            
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+
             cli::commands::debug::run(&profile).await
-        },
+        }
         Some(Command::GenDataContracts) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Test) => cli::commands::test::run(&args.directory).await,
         Some(Command::Abort { name }) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             cli::commands::abort::run(&profile, &name).await
         }
         Some(Command::Deployments) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             cli::commands::deployments::run(&profile).await
         }
         Some(Command::History { limit }) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             cli::commands::history::run(&profile, limit).await
         }
-        Some(Command::Ready { name, snapshot, timeout }) => {
-            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
-                .map_err(|e| CliError::Connection(
-                    ConnectionError::Config(e)
-                ))?;
-            
+        Some(Command::Ready {
+            name,
+            snapshot,
+            timeout,
+        }) => {
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+
             cli::commands::ready::run(&profile, &name, snapshot, timeout).await
         }
         None => {
@@ -315,4 +317,3 @@ async fn run(args: Args) -> Result<(), CliError> {
         }
     }
 }
-

@@ -24,10 +24,7 @@ use owo_colors::OwoColorize;
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(
-    profile: &Profile,
-    limit: Option<usize>,
-) -> Result<(), CliError> {
+pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError> {
     // Connect to database
     let client = helpers::connect_to_database(profile).await?;
 
@@ -39,7 +36,12 @@ pub async fn run(
         println!();
         println!("To create and promote a deployment, run:");
         println!("  {} {} {}", "mz-deploy".cyan(), "stage".cyan(), ".".cyan());
-        println!("  {} {} {}", "mz-deploy".cyan(), "apply".cyan(), "--staging-env <name>".cyan());
+        println!(
+            "  {} {} {}",
+            "mz-deploy".cyan(),
+            "apply".cyan(),
+            "--staging-env <name>".cyan()
+        );
         return Ok(());
     }
 
@@ -52,21 +54,9 @@ pub async fn run(
         let date_str = datetime.format("%a %b %d %H:%M:%S %Y %z").to_string();
 
         // Display deployment header (like a git commit)
-        println!(
-            "{} {}",
-            "deployment".yellow().bold(),
-            environment.cyan()
-        );
-        println!(
-            "{}: {}",
-            "Promoted by".dimmed(),
-            deployed_by.yellow()
-        );
-        println!(
-            "{}:   {}",
-            "Date".dimmed(),
-            date_str
-        );
+        println!("{} {}", "deployment".yellow().bold(), environment.cyan());
+        println!("{}: {}", "Promoted by".dimmed(), deployed_by.yellow());
+        println!("{}:   {}", "Date".dimmed(), date_str);
         println!();
 
         // List all schemas in this deployment (like files in a git commit)
