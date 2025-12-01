@@ -2512,14 +2512,20 @@ impl Coordinator {
         real_time_recency_timeout: Duration,
     ) -> Result<Option<BoxFuture<'static, Result<Timestamp, StorageError<Timestamp>>>>, AdapterError>
     {
-        let item_ids = source_ids.map(|gid| self.catalog.resolve_item_id(&gid));
+        let item_ids = source_ids
+            .map(|gid| {
+                self.catalog
+                    .try_resolve_item_id(&gid)
+                    .ok_or_else(|| AdapterError::RtrDropFailure(gid.to_string()))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Find all dependencies transitively because we need to ensure that
         // RTR queries determine the timestamp from the sources' (i.e.
         // storage objects that ingest data from external systems) remap
         // data. We "cheat" a little bit and filter out any IDs that aren't
         // user objects because we know they are not a RTR source.
-        let mut to_visit = VecDeque::from_iter(item_ids.filter(CatalogItemId::is_user));
+        let mut to_visit = VecDeque::from_iter(item_ids.into_iter().filter(CatalogItemId::is_user));
         // If none of the sources are user objects, we don't need to provide
         // a RTR timestamp.
         if to_visit.is_empty() {
