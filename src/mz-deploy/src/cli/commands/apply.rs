@@ -54,7 +54,13 @@ pub async fn run(
     println!("Applying SQL to database");
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile).await?;
+    let mut client = helpers::connect_to_database(profile).await?;
+
+    // Validate project before any deployment operations
+    // This ensures databases, schemas, clusters, and external dependencies exist
+    println!("Validating project...");
+    client.validate_project(&planned_project, directory).await?;
+    verbose!("Project validation successful");
 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 

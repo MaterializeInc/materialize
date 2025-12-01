@@ -77,7 +77,7 @@ pub async fn run(
     println!("Deploying to staging environment: {}", stage_name);
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile).await?;
+    let mut client = helpers::connect_to_database(profile).await?;
 
     // Initialize deployment tracking infrastructure
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
@@ -142,6 +142,12 @@ pub async fn run(
             cluster_set.insert(cluster.name.clone());
         }
     }
+
+    // Validate project before writing any metadata or creating resources
+    // This ensures databases, schemas, clusters, and external dependencies exist
+    println!("Validating project...");
+    client.validate_project(&planned_project, directory).await?;
+    verbose!("Project validation successful");
 
     // Collect deployment metadata and write to database BEFORE creating resources
     // This allows abort logic to clean up even if resource creation fails
