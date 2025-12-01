@@ -15,11 +15,11 @@ Materialize. Network policies are part of Materialize's framework for
 ## Syntax
 
 ```mzsql
-SHOW NETWORK POLICIES [ LIKE <pattern> ]
+SHOW NETWORK POLICIES [ LIKE <pattern> ];
 ```
 
-Option                     | Description
----------------------------|------------
+Syntax element                | Description
+------------------------------|------------
 **LIKE** \<pattern\>       | If specified, only show network policies whose name matches the pattern.
 
 ## Pre-installed network policy

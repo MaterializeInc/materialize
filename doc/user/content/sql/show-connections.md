@@ -16,9 +16,10 @@ aliases:
 SHOW CONNECTIONS
 [FROM <schema_name>]
 [LIKE <pattern> | WHERE <condition(s)>]
+;
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **FROM** \<schema_name\>      | If specified, only show connections from the specified schema. For available schema names, see [`SHOW SCHEMAS`](/sql/show-schemas).
 **LIKE** \<pattern\>          | If specified, only show connections that match the pattern.

@@ -10,12 +10,14 @@ menu:
 
 ## Syntax
 
-{{< diagram "drop-schema.svg" >}}
+```mzsql
+DROP SCHEMA [IF EXISTS] <schema_name> [CASCADE|RESTRICT];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the named schema does not exist.
-_schema&lowbar;name_ | The schema you want to remove. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the named schema does not exist.
+`<schema_name>` | The schema you want to remove. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 **CASCADE** | Remove the schema and its dependent objects.
 **RESTRICT** | Do not remove this schema if it contains any sources or views. _(Default)_
 

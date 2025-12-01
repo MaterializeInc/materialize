@@ -10,14 +10,16 @@ menu:
 
 ## Syntax
 
-{{< diagram "drop-type.svg" >}}
+```mzsql
+DROP TYPE [IF EXISTS] <data_type_name> [RESTRICT|CASCADE];
+```
 
-Field | Use
-------|-----
-**IF EXISTS**  | Do not return an error if the named type doesn't exist.
-_data_type_name_ | The name of the type to remove.
-**CASCADE** | Remove the type and its dependent objects, such as tables or other types.
-**RESTRICT** |  Don't remove the type if any objects depend on it. _(Default.)_
+Syntax element | Description
+---------------|------------
+**IF EXISTS**  | Optional. If specified, do not return an error if the named type doesn't exist.
+`<data_type_name>` | The name of the type to remove.
+**CASCADE** | Optional. If specified, remove the type and its dependent objects, such as tables or other types.
+**RESTRICT** | Optional. Don't remove the type if any objects depend on it. _(Default.)_
 
 ## Examples
 
