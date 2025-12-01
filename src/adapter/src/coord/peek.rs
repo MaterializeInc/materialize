@@ -1339,6 +1339,10 @@ impl crate::coord::Coordinator {
             .await
             .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)
         {
+            // Clean up the active compute sink that was added above, since the dataflow was never
+            // created. If we don't do this, the sink_id remains in drop_sinks but no collection
+            // exists in the compute controller, causing a panic when the connection terminates.
+            self.remove_active_compute_sink(sink_id).await;
             let _ = tx.send(Err(e));
             return;
         }
