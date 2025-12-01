@@ -759,10 +759,6 @@ impl CatalogState {
                     item_type.details.array_id = Some(item_id);
                 }
 
-                // Assert that no built-in types are record types so that we don't
-                // need to bother to build a description. Only record types need
-                // descriptions.
-                assert!(!matches!(typ.details.typ, CatalogType::Record { .. }));
                 let schema_id = self.resolve_system_schema(typ.schema);
 
                 self.insert_item(
