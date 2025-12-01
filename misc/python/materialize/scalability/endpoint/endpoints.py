@@ -10,6 +10,7 @@
 import psycopg
 
 from materialize import git
+from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.postgres import Postgres
@@ -160,8 +161,6 @@ class MaterializeContainer(MaterializeNonRemote):
             if not self.composition.try_pull_service_image(
                 Materialized(
                     image=self.image,
-                    external_metadata_store=True,
-                    metadata_store="cockroach",
                 )
             ):
                 # explicitly specified image cannot be found and alternative exists
@@ -180,6 +179,7 @@ class MaterializeContainer(MaterializeNonRemote):
             Materialized(
                 image=self.image,
                 sanity_restart=False,
+                additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
                 external_metadata_store=True,
                 metadata_store="cockroach",
             )
