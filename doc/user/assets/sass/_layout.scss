@@ -160,6 +160,33 @@ table.inline-headings {
             }
         }
     }
+    @media(max-width: 500px) {
+        position: fixed;
+        background: var(--bg);
+        z-index: 100;
+        top: 100px;
+        left: 0;
+        height: calc(120vh - var(--nav-height));
+        border-right: 1px solid var(--divider-light);
+        transform: translateX(-100%);
+        transition: all .2s ease-out;
+        visibility: hidden;
+
+        .close-topics {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        &.shown {
+            transform: none;
+            visibility: visible;
+
+            .close-topics {
+                opacity: 1;
+                pointer-events: initial;
+            }
+        }
+    }
 }
 
 .sidebar {

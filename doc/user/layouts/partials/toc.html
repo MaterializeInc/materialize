@@ -59,7 +59,7 @@
     const headings = $(".content h2, .content h3");
     let offsets = headings.toArray().map((h) => ({
       id: h.id,
-      offset: h.offsetTop - 85,  // 75 if banner is displayed (85 if 2 long lines), 65 otherwise
+      offset: h.offsetTop - 100,  // 75 if banner is displayed (85 if 2 long lines), 65 otherwise
     }));
     const cutoff = $(document).height() - $(window).height() - SLOP;
     const firstBad = offsets.findIndex((o) => o.offset > cutoff);
