@@ -31,11 +31,11 @@ use std::time::SystemTime;
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
 /// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
 /// Returns `CliError::Connection` for database errors
-pub async fn run(profile: Option<&Profile>, stage_name: &str, force: bool) -> Result<(), CliError> {
+pub async fn run(profile: &Profile, stage_name: &str, force: bool) -> Result<(), CliError> {
     println!("Deploying '{}' to production", stage_name);
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile.unwrap()).await?;
+    let client = helpers::connect_to_database(profile).await?;
 
     // Initialize deployment tracking infrastructure
     helpers::initialize_deployment_tracking(&client).await?;

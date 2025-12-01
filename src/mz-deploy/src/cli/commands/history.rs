@@ -4,7 +4,6 @@ use crate::cli::{CliError, helpers};
 use crate::client::Profile;
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
-use std::path::Path;
 
 /// Show deployment history in chronological order (promoted deployments only).
 ///
@@ -18,7 +17,6 @@ use std::path::Path;
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
-/// * `_directory` - Project directory (unused, for signature consistency)
 /// * `limit` - Optional limit on number of deployments to show
 ///
 /// # Returns
@@ -27,12 +25,11 @@ use std::path::Path;
 /// # Errors
 /// Returns `CliError::Connection` for database errors
 pub async fn run(
-    profile: Option<&Profile>,
-    _directory: &Path,
+    profile: &Profile,
     limit: Option<usize>,
 ) -> Result<(), CliError> {
     // Connect to database
-    let client = helpers::connect_to_database(profile.unwrap()).await?;
+    let client = helpers::connect_to_database(profile).await?;
 
     // Get deployment history (promoted only, grouped by deployment)
     let history = client.list_deployment_history(limit).await?;

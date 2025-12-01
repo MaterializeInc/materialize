@@ -682,6 +682,96 @@ impl Client {
         Ok(())
     }
 
+    /// Get hydration status for clusters in a staging deployment.
+    ///
+    /// Returns a HashMap mapping cluster name to (hydrated_count, total_count).
+    /// This provides a snapshot of the current hydration state.
+    pub async fn get_deployment_hydration_status(
+        &self,
+        environment: &str,
+    ) -> Result<HashMap<String, (i64, i64)>, ConnectionError> {
+        let query = r#"
+            WITH replica_hydration AS (
+                SELECT
+                    c.name,
+                    r.id,
+                    COUNT(*) FILTER (WHERE hydrated) AS hydrated,
+                    COUNT(*) AS total
+                FROM mz_clusters AS c
+                JOIN mz_cluster_replicas AS r ON c.id = r.cluster_id
+                JOIN deploy.clusters AS dc ON c.id = dc.cluster_id
+                JOIN mz_internal.mz_hydration_statuses AS mhs ON mhs.replica_id = r.id
+                WHERE dc.environment = $1
+                GROUP BY 1, 2
+            )
+            SELECT name, MAX(hydrated) AS hydrated, MAX(total) AS total
+            FROM replica_hydration
+            GROUP BY 1
+        "#;
+
+        let rows = self
+            .client
+            .query(query, &[&environment])
+            .await
+            .map_err(ConnectionError::Query)?;
+
+        let mut status = HashMap::new();
+        for row in rows {
+            let name: String = row.get("name");
+            let hydrated: i64 = row.get("hydrated");
+            let total: i64 = row.get("total");
+            status.insert(name, (hydrated, total));
+        }
+
+        Ok(status)
+    }
+
+    /// Subscribe to hydration status changes for a staging deployment.
+    ///
+    /// Returns a transaction that has a cursor set up for subscribing to hydration updates.
+    /// The cursor returns rows with:
+    /// - mz_timestamp (column 0): u64
+    /// - mz_diff (column 1): i64 (-1 for retractions, +1 for insertions)
+    /// - name (column 2): String (cluster name)
+    /// - hydrated (column 3): i64
+    /// - total (column 4): i64
+    ///
+    /// Caller should:
+    /// 1. Loop calling `txn.query("FETCH ALL c", &[]).await?`
+    /// 2. Filter out rows where mz_diff = -1
+    /// 3. Use rows where mz_diff = +1 as the current state (no merging needed)
+    pub async fn subscribe_deployment_hydration(
+        &mut self,
+        environment: &str,
+    ) -> Result<tokio_postgres::Transaction<'_>, ConnectionError> {
+        let txn = self.client.transaction().await?;
+
+        let subscribe_sql = r#"
+            DECLARE c CURSOR FOR SUBSCRIBE (
+                WITH replica_hydration AS (
+                    SELECT
+                        c.name,
+                        r.id,
+                        COUNT(*) FILTER (WHERE hydrated) AS hydrated,
+                        COUNT(*) AS total
+                    FROM mz_clusters AS c
+                    JOIN mz_cluster_replicas AS r ON c.id = r.cluster_id
+                    JOIN deploy.clusters AS dc ON c.id = dc.cluster_id
+                    JOIN mz_internal.mz_hydration_statuses AS mhs ON mhs.replica_id = r.id
+                    WHERE dc.environment = $1
+                    GROUP BY 1, 2
+                )
+                SELECT name, MAX(hydrated) AS hydrated, MAX(total) AS total
+                FROM replica_hydration
+                GROUP BY 1
+            )
+        "#;
+
+        txn.execute(subscribe_sql, &[&environment]).await?;
+
+        Ok(txn)
+    }
+
     /// Delete cluster records for a staging deployment.
     pub async fn delete_deployment_clusters(
         &self,

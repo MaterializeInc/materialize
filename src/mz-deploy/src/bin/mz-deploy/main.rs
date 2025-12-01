@@ -1,7 +1,9 @@
 use clap::{Parser, Subcommand};
-use mz_build_info::{BuildInfo, build_info};
+use mz_build_info::{build_info, BuildInfo};
 use mz_deploy::cli;
+use mz_deploy::cli::CliError;
 use mz_deploy::client::config::ProfilesConfig;
+use mz_deploy::client::ConnectionError;
 use mz_deploy::utils::log;
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -169,49 +171,53 @@ enum Command {
         #[arg(short, long, value_name = "N")]
         limit: Option<usize>,
     },
-}
 
-/// Determine if a command needs a database connection
-fn needs_connection(command: &Option<Command>) -> bool {
-    match command {
-        Some(Command::Compile { .. }) => false,
-        Some(Command::Apply { .. }) => true,
-        Some(Command::Stage { .. }) => true,
-        Some(Command::Debug) => true,
-        Some(Command::GenDataContracts) => true,
-        Some(Command::Test) => false, // Test uses Docker, not profile connection
-        Some(Command::Abort { .. }) => true,
-        Some(Command::Deployments) => true,
-        Some(Command::History { .. }) => true,
-        None => false,
-    }
+    /// Wait for staging deployment clusters to be hydrated and ready
+    ///
+    /// Monitors cluster hydration status and displays progress. By default, continuously
+    /// tracks hydration using Materialize's SUBSCRIBE feature with live progress bars
+    /// for each cluster. Use --snapshot to check current status once without waiting.
+    ///
+    /// Examples:
+    ///   # Wait with live progress tracking
+    ///   mz-deploy ready my-staging-env
+    ///
+    ///   # Check status once
+    ///   mz-deploy ready my-staging-env --snapshot
+    ///
+    ///   # With timeout
+    ///   mz-deploy ready my-staging-env --timeout 300
+    Ready {
+        /// Name of the staging environment to check
+        #[arg(value_name = "ENV")]
+        name: String,
+
+        /// Check current status once without continuous tracking
+        #[arg(long)]
+        snapshot: bool,
+
+        /// Maximum time to wait in seconds (default: no timeout)
+        #[arg(long, value_name = "SECONDS")]
+        timeout: Option<u64>,
+    },
 }
 
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
     log::set_verbose(args.verbose);
+    
+    if let Err(e) = run(args).await {
+        cli::display_error(&e);
+    }
+}
 
-    // Load profile once if command needs database connection
-    let profile = if needs_connection(&args.command) {
-        match ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref()) {
-            Ok(p) => Some(p),
-            Err(e) => {
-                cli::display_error(&cli::CliError::Connection(
-                    mz_deploy::client::ConnectionError::Config(e),
-                ));
-                return;
-            }
-        }
-    } else {
-        None
-    };
-
-    let result = match args.command {
+async fn run(args: Args) -> Result<(), CliError> {
+    match args.command {
         Some(Command::Compile {
-            skip_typecheck,
-            docker_image,
-        }) => {
+                 skip_typecheck,
+                 docker_image,
+             }) => {
             let compile_args = cli::commands::compile::CompileArgs {
                 typecheck: !skip_typecheck,
                 docker_image,
@@ -221,54 +227,92 @@ async fn main() {
                 .map(|_| ())
         }
         Some(Command::Apply {
-            staging_env,
-            allow_dirty,
-            force,
-            in_place_dangerous_will_cause_downtime,
-        }) => match staging_env {
-            None => {
-                cli::commands::apply::run(
-                    profile.as_ref(),
-                    &args.directory,
-                    in_place_dangerous_will_cause_downtime,
-                    allow_dirty,
-                )
-                .await
-            }
+                 staging_env,
+                 allow_dirty,
+                 force,
+                 in_place_dangerous_will_cause_downtime,
+             }) => {
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            match staging_env {
+                None => {
+                    cli::commands::apply::run(
+                        &profile,
+                        &args.directory,
+                        in_place_dangerous_will_cause_downtime,
+                        allow_dirty,
+                    )
+                        .await
+                }
 
-            Some(stage_env) => cli::commands::swap::run(profile.as_ref(), &stage_env, force).await,
+                Some(stage_env) => cli::commands::swap::run(&profile, &stage_env, force).await,
+            }
         },
         Some(Command::Stage { name, allow_dirty }) => {
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            
             cli::commands::stage::run(
-                profile.as_ref(),
+                &profile,
                 name.as_deref(),
                 &args.directory,
                 allow_dirty,
             )
-            .await
+                .await
         }
-        Some(Command::Debug) => cli::commands::debug::run(profile.as_ref(), &args.directory).await,
+        Some(Command::Debug) => {
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            
+            cli::commands::debug::run(&profile).await
+        },
         Some(Command::GenDataContracts) => {
-            cli::commands::gen_data_contracts::run(profile.as_ref(), &args.directory).await
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Test) => cli::commands::test::run(&args.directory).await,
         Some(Command::Abort { name }) => {
-            cli::commands::abort::run(profile.as_ref(), &args.directory, &name).await
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            cli::commands::abort::run(&profile, &name).await
         }
         Some(Command::Deployments) => {
-            cli::commands::deployments::run(profile.as_ref(), &args.directory).await
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            cli::commands::deployments::run(&profile).await
         }
         Some(Command::History { limit }) => {
-            cli::commands::history::run(profile.as_ref(), &args.directory, limit).await
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            cli::commands::history::run(&profile, limit).await
+        }
+        Some(Command::Ready { name, snapshot, timeout }) => {
+            let profile = ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                .map_err(|e| CliError::Connection(
+                    ConnectionError::Config(e)
+                ))?;
+            
+            cli::commands::ready::run(&profile, &name, snapshot, timeout).await
         }
         None => {
             // No command provided, do nothing
             Ok(())
         }
-    };
-
-    // Handle errors with proper display
-    if let Err(e) = result {
-        cli::display_error(&e);
     }
 }
+

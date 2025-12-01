@@ -3,7 +3,6 @@
 use crate::cli::{CliError, helpers};
 use crate::client::Profile;
 use owo_colors::OwoColorize;
-use std::path::Path;
 
 /// List all active staging deployments.
 ///
@@ -16,7 +15,6 @@ use std::path::Path;
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
-/// * `_directory` - Project directory (unused, for signature consistency)
 ///
 /// # Returns
 /// Ok(()) if listing succeeds
@@ -24,11 +22,10 @@ use std::path::Path;
 /// # Errors
 /// Returns `CliError::Connection` for database errors
 pub async fn run(
-    profile: Option<&Profile>,
-    _directory: &Path,
+    profile: &Profile,
 ) -> Result<(), CliError> {
     // Connect to database
-    let client = helpers::connect_to_database(profile.unwrap()).await?;
+    let client = helpers::connect_to_database(profile).await?;
 
     // List staging deployments
     let deployments = client.list_staging_deployments().await?;

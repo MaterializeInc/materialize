@@ -108,6 +108,10 @@ pub enum CliError {
     #[error(transparent)]
     TypeCheckFailed(#[from] TypeCheckError),
 
+    /// Timeout waiting for deployment to be ready
+    #[error("timeout waiting for deployment '{name}' to be ready after {seconds} seconds")]
+    ReadyTimeout { name: String, seconds: u64 },
+
     /// I/O error
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -241,6 +245,12 @@ impl CliError {
             ),
             Self::TypeCheckFailed(_) => Some(
                 "review the type checking errors above and fix any SQL syntax or dependency issues"
+                    .to_string(),
+            ),
+            Self::ReadyTimeout { .. } => Some(
+                "deployment is taking longer than expected to hydrate. You can:\n  \
+                 - Increase timeout with --timeout flag\n  \
+                 - Check cluster replica status with: mz-deploy ready <env> --snapshot"
                     .to_string(),
             ),
             Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {
