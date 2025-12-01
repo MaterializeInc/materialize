@@ -3,7 +3,6 @@
 use crate::cli::{CliError, helpers};
 use crate::client::Profile;
 use crate::verbose;
-use std::path::Path;
 
 /// Abort a staged deployment by dropping schemas, clusters, and deployment records.
 ///
@@ -15,7 +14,6 @@ use std::path::Path;
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
-/// * `_directory` - Project directory (unused, for signature consistency)
 /// * `environment` - Staging environment name to abort
 ///
 /// # Returns
@@ -26,14 +24,13 @@ use std::path::Path;
 /// Returns `CliError::StagingAlreadyPromoted` if the environment was already promoted
 /// Returns `CliError::Connection` for database errors
 pub async fn run(
-    profile: Option<&Profile>,
-    _directory: &Path,
+    profile: &Profile,
     environment: &str,
 ) -> Result<(), CliError> {
     println!("Aborting staged deployment: {}", environment);
 
     // Connect to database
-    let client = helpers::connect_to_database(profile.unwrap()).await?;
+    let client = helpers::connect_to_database(profile).await?;
 
     // Validate deployment exists and is not promoted
     let metadata = client.get_deployment_metadata(environment).await?;

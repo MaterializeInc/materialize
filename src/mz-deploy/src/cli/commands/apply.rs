@@ -34,7 +34,7 @@ use std::path::Path;
 /// # Errors
 /// Returns various `CliError` variants for different failure modes
 pub async fn run(
-    profile: Option<&Profile>,
+    profile: &Profile,
     directory: &Path,
     in_place_dangerous_will_cause_downtime: bool,
     allow_dirty: bool,
@@ -54,7 +54,7 @@ pub async fn run(
     println!("Applying SQL to database");
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile.unwrap()).await?;
+    let client = helpers::connect_to_database(profile).await?;
 
     helpers::initialize_deployment_tracking(&client).await?;
 

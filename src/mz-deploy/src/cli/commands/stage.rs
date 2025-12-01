@@ -44,7 +44,7 @@ use std::path::Path;
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Project` for project compilation errors
 pub async fn run(
-    profile: Option<&Profile>,
+    profile: &Profile,
     stage_name: Option<&str>,
     directory: &Path,
     allow_dirty: bool,
@@ -73,7 +73,7 @@ pub async fn run(
     println!("Deploying to staging environment: {}", stage_name);
 
     // Connect to the database
-    let client = helpers::connect_to_database(profile.unwrap()).await?;
+    let client = helpers::connect_to_database(profile).await?;
 
     // Initialize deployment tracking infrastructure
     helpers::initialize_deployment_tracking(&client).await?;

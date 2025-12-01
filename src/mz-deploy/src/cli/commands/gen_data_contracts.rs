@@ -28,11 +28,11 @@ use std::path::Path;
 /// # Errors
 /// Returns `CliError::Project` if project loading fails
 /// Returns `CliError::Connection` if database connection fails
-pub async fn run(profile: Option<&Profile>, directory: &Path) -> Result<(), CliError> {
+pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
     println!("Generating data contracts for external dependencies...");
 
     // Connect to the database
-    let mut client = helpers::connect_to_database(profile.unwrap()).await?;
+    let mut client = helpers::connect_to_database(profile).await?;
 
     // Load and plan the project
     let planned_project = project::plan(directory)?;
