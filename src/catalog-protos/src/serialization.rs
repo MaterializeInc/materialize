@@ -590,6 +590,9 @@ impl RustType<crate::objects::CatalogItemId> for CatalogItemId {
                 CatalogItemId::Transient(x) => {
                     crate::objects::catalog_item_id::Value::Transient(*x)
                 }
+                CatalogItemId::Explain => {
+                    crate::objects::catalog_item_id::Value::Explain(crate::objects::Empty {})
+                }
             }),
         }
     }
@@ -604,6 +607,7 @@ impl RustType<crate::objects::CatalogItemId> for CatalogItemId {
             Some(crate::objects::catalog_item_id::Value::Transient(x)) => {
                 Ok(CatalogItemId::Transient(x))
             }
+            Some(crate::objects::catalog_item_id::Value::Explain(_)) => Ok(CatalogItemId::Explain),
             None => Err(TryFromProtoError::missing_field("CatalogItemId::kind")),
         }
     }

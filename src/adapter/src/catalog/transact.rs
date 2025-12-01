@@ -766,7 +766,46 @@ impl Catalog {
                 };
                 table.collections.insert(version, new_global_id);
 
-                tx.update_item(id, new_entry.into())?;
+                for use_id in new_entry.referenced_by() {
+                    let mut entry = state.get_entry(use_id).clone();
+                    entry.item = entry.item.replace_item_refs(id, new_global_id);
+                    tx.update_item(*use_id, entry.into())?;
+                }
+
+                let old_comment_id = CommentObjectId::Table(id);
+                let new_comment_id = CommentObjectId::Table(new_global_id);
+                if let Some(comments) = state.comments.get_object_comments(old_comment_id) {
+                    tx.drop_comments(&[old_comment_id].into())?;
+                    for (sub, comment) in comments {
+                        tx.update_comment(new_comment_id, *sub, Some(comment.clone()))?;
+                    }
+                }
+
+                let mz_catalog::durable::Item {
+                    id,
+                    oid,
+                    global_id,
+                    schema_id,
+                    name,
+                    create_sql,
+                    owner_id,
+                    privileges,
+                    extra_versions,
+                } = new_entry.into();
+
+                tx.remove_item(id)?;
+                tx.insert_item(
+                    new_global_id,
+                    oid,
+                    global_id,
+                    schema_id,
+                    &name,
+                    create_sql,
+                    owner_id,
+                    privileges,
+                    extra_versions,
+                )?;
+
                 storage_collections_to_register.insert(new_global_id, shard_id);
             }
             Op::CreateDatabase { name, owner_id } => {

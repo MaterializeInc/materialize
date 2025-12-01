@@ -19,5 +19,6 @@ message ProtoCatalogItemId {
     uint64 user = 2;
     uint64 transient = 3;
     uint64 introspection_source_index = 4;
+    google.protobuf.Empty explain = 5;
   }
 }
