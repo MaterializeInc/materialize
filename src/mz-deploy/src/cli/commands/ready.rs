@@ -63,10 +63,7 @@ pub async fn run(
 }
 
 /// Run in snapshot mode: query hydration status once and display.
-async fn run_snapshot(
-    environment: &str,
-    client: &crate::client::Client,
-) -> Result<(), CliError> {
+async fn run_snapshot(environment: &str, client: &crate::client::Client) -> Result<(), CliError> {
     let status = client.get_deployment_hydration_status(environment).await?;
 
     if status.is_empty() {
@@ -112,9 +109,7 @@ async fn run_snapshot(
         println!("{}", "All clusters are ready!".green().bold());
         Ok(())
     } else {
-        Err(CliError::Message(
-            "Some clusters are still hydrating. Use 'mz-deploy ready <env>' without --snapshot to track continuously.".to_string()
-        ))
+        Err(CliError::ClustersHydrating)
     }
 }
 
@@ -191,7 +186,9 @@ async fn monitor_hydration(
 
     loop {
         // Fetch next batch of updates
-        let rows = txn.query("FETCH ALL c", &[]).await
+        let rows = txn
+            .query("FETCH ALL c", &[])
+            .await
             .map_err(|e| CliError::Message(format!("Failed to fetch subscription data: {}", e)))?;
 
         for row in rows {

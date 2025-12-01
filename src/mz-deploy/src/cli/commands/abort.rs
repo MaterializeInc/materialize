@@ -23,10 +23,7 @@ use crate::verbose;
 /// Returns `CliError::StagingEnvironmentNotFound` if the environment doesn't exist
 /// Returns `CliError::StagingAlreadyPromoted` if the environment was already promoted
 /// Returns `CliError::Connection` for database errors
-pub async fn run(
-    profile: &Profile,
-    environment: &str,
-) -> Result<(), CliError> {
+pub async fn run(profile: &Profile, environment: &str) -> Result<(), CliError> {
     println!("Aborting staged deployment: {}", environment);
 
     // Connect to database

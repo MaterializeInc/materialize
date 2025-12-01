@@ -566,9 +566,7 @@ impl Client {
         }
 
         // Step 1: Query mz_catalog to get cluster IDs for the given names
-        let placeholders: Vec<String> = (1..=clusters.len())
-            .map(|i| format!("${}", i))
-            .collect();
+        let placeholders: Vec<String> = (1..=clusters.len()).map(|i| format!("${}", i)).collect();
         let placeholders_str = placeholders.join(", ");
 
         let select_sql = format!(
@@ -576,8 +574,10 @@ impl Client {
             placeholders_str
         );
 
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            clusters.iter().map(|c| c as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = clusters
+            .iter()
+            .map(|c| c as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
 
         let rows = self.client.query(&select_sql, &params).await?;
 
@@ -1170,7 +1170,10 @@ impl Client {
     /// Returns a map from environment name to list of (database, schema) tuples and deployment metadata.
     pub async fn list_staging_deployments(
         &self,
-    ) -> Result<HashMap<String, (std::time::SystemTime, String, Vec<(String, String)>)>, ConnectionError> {
+    ) -> Result<
+        HashMap<String, (std::time::SystemTime, String, Vec<(String, String)>)>,
+        ConnectionError,
+    > {
         use std::time::UNIX_EPOCH;
 
         let query = r#"
@@ -1190,8 +1193,10 @@ impl Client {
             .await
             .map_err(ConnectionError::Query)?;
 
-        let mut deployments: HashMap<String, (std::time::SystemTime, String, Vec<(String, String)>)> =
-            HashMap::new();
+        let mut deployments: HashMap<
+            String,
+            (std::time::SystemTime, String, Vec<(String, String)>),
+        > = HashMap::new();
 
         for row in rows {
             let environment: String = row.get("environment");
@@ -1219,7 +1224,8 @@ impl Client {
     pub async fn list_deployment_history(
         &self,
         limit: Option<usize>,
-    ) -> Result<Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)>, ConnectionError> {
+    ) -> Result<Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)>, ConnectionError>
+    {
         use std::time::UNIX_EPOCH;
 
         // We need to limit unique deployments, not individual schema rows
@@ -1269,7 +1275,8 @@ impl Client {
             .map_err(ConnectionError::Query)?;
 
         // Group by (environment, promoted_at, deployed_by)
-        let mut deployments: Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)> = Vec::new();
+        let mut deployments: Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)> =
+            Vec::new();
         let mut current_key: Option<(String, std::time::SystemTime, String)> = None;
 
         for row in rows {
@@ -1285,7 +1292,12 @@ impl Client {
             // Check if this is a new deployment or same as current
             if current_key.as_ref() != Some(&key) {
                 // Start a new deployment group
-                deployments.push((environment, promoted_at, deployed_by, vec![(database, schema)]));
+                deployments.push((
+                    environment,
+                    promoted_at,
+                    deployed_by,
+                    vec![(database, schema)],
+                ));
                 current_key = Some(key);
             } else {
                 // Add schema to current deployment
