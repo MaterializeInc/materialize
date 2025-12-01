@@ -9,6 +9,7 @@
 
 //! Structured name types for SQL objects.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -1761,20 +1762,50 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 print_id: _,
             } => {
                 let item = self.catalog.get_item(id).at_version(*version);
-                let desc = match item.desc(full_name) {
-                    Ok(desc) => desc,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e.into());
+                let name = normalize::column_name(column_name.column.clone());
+                let desc = match item.item_type() {
+                    CatalogItemType::Type => {
+                        let details = item
+                            .type_details()
+                            .expect("type items must carry type details");
+                        match details.typ.desc(self.catalog) {
+                            Ok(Some(desc)) => Cow::Owned(desc),
+                            Ok(None) => {
+                                if self.status.is_ok() {
+                                    self.status = Err(PlanError::TypeWithoutColumns {
+                                        type_name: full_name.clone().into(),
+                                    });
+                                }
+                                return ast::ColumnName {
+                                    relation: ResolvedItemName::Error,
+                                    column: ResolvedColumnReference::Error,
+                                };
+                            }
+                            Err(e) => {
+                                if self.status.is_ok() {
+                                    self.status = Err(e);
+                                }
+                                return ast::ColumnName {
+                                    relation: ResolvedItemName::Error,
+                                    column: ResolvedColumnReference::Error,
+                                };
+                            }
                         }
-                        return ast::ColumnName {
-                            relation: ResolvedItemName::Error,
-                            column: ResolvedColumnReference::Error,
-                        };
                     }
+                    _ => match item.desc(full_name) {
+                        Ok(desc) => desc,
+                        Err(e) => {
+                            if self.status.is_ok() {
+                                self.status = Err(e.into());
+                            }
+                            return ast::ColumnName {
+                                relation: ResolvedItemName::Error,
+                                column: ResolvedColumnReference::Error,
+                            };
+                        }
+                    },
                 };
 
-                let name = normalize::column_name(column_name.column.clone());
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
                     if self.status.is_ok() {
                         let similar = desc.iter_similar_names(&name).cloned().collect();

@@ -378,7 +378,7 @@ CREATE TYPE custom_map_type AS MAP (KEY TYPE = text, VALUE TYPE = custom_type)
 statement ok
 COMMENT ON TYPE custom_map_type IS 'custom_map_type_comment';
 
-statement error cannot be depended upon
+statement error does not have addressable columns
 COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 
 query TT rowsort
@@ -394,10 +394,10 @@ CREATE TYPE custom_list_type AS LIST (ELEMENT TYPE = custom_type)
 statement ok
 COMMENT ON TYPE custom_list_type IS 'custom_list_type_comment';
 
-statement error cannot be depended upon
+statement error does not have addressable columns
 COMMENT ON COLUMN custom_list_type.element IS 'comment_on_element';
 
-statement error cannot be depended upon
+statement error does not have addressable columns
 COMMENT ON COLUMN custom_map_type.key IS 'comment_on_key';
 
 statement ok

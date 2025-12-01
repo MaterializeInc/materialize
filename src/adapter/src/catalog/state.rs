@@ -1419,14 +1419,15 @@ impl CatalogState {
                 cluster_id: in_cluster,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
-                let desc = match typ.inner.desc(&session_catalog) {
-                    Ok(desc) => desc,
-                    Err(err) => return Err((err.into(), cached_expr)),
-                };
+                // Even if we don't need the `RelationDesc` here, error out
+                // early and eagerly, as a kind of soft assertion that we _can_
+                // build the `RelationDesc` when needed.
+                if let Err(err) = typ.inner.desc(&session_catalog) {
+                    return Err((err.into(), cached_expr));
+                }
                 CatalogItem::Type(Type {
                     create_sql: Some(typ.create_sql),
                     global_id,
-                    desc,
                     details: CatalogTypeDetails {
                         array_id: None,
                         typ: typ.inner,

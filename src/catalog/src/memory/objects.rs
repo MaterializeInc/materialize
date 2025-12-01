@@ -40,9 +40,9 @@ use mz_sql::ast::{
 };
 use mz_sql::catalog::{
     CatalogClusterReplica, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem,
-    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogTypeDetails,
-    DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference, RoleAttributes, RoleMembership,
-    RoleVars, SystemObjectType,
+    CatalogItemType as SqlCatalogItemType, CatalogItemType, CatalogSchema, CatalogType,
+    CatalogTypeDetails, DefaultPrivilegeAclItem, DefaultPrivilegeObject, IdReference,
+    RoleAttributes, RoleMembership, RoleVars, SystemObjectType,
 };
 use mz_sql::names::{
     Aug, CommentObjectId, DatabaseId, DependencyIds, FullItemName, QualifiedItemName,
@@ -1486,7 +1486,6 @@ pub struct Type {
     pub global_id: GlobalId,
     #[serde(skip)]
     pub details: CatalogTypeDetails<IdReference>,
-    pub desc: Option<RelationDesc>,
     /// Other catalog objects referenced by this type.
     pub resolved_ids: ResolvedIds,
 }
@@ -1706,6 +1705,14 @@ impl CatalogItem {
         }
     }
 
+    /// Returns the [`RelationDesc`] for items that yield rows, at the requested
+    /// version.
+    ///
+    /// Some item types honor `version` so callers can ask for the schema that
+    /// matches a specific [`GlobalId`] or historical definition. Other relation
+    /// types ignore `version` because they have a single shape. Non-relational
+    /// items ( for example functions, indexes, sinks, secrets, and connections)
+    /// return [`SqlCatalogError::InvalidDependency`].
     pub fn desc(
         &self,
         name: &FullItemName,
@@ -1727,13 +1734,13 @@ impl CatalogItem {
             CatalogItem::MaterializedView(mview) => {
                 Some(Cow::Owned(mview.desc.at_version(version)))
             }
-            CatalogItem::Type(typ) => typ.desc.as_ref().map(Cow::Borrowed),
             CatalogItem::ContinualTask(ct) => Some(Cow::Borrowed(&ct.desc)),
             CatalogItem::Func(_)
             | CatalogItem::Index(_)
             | CatalogItem::Sink(_)
             | CatalogItem::Secret(_)
-            | CatalogItem::Connection(_) => None,
+            | CatalogItem::Connection(_)
+            | CatalogItem::Type(_) => None,
         }
     }
 
@@ -2434,7 +2441,12 @@ impl CatalogEntry {
 
     /// Reports if the item has columns.
     pub fn has_columns(&self) -> bool {
-        self.desc_opt_latest().is_some()
+        match self.item() {
+            CatalogItem::Type(Type { details, .. }) => {
+                matches!(details.typ, CatalogType::Record { .. })
+            }
+            _ => self.desc_opt_latest().is_some(),
+        }
     }
 
     /// Returns the [`mz_sql::func::Func`] associated with this `CatalogEntry`.
