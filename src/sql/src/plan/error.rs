@@ -70,6 +70,9 @@ pub enum PlanError {
         table: Option<PartialItemName>,
         column: ColumnName,
     },
+    TypeWithoutColumns {
+        type_name: PartialItemName,
+    },
     WrongJoinTypeForLateralColumn {
         table: Option<PartialItemName>,
         column: ColumnName,
@@ -530,6 +533,11 @@ impl fmt::Display for PlanError {
                 f,
                 "column {} must appear in the GROUP BY clause or be used in an aggregate function",
                 ColumnDisplay { table, column },
+            ),
+            Self::TypeWithoutColumns { type_name } => write!(
+                f,
+                "type {} does not have addressable columns",
+                type_name.item.quoted(),
             ),
             Self::WrongJoinTypeForLateralColumn { table, column } => write!(
                 f,

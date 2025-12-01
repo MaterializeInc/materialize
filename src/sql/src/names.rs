@@ -1772,10 +1772,8 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                             Ok(Some(desc)) => Cow::Owned(desc),
                             Ok(None) => {
                                 if self.status.is_ok() {
-                                    self.status = Err(PlanError::UnknownColumn {
-                                        table: Some(full_name.clone().into()),
-                                        column: name.clone(),
-                                        similar: Box::<[ColumnName]>::from([]),
+                                    self.status = Err(PlanError::TypeWithoutColumns {
+                                        type_name: full_name.clone().into(),
                                     });
                                 }
                                 return ast::ColumnName {
