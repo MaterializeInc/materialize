@@ -11,6 +11,10 @@
 # Test postgres EXCLUDE COLUMNS support
 #
 
+
+$ skip-if
+SELECT mz_version_num() < 16200;
+
 > CREATE SECRET pgpass AS 'postgres'
 > CREATE CONNECTION pg TO POSTGRES (
     HOST postgres,
