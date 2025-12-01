@@ -9,6 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::num::NonZero;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use std::{env, fmt};
@@ -49,6 +50,7 @@ use mz_orchestrator::{
     OfflineReason, Orchestrator, Service, ServiceAssignments, ServiceConfig, ServiceEvent,
     ServiceProcessMetrics, ServiceStatus, scheduling_config::*,
 };
+use mz_ore::cast::CastInto;
 use mz_ore::retry::Retry;
 use mz_ore::task::AbortOnDropHandle;
 use serde::Deserialize;
@@ -216,7 +218,7 @@ impl Orchestrator for KubernetesOrchestrator {
 
 #[derive(Clone, Copy)]
 struct ServiceInfo {
-    scale: u16,
+    scale: NonZero<u16>,
 }
 
 struct NamespacedKubernetesOrchestrator {
@@ -267,7 +269,7 @@ enum WorkerCommand {
 #[derive(Debug, Clone)]
 struct ServiceDescription {
     name: String,
-    scale: u16,
+    scale: NonZero<u16>,
     service: K8sService,
     stateful_set: StatefulSet,
     pod_template_hash: String,
@@ -655,7 +657,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
             status: None,
         };
 
-        let hosts = (0..scale)
+        let hosts = (0..scale.get())
             .map(|i| {
                 format!(
                     "{name}-{i}.{name}.{}.svc.cluster.local",
@@ -751,7 +753,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
         let topology_spread = if scheduling_config.topology_spread.enabled {
             let config = &scheduling_config.topology_spread;
 
-            if !config.ignore_non_singular_scale || scale <= 1 {
+            if !config.ignore_non_singular_scale || scale.get() == 1 {
                 let label_selector_requirements = (if config.ignore_non_singular_scale {
                     let mut replicas_selector_ignoring_scale = replicas_selector.clone();
 
@@ -1196,7 +1198,7 @@ impl NamespacedOrchestrator for NamespacedKubernetesOrchestrator {
                     ..Default::default()
                 },
                 service_name: Some(name.clone()),
-                replicas: Some(scale.into()),
+                replicas: Some(scale.cast_into()),
                 template: pod_template_spec,
                 update_strategy: Some(StatefulSetUpdateStrategy {
                     type_: Some("OnDelete".to_owned()),
@@ -1418,7 +1420,7 @@ impl OrchestratorWorker {
         info: &ServiceInfo,
     ) -> Vec<ServiceProcessMetrics> {
         if !self.collect_pod_metrics {
-            return (0..info.scale)
+            return (0..info.scale.get())
                 .map(|_| ServiceProcessMetrics::default())
                 .collect();
         }
@@ -1559,8 +1561,9 @@ impl OrchestratorWorker {
             Ok(usage)
         }
 
-        let ret =
-            futures::future::join_all((0..info.scale).map(|i| get_metrics(self, name, i.into())));
+        let ret = futures::future::join_all(
+            (0..info.scale.cast_into()).map(|i| get_metrics(self, name, i)),
+        );
 
         ret.await
     }
@@ -1611,7 +1614,7 @@ impl OrchestratorWorker {
         // Our pod recreation policy is simple: If a pod's template hash changed, delete it, and
         // let the StatefulSet controller recreate it. Otherwise, patch the existing pod's
         // annotations to line up with the ones in the spec.
-        for pod_id in 0..desc.scale {
+        for pod_id in 0..desc.scale.get() {
             let pod_name = format!("{}-{pod_id}", desc.name);
             let pod = match self.pod_api.get(&pod_name).await {
                 Ok(pod) => pod,

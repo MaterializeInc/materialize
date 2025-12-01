@@ -2136,7 +2136,7 @@ impl CatalogState {
 
             let row = Row::pack_slice(&[
                 size.as_str().into(),
-                u64::from(alloc.scale).into(),
+                u64::cast_from(alloc.scale).into(),
                 u64::cast_from(alloc.workers).into(),
                 cpu_limit.as_nanocpus().into(),
                 memory_bytes.into(),
