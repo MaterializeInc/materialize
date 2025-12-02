@@ -269,6 +269,10 @@ impl<T: TimestampManipulation> Session<T> {
         ))
     }
 
+    pub(crate) fn qcell_ro<'a, T2: 'a>(&'a self, cell: &'a Arc<QCell<T2>>) -> &'a T2 {
+        self.qcell_owner.ro(&*cell)
+    }
+
     pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
         self.qcell_owner.rw(&*cell)
     }
