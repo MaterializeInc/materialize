@@ -344,7 +344,7 @@ cleanup() {
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] \
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] \
     && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]] \
-    && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ test\ .* ]] \
+    && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]]; then
       echo "+++ services.log is empty, failing"
       exit 1
