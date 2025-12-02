@@ -157,18 +157,21 @@ nodes:
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
+      materialize.cloud/swap: true
       materialize.cloud/availability-zone: "1"
       topology.kubernetes.io/zone: "1"
   - role: worker
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
+      materialize.cloud/swap: true
       materialize.cloud/availability-zone: "2"
       topology.kubernetes.io/zone: "2"
   - role: worker
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
+      materialize.cloud/swap: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
 
@@ -177,6 +180,7 @@ nodes:
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: false
+      materialize.cloud/swap: false
       materialize.cloud/availability-zone: "1"
       topology.kubernetes.io/zone: "1"
 
@@ -185,11 +189,13 @@ nodes:
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
+      materialize.cloud/swap: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
   - role: worker
     image: kindest/node:v1.31.6
     labels:
       materialize.cloud/disk: true
+      materialize.cloud/swap: true
       materialize.cloud/availability-zone: "3"
       topology.kubernetes.io/zone: "3"
