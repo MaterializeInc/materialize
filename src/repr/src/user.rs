@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Metadata about a user in an external system.
@@ -19,7 +19,7 @@ pub struct ExternalUserMetadata {
     pub admin: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalUserMetadata {
     pub superuser: bool,
 }
