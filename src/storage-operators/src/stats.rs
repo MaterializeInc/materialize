@@ -93,19 +93,13 @@ impl StatsCursor {
     ) -> Option<impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, StorageDiff)> + '_>
     {
         fn expect_decode(
-            raw: impl Iterator<
-                Item = (
-                    (Result<SourceData, String>, Result<(), String>),
-                    Timestamp,
-                    StorageDiff,
-                ),
-            >,
+            raw: impl Iterator<Item = ((SourceData, ()), Timestamp, StorageDiff)>,
             is_err: bool,
         ) -> impl Iterator<Item = (Result<Row, DataflowError>, Timestamp, StorageDiff)> {
             raw.map(|((k, v), t, d)| {
                 // NB: this matches the decode behaviour in sources
-                let SourceData(row) = k.expect("decode error");
-                let () = v.expect("decode error");
+                let SourceData(row) = k;
+                let () = v;
                 (row, t, d)
             })
             .filter(move |(r, _, _)| if is_err { r.is_err() } else { r.is_ok() })

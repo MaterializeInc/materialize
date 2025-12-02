@@ -112,11 +112,7 @@ pub struct Transactor {
     // Keep a long-lived listen, which is incrementally read as we go. Then
     // assert that it has the same data as the short-lived snapshot+listen in
     // `read`. This hopefully stresses slightly different parts of the system.
-    long_lived_updates: Vec<(
-        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-        u64,
-        i64,
-    )>,
+    long_lived_updates: Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
     long_lived_listen: Listen<MaelstromKey, MaelstromVal, u64, i64>,
 }
 
@@ -241,11 +237,7 @@ impl Transactor {
         &mut self,
     ) -> Result<
         (
-            Vec<(
-                (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-                u64,
-                i64,
-            )>,
+            Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
             Antichain<u64>,
         ),
         MaelstromError,
@@ -382,14 +374,7 @@ impl Transactor {
     async fn listen_through(
         mut listen: Listen<MaelstromKey, MaelstromVal, u64, i64>,
         frontier: &Antichain<u64>,
-    ) -> Result<
-        Vec<(
-            (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-            u64,
-            i64,
-        )>,
-        ExternalError,
-    > {
+    ) -> Result<Vec<((MaelstromKey, MaelstromVal), u64, i64)>, ExternalError> {
         let mut ret = Vec::new();
         loop {
             for event in listen.fetch_next().await {
@@ -415,11 +400,7 @@ impl Transactor {
     async fn read_long_lived(
         &mut self,
         as_of: &Antichain<u64>,
-    ) -> Vec<(
-        (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-        u64,
-        i64,
-    )> {
+    ) -> Vec<((MaelstromKey, MaelstromVal), u64, i64)> {
         while PartialOrder::less_equal(self.long_lived_listen.frontier(), as_of) {
             for event in self.long_lived_listen.fetch_next().await {
                 match event {
@@ -450,11 +431,7 @@ impl Transactor {
 
     fn extract_state_map(
         read_ts: u64,
-        updates: Vec<(
-            (Result<MaelstromKey, String>, Result<MaelstromVal, String>),
-            u64,
-            i64,
-        )>,
+        updates: Vec<((MaelstromKey, MaelstromVal), u64, i64)>,
     ) -> Result<BTreeMap<MaelstromKey, MaelstromVal>, MaelstromError> {
         let mut ret = BTreeMap::new();
         for ((k, v), _, d) in updates {
@@ -464,14 +441,6 @@ impl Transactor {
                     text: format!("invalid read at time {}", read_ts),
                 });
             }
-            let k = k.map_err(|err| MaelstromError {
-                code: ErrorCode::Crash,
-                text: format!("invalid key {}", err),
-            })?;
-            let v = v.map_err(|err| MaelstromError {
-                code: ErrorCode::Crash,
-                text: format!("invalid val {}", err),
-            })?;
             if ret.contains_key(&k) {
                 return Err(MaelstromError {
                     code: ErrorCode::Crash,

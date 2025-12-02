@@ -970,10 +970,7 @@ mod tests {
             .expect("client construction failed")
     }
 
-    pub fn all_ok<'a, K, V, T, D, I>(
-        iter: I,
-        as_of: T,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
+    pub fn all_ok<'a, K, V, T, D, I>(iter: I, as_of: T) -> Vec<((K, V), T, D)>
     where
         K: Ord + Clone + 'a,
         V: Ord + Clone + 'a,
@@ -987,7 +984,7 @@ mod tests {
             .map(|((k, v), t, d)| {
                 let mut t = t.clone();
                 t.advance_by(as_of.borrow());
-                ((Ok(k.clone()), Ok(v.clone())), t, d.clone())
+                ((k.clone(), v.clone()), t, d.clone())
             })
             .collect();
         consolidate_updates(&mut ret);
@@ -999,13 +996,10 @@ mod tests {
         key: &BlobKey,
         metrics: &Metrics,
         read_schemas: &Schemas<K, V>,
-    ) -> (
-        BlobTraceBatchPart<T>,
-        Vec<((Result<K, String>, Result<V, String>), T, D)>,
-    )
+    ) -> (BlobTraceBatchPart<T>, Vec<((K, V), T, D)>)
     where
-        K: Codec,
-        V: Codec,
+        K: Codec + Clone,
+        V: Codec + Clone,
         T: Timestamp + Codec64,
         D: Codec64,
     {
@@ -1016,22 +1010,13 @@ mod tests {
             .expect("missing part");
         let mut part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
-        // Ensure codec data is present even if it was not generated at write time.
-        let _ = part
+        let structured = part
             .updates
-            .get_or_make_codec::<K, V>(&read_schemas.key, &read_schemas.val);
-        let mut updates = Vec::new();
-        // TODO(bkirwi): switch to structured data in tests
-        for ((k, v), t, d) in part.updates.records().expect("codec data").iter() {
-            updates.push((
-                (
-                    K::decode(k, &read_schemas.key),
-                    V::decode(v, &read_schemas.val),
-                ),
-                T::decode(t),
-                D::decode(d),
-            ));
-        }
+            .into_part::<K, V>(&*read_schemas.key, &*read_schemas.val);
+        let updates = structured
+            .decode_iter::<K, V, T, D>(&*read_schemas.key, &*read_schemas.val)
+            .expect("structured data")
+            .collect();
         (part, updates)
     }
 
@@ -1973,7 +1958,7 @@ mod tests {
         assert_eq!(
             listen_next.await,
             vec![
-                ListenEvent::Updates(vec![((Ok("2".to_owned()), Ok("two".to_owned())), 2, 1)]),
+                ListenEvent::Updates(vec![(("2".to_owned(), "two".to_owned()), 2, 1)]),
                 ListenEvent::Progress(Antichain::from_elem(3)),
             ]
         );

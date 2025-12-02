@@ -169,8 +169,8 @@ impl<C: DurableCacheCodec> DurableCache<C> {
                             consolidate_updates(&mut updates);
                             updates.sort_by(|(_, _, d1), (_, _, d2)| d1.cmp(d2));
                             for ((k, v), t, d) in updates {
-                                let encoded_key = k.unwrap();
-                                let encoded_val = v.unwrap();
+                                let encoded_key = k;
+                                let encoded_val = v;
                                 let (decoded_key, decoded_val) =
                                     C::decode(&encoded_key, &encoded_val);
                                 let val = LocalVal {
