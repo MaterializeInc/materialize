@@ -137,7 +137,7 @@ use the new setting `rolloutStrategy` to specify either:
 - `WaitUntilReady` (*Default*)
 - `ImmediatelyPromoteCausingDowntime`
 
-For more information, see [`rolloutStrategy`](/installation/#rollout-strategies).
+For more information, see [`rolloutStrategy`](/installation/upgrading/#rollout-strategies).
 
 ### Terraform helpers
 
@@ -186,7 +186,7 @@ See also Upgrade Notes for release specific notes.
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
 
-See also [General notes for upgrades](/installation/#general-notes-for-upgrades).
+See also [Version specific upgrade notes](/installation/upgrading/#version-specific-upgrade-notes).
 
 ## Self-managed release versions
 

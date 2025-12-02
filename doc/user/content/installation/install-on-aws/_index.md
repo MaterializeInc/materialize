@@ -16,8 +16,8 @@ menu:
 
 | Guide | Description |
 |-------|-------------|
-| [Terraform Provider](/installation/install-on-aws/terraform-module/) | Install Materialize on AWS using our new Unified Terraform Provider  |
-| [Terraform Provider (legacy)](/installation/install-on-aws/legacy-terraform-module/) | Install Materialize on AWS using our Terraform Provider (legacy) |
+| [Terraform Provider](/installation/install-on-aws/terraform-module/) | Install Materialize on AWS using our new unified Terraform Provider  |
+| [Terraform Provider (legacy)](/installation/install-on-aws/legacy-terraform-module/) | Install Materialize on AWS using our legacy Terraform Provider |
 | [Appendix: AWS deployment guidelines](/installation/install-on-aws/appendix-deployment-guidelines/) | Additional guidelines for AWS deployments |
 
 ## See also

@@ -10,11 +10,10 @@ The following provides a general outline and examples for upgrading Materialize.
 
 For a more specific set of steps, please consult the deployment-specific upgrade
 documentation:
- - [Minikube](/installation/install-on-local-minikube/upgrade-on-local-minikube/)
  - [Kind](/installation/install-on-local-kind/upgrade-on-local-kind/)
- - [AWS](/installation/install-on-aws/legacy-terraform-module/upgrade/)
- - [GCP](/installation/install-on-gcp/legacy-terraform-module/upgrade/)
- - [Azure](/installation/install-on-azure/legacy-terraform-module/upgrade/)
+ - [AWS (legacy Terraform)](/installation/install-on-aws/legacy-terraform-module/upgrade/)
+ - [GCP (legacy Terraform)](/installation/install-on-gcp/legacy-terraform-module/upgrade/)
+ - [Azure (legacy Terraform)](/installation/install-on-azure/legacy-terraform-module/upgrade/)
 
 ***When upgrading always***:
 - Upgrade the operator first and ensure version compatibility between the operator and the Materialize instance you are upgrading to.
@@ -164,21 +163,15 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
 ### Version Specific Upgrade Notes
 
-#### Upgrading to `v26.0`
-- This is a major version upgrade. In order to upgrade to `v26.0`, you must first upgrade to `v25.2.15`, then upgrade to `v26.0.0`.
-- New requirements were introduced for license keys. In order to upgrade, you will
-  first need to add a license key to the `backendSecret` used in the spec for your
-  Materialize resource. Please refer to our [instructions on how to get and install a license keys](/installation/faq#how-do-i-get-a-license-key).
-- Swap is now enabled by default. Swap reduces the memory required to
-  operate Materialize and improves cost efficiency. Upgrading to `v26.0`
-  requires some preparation to ensure kubernetes nodes are labeled
-  and configured correctly. Please refer to our guides:
-
-  {{< yaml-table data="self_managed/enable_swap_upgrade_guides" >}}
-
+#### Upgrading to `v26.1` and later versions
+{{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
 
 #### Upgrading between minor versions less than `v26`
  - Prior to `v26`, you must upgrade at most one minor version at a time. For example, upgrading from `v25.1.5` to `v25.2.15` is permitted.
+
+#### Upgrading between minor versions less than `v26`
+ - Prior to `v26`, you must upgrade at most one minor version at a time. For
+   example, upgrading from `v25.1.5` to `v25.2.16` is permitted.
 
 ## See also
 

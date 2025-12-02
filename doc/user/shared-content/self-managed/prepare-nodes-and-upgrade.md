@@ -15,7 +15,7 @@ Materialize-provided Terraforms.
 {{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md"
 >}}
 
-See also [General notes for upgrades](/installation/#general-notes-for-upgrades)
+See also [Upgrade Overview](/installation/upgrading/)
 {{< /tip >}}
 
 1. Label existing scratchfs/lgalloc node groups.

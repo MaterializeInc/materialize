@@ -9,19 +9,17 @@ menu:
 ---
 
 Materialize provides a set of modular Terraform modules that can be used to
-deploy all services required for a production ready Materialize database.
+deploy all services required for Materialize to run on Google Cloud.
 The module is intended to provide a simple set of examples on how to deploy
-materialize. It can be used as is or modules can be taken from the example and
+Materialize. It can be used as is or modules can be taken from the example and
 integrated with existing DevOps tooling.
 
-The repository can be found at:
+The repository can be found at: ***[Materialize Terraform Self-Managed GCP](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp)***
 
-***[Materialize Terraform Self-Managed GCP](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp)***
 
-Please see the [top level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main) and [cloud specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp) documentation for a full understanding
-of the module structure and customizations.
-
-Also check out the [GCP deployment guide](/installation/install-on-gcp/appendix-deployment-guidelines/) for details on recommended instance sizing and configuration.
+For details on the module structure and customization, see:
+* [top level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
+* [cloud specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp)
 
 {{< note >}}
 {{% self-managed/materialize-components-sentence %}}
@@ -45,7 +43,7 @@ Also check out the [GCP deployment guide](/installation/install-on-gcp/appendix-
 
 #### License key
 
-{{< include-md file="shared-content/license-key-required.md" >}}
+{{< yaml-table data="self_managed/license_key" >}}
 
 ---
 
@@ -65,41 +63,57 @@ cd materialize-terraform-self-managed/gcp/examples/simple
 This example provisions the following infrastructure:
 
 ### Networking
-- **VPC Network**: Custom VPC with auto-create subnets disabled
-- **Subnet**: 192.168.0.0/20 primary range with private Google access enabled
-- **Secondary Ranges**:
-  - Pods: 192.168.64.0/18
-  - Services: 192.168.128.0/20
-- **Cloud Router**: For NAT and routing configuration
-- **Cloud NAT**: For outbound internet access from private nodes
-- **VPC Peering**: Service networking connection for Cloud SQL private access
+
+| Resource | Description |
+|----------|-------------|
+| VPC Network | Custom VPC with auto-create subnets disabled |
+| Subnet | 192.168.0.0/20 primary range with private Google access enabled |
+| Secondary Ranges | Pods: 192.168.64.0/18, Services: 192.168.128.0/20 |
+| Cloud Router | For NAT and routing configuration |
+| Cloud NAT | For outbound internet access from private nodes |
+| VPC Peering | Service networking connection for Cloud SQL private access |
 
 ### Compute
-- **GKE Cluster**: Regional cluster with Workload Identity enabled
-- **Generic Node Pool**: e2-standard-8 machines, autoscaling 2-5 nodes, 50GB disk, for general workloads
-- **Materialize Node Pool**: n2-highmem-8 machines, autoscaling 2-5 nodes, 100GB disk, 1 local SSD, swap enabled, dedicated taints for Materialize workloads
-- **Service Account**: GKE service account with workload identity binding
+
+| Resource | Description |
+|----------|-------------|
+| GKE Cluster | Regional cluster with Workload Identity enabled |
+| Generic Node Pool | e2-standard-8 machines, autoscaling 2-5 nodes, 50GB disk, for general workloads |
+| Materialize Node Pool | n2-highmem-8 machines, autoscaling 2-5 nodes, 100GB disk, 1 local SSD, swap enabled, dedicated taints for Materialize workloads |
+| Service Account | GKE service account with workload identity binding |
 
 ### Database
-- **Cloud SQL PostgreSQL**: Private IP only (no public IP)
-- **Tier**: db-custom-2-4096 (2 vCPUs, 4GB memory)
-- **Database**: `materialize` database with UTF8 charset
-- **User**: `materialize` user with auto-generated password
-- **Network**: Connected via VPC peering for private access
+
+| Resource | Description |
+|----------|-------------|
+| Cloud SQL PostgreSQL | Private IP only (no public IP) |
+| Tier | db-custom-2-4096 (2 vCPUs, 4GB memory) |
+| Database | `materialize` database with UTF8 charset |
+| User | `materialize` user with auto-generated password |
+| Network | Connected via VPC peering for private access |
 
 ### Storage
-- **Cloud Storage Bucket**: Regional bucket for Materialize persistence
-- **Access**: HMAC keys for S3-compatible access (Workload Identity service account with storage permissions is configured but not currently used by Materialize for GCS access, in future we will remove HMAC keys and support access to GCS either via Workload Identity Federation or via Kubernetes ServiceAccounts that impersonate IAM service accounts)
-- **Versioning**: Disabled (for testing; enable in production)
+
+| Resource | Description |
+|----------|-------------|
+| Cloud Storage Bucket | Regional bucket for Materialize persistence |
+| Access | HMAC keys for S3-compatible access (Workload Identity service account with storage permissions is configured but not currently used by Materialize for GCS access, in future we will remove HMAC keys and support access to GCS either via Workload Identity Federation or via Kubernetes ServiceAccounts that impersonate IAM service accounts) |
+| Versioning | Disabled (for testing; enable in production) |
 
 ### Kubernetes Add-ons
-- **cert-manager**: Certificate management controller for Kubernetes that automates TLS certificate provisioning and renewal
-- **Self-signed ClusterIssuer**: Provides self-signed TLS certificates for Materialize instance internal communication (balancerd, console). Used by the Materialize instance for secure inter-component communication.
+
+| Resource | Description |
+|----------|-------------|
+| cert-manager | Certificate management controller for Kubernetes that automates TLS certificate provisioning and renewal |
+| Self-signed ClusterIssuer | Provides self-signed TLS certificates for Materialize instance internal communication (balancerd, console). Used by the Materialize instance for secure inter-component communication. |
 
 ### Materialize
-- **Operator**: Materialize Kubernetes operator in `materialize` namespace
-- **Instance**: Single Materialize instance in `materialize-environment` namespace
-- **Load Balancers**: GCP Load Balancers for Materialize access
+
+| Resource | Description |
+|----------|-------------|
+| Operator | Materialize Kubernetes operator in `materialize` namespace |
+| Instance | Single Materialize instance in `materialize-environment` namespace |
+| Load Balancers | GCP Load Balancers for Materialize access |
 
 ---
 
@@ -125,7 +139,7 @@ Before running Terraform, create a `terraform.tfvars` file with the following va
 project_id  = "my-gcp-project"
 name_prefix = "simple-demo"
 region      = "us-central1"
-license_key = "your-materialize-license-key"  # Optional: Get from https://materialize.com/self-managed/
+license_key = "your-materialize-license-key"
 labels = {
   environment = "demo"
   created_by  = "terraform"
