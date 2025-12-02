@@ -27,18 +27,27 @@ from materialize import MZ_ROOT, ui
 from materialize.docker import image_registry
 
 DEV_IMAGE_TAG = "local-dev"
-DEFAULT_POSTGRES = (
-    "postgres://root@postgres.materialize.svc.cluster.local:5432/materialize"
-)
-DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
+DEFAULT_POSTGRES = "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+DEFAULT_MINIO = "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
 
 
 def main():
     os.chdir(MZ_ROOT)
+    # Console is not on GHCR yet
+    os.environ["MZ_GHCR"] = "0"
 
     parser = argparse.ArgumentParser(
         prog="orchestratord",
-        description="""Runs orchestratord within a local kind cluster""",
+        description="Runs orchestratord within a local kind cluster",
+        usage="""
+For a new setup you can run:
+  kind delete cluster
+  kind create cluster --config misc/kind/cluster.yaml
+  kubectl create namespace materialize
+  kubectl apply -f misc/helm-charts/testing/postgres.yaml
+  kubectl apply -f misc/helm-charts/testing/minio.yaml
+  bin/orchestratord run
+  bin/orchestratord environment --license-key-file ~/license-key""",
     )
     parser.add_argument(
         "--kind-cluster-name",
