@@ -63,6 +63,12 @@ class PostgresRecvlogical(MzComposeService):
             f"{replication_slot_name}",
             "--file",
             "-",
+            # We pass the maximum allowed fsync-interval (~24 days) to prevent
+            # this process from advancing the slot. The purpose of this reader
+            # is to just mark the slot as busy, not to move its reserved WAL
+            # forward.
+            "--fsync-interval",
+            "2147483",
             "--dbname",
             "postgres",
             "--host",
