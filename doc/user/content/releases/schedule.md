@@ -47,7 +47,7 @@ page](https://status.materialize.com). You can also use the [status page API](ht
 
 ## Self-Managed release schedule
 
-In general, Materialize releases new Self-Managed versions on Thursday/Friday.
+In general, Materialize releases new Self-Managed versions on Friday.
 
 {{< note >}}
 
