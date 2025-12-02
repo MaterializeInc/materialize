@@ -16,6 +16,7 @@ use std::iter;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use differential_dataflow::consolidation::consolidate_updates;
 use futures::future;
 use itertools::{Either, Itertools};
 use mz_adapter_types::connection::ConnectionId;
@@ -61,6 +62,7 @@ use tracing::{Instrument, info_span, warn};
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState};
+use crate::coord::catalog_implications::parsed_state_updates::{self, ParsedStateUpdate};
 use crate::util::index_sql;
 
 /// Maintains the state of retractions while applying catalog state updates for a single timestamp.
@@ -101,8 +103,12 @@ impl CatalogState {
         &mut self,
         updates: Vec<StateUpdate>,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> (
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        Vec<ParsedStateUpdate>,
+    ) {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
+        let mut catalog_updates = Vec::with_capacity(updates.len());
         let updates = sort_updates(updates);
 
         let mut groups: Vec<Vec<_>> = Vec::new();
@@ -115,7 +121,7 @@ impl CatalogState {
 
             for update in updates {
                 let next_apply_state = BootstrapApplyState::new(update);
-                let (next_apply_state, builtin_table_update) = apply_state
+                let (next_apply_state, (builtin_table_update, catalog_update)) = apply_state
                     .step(
                         next_apply_state,
                         self,
@@ -125,15 +131,18 @@ impl CatalogState {
                     .await;
                 apply_state = next_apply_state;
                 builtin_table_updates.extend(builtin_table_update);
+                catalog_updates.extend(catalog_update);
             }
 
             // Apply remaining state.
-            let builtin_table_update = apply_state
+            let (builtin_table_update, catalog_update) = apply_state
                 .apply(self, &mut retractions, local_expression_cache)
                 .await;
             builtin_table_updates.extend(builtin_table_update);
+            catalog_updates.extend(catalog_update);
         }
-        builtin_table_updates
+
+        (builtin_table_updates, catalog_updates)
     }
 
     /// Update in-memory catalog state from a list of updates made to the durable catalog state.
@@ -143,21 +152,66 @@ impl CatalogState {
     pub(crate) fn apply_updates(
         &mut self,
         updates: Vec<StateUpdate>,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        CatalogError,
+    > {
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
+        let mut catalog_updates = Vec::with_capacity(updates.len());
+
+        // First, consolidate updates. The code that applies parsed state
+        // updates _requires_ that the given updates are consolidated. There
+        // must be at most one addition and/or one retraction for a given item,
+        // as identified by that items ID type.
+        let updates = Self::consolidate_updates(updates);
+
+        // Then bring it into the pseudo-topological order that we need for
+        // updating our in-memory state and generating builtin table updates.
         let updates = sort_updates(updates);
 
         for (_, updates) in &updates.into_iter().chunk_by(|update| update.ts) {
             let mut retractions = InProgressRetractions::default();
-            let builtin_table_update = self.apply_updates_inner(
+            let (builtin_table_update, catalog_updates_op) = self.apply_updates_inner(
                 updates.collect(),
                 &mut retractions,
                 &mut LocalExpressionCache::Closed,
             )?;
             builtin_table_updates.extend(builtin_table_update);
+            catalog_updates.extend(catalog_updates_op);
         }
 
-        Ok(builtin_table_updates)
+        Ok((builtin_table_updates, catalog_updates))
+    }
+
+    /// It can happen that the sequencing logic creates "fluctuating" updates
+    /// for a given catalog ID. For example, when doing a `DROP OWNED BY ...`,
+    /// for a table, there will be a retraction of the original table state,
+    /// then an addition for the same table but stripped of some of the roles
+    /// and access things, and then a retraction for that intermediate table
+    /// state. By consolidating, the intermediate state addition/retraction will
+    /// cancel out and we'll only see the retraction for the original state.
+    fn consolidate_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
+        let mut updates: Vec<(StateUpdateKind, Timestamp, mz_repr::Diff)> = updates
+            .into_iter()
+            .map(|update| (update.kind, update.ts, update.diff.into()))
+            .collect_vec();
+
+        consolidate_updates(&mut updates);
+
+        updates
+            .into_iter()
+            .filter(|(_kind, _ts, diff)| *diff != 0.into())
+            .map(|(kind, ts, diff)| StateUpdate {
+                kind,
+                ts,
+                diff: diff
+                    .try_into()
+                    .expect("catalog state cannot have diff other than -1 or 1"),
+            })
+            .collect_vec()
     }
 
     #[instrument(level = "debug")]
@@ -166,7 +220,13 @@ impl CatalogState {
         updates: Vec<StateUpdate>,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        CatalogError,
+    > {
         soft_assert_no_log!(
             updates.iter().map(|update| update.ts).all_equal(),
             "all timestamps should be equal: {updates:?}"
@@ -175,25 +235,59 @@ impl CatalogState {
         let mut update_system_config = false;
 
         let mut builtin_table_updates = Vec::with_capacity(updates.len());
-        for StateUpdate { kind, ts: _, diff } in updates {
-            if matches!(kind, StateUpdateKind::SystemConfiguration(_)) {
+        let mut catalog_updates = Vec::new();
+
+        for state_update in updates {
+            if matches!(state_update.kind, StateUpdateKind::SystemConfiguration(_)) {
                 update_system_config = true;
             }
 
-            match diff {
+            match state_update.diff {
                 StateDiff::Retraction => {
+                    // We want the parsed catalog updates to match the state of
+                    // the catalog _before_ applying a retraction. So that we can
+                    // still have useful in-memory state to work with.
+                    if let Some(update) =
+                        parsed_state_updates::parse_state_update(self, state_update.clone())
+                    {
+                        catalog_updates.push(update);
+                    }
+
                     // We want the builtin table retraction to match the state of the catalog
                     // before applying the update.
-                    builtin_table_updates
-                        .extend(self.generate_builtin_table_update(kind.clone(), diff));
-                    self.apply_update(kind, diff, retractions, local_expression_cache)?;
+                    builtin_table_updates.extend(self.generate_builtin_table_update(
+                        state_update.kind.clone(),
+                        state_update.diff,
+                    ));
+                    self.apply_update(
+                        state_update.kind,
+                        state_update.diff,
+                        retractions,
+                        local_expression_cache,
+                    )?;
                 }
                 StateDiff::Addition => {
-                    self.apply_update(kind.clone(), diff, retractions, local_expression_cache)?;
-                    // We want the builtin table addition to match the state of the catalog
-                    // after applying the update.
-                    builtin_table_updates
-                        .extend(self.generate_builtin_table_update(kind.clone(), diff));
+                    self.apply_update(
+                        state_update.kind.clone(),
+                        state_update.diff,
+                        retractions,
+                        local_expression_cache,
+                    )?;
+                    // We want the builtin table addition to match the state of
+                    // the catalog after applying the update. So that we already
+                    // have useful in-memory state to work with.
+                    builtin_table_updates.extend(self.generate_builtin_table_update(
+                        state_update.kind.clone(),
+                        state_update.diff,
+                    ));
+
+                    // We want the parsed catalog updates to match the state of
+                    // the catalog _after_ applying an addition.
+                    if let Some(update) =
+                        parsed_state_updates::parse_state_update(self, state_update.clone())
+                    {
+                        catalog_updates.push(update);
+                    }
                 }
             }
         }
@@ -202,7 +296,7 @@ impl CatalogState {
             self.system_configuration.dyncfg_updates();
         }
 
-        Ok(builtin_table_updates)
+        Ok((builtin_table_updates, catalog_updates))
     }
 
     #[instrument(level = "debug")]
@@ -260,7 +354,7 @@ impl CatalogState {
                 );
             }
             StateUpdateKind::TemporaryItem(item) => {
-                self.apply_temporary_item_update(item, diff, retractions);
+                self.apply_temporary_item_update(item, diff, retractions, local_expression_cache);
             }
             StateUpdateKind::Item(item) => {
                 self.apply_item_update(item, diff, retractions, local_expression_cache)?;
@@ -933,46 +1027,108 @@ impl CatalogState {
     #[instrument(level = "debug")]
     fn apply_temporary_item_update(
         &mut self,
-        TemporaryItem {
-            id,
-            oid,
-            name,
-            item,
-            owner_id,
-            privileges,
-        }: TemporaryItem,
+        temporary_item: TemporaryItem,
         diff: StateDiff,
         retractions: &mut InProgressRetractions,
+        local_expression_cache: &mut LocalExpressionCache,
     ) {
         match diff {
             StateDiff::Addition => {
+                let TemporaryItem {
+                    id,
+                    oid,
+                    global_id,
+                    schema_id,
+                    name,
+                    conn_id,
+                    create_sql,
+                    owner_id,
+                    privileges,
+                    extra_versions,
+                } = temporary_item;
+                let schema = self.find_temp_schema(&schema_id);
+                let name = QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: schema.database().clone(),
+                        schema_spec: schema.id().clone(),
+                    },
+                    item: name.clone(),
+                };
+
                 let entry = match retractions.temp_items.remove(&id) {
                     Some(mut retraction) => {
                         assert_eq!(retraction.id, id);
-                        retraction.item = item;
+
+                        // We only reparse the SQL if it's changed. Otherwise, we use the existing
+                        // item. This is a performance optimization and not needed for correctness.
+                        // This makes it difficult to use the `UpdateFrom` trait, but the structure
+                        // is still the same as the trait.
+                        if retraction.create_sql() != create_sql {
+                            let mut catalog_item = self
+                                .deserialize_item(
+                                    global_id,
+                                    &create_sql,
+                                    &extra_versions,
+                                    local_expression_cache,
+                                    Some(retraction.item),
+                                )
+                                .unwrap_or_else(|e| {
+                                    panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                                });
+                            // Have to patch up the item because parsing doesn't
+                            // take into account temporary schemas/conn_id.
+                            // NOTE(aljoscha): I don't like how we're patching
+                            // this in here, but it's but one of the ways in
+                            // which temporary items are a bit weird. So, here
+                            // we are ...
+                            catalog_item.set_conn_id(conn_id);
+                            retraction.item = catalog_item;
+                        }
+
                         retraction.id = id;
                         retraction.oid = oid;
                         retraction.name = name;
                         retraction.owner_id = owner_id;
-                        retraction.privileges = privileges;
+                        retraction.privileges = PrivilegeMap::from_mz_acl_items(privileges);
                         retraction
                     }
-                    None => CatalogEntry {
-                        item,
-                        referenced_by: Vec::new(),
-                        used_by: Vec::new(),
-                        id,
-                        oid,
-                        name,
-                        owner_id,
-                        privileges,
-                    },
+                    None => {
+                        let mut catalog_item = self
+                            .deserialize_item(
+                                global_id,
+                                &create_sql,
+                                &extra_versions,
+                                local_expression_cache,
+                                None,
+                            )
+                            .unwrap_or_else(|e| {
+                                panic!("{e:?}: invalid persisted SQL: {create_sql}")
+                            });
+
+                        // Have to patch up the item because parsing doesn't
+                        // take into account temporary schemas/conn_id.
+                        // NOTE(aljoscha): I don't like how we're patching this
+                        // in here, but it's but one of the ways in which
+                        // temporary items are a bit weird. So, here we are ...
+                        catalog_item.set_conn_id(conn_id);
+
+                        CatalogEntry {
+                            item: catalog_item,
+                            referenced_by: Vec::new(),
+                            used_by: Vec::new(),
+                            id,
+                            oid,
+                            name,
+                            owner_id,
+                            privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                        }
+                    }
                 };
                 self.insert_entry(entry);
             }
             StateDiff::Retraction => {
-                let entry = self.drop_item(id);
-                retractions.temp_items.insert(id, entry);
+                let entry = self.drop_item(temporary_item.id);
+                retractions.temp_items.insert(temporary_item.id, entry);
             }
         }
     }
@@ -2099,7 +2255,7 @@ fn sort_updates_inner(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
         let mut continual_tasks = Vec::new();
 
         for update in temp_item_updates {
-            match update.0.item.typ() {
+            match update.0.item_type() {
                 CatalogItemType::Type => types.push(update),
                 CatalogItemType::Func => funcs.push(update),
                 CatalogItemType::Secret => secrets.push(update),
@@ -2267,7 +2423,10 @@ impl BootstrapApplyState {
         state: &mut CatalogState,
         retractions: &mut InProgressRetractions,
         local_expression_cache: &mut LocalExpressionCache,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
+    ) -> (
+        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        Vec<ParsedStateUpdate>,
+    ) {
         match self {
             BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions) => {
                 let restore = state.system_configuration.clone();
@@ -2280,7 +2439,7 @@ impl BootstrapApplyState {
                 )
                 .await;
                 state.system_configuration = restore;
-                builtin_table_updates
+                (builtin_table_updates, Vec::new())
             }
             BootstrapApplyState::Items(updates) => state.with_enable_for_item_parsing(|state| {
                 state
@@ -2301,7 +2460,10 @@ impl BootstrapApplyState {
         local_expression_cache: &mut LocalExpressionCache,
     ) -> (
         BootstrapApplyState,
-        Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
     ) {
         match (self, next) {
             (
@@ -2312,13 +2474,16 @@ impl BootstrapApplyState {
                 builtin_view_additions.extend(next_builtin_view_additions);
                 (
                     BootstrapApplyState::BuiltinViewAdditions(builtin_view_additions),
-                    Vec::new(),
+                    (Vec::new(), Vec::new()),
                 )
             }
             (BootstrapApplyState::Items(mut updates), BootstrapApplyState::Items(next_updates)) => {
                 // Continue batching item updates.
                 updates.extend(next_updates);
-                (BootstrapApplyState::Items(updates), Vec::new())
+                (
+                    BootstrapApplyState::Items(updates),
+                    (Vec::new(), Vec::new()),
+                )
             }
             (
                 BootstrapApplyState::Updates(mut updates),
@@ -2326,14 +2491,17 @@ impl BootstrapApplyState {
             ) => {
                 // Continue batching updates.
                 updates.extend(next_updates);
-                (BootstrapApplyState::Updates(updates), Vec::new())
+                (
+                    BootstrapApplyState::Updates(updates),
+                    (Vec::new(), Vec::new()),
+                )
             }
             (apply_state, next_apply_state) => {
                 // Apply the current batch and start batching new apply state.
-                let builtin_table_update = apply_state
+                let updates = apply_state
                     .apply(state, retractions, local_expression_cache)
                     .await;
-                (next_apply_state, builtin_table_update)
+                (next_apply_state, updates)
             }
         }
     }

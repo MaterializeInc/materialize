@@ -221,6 +221,7 @@ pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
+pub mod catalog_implications;
 mod caught_up;
 mod command_handler;
 mod ddl;

@@ -71,6 +71,7 @@ use tracing::debug;
 
 use crate::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_SYSTEM_CLUSTER};
 use crate::durable;
+use crate::durable::objects::item_type;
 
 /// Used to update `self` from the input value while consuming the input value.
 pub trait UpdateFrom<T>: From<T> {
@@ -1857,6 +1858,25 @@ impl CatalogItem {
         }
     }
 
+    /// Sets the connection ID that this item belongs to, which makes it a
+    /// temporary item.
+    pub fn set_conn_id(&mut self, conn_id: Option<ConnectionId>) {
+        match self {
+            CatalogItem::View(view) => view.conn_id = conn_id,
+            CatalogItem::Index(index) => index.conn_id = conn_id,
+            CatalogItem::Table(table) => table.conn_id = conn_id,
+            CatalogItem::Log(_)
+            | CatalogItem::Source(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Secret(_)
+            | CatalogItem::Type(_)
+            | CatalogItem::Func(_)
+            | CatalogItem::Connection(_)
+            | CatalogItem::ContinualTask(_) => (),
+        }
+    }
+
     /// Indicates whether this item is temporary or not.
     pub fn is_temporary(&self) -> bool {
         self.conn_id().is_some()
@@ -3456,7 +3476,7 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
 }
 
 /// A single update to the catalog state.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StateUpdate {
     pub kind: StateUpdateKind,
     pub ts: Timestamp,
@@ -3466,7 +3486,7 @@ pub struct StateUpdate {
 /// The contents of a single state update.
 ///
 /// Variants are listed in dependency order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateUpdateKind {
     Role(durable::objects::Role),
     RoleAuth(durable::objects::RoleAuth),
@@ -3481,8 +3501,9 @@ pub enum StateUpdateKind {
     ClusterReplica(durable::objects::ClusterReplica),
     SourceReferences(durable::objects::SourceReferences),
     SystemObjectMapping(durable::objects::SystemObjectMapping),
-    // Temporary items are not actually updated via the durable catalog, but this allows us to
-    // model them the same way as all other items.
+    // Temporary items are not actually updated via the durable catalog, but
+    // this allows us to model them the same way as all other items in parts of
+    // the pipeline.
     TemporaryItem(TemporaryItem),
     Item(durable::objects::Item),
     Comment(durable::objects::Comment),
@@ -3520,26 +3541,43 @@ impl TryFrom<Diff> for StateDiff {
 }
 
 /// Information needed to process an update to a temporary item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Ord, PartialOrd, PartialEq, Eq)]
 pub struct TemporaryItem {
     pub id: CatalogItemId,
     pub oid: u32,
-    pub name: QualifiedItemName,
-    pub item: CatalogItem,
+    pub global_id: GlobalId,
+    pub schema_id: SchemaId,
+    pub name: String,
+    pub conn_id: Option<ConnectionId>,
+    pub create_sql: String,
     pub owner_id: RoleId,
-    pub privileges: PrivilegeMap,
+    pub privileges: Vec<MzAclItem>,
+    pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
 }
 
 impl From<CatalogEntry> for TemporaryItem {
     fn from(entry: CatalogEntry) -> Self {
+        let conn_id = entry.conn_id().cloned();
+        let (create_sql, global_id, extra_versions) = entry.item.to_serialized();
+
         TemporaryItem {
             id: entry.id,
             oid: entry.oid,
-            name: entry.name,
-            item: entry.item,
+            global_id,
+            schema_id: entry.name.qualifiers.schema_spec.into(),
+            name: entry.name.item,
+            conn_id,
+            create_sql,
             owner_id: entry.owner_id,
-            privileges: entry.privileges,
+            privileges: entry.privileges.into_all_values().collect(),
+            extra_versions,
         }
+    }
+}
+
+impl TemporaryItem {
+    pub fn item_type(&self) -> CatalogItemType {
+        item_type(&self.create_sql)
     }
 }
 
