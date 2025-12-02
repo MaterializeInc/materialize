@@ -1370,7 +1370,7 @@ pub static STATEMENT_LOGGING_DEFAULT_SAMPLE_RATE: VarDefinition = VarDefinition:
 pub static ENABLE_INTERNAL_STATEMENT_LOGGING: VarDefinition = VarDefinition::new(
     "enable_internal_statement_logging",
     value!(bool; false),
-    "Whether to log statements from the `mz_system` user.",
+    "Whether to log statements from internal users, e.g., mz_system, mz_support, mz_analytics.",
     false,
 );
 
