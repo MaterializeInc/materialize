@@ -229,10 +229,11 @@ hydration is complete**. To see whether an object is still hydrating, navigate
 to the [workflow graph](#detect) for the object in the Materialize console.
 
 Hydration time is proportional to data volume and query complexity. This means
-that you should expect objects with large volumes of data and/or complex
-queries to take longer to hydrate. You should also expect hydration to be
+that you should expect objects with large volumes of data and/or complex queries
+to take longer to hydrate. For Cloud, you should also expect hydration to be
 triggered every time a cluster is restarted or sized up, including during
-[Materialize's routine maintenance window](/releases/cloud-upgrade-schedule/).
+[Materialize Cloud's routine maintenance
+window](/releases/schedule/#cloud-upgrade-schedule).
 
 ### Unhealthy cluster
 

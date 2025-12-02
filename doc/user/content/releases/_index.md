@@ -10,10 +10,15 @@ aliases:
   - /self-managed/v25.1/release-notes/
 ---
 
-## Self-Managed v26.1.0
-*Released: 2025-11-26*
+{{< note >}}
+Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
+both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
+{{</ note >}}
 
-v26.1.0 introduces `EXPLAIN ANALYZE CLUSTER`, console bugfixes, and improvements for SQLServer Support, including the ability to create a SQLServer Source via the console.
+## v26.1.0
+*Released Self-Managed: 2025-11-26*
+
+v26.1.0 introduces `EXPLAIN ANALYZE CLUSTER`, console bugfixes, and improvements for SQL Server support, including the ability to create a SQL Server Source via the Console.
 
 ### `EXPLAIN ANALYZE CLUSTER`
 The [`EXPLAIN ANALYZE`](/sql/explain-analyze/) statement helps analyze how objects, namely indexes or materialized views, are running. We've introduced a variation of this statement, `EXPLAIN ANALYZE CLUSTER`, which presents a summary of every object running on your current cluster.
@@ -37,7 +42,11 @@ To understand worker skew, you can run `EXPLAIN ANALYZE CLUSTER CPU WITH SKEW`, 
 | materialize.public.idx_top_buyers       | u85496    | 0         | 0.99                   | 00:00:00.020932 | 00:00:00.021048 | 00:00:00.042096 |
 | materialize.public.idx_sales_by_product | u85492    | 1         | 0.82                   | 00:00:00.065211 | 00:00:00.079829 | 00:00:00.159659 |
 
-#### Upgrade notes for v26.1.0
+### Improved SQL Server support
+
+Materialize v26.1.0 includes improved support for SQLServer, including the ability to create a SQLServer Source via the console.
+
+### Upgrade notes for v26.1.0
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.1.md" >}}
 
@@ -188,11 +197,7 @@ See also Upgrade Notes for release specific notes.
 
 See also [General notes for upgrades](/installation/#general-notes-for-upgrades).
 
-## Self-managed release versions
-
-{{< yaml-table data="self_managed/self_managed_operator_compatibility" >}}
-
 
 ## See also
 
-- [Cloud Upgrade Schedule](/releases/cloud-upgrade-schedule/)
+- [Release Schedule](/releases/schedule/)
