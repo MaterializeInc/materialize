@@ -931,7 +931,7 @@ CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("bar")])),
 parse-statement
 CREATE SINK bar FROM foo INTO ICEBERG CATALOG CONNECTION s3tables (BLAH = 'boo!') USING AWS CONNECTION aws_conn ENVELOPE UPSERT;
 ----
-error: Expected one of NAMESPACE or TABLE or COMMIT, found identifier "blah"
+error: Expected one of NAMESPACE or TABLE, found identifier "blah"
 CREATE SINK bar FROM foo INTO ICEBERG CATALOG CONNECTION s3tables (BLAH = 'boo!') USING AWS CONNECTION aws_conn ENVELOPE UPSERT;
                                                                    ^
 

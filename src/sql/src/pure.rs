@@ -453,7 +453,10 @@ async fn purify_create_sink(
     } = &mut create_sink_stmt;
 
     // The list of options that the user is allowed to specify.
-    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
+    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
+        CreateSinkOptionName::Snapshot,
+        CreateSinkOptionName::CommitInterval,
+    ];
 
     if let Some(op) = with_options
         .iter()

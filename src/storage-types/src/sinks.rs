@@ -45,6 +45,12 @@ pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub as_of: Antichain<T>,
     pub from_storage_metadata: S,
     pub to_storage_metadata: S,
+    /// The interval at which to commit data to the sink.
+    /// This isn't universally supported by all sinks
+    /// yet, so it is optional. Even for sinks that might
+    /// support it in the future (ahem, kafka) users might
+    /// not want to set it.
+    pub commit_interval: Option<Duration>,
 }
 
 impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
@@ -76,6 +82,7 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             from_storage_metadata,
             with_snapshot,
             to_storage_metadata,
+            commit_interval: _,
         } = self;
 
         let compatibility_checks = [
@@ -641,7 +648,6 @@ pub struct IcebergSinkConnection<C: ConnectionAccess = InlinedConnection> {
     pub key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
     pub namespace: String,
     pub table: String,
-    pub commit_interval: Duration,
 }
 
 impl<C: ConnectionAccess> IcebergSinkConnection<C> {
@@ -662,7 +668,6 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
             key_desc_and_indices,
             namespace,
             table,
-            commit_interval,
         } = self;
 
         let compatibility_checks = [
@@ -696,7 +701,6 @@ impl<C: ConnectionAccess> IcebergSinkConnection<C> {
             ),
             (namespace == &other.namespace, "namespace"),
             (table == &other.table, "table"),
-            (commit_interval == &other.commit_interval, "commit_interval"),
         ];
         for (compatible, field) in compatibility_checks {
             if !compatible {
@@ -727,7 +731,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             key_desc_and_indices,
             namespace,
             table,
-            commit_interval,
         } = self;
         IcebergSinkConnection {
             catalog_connection_id,
@@ -740,7 +743,6 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergSinkConnection, R>
             key_desc_and_indices,
             namespace,
             table,
-            commit_interval,
         }
     }
 }

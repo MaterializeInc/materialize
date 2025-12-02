@@ -75,9 +75,6 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 use std::{cell::RefCell, rc::Rc, sync::Arc};
 
-use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
-use crate::render::sinks::SinkRender;
-use crate::storage_state::StorageState;
 use anyhow::{Context, anyhow};
 use arrow::array::Int32Array;
 use arrow::datatypes::{DataType, Field};
@@ -105,17 +102,19 @@ use iceberg::writer::base_writer::position_delete_writer::{
     PositionDeleteFileWriterBuilder, PositionDeleteWriterConfig,
 };
 use iceberg::writer::combined_writer::delta_writer::{DeltaWriter, DeltaWriterBuilder};
+use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
-use iceberg::writer::file_writer::{ParquetWriterBuilder, location_generator};
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 use itertools::Itertools;
 use mz_arrow_util::builder::ArrowBuilder;
 use mz_interchange::avro::DiffPair;
+use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
+use mz_ore::future::InTask;
 use mz_ore::retry::{Retry, RetryResult};
-use mz_ore::{cast::CastFrom, error::ErrorExt, future::InTask};
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -132,13 +131,18 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
-use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{Broadcast, Capability};
-use timely::dataflow::operators::{CapabilitySet, Concatenate, Map, ToStream};
+use timely::dataflow::operators::{
+    Broadcast, Capability, CapabilitySet, Concatenate, Map, ToStream,
+};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
+use timely::{Container, PartialOrder};
+
+use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::render::sinks::SinkRender;
+use crate::storage_state::StorageState;
 
 /// Set the default capacity for the array builders inside the ArrowBuilder. This is the
 /// number of items each builder can hold before it needs to allocate more memory.
@@ -238,10 +242,8 @@ async fn reload_table(
     let current_schema = current_table.metadata().current_schema_id();
     let current_partition_spec = current_table.metadata().default_partition_spec_id();
 
-    // Reload the table to get the latest metadata
     match catalog.load_table(&table_ident).await {
         Ok(table) => {
-            // Verify that schema and partition spec IDs match
             let reloaded_schema = table.metadata().current_schema_id();
             let reloaded_partition_spec = table.metadata().default_partition_spec_id();
             if reloaded_schema != current_schema {
@@ -318,34 +320,24 @@ async fn load_or_create_table(
 /// Find the most recent Materialize frontier from Iceberg snapshots.
 /// We store the frontier in snapshot metadata to track where we left off after restarts.
 /// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
+/// The input slice will be sorted by sequence number in descending order.
 fn retrieve_upper_from_snapshots(
-    snapshots: impl IntoIterator<Item = Arc<Snapshot>>,
-) -> anyhow::Result<Option<(Antichain<Timestamp>, Option<u64>)>> {
-    let snapshots = snapshots
-        .into_iter()
-        .sorted_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
+    snapshots: &mut [Arc<Snapshot>],
+) -> anyhow::Result<Option<(Antichain<Timestamp>, u64)>> {
+    snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
     for snapshot in snapshots {
-        if snapshot
-            .summary()
-            .additional_properties
-            .contains_key("mz-frontier")
+        let props = &snapshot.summary().additional_properties;
+        if let (Some(frontier_json), Some(sink_version_str)) =
+            (props.get("mz-frontier"), props.get("mz-sink-version"))
         {
-            let frontier_json = snapshot
-                .summary()
-                .additional_properties
-                .get("mz-frontier")
-                .unwrap();
             let frontier: Vec<Timestamp> = serde_json::from_str(frontier_json)
-                .expect("Failed to deserialize frontier from snapshot properties");
+                .context("Failed to deserialize frontier from snapshot properties")?;
             let frontier = Antichain::from_iter(frontier);
 
-            // Try to extract optional sink version if present
-            let sink_version = snapshot
-                .summary()
-                .additional_properties
-                .get("mz-sink-version")
-                .and_then(|s| s.parse::<u64>().ok());
+            let sink_version = sink_version_str
+                .parse::<u64>()
+                .context("Failed to parse mz-sink-version from snapshot properties")?;
 
             return Ok(Some((frontier, sink_version)));
         }
@@ -382,10 +374,21 @@ fn relation_desc_to_iceberg_schema(
     Ok((arrow_schema_with_ids, Arc::new(iceberg_schema)))
 }
 
+/// Build a new Arrow schema by adding an __op column to the existing schema.
+fn build_schema_with_op_column(schema: &ArrowSchema) -> ArrowSchema {
+    let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
+    fields.push(Field::new("__op", DataType::Int32, false));
+    ArrowSchema::new(fields)
+}
+
 /// Convert a Materialize DiffPair into an Arrow RecordBatch with an __op column.
 /// The __op column indicates whether each row is an insert (1) or delete (-1), which
 /// the DeltaWriter uses to generate the appropriate Iceberg data/delete files.
-fn row_to_recordbatch(row: DiffPair<Row>, schema: ArrowSchemaRef) -> anyhow::Result<RecordBatch> {
+fn row_to_recordbatch(
+    row: DiffPair<Row>,
+    schema: ArrowSchemaRef,
+    schema_with_op: ArrowSchemaRef,
+) -> anyhow::Result<RecordBatch> {
     let mut builder = ArrowBuilder::new_with_schema(
         Arc::clone(&schema),
         DEFAULT_ARRAY_BUILDER_ITEM_CAPACITY,
@@ -412,13 +415,10 @@ fn row_to_recordbatch(row: DiffPair<Row>, schema: ArrowSchemaRef) -> anyhow::Res
         .to_record_batch()
         .context("Failed to create record batch")?;
 
-    let mut columns = batch.columns().to_vec();
+    let mut columns = Vec::with_capacity(batch.columns().len() + 1);
+    columns.extend_from_slice(batch.columns());
     let op_column = Arc::new(Int32Array::from(op_values));
     columns.push(op_column);
-
-    let mut fields: Vec<Field> = schema.fields().iter().map(|f| f.as_ref().clone()).collect();
-    fields.push(Field::new("__op", DataType::Int32, false));
-    let schema_with_op = Arc::new(ArrowSchema::new(fields));
 
     let batch_with_op = RecordBatch::try_new(schema_with_op, columns)
         .context("Failed to create batch with op column")?;
@@ -429,22 +429,23 @@ fn row_to_recordbatch(row: DiffPair<Row>, schema: ArrowSchemaRef) -> anyhow::Res
 /// Batches are minted with configurable windows to balance write efficiency with latency.
 /// We maintain a sliding window of future batch descriptions so writers can start
 /// processing data even while earlier batches are still being written.
-fn mint_batch_descriptions<G>(
+fn mint_batch_descriptions<G, D>(
     name: String,
     sink_id: GlobalId,
-    input: &VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    input: &VecCollection<G, D, Diff>,
     sink: &StorageSinkDesc<CollectionMetadata, Timestamp>,
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     initial_schema: SchemaRef,
 ) -> (
-    VecCollection<G, (Option<Row>, DiffPair<Row>), Diff>,
+    VecCollection<G, D, Diff>,
     Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     Stream<G, HealthStatusMessage>,
     PressOnDropButton,
 )
 where
     G: Scope<Timestamp = Timestamp>,
+    D: Clone + 'static,
 {
     let scope = input.scope();
     let name_for_error = name.clone();
@@ -460,6 +461,10 @@ where
         builder.new_input_for_many(&input.inner, Pipeline, [&output, &batch_desc_output]);
 
     let as_of = sink.as_of.clone();
+    let commit_interval = sink
+        .commit_interval
+        .expect("the planner should have enforced this")
+        .clone();
 
     let (button, errors): (_, Stream<G, Rc<anyhow::Error>>) = builder.build_fallible(move |caps| {
         Box::pin(async move {
@@ -494,11 +499,10 @@ where
             )
             .await?;
 
-            let snapshots = table.metadata().snapshots().sorted_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
-
-            let resume = retrieve_upper_from_snapshots(snapshots.cloned())?;
+            let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+            let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
             let (resume_upper, resume_version) = match resume {
-                Some((f, v)) => (f, v.unwrap_or(0)),
+                Some((f, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
             };
 
@@ -518,7 +522,6 @@ where
                 // This would normally be an assertion but because it can happen after a
                 // Materialize backup/restore we log an error so that it appears on Sentry but
                 // leaves the rest of the objects in the cluster unaffected.
-                tracing::error!("{err}");
                 return Err(anyhow::anyhow!("{err}"));
             };
 
@@ -565,9 +568,10 @@ where
                         batch_descriptions.push(batch_description);
                     }
 
+
                     // Mint initial future batch descriptions at configurable intervals
                     for i in 1..INITIAL_DESCRIPTIONS_TO_MINT + 1 {
-                        let duration_millis = connection.commit_interval.as_millis()
+                        let duration_millis = commit_interval.as_millis()
                             .checked_mul(u128::from(i))
                             .expect("commit interval multiplication overflow");
                         let duration_ts = Timestamp::new(u64::try_from(duration_millis)
@@ -582,18 +586,18 @@ where
                     minted_batches.extend(batch_descriptions.clone());
 
                     for desc in batch_descriptions {
-                        // let cap = capset
-                        //     .try_delayed(desc.0.as_option().unwrap())
-                        //     .ok_or_else(|| {
-                        //         format!(
-                        //             "minter cannot delay {:?} to {:?}. \
-                        //                 Likely because we already emitted a \
-                        //                 batch description and delayed.",
-                        //             capset, desc.1
-                        //         )
-                        //     })
-                        //     .unwrap();
-                        batch_desc_output.give(&capset[0], desc);
+                        let cap = capset
+                            .try_delayed(desc.0.as_option().unwrap())
+                            .ok_or_else(|| {
+                                format!(
+                                    "minter cannot delay {:?} to {:?}. \
+                                        Likely because we already emitted a \
+                                        batch description and delayed.",
+                                    capset, desc.1
+                                )
+                            })
+                            .unwrap();
+                        batch_desc_output.give(&cap, desc);
                     }
 
                     capset.downgrade(current_upper);
@@ -611,7 +615,7 @@ where
                         let newest_upper = minted_batches.back().unwrap().1.clone();
                         let new_lower = newest_upper.clone();
                         let new_lower_ts = new_lower.as_option().unwrap().clone();
-                        let duration_ts = Timestamp::new(connection.commit_interval.as_millis()
+                        let duration_ts = Timestamp::new(commit_interval.as_millis()
                             .try_into()
                             .expect("commit interval too large for u64"));
                         let new_upper = Antichain::from_elem(newest_upper
@@ -623,20 +627,20 @@ where
                         minted_batches.pop_front();
                         minted_batches.push_back(new_batch_description.clone());
 
-                        // let cap = capset
-                        //     .try_delayed(&new_lower_ts)
-                        //     .ok_or_else(|| {
-                        //         format!(
-                        //             "minter cannot delay {:?} to {:?}. \
-                        //                 Likely because we already emitted a \
-                        //                 batch description and delayed.",
-                        //             capset, new_upper
-                        //         )
-                        //     })
-                        //     .unwrap();
+                        let cap = capset
+                            .try_delayed(&new_lower_ts)
+                            .ok_or_else(|| {
+                                format!(
+                                    "minter cannot delay {:?} to {:?}. \
+                                        Likely because we already emitted a \
+                                        batch description and delayed.",
+                                    capset, new_upper
+                                )
+                            })
+                            .unwrap();
 
 
-                        batch_desc_output.give(&capset[0], new_batch_description);
+                        batch_desc_output.give(&cap, new_batch_description);
 
                         capset.downgrade(new_upper);
                     }
@@ -677,10 +681,9 @@ impl Serialize for SerializableDataFile {
         S: serde::Serializer,
     {
         let mut buffer = Vec::new();
-        let iter = std::iter::once(self.data_file.clone());
         write_data_files_to_avro(
             &mut buffer,
-            iter,
+            [self.data_file.clone()],
             &StructType::new(vec![]),
             FormatVersion::V2,
         )
@@ -869,34 +872,23 @@ where
                 .context("Failed to merge Materialize metadata into Iceberg schema")?,
             );
 
+            let schema_with_op = Arc::new(build_schema_with_op_column(&arrow_schema));
+
             // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
             // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
             // No clear way to detect this properly right now, so we use heuristics.
             let location = table_metadata.location();
-            let corrected_location = if location.contains("/metadata/")
-                && location.ends_with(".metadata.json")
-            {
-                if let Some(metadata_idx) = location.rfind("/metadata/") {
-                    let corrected = location[..metadata_idx].to_string();
-                    corrected
-                } else {
-                    tracing::warn!(
-                        "Table location contains /metadata/ but couldn't find the split point: {}",
-                        location
-                    );
-                    location.to_string()
-                }
-            } else {
-                location.to_string()
+            let corrected_location = match location.rsplit_once("/metadata/") {
+                Some((a, b)) if b.ends_with(".metadata.json") => a,
+                _ => location,
             };
 
             let data_location = format!("{}/data", corrected_location);
-            let location_generator =
-                location_generator::DefaultLocationGenerator::with_data_location(data_location);
+            let location_generator = DefaultLocationGenerator::with_data_location(data_location);
 
             // Add a unique suffix to avoid filename collisions across restarts and workers
             let unique_suffix = format!("-{}", uuid::Uuid::new_v4());
-            let file_name_generator = location_generator::DefaultFileNameGenerator::new(
+            let file_name_generator = DefaultFileNameGenerator::new(
                 PARQUET_FILE_PREFIX.to_string(),
                 Some(unique_suffix),
                 iceberg::spec::DataFileFormat::Parquet,
@@ -1027,6 +1019,7 @@ where
                                                 let record_batch = row_to_recordbatch(
                                                     diff_pair.clone(),
                                                     Arc::clone(&arrow_schema),
+                                                    Arc::clone(&schema_with_op),
                                                 )
                                                 .context("failed to convert row to recordbatch")?;
                                                 delta_writer.write(record_batch).await.context(
@@ -1060,7 +1053,7 @@ where
                                 let row_ts = ts.clone();
                                 let ts_antichain = Antichain::from_elem(row_ts.clone());
                                 let mut written = false;
-                                // Try writing the row to any in-flight batch it belongs to
+                                // Try writing the row to any in-flight batch it belongs to...
                                 for (batch_desc, (_, delta_writer)) in in_flight_batches.iter_mut()
                                 {
                                     let (lower, upper) = batch_desc;
@@ -1070,6 +1063,7 @@ where
                                         let record_batch = row_to_recordbatch(
                                             diff_pair.clone(),
                                             Arc::clone(&arrow_schema),
+                                            Arc::clone(&schema_with_op),
                                         )
                                         .context("failed to convert row to recordbatch")?;
                                         delta_writer
@@ -1081,6 +1075,7 @@ where
                                     }
                                 }
                                 if !written {
+                                    // ...otherwise stash it for later
                                     let entry = stashed_rows.entry(row_ts).or_default();
                                     entry.push((row, diff_pair));
                                 }
@@ -1144,7 +1139,7 @@ fn commit_to_iceberg<G>(
     name: String,
     sink_id: GlobalId,
     sink_version: u64,
-    batch_input: Stream<G, BoundedDataFile>,
+    batch_input: &Stream<G, BoundedDataFile>,
     batch_desc_input: &Stream<G, (Antichain<Timestamp>, Antichain<Timestamp>)>,
     write_frontier: Rc<RefCell<Antichain<Timestamp>>>,
     connection: IcebergSinkConnection,
@@ -1246,7 +1241,7 @@ where
                     .cloned()
                     .collect();
 
-                // Commit batches in timestamp order to maintain strong consistency
+                // Commit batches in timestamp order to maintain consistency
                 done_batches.sort_by(|a, b| {
                     if PartialOrder::less_than(a, b) {
                         Ordering::Less
@@ -1312,9 +1307,8 @@ where
                                     Err(e) => return RetryResult::RetryableErr(anyhow!(e)),
                                 };
 
-                                let snapshots = table.metadata().snapshots().sorted_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
-
-                                let last = retrieve_upper_from_snapshots(snapshots.cloned());
+                                let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
+                                let last = retrieve_upper_from_snapshots(&mut snapshots);
                                 let last = match last {
                                     Ok(val) => val,
                                     Err(e) => return RetryResult::RetryableErr(anyhow!(e)),
@@ -1463,7 +1457,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             format!("{sink_id}-commit-to-iceberg"),
             sink_id,
             sink.version,
-            datafiles,
+            &datafiles,
             &batch_descriptions,
             Rc::clone(&write_frontier),
             connection_for_committer,

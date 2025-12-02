@@ -1803,6 +1803,7 @@ pub struct Sink {
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub version: u64,
+    pub commit_interval: Option<Duration>,
 }
 
 #[derive(Clone, Debug)]
