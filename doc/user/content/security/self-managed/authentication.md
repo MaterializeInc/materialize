@@ -160,8 +160,6 @@ spec:
   ...
   requestRollout: <SOME_NEW_UUID> # Generate new UUID for rollout
   forceRollout: <SOME_NEW_UUID> # Rollout without requiring a version change
-  # Tears down the prior version and restarts the current Materialize instance
-  rolloutStrategy: ImmediatelyPromoteCausingDowntime
 ```
 
 For more information on rollout configuration, view our [installation overview](/installation/#rollout-configuration).
