@@ -1343,9 +1343,9 @@ impl Drop for ExecuteContextExtra {
             // Note: the impact when this error hits
             // is that the statement will never be marked
             // as finished in the statement log.
-            soft_panic_or_log!(
-                "execute context for statement {statement_uuid:?} dropped without being properly retired."
-            );
+            // soft_panic_or_log!(
+            //     "execute context for statement {statement_uuid:?} dropped without being properly retired."
+            // );
         }
     }
 }
