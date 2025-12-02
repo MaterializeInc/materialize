@@ -1294,6 +1294,7 @@ impl Coordinator {
             version: sink.version,
             from_storage_metadata: (),
             to_storage_metadata: (),
+            commit_interval: sink.commit_interval,
         };
 
         let collection_desc = CollectionDescription {

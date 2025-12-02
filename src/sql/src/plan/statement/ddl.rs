@@ -3515,6 +3515,14 @@ fn plan_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
+    let CreateSinkOptionExtracted {
+        snapshot,
+        version,
+        partition_strategy: _,
+        seen: _,
+        commit_interval,
+    } = with_options.try_into()?;
+
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
             connection,
@@ -3531,6 +3539,7 @@ fn plan_sink(
             desc.into_owned(),
             envelope,
             from.id(),
+            commit_interval,
         )?,
         CreateSinkConnection::Iceberg {
             connection,
@@ -3544,16 +3553,9 @@ fn plan_sink(
             options,
             relation_key_indices,
             key_desc_and_indices,
+            commit_interval,
         )?,
     };
-
-    let CreateSinkOptionExtracted {
-        snapshot,
-        version,
-        partition_strategy: _,
-        seen: _,
-        commit_interval: _,
-    } = with_options.try_into()?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
@@ -3574,6 +3576,7 @@ fn plan_sink(
             connection: connection_builder,
             envelope,
             version,
+            commit_interval,
         },
         with_snapshot,
         if_not_exists,
@@ -3720,6 +3723,7 @@ fn iceberg_sink_builder(
     options: Vec<IcebergSinkConfigOption<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    commit_interval: Option<Duration>,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_ICEBERG_SINK)?;
     let catalog_connection_item = scx.get_item_by_resolved_name(&catalog_connection)?;
@@ -3752,7 +3756,6 @@ fn iceberg_sink_builder(
     let IcebergSinkConfigOptionExtracted {
         table,
         namespace,
-        commit_interval,
         seen: _,
     }: IcebergSinkConfigOptionExtracted = options.try_into()?;
 
@@ -3762,9 +3765,9 @@ fn iceberg_sink_builder(
     let Some(namespace) = namespace else {
         sql_bail!("Iceberg sink must specify NAMESPACE");
     };
-    let Some(commit_interval) = commit_interval else {
+    if commit_interval.is_none() {
         sql_bail!("Iceberg sink must specify COMMIT INTERVAL");
-    };
+    }
 
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
         catalog_connection_id,
@@ -3773,7 +3776,6 @@ fn iceberg_sink_builder(
         aws_connection: aws_connection_id,
         table,
         namespace,
-        commit_interval,
         relation_key_indices,
         key_desc_and_indices,
     }))
@@ -3790,6 +3792,7 @@ fn kafka_sink_builder(
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
     sink_from: CatalogItemId,
+    commit_interval: Option<Duration>,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     // Get Kafka connection.
     let connection_item = scx.get_item_by_resolved_name(&connection)?;
@@ -3801,6 +3804,10 @@ fn kafka_sink_builder(
             scx.catalog.resolve_full_name(connection_item.name())
         ),
     };
+
+    if commit_interval.is_some() {
+        sql_bail!("COMMIT INTERVAL option is not supported with KAFKA sinks");
+    }
 
     let KafkaSinkConfigOptionExtracted {
         topic,

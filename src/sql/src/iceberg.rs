@@ -7,8 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::time::Duration;
-
 use crate::names::Aug;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{IcebergSinkConfigOption, IcebergSinkConfigOptionName};
@@ -16,6 +14,5 @@ use mz_sql_parser::ast::{IcebergSinkConfigOption, IcebergSinkConfigOptionName};
 generate_extracted_config!(
     IcebergSinkConfigOption,
     (Table, String),
-    (Namespace, String),
-    (CommitInterval, Duration)
+    (Namespace, String)
 );

@@ -2574,13 +2574,9 @@ impl<'a> Parser<'a> {
     fn parse_iceberg_sink_config_option(
         &mut self,
     ) -> Result<IcebergSinkConfigOption<Raw>, ParserError> {
-        let name = match self.expect_one_of_keywords(&[NAMESPACE, TABLE, COMMIT])? {
+        let name = match self.expect_one_of_keywords(&[NAMESPACE, TABLE])? {
             NAMESPACE => IcebergSinkConfigOptionName::Namespace,
             TABLE => IcebergSinkConfigOptionName::Table,
-            COMMIT => {
-                self.expect_keyword(INTERVAL)?;
-                IcebergSinkConfigOptionName::CommitInterval
-            }
             _ => unreachable!(),
         };
         Ok(IcebergSinkConfigOption {

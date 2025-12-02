@@ -401,6 +401,7 @@ mod tests {
                 ),
                 txns_shard: Default::default(),
             },
+            commit_interval: Default::default(),
         }
     }
 
