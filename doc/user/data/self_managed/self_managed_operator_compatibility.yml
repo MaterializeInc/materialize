@@ -5,6 +5,11 @@ columns:
   - column: Release date
   - column: Notes
 rows:
+  - Materialize Operator: v26.1.0
+    orchestratord version: v26.1.0
+    environmentd version: v26.1.0
+    Release date: "2025-11-26"
+    Notes: "See [v26.1.0 release notes](/releases/#v2610)"
   - Materialize Operator: v26.0.0
     orchestratord version: v26.0.0
     environmentd version: v26.0.0
