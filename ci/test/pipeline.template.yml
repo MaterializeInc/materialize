@@ -722,6 +722,18 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: doc-examples
+        label: Documentation Examples Code
+        inputs:
+          - doc/user/data/examples
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: doc-examples
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs

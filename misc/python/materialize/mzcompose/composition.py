@@ -1464,7 +1464,7 @@ class Composition:
         input: str,
         service: str = "testdrive",
         args: list[str] = [],
-        caller: Traceback | None = None,
+        caller: Traceback | str | None = None,
         mz_service: str | None = None,
         quiet: bool = False,
         silent: bool = False,
@@ -1482,7 +1482,13 @@ class Composition:
         """
 
         caller = caller or getframeinfo(stack()[1][0])
-        args = args + [f"--source={caller.filename}:{caller.lineno}"]
+        args = args + [
+            (
+                f"--source={caller.filename}:{caller.lineno}"
+                if isinstance(caller, Traceback)
+                else f"--source={caller}"
+            )
+        ]
 
         if mz_service is not None:
             args = args + [

@@ -5,6 +5,28 @@
     PostgreSQL instance and start ingesting data from the publication you
     created [earlier](#2-create-a-publication-and-a-replication-user):
 
+  test_setup: |
+    $ postgres-execute connection=postgres://postgres:postgres@postgres
+    ALTER USER postgres WITH replication;
+    DROP SCHEMA IF EXISTS public CASCADE;
+    DROP PUBLICATION IF EXISTS mz_source;
+    CREATE SCHEMA public;
+    CREATE TABLE table1 (a INT);
+    ALTER TABLE table1 REPLICA IDENTITY FULL;
+    INSERT INTO table1 VALUES (100), (101), (102);
+    CREATE TABLE table2 (a INT);
+    ALTER TABLE table2 REPLICA IDENTITY FULL;
+    INSERT INTO table2 VALUES (100), (101), (102);
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+    > CREATE SECRET pg_pass AS 'postgres'
+    > CREATE CONNECTION pg_connection TO POSTGRES (
+        HOST postgres,
+        DATABASE postgres,
+        USER postgres,
+        PASSWORD SECRET pg_pass
+      )
+    > CREATE CLUSTER ingest_postgres SIZE 'scale=1,workers=1'
   code: |
     CREATE SOURCE mz_source
       IN CLUSTER ingest_postgres
@@ -16,6 +38,7 @@
     - To ingest data from specific schemas or tables, use the `FOR SCHEMAS (<schema1>,<schema2>)` or `FOR TABLES (<table1>, <table2>)` options instead of `FOR ALL TABLES`.
     - To handle [unsupported data types](#supported-types), use the `TEXT
     COLUMNS` or `EXCLUDE COLUMNS` options in the `CREATE SOURCE` statement.
+  testable_results: false
 
 - name: "create-source"
   description: |
@@ -26,6 +49,8 @@
     tables in Materialize and start ingesting data from the publication you
     created [earlier](#2-create-a-publication-and-a-replication-user):
 
+  test_setup: |
+    > DROP SOURCE mz_source CASCADE
   code: |
       -- Step 1: Create the source
       CREATE SOURCE mz_source
@@ -41,6 +66,7 @@
     - After creating the source, you can query `mz_internal.mz_source_references` to see available tables in the publication.
     - Create individual tables using [`CREATE TABLE <table_name> FROM SOURCE <source_name> (REFERENCE <upstream_table>)`](/sql/create-table/).
     - To handle [unsupported data types](#supported-types), use `WITH (TEXT COLUMNS = [<column>])` or `WITH (EXCLUDE COLUMNS = [<column>])` in the [`CREATE TABLE`](/sql/create-table/) statement.
+  testable_results: false
 
 - name: "schema-changes"
   description: |

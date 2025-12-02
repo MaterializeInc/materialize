@@ -7,6 +7,10 @@
     That is, assume you have a Kafka sink `avro_sink` created from `matview_old`
     (See [`CREATE SINK`:Kafka/Redpanda](/sql/create-sink/kafka/) for more
     information):
+  test_setup: |
+    > CREATE MATERIALIZED VIEW matview_old AS SELECT DISTINCT ON (key_col) 1 AS key_col;
+    > CREATE CONNECTION kafka_connection TO KAFKA (BROKER '${testdrive.kafka-addr}', SECURITY PROTOCOL PLAINTEXT);
+    > CREATE CONNECTION csr_connection TO CONFLUENT SCHEMA REGISTRY (URL '${testdrive.schema-registry-url}');
   code: |
     CREATE SINK avro_sink
       FROM matview_old
@@ -29,6 +33,8 @@
     to make progress. See [Valid schema changes](#valid-schema-changes) for
     details.
     {{< /note >}}
+  test_setup: |
+    > CREATE MATERIALIZED VIEW matview_new AS SELECT DISTINCT ON (key_col) 2 AS key_col;
   code: |
     ALTER SINK avro_sink
       SET FROM matview_new
@@ -47,6 +53,8 @@
 
     For workaround, see [Example: Handle cutover scenarios](#handle-cutover-scenarios)
     {{< /tip >}}
+
+  testable_results: false
 
 - name: "handle-cutover-scenarios-intro"
   description: |
@@ -91,6 +99,7 @@
 - name: "handle-cutover-scenarios-alter-sink-to-transition"
   code: |
     ALTER SINK avro_sink SET FROM transition;
+  testable: false  # TODO: Materialize could not prove that the specified upsert envelope key ("key_col") was a unique key of the underlying relation "materialize.public.transition". There are no known valid unique keys for the underlying relation.
 
 - name: "handle-cutover-scenarios-step-3-intro"
   description: |

@@ -19,6 +19,18 @@
     PostgreSQL publication is `mz_source` and the connection to PostgreSQL is
     `pg_connection`.
 
+  test_setup: |
+    > CREATE SECRET pgpass AS 'postgres'
+    > CREATE CONNECTION pg_connection TO POSTGRES(HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgpass);
+    $ postgres-execute connection=postgres://postgres:postgres@postgres
+    ALTER USER postgres WITH replication;
+    DROP SCHEMA IF EXISTS public CASCADE;
+    DROP PUBLICATION IF EXISTS mz_source;
+    CREATE SCHEMA PUBLIC;
+    CREATE TABLE items (a INT);
+    ALTER TABLE items REPLICA IDENTITY FULL;
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
+
   code: |
     /* This example assumes:
     - In the upstream PostgreSQL, you have defined:
@@ -62,3 +74,5 @@
     {{< /note >}}
 
     For more information, see [`CREATE TABLE`](/sql/create-table/).
+
+  testable_results: false

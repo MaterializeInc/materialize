@@ -48,6 +48,22 @@
 
     {{< /note >}}
 
+  test_setup: |
+    > CREATE SECRET pgpass AS 'postgres'
+    > CREATE CONNECTION pg_connection TO POSTGRES(HOST postgres, DATABASE postgres, USER postgres, PASSWORD SECRET pgpass);
+    $ postgres-execute connection=postgres://postgres:postgres@postgres
+    ALTER USER postgres WITH replication;
+    DROP SCHEMA IF EXISTS public CASCADE;
+    DROP PUBLICATION IF EXISTS mz_source;
+    CREATE SCHEMA PUBLIC;
+    CREATE TABLE items (a INT);
+    ALTER TABLE items REPLICA IDENTITY FULL;
+    CREATE TABLE orders (a INT);
+    ALTER TABLE orders REPLICA IDENTITY FULL;
+    CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+    > CREATE SOURCE pg_source FROM POSTGRES CONNECTION pg_connection (PUBLICATION 'mz_source');
+
   code: |
     /* This example assumes:
       - In the upstream PostgreSQL, you have defined:
@@ -86,6 +102,9 @@
     file="shared-content/create-table-from-source-snapshotting.md" >}}
 
     {{< include-md file="shared-content/create-table-if-not-exists-tip.md" >}}
+
+  testable_results: false
+
 - name: "show-tables"
   description: |
     To verify that the table has been created, you can run [`SHOW
@@ -116,6 +135,9 @@
 
     For the list of supported PostgreSQL data types, refer to [supported
     types](/sql/create-table/postgres/#supported-data-types).
+  test_results:
+    - a true integer ""
+    - a true integer ""
 
 - name: "read-from-table"
   description: |

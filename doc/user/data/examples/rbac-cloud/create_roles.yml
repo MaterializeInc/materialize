@@ -28,6 +28,9 @@
     the compute/transform cluster(s). This role will handle creating views,
     materialized views, and other transformation objects.
 
+  test_setup: |
+    > CREATE ROLE "blue.berry@example.com" WITH LOGIN PASSWORD 'materialize'
+    > CREATE ROLE sales_report_app
   code: |
     CREATE ROLE view_manager;
 

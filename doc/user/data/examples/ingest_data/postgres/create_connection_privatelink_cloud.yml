@@ -4,11 +4,15 @@
     client connected to Materialize, use the [`CREATE
     CONNECTION`](/sql/create-connection/#aws-privatelink) command to create an
     AWS PrivateLink connection:
+  test_setup: |
+    $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+    ALTER SYSTEM SET max_aws_privatelink_connections = 5
   code: |
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (
       SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0356210a8a432d9e9',
       AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4')
     );
+  testable: false  # TODO: Reenable when database-issues#9932 is fixed
 - name: "create-privatelink-connection-options-aurora"
   description: |
     - Replace the `SERVICE NAME` value with the service name you noted
@@ -35,10 +39,13 @@
     To connect to an AWS PrivateLink endpoint service in the **same region** as
     your Materialize environment:
 
+  test_setup: |
+    > DROP CONNECTION privatelink_svc
   code: |
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK ( SERVICE
           NAME 'com.amazonaws.vpce.<region_id>.vpce-svc-<endpoint_service_id>',
           AVAILABILITY ZONES ('use1-az1', 'use1-az2', 'use1-az4') );
+  testable: false  # TODO: Reenable when database-issues#9932 is fixed
 
 - name: "create-privatelink-connection-rds-in-region-options"
   description: |
@@ -60,11 +67,14 @@
 
     To connect to an AWS PrivateLink endpoint service in a **different region**
     to the one where your Materialize environment is deployed:
+  test_setup: |
+    > DROP CONNECTION privatelink_svc
   code: |
     CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK ( SERVICE
     NAME 'com.amazonaws.vpce.us-west-1.vpce-svc-<endpoint_service_id>', -- For
     now, the AVAILABILITY ZONES clause **is** required, but will be -- made
     optional in a future release. AVAILABILITY ZONES () );
+  testable: false  # TODO: Reenable when database-issues#9932 is fixed
 
 - name: "create-privatelink-connection-rds-cross-region-options"
   description: |-
@@ -84,6 +94,7 @@
     FROM mz_aws_privatelink_connections plc
     JOIN mz_connections c ON plc.id = c.id
     WHERE c.name = 'privatelink_svc';
+  testable: false  # TODO: Reenable when database-issues#9932 is fixed
 
 
 - name: "get-principal-privatelink-connection-results"
@@ -117,6 +128,8 @@
     VALIDATE CONNECTION privatelink_svc;
   results: |
     If no validation error is returned, move to the next step.
+  testable_results: false
+  testable: false  # TODO: Reenable when database-issues#9932 is fixed
 
 - name: "create-secret"
   description: |
@@ -126,6 +139,7 @@
 
   code: |
     CREATE SECRET pgpass AS '<PASSWORD>';
+  testable: false  # TODO: Reenable when database-issues#9932 is fixed
 
 - name: "create-connection"
   description: |
@@ -142,6 +156,7 @@
       DATABASE '<database>',
       AWS PRIVATELINK privatelink_svc
       );
+  testable: false  # TODO: Reenable when database-issues#9932 is fixed
 
 - name: "create-connection-options-aurora"
   description: |

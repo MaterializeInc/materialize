@@ -236,7 +236,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 file,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(f"test/testdrive/{junit_report}")
+            os.remove(MZ_ROOT / "test" / "testdrive" / junit_report)
 
         files = buildkite.shard_list(
             sorted(

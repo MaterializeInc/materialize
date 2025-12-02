@@ -3,6 +3,17 @@
     Once you have created the connection, you can use the connection in the
     [`CREATE SOURCE`](/sql/create-source/) command to connect to your MySQL instance and start ingesting
     data:
+  test_setup: |
+    > CREATE SECRET IF NOT EXISTS mysqlpass AS 'p@ssw0rd'
+    > CREATE CONNECTION IF NOT EXISTS mysql_connection TO MYSQL (HOST mysql, USER root, PASSWORD SECRET mysqlpass)
+
+    $ mysql-connect name=mysql url=mysql://root@mysql password=p@ssw0rd
+    $ mysql-execute name=mysql
+    DROP DATABASE IF EXISTS public;
+    CREATE DATABASE public;
+    USE public;
+    CREATE TABLE t (x INT);
+
   code: |
     CREATE SOURCE mz_source
       FROM MYSQL CONNECTION mysql_connection

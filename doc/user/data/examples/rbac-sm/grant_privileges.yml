@@ -1,3 +1,5 @@
+- test_depends_on: rbac-sm/grant_roles.yml
+
 - name: "to-view-manager"
   description: |
 
@@ -47,19 +49,21 @@
     role in addition to those privileges inherited through the `PUBLIC` role.
 
     ```none
-    | grantor   | grantee      | database    | schema | name            | object_type | privilege_type |
-    | --------- | ------------ | ----------- | ------ | --------------- | ----------- | -------------- |
-    | mz_system | PUBLIC       | materialize | null   | public          | schema      | USAGE          |
-    | mz_system | PUBLIC       | mydb        | null   | public          | schema      | USAGE          |
-    | mz_system | PUBLIC       | null        | null   | materialize     | database    | USAGE          |
-    | mz_system | PUBLIC       | null        | null   | quickstart      | cluster     | USAGE          |
-    | mz_system | view_manager | mydb        | sales  | items           | table       | SELECT         |
-    | mz_system | view_manager | mydb        | sales  | orders          | table       | SELECT         |
-    | mz_system | view_manager | mydb        | sales  | sales_items     | table       | SELECT         |
-    | mz_system | view_manager | mydb        | null   | sales           | schema      | CREATE         |
-    | mz_system | view_manager | mydb        | null   | sales           | schema      | USAGE          |
-    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | CREATE         |
-    | mz_system | view_manager | null        | null   | compute_cluster | cluster     | USAGE          |
+    | grantor   | grantee      | database    | schema | name                | object_type       | privilege_type |
+    | --------- | ------------ | ----------- | ------ | ------------------- | ----------------- | -------------- |
+    | mz_system | PUBLIC       | materialize | null   | public              | schema            | USAGE          |
+    | mz_system | PUBLIC       | mydb        | null   | public              | schema            | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | materialize         | database          | USAGE          |
+    | mz_system | PUBLIC       | null        | null   | quickstart          | cluster           | USAGE          |
+    | mz_system | view_manager | mydb        | sales  | items               | table             | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | orders              | table             | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | orders_daily_totals | materialized-view | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | orders_view         | view              | SELECT         |
+    | mz_system | view_manager | mydb        | sales  | sales_items         | table             | SELECT         |
+    | mz_system | view_manager | mydb        | null   | sales               | schema            | CREATE         |
+    | mz_system | view_manager | mydb        | null   | sales               | schema            | USAGE          |
+    | mz_system | view_manager | null        | null   | compute_cluster     | cluster           | CREATE         |
+    | mz_system | view_manager | null        | null   | compute_cluster     | cluster           | USAGE          |
     ```
 
     {{< important >}}
@@ -78,6 +82,11 @@
     to automatically grant privileges on new objects.
 
     {{</ important >}}
+  test_replacements:
+    mz_system: materialize
+    "materialize PUBLIC <null> <null> materialize database USAGE": "mz_system PUBLIC <null> <null> materialize database USAGE"
+    "materialize PUBLIC <null> <null> quickstart cluster USAGE": "mz_system PUBLIC <null> <null> quickstart cluster USAGE"
+    "materialize PUBLIC materialize <null> public schema USAGE": "mz_system PUBLIC materialize <null> public schema USAGE"
 
 - name: "to-serving-index-manager"
   description: |
@@ -148,6 +157,11 @@
     for details and example of changing ownership of objects.
 
     {{</ note >}}
+  test_replacements:
+    mz_system: materialize
+    "materialize PUBLIC <null> <null> materialize database USAGE": "mz_system PUBLIC <null> <null> materialize database USAGE"
+    "materialize PUBLIC <null> <null> quickstart cluster USAGE": "mz_system PUBLIC <null> <null> quickstart cluster USAGE"
+    "materialize PUBLIC materialize <null> public schema USAGE": "mz_system PUBLIC materialize <null> public schema USAGE"
 
 - name: "to-data-reader"
   description: |
@@ -185,17 +199,19 @@
     role in addition to those privileges inherited through the `PUBLIC` role.
 
     ```none
-    | grantor   | grantee     | database    | schema | name            | object_type | privilege_type |
-    | --------- | ----------- | ----------- | ------ | --------------- | ----------- | -------------- |
-    | mz_system | PUBLIC      | materialize | null   | public          | schema      | USAGE          |
-    | mz_system | PUBLIC      | mydb        | null   | public          | schema      | USAGE          |
-    | mz_system | PUBLIC      | null        | null   | materialize     | database    | USAGE          |
-    | mz_system | PUBLIC      | null        | null   | quickstart      | cluster     | USAGE          |
-    | mz_system | data_reader | mydb        | sales  | items           | table       | SELECT         |
-    | mz_system | data_reader | mydb        | sales  | orders          | table       | SELECT         |
-    | mz_system | data_reader | mydb        | sales  | sales_items     | table       | SELECT         |
-    | mz_system | data_reader | mydb        | null   | sales           | schema      | USAGE          |
-    | mz_system | data_reader | null        | null   | serving_cluster | cluster     | USAGE          |
+    | grantor   | grantee     | database    | schema | name                | object_type       | privilege_type |
+    | --------- | ----------- | ----------- | ------ | ------------------- | ----------------- | -------------- |
+    | mz_system | PUBLIC      | materialize | null   | public              | schema            | USAGE          |
+    | mz_system | PUBLIC      | mydb        | null   | public              | schema            | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | materialize         | database          | USAGE          |
+    | mz_system | PUBLIC      | null        | null   | quickstart          | cluster           | USAGE          |
+    | mz_system | data_reader | mydb        | sales  | items               | table             | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | orders              | table             | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | orders_daily_totals | materialized-view | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | orders_view         | view              | SELECT         |
+    | mz_system | data_reader | mydb        | sales  | sales_items         | table             | SELECT         |
+    | mz_system | data_reader | mydb        | null   | sales               | schema            | USAGE          |
+    | mz_system | data_reader | null        | null   | serving_cluster     | cluster           | USAGE          |
     ```
 
     {{< important >}}
@@ -214,3 +230,8 @@
     to automatically grant privileges on new objects.
 
     {{</ important >}}
+  test_replacements:
+    mz_system: materialize
+    "materialize PUBLIC <null> <null> materialize database USAGE": "mz_system PUBLIC <null> <null> materialize database USAGE"
+    "materialize PUBLIC <null> <null> quickstart cluster USAGE": "mz_system PUBLIC <null> <null> quickstart cluster USAGE"
+    "materialize PUBLIC materialize <null> public schema USAGE": "mz_system PUBLIC materialize <null> public schema USAGE"
