@@ -366,9 +366,7 @@ def workflow_cdc(c: Composition, parser: WorkflowArgumentParser) -> None:
     ssl_args_dict = get_testdrive_ssl_args(c)
     testdrive_ssl_args = ssl_args_dict["testdrive_args"]
 
-    testdrive_args = (
-        testdrive_ssl_args + get_default_testdrive_size_args() + ["--no-reset"]
-    )
+    testdrive_args = testdrive_ssl_args + get_default_testdrive_size_args()
     with c.override(create_postgres(pg_version=pg_version)):
         c.up("materialized", "test-certs", "postgres")
         c.test_parts(
