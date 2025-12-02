@@ -9,18 +9,18 @@
 
 use crate::durable::traits::{UpgradeFrom, UpgradeInto};
 use crate::durable::upgrade::MigrationAction;
-use crate::durable::upgrade::wire_compatible::{WireCompatible, wire_compatible};
+use crate::durable::upgrade::json_compatible::{JsonCompatible, json_compatible};
 use crate::durable::upgrade::{objects_v75 as v75, objects_v76 as v76};
 
-wire_compatible!(v75::ClusterKey with v76::ClusterKey);
-wire_compatible!(v75::ClusterReplicaKey with v76::ClusterReplicaKey);
-wire_compatible!(v75::ClusterId with v76::ClusterId);
-wire_compatible!(v75::RoleId with v76::RoleId);
-wire_compatible!(v75::MzAclItem with v76::MzAclItem);
-wire_compatible!(v75::ReplicaLogging with v76::ReplicaLogging);
-wire_compatible!(v75::replica_config::UnmanagedLocation with v76::replica_config::UnmanagedLocation);
-wire_compatible!(v75::OptimizerFeatureOverride with v76::OptimizerFeatureOverride);
-wire_compatible!(v75::ClusterSchedule with v76::ClusterSchedule);
+json_compatible!(v75::ClusterKey with v76::ClusterKey);
+json_compatible!(v75::ClusterReplicaKey with v76::ClusterReplicaKey);
+json_compatible!(v75::ClusterId with v76::ClusterId);
+json_compatible!(v75::RoleId with v76::RoleId);
+json_compatible!(v75::MzAclItem with v76::MzAclItem);
+json_compatible!(v75::ReplicaLogging with v76::ReplicaLogging);
+json_compatible!(v75::replica_config::UnmanagedLocation with v76::replica_config::UnmanagedLocation);
+json_compatible!(v75::OptimizerFeatureOverride with v76::OptimizerFeatureOverride);
+json_compatible!(v75::ClusterSchedule with v76::ClusterSchedule);
 
 /// Removes the `disk` flag from managed cluster and replica configs.
 pub fn upgrade(
@@ -64,7 +64,7 @@ pub fn upgrade(
 impl UpgradeFrom<v75::state_update_kind::Cluster> for v76::state_update_kind::Cluster {
     fn upgrade_from(old: v75::state_update_kind::Cluster) -> Self {
         v76::state_update_kind::Cluster {
-            key: old.key.as_ref().map(WireCompatible::convert),
+            key: old.key.as_ref().map(JsonCompatible::convert),
             value: old.value.map(UpgradeFrom::upgrade_from),
         }
     }
@@ -74,8 +74,8 @@ impl UpgradeFrom<v75::ClusterValue> for v76::ClusterValue {
     fn upgrade_from(old: v75::ClusterValue) -> Self {
         v76::ClusterValue {
             name: old.name,
-            owner_id: old.owner_id.as_ref().map(WireCompatible::convert),
-            privileges: old.privileges.iter().map(WireCompatible::convert).collect(),
+            owner_id: old.owner_id.as_ref().map(JsonCompatible::convert),
+            privileges: old.privileges.iter().map(JsonCompatible::convert).collect(),
             config: old.config.map(UpgradeFrom::upgrade_from),
         }
     }
@@ -109,13 +109,13 @@ impl UpgradeFrom<v75::cluster_config::ManagedCluster> for v76::cluster_config::M
             size: loc.size,
             replication_factor: loc.replication_factor,
             availability_zones: loc.availability_zones,
-            logging: loc.logging.as_ref().map(WireCompatible::convert),
+            logging: loc.logging.as_ref().map(JsonCompatible::convert),
             optimizer_feature_overrides: loc
                 .optimizer_feature_overrides
                 .iter()
-                .map(WireCompatible::convert)
+                .map(JsonCompatible::convert)
                 .collect(),
-            schedule: loc.schedule.as_ref().map(WireCompatible::convert),
+            schedule: loc.schedule.as_ref().map(JsonCompatible::convert),
         }
     }
 }
@@ -125,7 +125,7 @@ impl UpgradeFrom<v75::state_update_kind::ClusterReplica>
 {
     fn upgrade_from(old: v75::state_update_kind::ClusterReplica) -> Self {
         v76::state_update_kind::ClusterReplica {
-            key: old.key.as_ref().map(WireCompatible::convert),
+            key: old.key.as_ref().map(JsonCompatible::convert),
             value: old.value.map(UpgradeFrom::upgrade_from),
         }
     }
@@ -134,10 +134,10 @@ impl UpgradeFrom<v75::state_update_kind::ClusterReplica>
 impl UpgradeFrom<v75::ClusterReplicaValue> for v76::ClusterReplicaValue {
     fn upgrade_from(old: v75::ClusterReplicaValue) -> Self {
         v76::ClusterReplicaValue {
-            cluster_id: old.cluster_id.as_ref().map(WireCompatible::convert),
+            cluster_id: old.cluster_id.as_ref().map(JsonCompatible::convert),
             name: old.name,
             config: old.config.map(UpgradeFrom::upgrade_from),
-            owner_id: old.owner_id.as_ref().map(WireCompatible::convert),
+            owner_id: old.owner_id.as_ref().map(JsonCompatible::convert),
         }
     }
 }
@@ -145,7 +145,7 @@ impl UpgradeFrom<v75::ClusterReplicaValue> for v76::ClusterReplicaValue {
 impl UpgradeFrom<v75::ReplicaConfig> for v76::ReplicaConfig {
     fn upgrade_from(old: v75::ReplicaConfig) -> Self {
         v76::ReplicaConfig {
-            logging: old.logging.as_ref().map(WireCompatible::convert),
+            logging: old.logging.as_ref().map(JsonCompatible::convert),
             location: old.location.map(UpgradeFrom::upgrade_from),
         }
     }
@@ -155,7 +155,7 @@ impl UpgradeFrom<v75::replica_config::Location> for v76::replica_config::Locatio
     fn upgrade_from(old: v75::replica_config::Location) -> Self {
         match old {
             v75::replica_config::Location::Unmanaged(loc) => {
-                v76::replica_config::Location::Unmanaged(WireCompatible::convert(&loc))
+                v76::replica_config::Location::Unmanaged(JsonCompatible::convert(&loc))
             }
             v75::replica_config::Location::Managed(loc) => {
                 v76::replica_config::Location::Managed(loc.upgrade_into())
