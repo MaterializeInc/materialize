@@ -31,6 +31,7 @@ use mz_environmentd::test_util::{
     get_explain_timestamp_determination, try_get_explain_timestamp,
 };
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::now::{EpochMillis, NOW_ZERO, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
@@ -170,7 +171,10 @@ async fn test_no_block() {
             println!("test_no_block: in thread; create source done");
             // Verify that the schema registry error was returned to the client, for
             // good measure.
-            assert_contains!(result.unwrap_err().to_string(), "server error 503");
+            assert_contains!(
+                result.unwrap_err().to_string_with_causes(),
+                "server error 503"
+            );
         });
 
         // Wait for Materialize to contact the schema registry, which
@@ -299,7 +303,7 @@ async fn test_drop_connection_race() {
     info!("test_drop_connection_race: asserting response");
     let source_res = source_task.into_tokio_handle().await.unwrap();
     assert_contains!(
-        source_res.unwrap_err().to_string(),
+        source_res.unwrap_err().to_string_with_causes(),
         "unknown catalog item 'conn'"
     );
 }
@@ -1311,7 +1315,11 @@ fn test_transactional_explain_timestamps() {
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap_err();
 
-    assert!(format!("{}", error).contains("transaction in write-only mode"));
+    assert!(
+        error
+            .to_string_with_causes()
+            .contains("transaction in write-only mode")
+    );
 
     client_writes.batch_execute("ROLLBACK").unwrap();
 
@@ -1360,7 +1368,8 @@ fn test_transactional_explain_timestamps() {
         .unwrap_err();
 
     assert!(
-        format!("{}", error)
+        error
+            .to_string_with_causes()
             .contains("Transactions can only reference objects in the same timedomain")
     );
 
@@ -2013,14 +2022,14 @@ fn test_alter_system_invalid_param() {
         .batch_execute("ALTER SYSTEM SET invalid_param TO 42")
         .unwrap_err();
     assert!(
-        res.to_string()
+        res.to_string_with_causes()
             .contains("unrecognized configuration parameter \"invalid_param\"")
     );
     let res = mz_client
         .batch_execute("ALTER SYSTEM RESET invalid_param")
         .unwrap_err();
     assert!(
-        res.to_string()
+        res.to_string_with_causes()
             .contains("unrecognized configuration parameter \"invalid_param\"")
     );
 }
@@ -2581,7 +2590,10 @@ fn test_dont_drop_sinks_twice() {
         .cancel_query(postgres::NoTls)
         .expect("failed to cancel subscribe");
     let err = out.read_to_end(&mut vec![]).unwrap_err();
-    assert!(err.to_string().contains("subscribe has been terminated"));
+    assert!(
+        err.to_string_with_causes()
+            .contains("subscribe has been terminated")
+    );
 
     drop(out);
     client_a.close().expect("failed to drop client");
@@ -3023,7 +3035,7 @@ fn test_pg_cancel_backend() {
             client_user
                 .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
                 .unwrap_err()
-                .to_string(),
+                .to_string_with_causes(),
             r#"must be a member of "materialize""#
         );
 
@@ -3035,7 +3047,10 @@ fn test_pg_cancel_backend() {
     });
 
     let err = client1.query("SUBSCRIBE t", &[]).unwrap_err();
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
 
     handle.join().unwrap();
 
@@ -3043,7 +3058,7 @@ fn test_pg_cancel_backend() {
         client1
             .query_one("SELECT * FROM (SELECT pg_cancel_backend(1))", &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "pg_cancel_backend in this position",
     );
 
@@ -3056,7 +3071,7 @@ fn test_pg_cancel_backend() {
         client1
             .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "canceling statement due to user request",
     );
 
@@ -3084,11 +3099,14 @@ fn test_pg_cancel_backend() {
         client1
             .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "canceling statement due to user request",
     );
     assert_contains!(
-        client1.batch_execute("SELECT 1").unwrap_err().to_string(),
+        client1
+            .batch_execute("SELECT 1")
+            .unwrap_err()
+            .to_string_with_causes(),
         "current transaction is aborted"
     );
 }
@@ -3261,7 +3279,7 @@ fn test_peek_on_dropped_indexed_view() {
 
     // Check that the peek is cancelled an all resources are cleaned up.
     let select_res = handle.join().unwrap();
-    let select_err = select_res.unwrap_err().to_string();
+    let select_err = select_res.unwrap_err().to_string_with_causes();
     assert!(
         select_err.contains(
             "query could not complete because relation \"materialize.public.v\" was dropped"
@@ -3890,11 +3908,17 @@ async fn test_serialized_ddl_cancel() {
     // we are trying to test here).
     cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
     let err = handle2.await;
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
     // Cancel the in-progress statement.
     cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
     let err = handle1.await;
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
 
     // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully
     // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't

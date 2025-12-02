@@ -45,6 +45,7 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -1159,7 +1160,10 @@ async fn test_auth_base_require_tls_frontegg() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
             TestCase::Http {
@@ -1192,7 +1196,10 @@ async fn test_auth_base_require_tls_frontegg() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
             TestCase::Http {
@@ -1226,7 +1233,10 @@ async fn test_auth_base_require_tls_frontegg() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'PUBLIC'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'PUBLIC'"
+                    );
                 })),
             },
             TestCase::Http {
@@ -1304,7 +1314,7 @@ async fn test_auth_base_disable_tls() {
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_eq!(
-                        err.to_string(),
+                        err.to_string_with_causes(),
                         "error performing TLS handshake: server does not support TLS",
                     )
                 })),
@@ -1331,7 +1341,10 @@ async fn test_auth_base_disable_tls() {
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
         ],
@@ -1451,7 +1464,10 @@ async fn test_auth_base_require_tls() {
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
         ],
@@ -1488,7 +1504,10 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unable to get local issuer certificate");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unable to get local issuer certificate"
+                    );
                 })),
             },
             TestCase::Http {
