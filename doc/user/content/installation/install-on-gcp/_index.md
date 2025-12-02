@@ -16,8 +16,8 @@ menu:
 
 | Guide | Description |
 |-------|-------------|
-| [Terraform Provider](/installation/install-on-gcp/terraform-module/) | Install Materialize on GCP using our new Unified Terraform Provider  |
-| [Terraform Provider (legacy)](/installation/install-on-gcp/legacy-terraform-module/) | Install Materialize on GCP using our Terraform Provider (legacy) |
+| [Terraform Provider](/installation/install-on-gcp/terraform-module/) | Install Materialize on GCP using our new unified Terraform Provider  |
+| [Terraform Provider (legacy)](/installation/install-on-gcp/legacy-terraform-module/) | Install Materialize on GCP using our legacy Terraform Provider |
 | [Appendix: Google deployment guidelines](/installation/install-on-gcp/appendix-deployment-guidelines/) | Additional guidelines for Google Cloud deployments |
 
 ## See also

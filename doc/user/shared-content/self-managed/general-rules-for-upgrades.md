@@ -7,4 +7,4 @@ Whe upgrading:
   ensure compatibility.
 
 - **Always check** the [version specific upgrade
-  notes](/installation/#version-specific-upgrade-notes).
+  notes](/installation/upgrading/#version-specific-upgrade-notes).

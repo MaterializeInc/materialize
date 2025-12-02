@@ -27,7 +27,7 @@ file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
 - {{< include-md
 file="shared-content/self-managed/azure-terraform-v0.6.1-upgrade-notes.md" >}}.
 
-See also [General notes for upgrades](/installation/#upgrade).
+See also [Upgrade Overview](/installation/upgrading/).
 
 {{< /annotation >}}
 

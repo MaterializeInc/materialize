@@ -15,8 +15,8 @@ aliases:
 
 | Guide | Description |
 |-------|-------------|
-| [Terraform Provider](/installation/install-on-azure/terraform-module/) | Install Materialize on Azure using our new Unified Terraform Provider  |
-| [Terraform Provider (legacy)](/installation/install-on-azure/legacy-terraform-module/) | Install Materialize on Azure using our Terraform Provider (legacy) |
+| [Terraform Provider](/installation/install-on-azure/terraform-module/) | Install Materialize on Azure using our new unified Terraform Provider  |
+| [Terraform Provider (legacy)](/installation/install-on-azure/legacy-terraform-module/) | Install Materialize on Azure using our legacy Terraform Provider |
 | [Appendix: Azure deployment guidelines](/installation/install-on-azure/appendix-deployment-guidelines/) | Additional guidelines for Azure deployments |
 
 ## See also

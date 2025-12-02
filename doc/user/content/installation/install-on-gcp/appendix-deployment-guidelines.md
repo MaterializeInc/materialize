@@ -13,8 +13,8 @@ menu:
 As a general guideline, we recommend:
 
 - ARM-based CPU
-- A 1:8 ratio of vCPU to GiB memory is recommended.
-- When using swap, it is recommended to use a 8:1 ratio of GiB local instance storage to GiB Ram.
+- A 1:8 ratio of vCPU to GiB memory.
+- When using swap, use a 8:1 ratio of GiB local instance storage to GiB memory.
 
 When operating on GCP in production, we recommend the following machine types
 that support local SSD attachment:
@@ -64,7 +64,7 @@ type](https://cloud.google.com/compute/docs/disks/local-ssd#lssd_disk_options).
 
 ## Locally-attached NVMe storage
 
-Configuring swap on nodes to using locally-attached NVMe storage allows
+Configuring swap on nodes to use locally-attached NVMe storage allows
 Materialize to spill to disk when operating on datasets larger than main memory.
 This setup can provide significant cost savings and provides a more graceful
 degradation rather than OOMing. Network-attached storage (like EBS volumes) can
@@ -87,7 +87,7 @@ With this change, the Terraform:
 See [Upgrade Notes](https://github.com/MaterializeInc/terraform-google-materialize?tab=readme-ov-file#v061).
 
 {{< note >}}
-If deploying `v25.2` Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26` this will be handled automatically.
+If deploying `v25.2`, Materialize clusters will not automatically use swap unless they are configured with a `memory_request` less than their `memory_limit`. In `v26`, this will be handled automatically.
 {{< /note >}}
 
 

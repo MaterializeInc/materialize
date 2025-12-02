@@ -1,5 +1,5 @@
 ---
-title: "Install locally on kind (via Helm)"
+title: "Install locally on kind"
 description: "Deploy Self-managed Materialize to a local kind cluster."
 aliases:
   - /self-hosted/install-on-local-kind/
