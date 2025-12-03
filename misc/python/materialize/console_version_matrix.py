@@ -13,7 +13,7 @@ Version matrix for console testing - uses existing version_list infrastructure.
 
 from materialize.mz_version import MzVersion
 from materialize.version_list import (
-    get_all_mz_versions,
+    get_published_minor_mz_versions,
     get_self_managed_versions,
 )
 
@@ -21,41 +21,37 @@ from materialize.version_list import (
 def get_console_test_versions() -> dict[str, MzVersion | None]:
     """
     Get all versions that should be tested for console.
-    
+
     Uses existing version_list.py infrastructure to determine:
     - cloud-backward: Last released minor version (from git tags)
     - cloud-current: Current source (None)
-    - cloud-forward: Current source (None) 
+    - cloud-forward: Current source (None)
     - sm-lts: Latest self-managed LTS minor version
-    
+
     Returns:
         Dictionary mapping test name to version (None = current source)
-    
-    Note: This function does NOT verify Docker images exist, for speed.
-    The assumption is that released versions have published images.
+
+    Note: Uses get_published_minor_mz_versions which verifies Docker images exist.
     """
-    # Get all versions from git tags (fast, no Docker check)
-    all_versions = get_all_mz_versions(newest_first=True)
-    
-    # Debug: Print last 5 versions from git tags
-    print(f"DEBUG: Last 5 released versions: {[str(v) for v in all_versions[:5]]}")
+    # Get the latest patch version for each minor version (with Docker image verification)
+    # Limit to 5 versions for speed
+    minor_versions = get_published_minor_mz_versions(newest_first=True, limit=5)
+
+    # Debug: Print minor versions
+    print(f"DEBUG: Minor versions (newest first): {[str(v) for v in minor_versions]}")
     
     # Map versions to deployment stages based on array position
     # cloud-forward: newest version (index 0) (version in staging)
     # cloud-current: the version released before the latest one (version in prod)
     # cloud-backward: two versions back before the latest released version (version in staging)
     
-    cloud_forward = all_versions[0] if len(all_versions) > 0 else None
-    cloud_current = all_versions[1] if len(all_versions) > 2 else None
-    cloud_backward = all_versions[2] if len(all_versions) > 4 else None
+    cloud_forward = minor_versions[0] if len(minor_versions) > 0 else None
+    cloud_current = minor_versions[1] if len(minor_versions) > 1 else None
+    cloud_backward = minor_versions[2] if len(minor_versions) > 2 else None
     
-    # Self-managed LTS: Get from Helm chart (fast, already cached)
+    # Self-managed LTS: Get the latest self-managed version from Helm chart
     sm_versions = get_self_managed_versions()
-    # Currently targeting v25.2.x series as LTS
-    sm_lts = max(
-        (v for v in sm_versions if v.major == 25 and v.minor == 2),
-        default=max(sm_versions) if sm_versions else cloud_backward,
-    )
+    sm_lts = max(sm_versions) if sm_versions else cloud_backward
     
     return {
         "cloud-backward": cloud_backward,

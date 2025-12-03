@@ -7,7 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-import os
 import sys
 
 from materialize.mzcompose.composition import Composition, Service, WorkflowArgumentParser
@@ -78,7 +77,7 @@ def workflow_start_version(c: Composition, parser: WorkflowArgumentParser) -> No
     
     Arguments:
         version_alias: One of: cloud-backward, cloud-current, cloud-forward, sm-lts
-                      Or a direct version like: v0.147.18
+                      Or a direct version like: v0.26.1.1
     """
     from materialize.console_version_matrix import get_console_test_versions
     
@@ -102,27 +101,24 @@ def workflow_start_version(c: Composition, parser: WorkflowArgumentParser) -> No
         if version_alias not in versions:
             print(f"❌ Unknown version alias: {version_alias}")
             print(f"Available aliases: {', '.join(versions.keys())}")
-            print(f"Or provide a direct version like: v0.147.18")
+            print(f"Or provide a direct version like: v0.26.1.1")
             sys.exit(1)
         
         version = versions[version_alias]
         version_str = str(version) if version else None
-    
     print(f"Starting services for version: {version_alias}")
-    
+
     if version_str:
         print(f"Docker image: materialize/materialized:{version_str}")
-        # Override the Materialized service config with specific version
-        # Note: We update the compose dict directly so it persists
-        # This is necessary for sanity restarts to work correctly
         c.compose["services"]["materialized"]["image"] = f"materialize/materialized:{version_str}"
     else:
         print("Using current source build")
-    
+
     # Start services
     c.up(
         "redpanda",
         "postgres",
+        "sql-server",
         "mysql",
         "materialized",
         Service("testdrive", idle=True),
