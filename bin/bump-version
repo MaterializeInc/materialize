@@ -99,7 +99,7 @@ if $sbom; then
         echo "Or use bin/ci-builder run stable ..."
         exit 1
     fi
-    inspector_sbomgen_version=1.8.1
+    inspector_sbomgen_version=1.8.2
     if [ "$(inspector-sbomgen --version)" != "$inspector_sbomgen_version" ]; then
         echo "inspector-sbomgen is installed, but has wrong version: $(inspector-sbomgen --version)"
         echo "Install inspector-sbomgen $inspector_sbomgen_version from from https://docs.aws.amazon.com/inspector/latest/user/sbom-generator.html"
