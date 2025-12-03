@@ -2,6 +2,7 @@
 
 use crate::cli::{CliError, helpers};
 use crate::client::{ClusterOptions, Profile};
+use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
 use crate::project::object_id::ObjectId;
 use crate::project::planned::extract_external_indexes;
@@ -129,9 +130,37 @@ pub async fn run(
         planned_project.get_sorted_objects()?
     };
 
+    // Filter out tables and sinks - use create-tables command for those
+    let objects_before_filter = objects.len();
+    let objects: Vec<_> = objects
+        .into_iter()
+        .filter(|(_, typed_obj)| {
+            !matches!(
+                typed_obj.stmt,
+                Statement::CreateTable(_)
+                    | Statement::CreateTableFromSource(_)
+                    | Statement::CreateSink(_)
+            )
+        })
+        .collect();
+
+    let filtered_count = objects_before_filter - objects.len();
+    if filtered_count > 0 {
+        verbose!(
+            "Skipped {} table(s)/sink(s) - use 'mz-deploy create-tables' for those",
+            filtered_count
+        );
+    }
+
+    // Validate remaining objects don't depend on missing tables
+    let object_ids: HashSet<_> = objects.iter().map(|(id, _)| id.clone()).collect();
+    client
+        .validate_table_dependencies(&planned_project, &object_ids)
+        .await?;
+
     let analyze_duration = analyze_start.elapsed().unwrap();
     progress::stage_success(
-        &format!("Ready to deploy {} objects", objects.len()),
+        &format!("Ready to deploy {} view(s)/materialized view(s)", objects.len()),
         analyze_duration
     );
 
@@ -251,9 +280,61 @@ async fn create_resources_with_rollback<'a>(
         }
         let schema_duration = schema_start.elapsed().unwrap();
         progress::stage_success(
-            &format!("Created {} schema(s)", schema_set.len()),
+            &format!("Created {} staging schema(s)", schema_set.len()),
             schema_duration
         );
+
+        // Create production schemas if they don't exist (needed for swap)
+        progress::info("Creating production schemas if not exists");
+        for (database, schema) in schema_set {
+            client.create_schema(database, schema).await?;
+            verbose!("  Ensured schema {}.{} exists", database, schema);
+        }
+
+        // Execute schema mod_statements for staging schemas
+        progress::stage_start("Applying schema setup statements");
+        let mod_start = SystemTime::now();
+        for mod_stmt in planned_project.iter_mod_statements() {
+            match mod_stmt {
+                project::ModStatement::Database { database, statement } => {
+                    // Check if any schema in this database is in our schema_set
+                    let has_schema = schema_set.iter().any(|(db, _)| db == database);
+                    if has_schema {
+                        verbose!("Applying database setup for: {}", database);
+                        client
+                            .execute(&statement.to_string(), &[])
+                            .await
+                            .map_err(|e| CliError::SqlExecutionFailed {
+                                statement: statement.to_string(),
+                                source: e,
+                            })?;
+                    }
+                }
+                project::ModStatement::Schema {
+                    database,
+                    schema,
+                    statement,
+                } => {
+                    if schema_set.contains(&(database.to_string(), schema.to_string())) {
+                        // Transform schema name to staging version
+                        let staging_schema = format!("{}{}", schema, staging_suffix);
+                        let transformed_stmt = statement.to_string()
+                            .replace(&format!("{}.{}", database, schema), &format!("{}.{}", database, staging_schema));
+
+                        verbose!("Applying schema setup for: {}.{}", database, staging_schema);
+                        client
+                            .execute(&transformed_stmt, &[])
+                            .await
+                            .map_err(|e| CliError::SqlExecutionFailed {
+                                statement: transformed_stmt.clone(),
+                                source: e,
+                            })?;
+                    }
+                }
+            }
+        }
+        let mod_duration = mod_start.elapsed().unwrap();
+        progress::stage_success("Schema setup statements applied", mod_duration);
 
         // Write cluster mappings to deploy.clusters table BEFORE creating clusters
         // This allows abort logic to clean up even if cluster creation fails
@@ -430,7 +511,7 @@ async fn create_resources_with_rollback<'a>(
 
         let deploy_duration = deploy_start.elapsed().unwrap();
         progress::stage_success(
-            &format!("Deployed {} objects", success_count),
+            &format!("Deployed {} view(s)/materialized view(s)", success_count),
             deploy_duration
         );
 

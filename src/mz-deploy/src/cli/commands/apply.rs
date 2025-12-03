@@ -2,8 +2,10 @@
 
 use crate::cli::{CliError, helpers};
 use crate::client::Profile;
+use crate::project::ast::Statement;
 use crate::utils::git;
 use crate::{project, verbose};
+use std::collections::HashSet;
 use std::path::Path;
 
 /// Apply the project to the database (direct deployment or blue/green swap).
@@ -140,6 +142,21 @@ pub async fn run(
         }
     }
 
+    // Create project schemas if they don't exist
+    let mut project_schemas = HashSet::new();
+    for db in &planned_project.databases {
+        for schema in &db.schemas {
+            project_schemas.insert((db.name.clone(), schema.name.clone()));
+        }
+    }
+
+    if !project_schemas.is_empty() {
+        verbose!("Creating schemas if not exists...");
+        for (database, schema) in &project_schemas {
+            client.create_schema(database, schema).await?;
+        }
+    }
+
     // Determine which module statements to execute based on dirty schemas
     let mod_stmts = planned_project.iter_mod_statements();
     let mut filtered_mod_stmts = Vec::new();
@@ -233,6 +250,34 @@ pub async fn run(
         planned_project.get_sorted_objects()?
     };
 
+    // Filter out tables and sinks - use create-tables command for those
+    let objects_before_filter = objects.len();
+    let objects: Vec<_> = objects
+        .into_iter()
+        .filter(|(_, typed_obj)| {
+            !matches!(
+                typed_obj.stmt,
+                Statement::CreateTable(_)
+                    | Statement::CreateTableFromSource(_)
+                    | Statement::CreateSink(_)
+            )
+        })
+        .collect();
+
+    let filtered_count = objects_before_filter - objects.len();
+    if filtered_count > 0 {
+        verbose!(
+            "Skipped {} table(s)/sink(s) - use 'mz-deploy create-tables' for those",
+            filtered_count
+        );
+    }
+
+    // Validate remaining objects don't depend on missing tables
+    let object_ids: HashSet<_> = objects.iter().map(|(id, _)| id.clone()).collect();
+    client
+        .validate_table_dependencies(&planned_project, &object_ids)
+        .await?;
+
     // Execute SQL for each object in topological order
     let executor = helpers::DeploymentExecutor::new(&client);
     let mut success_count = 0;
@@ -258,9 +303,15 @@ pub async fn run(
     .await?;
 
     println!(
-        "\nSuccessfully applied {} objects to the database",
+        "\nSuccessfully applied {} view(s)/materialized view(s) to the database",
         success_count
     );
+    if filtered_count > 0 {
+        println!(
+            "Note: Skipped {} table(s)/sink(s) - run 'mz-deploy create-tables' to deploy tables",
+            filtered_count
+        );
+    }
 
     Ok(())
 }
