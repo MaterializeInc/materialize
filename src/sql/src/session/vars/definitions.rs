@@ -2230,6 +2230,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: true,
     },
+    {
+        name: enable_cast_elimination,
+        desc: "Allow the optimizer to eliminate noop casts between values of equivalent representation types.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {
@@ -2253,6 +2259,7 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
             enable_fast_path_plan_insights: vars.enable_fast_path_plan_insights(),
+            enable_cast_elimination: vars.enable_cast_elimination(),
         }
     }
 }
