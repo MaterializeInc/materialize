@@ -55,6 +55,20 @@ enum Command {
         docker_image: Option<String>,
     },
 
+    /// Create all tables in the project with IF NOT EXISTS
+    ///
+    /// Safely deploys only CREATE TABLE and CREATE TABLE FROM SOURCE statements
+    /// with IF NOT EXISTS flags. Schemas are created if they don't exist.
+    /// This is useful for initial setup or ensuring table structures exist.
+    ///
+    /// Example:
+    ///   mz-deploy create-tables
+    CreateTables {
+        /// Allow deployment with uncommitted git changes
+        #[arg(long)]
+        allow_dirty: bool,
+    },
+
     /// Deploy to production directly or promote a staging environment
     ///
     /// This command has two modes:
@@ -235,6 +249,14 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::compile::run(&args.directory, compile_args)
                 .await
                 .map(|_| ())
+        }
+        Some(Command::CreateTables { allow_dirty }) => {
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+
+            cli::commands::create_tables::run(&profile, &args.directory, allow_dirty).await?;
+            cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Apply {
             staging_env,

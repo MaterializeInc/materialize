@@ -75,6 +75,22 @@ pub enum ModStatement<'a> {
     },
 }
 
+/// The type of objects contained in a schema.
+///
+/// Schemas are segregated by object type to prevent accidental recreation:
+/// - Storage schemas contain tables, sinks, and tables from sources
+/// - Compute schemas contain views and materialized views
+/// - Empty schemas contain no objects
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SchemaType {
+    /// Schema contains storage objects (tables, sinks)
+    Storage,
+    /// Schema contains computation objects (views, materialized views)
+    Compute,
+    /// Schema contains no objects
+    Empty,
+}
+
 /// A schema containing objects with dependency information.
 #[derive(Debug)]
 pub struct Schema {
@@ -82,6 +98,8 @@ pub struct Schema {
     pub objects: Vec<DatabaseObject>,
     /// Optional module-level statements (from schema.sql file)
     pub mod_statements: Option<Vec<mz_sql_parser::ast::Statement<Raw>>>,
+    /// The type of objects in this schema (Storage, Compute, or Empty)
+    pub schema_type: SchemaType,
 }
 
 /// A database containing schemas with dependency information.
@@ -129,6 +147,15 @@ impl Project {
         }
 
         Ok(sorted)
+    }
+
+    pub fn get_tables(&self) -> impl Iterator<Item = ObjectId> {
+        self.databases
+            .iter()
+            .flat_map(|db| db.schemas.iter())
+            .flat_map(|schema| schema.objects.iter())
+            .filter(|object| matches!(object.typed_object.stmt, Statement::CreateTable(_) | Statement::CreateTableFromSource(_)))
+            .map(|object| object.id.clone())
     }
 
     fn visit(
@@ -461,6 +488,30 @@ impl Project {
     }
 }
 
+/// Determine the schema type based on the objects it contains.
+///
+/// Returns:
+/// - `SchemaType::Storage` if the schema contains tables, sinks, or tables from sources
+/// - `SchemaType::Compute` if the schema contains views or materialized views
+/// - `SchemaType::Empty` if the schema contains no objects
+///
+/// Note: Due to validation in the typed phase, schemas cannot contain both storage
+/// and compute objects, so we only need to check the first object.
+fn determine_schema_type(objects: &[DatabaseObject]) -> SchemaType {
+    if objects.is_empty() {
+        return SchemaType::Empty;
+    }
+
+    // Check the first object to determine schema type
+    // Validation ensures all objects in a schema are the same type
+    match &objects[0].typed_object.stmt {
+        Statement::CreateTable(_)
+        | Statement::CreateTableFromSource(_)
+        | Statement::CreateSink(_) => SchemaType::Storage,
+        Statement::CreateView(_) | Statement::CreateMaterializedView(_) => SchemaType::Compute,
+    }
+}
+
 impl From<typed::Project> for Project {
     fn from(typed_project: typed::Project) -> Self {
         let mut dependency_graph = HashMap::new();
@@ -532,10 +583,14 @@ impl From<typed::Project> for Project {
                     });
                 }
 
+                // Determine schema type based on objects
+                let schema_type = determine_schema_type(&objects);
+
                 schemas.push(Schema {
                     name: typed_schema.name,
                     objects,
                     mod_statements: typed_schema.mod_statements,
+                    schema_type,
                 });
             }
 
@@ -2101,6 +2156,7 @@ mod tests {
                     name: "schema".to_string(),
                     objects: vec![mv_obj, sink_obj],
                     mod_statements: None,
+                    schema_type: SchemaType::Storage, // Has sink
                 }],
                 mod_statements: None,
             }],
@@ -2149,6 +2205,7 @@ mod tests {
                     name: "schema".to_string(),
                     objects: vec![mv_obj],
                     mod_statements: None,
+                    schema_type: SchemaType::Compute, // Has MV
                 }],
                 mod_statements: None,
             }],
@@ -2235,6 +2292,7 @@ mod tests {
                     name: "schema".to_string(),
                     objects: vec![table_obj, sink_obj],
                     mod_statements: None,
+                    schema_type: SchemaType::Storage, // Has sink and table
                 }],
                 mod_statements: None,
             }],
@@ -2311,6 +2369,7 @@ mod tests {
                     name: "schema".to_string(),
                     objects: vec![mv_obj, sink_obj],
                     mod_statements: None,
+                    schema_type: SchemaType::Storage, // Has sink
                 }],
                 mod_statements: None,
             }],
@@ -2371,6 +2430,7 @@ mod tests {
                     name: "schema".to_string(),
                     objects: vec![mv_obj],
                     mod_statements: None,
+                    schema_type: SchemaType::Compute, // Has MV
                 }],
                 mod_statements: None,
             }],
@@ -2418,6 +2478,7 @@ mod tests {
                     name: "schema".to_string(),
                     objects: vec![sink_obj],
                     mod_statements: None,
+                    schema_type: SchemaType::Storage, // Has sink
                 }],
                 mod_statements: None,
             }],

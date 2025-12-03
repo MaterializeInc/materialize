@@ -3,6 +3,7 @@ use crate::client::models::{
     Cluster, ClusterOptions, ConflictRecord, DeploymentMetadata, DeploymentObjectRecord,
     SchemaDeploymentRecord,
 };
+use crate::project::ast::Statement;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
@@ -106,6 +107,11 @@ pub enum DatabaseValidationError {
         compute_objects: Vec<String>,
         storage_objects: Vec<String>,
     },
+    InsufficientPrivileges {
+        missing_database_usage: Vec<String>,
+        missing_createcluster: bool,
+    },
+    MissingSources(Vec<ObjectId>),
     QueryError(tokio_postgres::Error),
 }
 
@@ -228,6 +234,62 @@ impl fmt::Display for DatabaseValidationError {
                     "  {} Move sources/sinks to a separate cluster to avoid accidental recreation",
                     "help:".bright_cyan().bold()
                 )?;
+                Ok(())
+            }
+            DatabaseValidationError::InsufficientPrivileges {
+                missing_database_usage,
+                missing_createcluster,
+            } => {
+                writeln!(
+                    f,
+                    "{}: insufficient privileges to deploy this project",
+                    "error".bright_red().bold()
+                )?;
+                writeln!(f)?;
+
+                if !missing_database_usage.is_empty() {
+                    writeln!(f, "  Missing USAGE privilege on databases:")?;
+                    for db in missing_database_usage {
+                        writeln!(f, "    - {}", db)?;
+                    }
+                    writeln!(f)?;
+                }
+
+                if *missing_createcluster {
+                    writeln!(f, "  Missing CREATECLUSTER system privilege")?;
+                    writeln!(f)?;
+                }
+
+                writeln!(
+                    f,
+                    "  {} Ask your administrator to grant the required privileges:",
+                    "help:".bright_cyan().bold()
+                )?;
+                writeln!(f)?;
+
+                if !missing_database_usage.is_empty() {
+                    for db in missing_database_usage {
+                        writeln!(f, "    GRANT USAGE ON DATABASE {} TO <user>;", db)?;
+                    }
+                }
+
+                if *missing_createcluster {
+                    writeln!(f, "    GRANT CREATECLUSTER ON SYSTEM TO <user>;")?;
+                }
+
+                Ok(())
+            }
+            DatabaseValidationError::MissingSources(sources) => {
+                writeln!(
+                    f,
+                    "{}: The following sources are referenced but do not exist:",
+                    "error".bright_red().bold()
+                )?;
+                for source in sources {
+                    writeln!(f, "  - {}.{}.{}", source.database, source.schema, source.object)?;
+                }
+                writeln!(f)?;
+                writeln!(f, "Please ensure all sources are created before running this command.")?;
                 Ok(())
             }
             DatabaseValidationError::QueryError(e) => {
@@ -366,7 +428,13 @@ impl Client {
         project: &planned::Project,
     ) -> Result<Types, ConnectionError> {
         let mut objects = BTreeMap::new();
-        for oid in &project.external_dependencies {
+        let oids = project
+            .external_dependencies
+            .iter()
+            .cloned()
+            .chain(project.get_tables());
+
+        for oid in oids {
             let quoted_db = quote_identifier(&oid.database);
             let quoted_schema = quote_identifier(&oid.schema);
             let quoted_object = quote_identifier(&oid.object);
@@ -1830,5 +1898,141 @@ impl Client {
                     storage_objects,
                 }
             })
+    }
+
+    /// Validate that the user has sufficient privileges to deploy the project
+    pub async fn validate_privileges(
+        &mut self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        // Check if user is a superuser
+        let row = self
+            .client
+            .query_one("SELECT mz_is_superuser()", &[])
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+        let is_superuser: bool = row.get(0);
+
+        if is_superuser {
+            return Ok(()); // Superuser has all privileges
+        }
+
+        // Collect all required databases from the project
+        let mut required_databases = HashSet::new();
+        for db in &planned_project.databases {
+            required_databases.insert(db.name.clone());
+        }
+
+        // Check USAGE privileges on databases using the provided query
+        let missing_usage = if !required_databases.is_empty() {
+            // Build IN clause with placeholders
+            let placeholders: Vec<String> = (1..=required_databases.len())
+                .map(|i| format!("${}", i))
+                .collect();
+            let in_clause = placeholders.join(", ");
+
+            let query = format!(
+                r#"
+                SELECT name
+                FROM mz_internal.mz_show_my_database_privileges
+                WHERE name IN ({})
+                GROUP BY name
+                HAVING NOT BOOL_OR(privilege_type = 'USAGE')
+                "#,
+                in_clause
+            );
+
+            let params: Vec<&(dyn ToSql + Sync)> = required_databases
+                .iter()
+                .map(|s| s as &(dyn ToSql + Sync))
+                .collect();
+
+            let rows = self
+                .client
+                .query(&query, &params)
+                .await
+                .map_err(DatabaseValidationError::QueryError)?;
+
+            rows.iter()
+                .map(|row| row.get::<_, String>("name"))
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+
+        // Check CREATECLUSTER privilege if project has cluster dependencies
+        let missing_createcluster = if !planned_project.cluster_dependencies.is_empty() {
+            let query = r#"
+                SELECT EXISTS (
+                    SELECT * FROM mz_internal.mz_show_my_system_privileges
+                    WHERE privilege_type = 'CREATECLUSTER'
+                )
+            "#;
+
+            let row = self
+                .client
+                .query_one(query, &[])
+                .await
+                .map_err(DatabaseValidationError::QueryError)?;
+
+            let has_createcluster: bool = row.get(0);
+            !has_createcluster
+        } else {
+            false
+        };
+
+        // Return error if missing any privileges
+        if !missing_usage.is_empty() || missing_createcluster {
+            return Err(DatabaseValidationError::InsufficientPrivileges {
+                missing_database_usage: missing_usage,
+                missing_createcluster,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Validate that all sources referenced by CREATE TABLE FROM SOURCE statements exist
+    pub async fn validate_sources_exist(
+        &mut self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        let mut missing_sources = Vec::new();
+
+        // Collect all source references from CREATE TABLE FROM SOURCE statements
+        for obj in planned_project.iter_objects() {
+            if let Statement::CreateTableFromSource(ref stmt) = obj.typed_object.stmt {
+                // Extract the source ObjectId from the statement
+                let source_id = ObjectId::from_raw_item_name(
+                    &stmt.source,
+                    &obj.id.database,
+                    &obj.id.schema,
+                );
+
+                // Check if source exists in the database
+                let query = r#"
+                    SELECT s.name
+                    FROM mz_sources s
+                    JOIN mz_schemas sch ON s.schema_id = sch.id
+                    JOIN mz_databases d ON sch.database_id = d.id
+                    WHERE s.name = $1 AND sch.name = $2 AND d.name = $3"#;
+
+                let rows = self
+                    .client
+                    .query(query, &[&source_id.object, &source_id.schema, &source_id.database])
+                    .await
+                    .map_err(DatabaseValidationError::QueryError)?;
+
+                if rows.is_empty() {
+                    missing_sources.push(source_id);
+                }
+            }
+        }
+
+        if !missing_sources.is_empty() {
+            return Err(DatabaseValidationError::MissingSources(missing_sources));
+        }
+
+        Ok(())
     }
 }
