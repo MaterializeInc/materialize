@@ -180,6 +180,11 @@ impl Coordinator {
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
 
+        // Replacing a materialized view causes the replacement's catalog entry
+        // to be dropped. Its compute and storage collections are transferred to
+        // the target MV though, so we must make sure not to drop those.
+        let mut replacement_gids = vec![];
+
         // We're incrementally migrating the code that manipulates the
         // controller from closures in the sequencer. For some types of catalog
         // changes we haven't done this migration yet, so there you will see
@@ -313,11 +318,13 @@ impl Coordinator {
                     prev: prev_mv,
                     new: new_mv,
                 }) => {
-                    tracing::debug!(
-                        ?prev_mv,
-                        ?new_mv,
-                        "not handling AlterMaterializedView in here yet"
-                    );
+                    let old_gid = prev_mv.global_id_writes();
+                    let new_gid = new_mv.global_id_writes();
+                    if new_gid != old_gid {
+                        replacement_gids.push((new_mv.cluster_id, new_gid));
+                    }
+
+                    self.handle_alter_materialized_view(prev_mv, new_mv)?;
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Dropped(
                     mv,
@@ -498,6 +505,12 @@ impl Coordinator {
                     );
                 }
             }
+        }
+
+        // Cancel out drops against replacements.
+        for (cluster_id, gid) in replacement_gids {
+            sources_to_drop.retain(|(_, id)| *id != gid);
+            compute_gids_to_drop.retain(|id| *id != (cluster_id, gid));
         }
 
         if !source_collections_to_create.is_empty() {
@@ -1100,6 +1113,36 @@ impl Coordinator {
 
         // Alter is complete! We can drop our read hold.
         drop(existing_table_read_hold);
+
+        Ok(())
+    }
+
+    #[instrument(level = "debug")]
+    fn handle_alter_materialized_view(
+        &mut self,
+        prev_mv: MaterializedView,
+        new_mv: MaterializedView,
+    ) -> Result<(), AdapterError> {
+        let old_gid = prev_mv.global_id_writes();
+        let new_gid = new_mv.global_id_writes();
+
+        if old_gid == new_gid {
+            // It's not an ALTER MATERIALIZED VIEW as far as the controller is
+            // concerned, because we still have the same GlobalId. This is
+            // likely a change from an ALTER SWAP.
+            return Ok(());
+        }
+
+        // Cut over the MV computation, by shutting down the old dataflow and allowing the
+        // new dataflow to start writing.
+        //
+        // Both commands are applied to their respective clusters asynchronously and they
+        // race, so it is possible that we allow writes by the replacement before having
+        // dropped the old dataflow. Thus there might be a period where the two dataflows
+        // are competing in trying to commit conflicting outputs. Eventually the old
+        // dataflow will be dropped and the replacement takes over.
+        self.drop_compute_collections(vec![(prev_mv.cluster_id, old_gid)]);
+        self.allow_writes(new_mv.cluster_id, new_gid);
 
         Ok(())
     }
