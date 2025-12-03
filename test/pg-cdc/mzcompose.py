@@ -424,10 +424,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if name in ("default", "large-scale"):
             return
 
-        # TODO: Flaky, reenable when database-issues#8447 is fixed
-        if name == "silent-connection-drop":
-            return
-
         c.kill("postgres")
         c.rm("postgres")
         c.kill("materialized")
