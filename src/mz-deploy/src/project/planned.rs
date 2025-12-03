@@ -352,6 +352,113 @@ impl Project {
     pub fn find_object(&self, id: &ObjectId) -> Option<&DatabaseObject> {
         self.iter_objects().find(|obj| &obj.id == id)
     }
+
+    /// Validate that sources and sinks don't share clusters with indexes or materialized views.
+    ///
+    /// This validation prevents accidentally recreating sources/sinks when updating compute objects.
+    ///
+    /// # Arguments
+    /// * `sources_by_cluster` - Map of cluster name to list of source FQNs from the database
+    ///
+    /// # Returns
+    /// * `Ok(())` if no conflicts found
+    /// * `Err((cluster_name, compute_objects, storage_objects))` if conflicts detected
+    ///
+    /// # Example
+    /// ```ignore
+    /// let sources = query_sources_by_cluster(&client).await?;
+    /// project.validate_cluster_isolation(&sources)?;
+    /// ```
+    pub fn validate_cluster_isolation(
+        &self,
+        sources_by_cluster: &HashMap<String, Vec<String>>,
+    ) -> Result<(), (String, Vec<String>, Vec<String>)> {
+        // Build a map of cluster -> compute objects (indexes, MVs)
+        let mut cluster_compute_objects: HashMap<String, Vec<String>> = HashMap::new();
+
+        for db in &self.databases {
+            for schema in &db.schemas {
+                for obj in &schema.objects {
+                    // Check for materialized views
+                    if let Statement::CreateMaterializedView(mv) = &obj.typed_object.stmt {
+                        if let Some(cluster_name) = &mv.in_cluster {
+                            cluster_compute_objects
+                                .entry(cluster_name.to_string())
+                                .or_insert_with(Vec::new)
+                                .push(obj.id.to_string());
+                        }
+                    }
+
+                    // Check for indexes
+                    for index in &obj.typed_object.indexes {
+                        if let Some(cluster_name) = &index.in_cluster {
+                            let index_name = index
+                                .name
+                                .as_ref()
+                                .map(|n| format!(" (index: {})", n))
+                                .unwrap_or_default();
+                            cluster_compute_objects
+                                .entry(cluster_name.to_string())
+                                .or_insert_with(Vec::new)
+                                .push(format!("{}{}", obj.id, index_name));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Build a map of cluster -> sinks
+        let mut cluster_sinks: HashMap<String, Vec<String>> = HashMap::new();
+
+        for db in &self.databases {
+            for schema in &db.schemas {
+                for obj in &schema.objects {
+                    if let Statement::CreateSink(sink) = &obj.typed_object.stmt {
+                        if let Some(cluster_name) = &sink.in_cluster {
+                            cluster_sinks
+                                .entry(cluster_name.to_string())
+                                .or_insert_with(Vec::new)
+                                .push(obj.id.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Get all clusters that have compute objects or sinks
+        let mut all_clusters: HashSet<String> = HashSet::new();
+        all_clusters.extend(cluster_compute_objects.keys().cloned());
+        all_clusters.extend(cluster_sinks.keys().cloned());
+
+        // Check for conflicts: cluster has both compute objects AND (sources OR sinks)
+        for cluster_name in all_clusters {
+            let compute_objects = cluster_compute_objects.get(&cluster_name);
+            let sources = sources_by_cluster.get(&cluster_name);
+            let sinks = cluster_sinks.get(&cluster_name);
+
+            let has_compute = compute_objects.is_some() && !compute_objects.unwrap().is_empty();
+            let has_sources = sources.is_some() && !sources.unwrap().is_empty();
+            let has_sinks = sinks.is_some() && !sinks.unwrap().is_empty();
+
+            if has_compute && (has_sources || has_sinks) {
+                let mut storage_objects = Vec::new();
+                if let Some(sources) = sources {
+                    storage_objects.extend(sources.iter().cloned());
+                }
+                if let Some(sinks) = sinks {
+                    storage_objects.extend(sinks.iter().cloned());
+                }
+
+                return Err((
+                    cluster_name,
+                    compute_objects.unwrap().clone(),
+                    storage_objects,
+                ));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl From<typed::Project> for Project {
@@ -532,16 +639,8 @@ pub fn extract_dependencies(
             let from_id = ObjectId::from_raw_item_name(&s.from, default_database, default_schema);
             deps.insert(from_id);
 
-            // Sink also depends on the connection it uses
-            // CreateSinkConnection is an enum, need to extract connection name from each variant
-            let connection_name = match &s.connection {
-                CreateSinkConnection::Kafka { connection, .. } => Some(connection),
-                CreateSinkConnection::Iceberg { connection, .. } => Some(connection),
-            };
-            if let Some(connection) = connection_name {
-                let connection_id =
-                    ObjectId::from_raw_item_name(connection, default_database, default_schema);
-                deps.insert(connection_id);
+            if let Some(ref cluster_name) = s.in_cluster {
+                clusters.insert(Cluster::new(cluster_name.to_string()));
             }
         }
         // These don't have dependencies on other database objects
@@ -1220,28 +1319,30 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let src_dir = temp_dir.path();
 
-        // Create test structure
+        // Create test structure with separate schemas for tables and views
         let db_path = src_dir.join("test_db");
-        let schema_path = db_path.join("public");
-        fs::create_dir_all(&schema_path).unwrap();
+        let tables_schema_path = db_path.join("tables");
+        let views_schema_path = db_path.join("views");
+        fs::create_dir_all(&tables_schema_path).unwrap();
+        fs::create_dir_all(&views_schema_path).unwrap();
 
-        // Create table
+        // Create table in tables schema
         fs::write(
-            schema_path.join("table1.sql"),
+            tables_schema_path.join("table1.sql"),
             "CREATE TABLE table1 (id INT);",
         )
         .unwrap();
 
-        // Create view depending on table
+        // Create view depending on table in views schema
         fs::write(
-            schema_path.join("view1.sql"),
-            "CREATE VIEW view1 AS SELECT * FROM table1;",
+            views_schema_path.join("view1.sql"),
+            "CREATE VIEW view1 AS SELECT * FROM tables.table1;",
         )
         .unwrap();
 
-        // Create another view depending on view1
+        // Create another view depending on view1 in views schema
         fs::write(
-            schema_path.join("view2.sql"),
+            views_schema_path.join("view2.sql"),
             "CREATE VIEW view2 AS SELECT * FROM view1;",
         )
         .unwrap();
@@ -1255,7 +1356,7 @@ mod tests {
         let mut filter = HashSet::new();
         let view1_id = ObjectId::new(
             "test_db".to_string(),
-            "public".to_string(),
+            "views".to_string(),
             "view1".to_string(),
         );
         filter.insert(view1_id.clone());
@@ -1926,5 +2027,411 @@ mod tests {
         } else {
             panic!("Expected CreateView statement");
         }
+    }
+
+    // Helper function to create a minimal Project for cluster isolation testing
+    fn create_test_project_for_cluster_validation() -> Project {
+        Project {
+            databases: vec![],
+            dependency_graph: HashMap::new(),
+            external_dependencies: HashSet::new(),
+            cluster_dependencies: HashSet::new(),
+            tests: vec![],
+        }
+    }
+
+    #[test]
+    fn test_validate_cluster_isolation_no_conflicts() {
+        let project = create_test_project_for_cluster_validation();
+        let sources_by_cluster = HashMap::new();
+
+        let result = project.validate_cluster_isolation(&sources_by_cluster);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_cluster_isolation_separate_clusters() {
+        // Create a project with MV on compute_cluster and sink on storage_cluster
+        let mv_sql = "CREATE MATERIALIZED VIEW mv IN CLUSTER compute_cluster AS SELECT 1";
+        let sink_sql = "CREATE SINK sink IN CLUSTER storage_cluster FROM mv INTO KAFKA CONNECTION conn (TOPIC 'test')";
+
+        let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
+        let sink_parsed = mz_sql_parser::parser::parse_statements(sink_sql).unwrap();
+
+        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+            Statement::CreateMaterializedView(s.clone())
+        } else {
+            panic!("Expected CreateMaterializedView");
+        };
+
+        let sink_stmt = if let mz_sql_parser::ast::Statement::CreateSink(s) = &sink_parsed[0].ast {
+            Statement::CreateSink(s.clone())
+        } else {
+            panic!("Expected CreateSink");
+        };
+
+        let mv_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: mv_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let sink_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "sink".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: sink_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let project = Project {
+            databases: vec![Database {
+                name: "db".to_string(),
+                schemas: vec![Schema {
+                    name: "schema".to_string(),
+                    objects: vec![mv_obj, sink_obj],
+                    mod_statements: None,
+                }],
+                mod_statements: None,
+            }],
+            dependency_graph: HashMap::new(),
+            external_dependencies: HashSet::new(),
+            cluster_dependencies: HashSet::new(),
+            tests: vec![],
+        };
+
+        // Sources on storage_cluster (different from compute objects)
+        let mut sources_by_cluster = HashMap::new();
+        sources_by_cluster.insert("storage_cluster".to_string(), vec!["db.schema.source1".to_string()]);
+
+        let result = project.validate_cluster_isolation(&sources_by_cluster);
+        assert!(result.is_ok(), "Should succeed when storage and compute are on separate clusters");
+    }
+
+    #[test]
+    fn test_validate_cluster_isolation_conflict_mv_and_source() {
+        // Create a project with MV on shared_cluster
+        let mv_sql = "CREATE MATERIALIZED VIEW mv IN CLUSTER shared_cluster AS SELECT 1";
+        let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
+
+        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+            Statement::CreateMaterializedView(s.clone())
+        } else {
+            panic!("Expected CreateMaterializedView");
+        };
+
+        let mv_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: mv_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let project = Project {
+            databases: vec![Database {
+                name: "db".to_string(),
+                schemas: vec![Schema {
+                    name: "schema".to_string(),
+                    objects: vec![mv_obj],
+                    mod_statements: None,
+                }],
+                mod_statements: None,
+            }],
+            dependency_graph: HashMap::new(),
+            external_dependencies: HashSet::new(),
+            cluster_dependencies: HashSet::new(),
+            tests: vec![],
+        };
+
+        // Source on the same cluster as MV
+        let mut sources_by_cluster = HashMap::new();
+        sources_by_cluster.insert("shared_cluster".to_string(), vec!["db.schema.source1".to_string()]);
+
+        let result = project.validate_cluster_isolation(&sources_by_cluster);
+        assert!(result.is_err(), "Should fail when MV and source share a cluster");
+
+        if let Err((cluster_name, compute_objects, storage_objects)) = result {
+            assert_eq!(cluster_name, "shared_cluster");
+            assert_eq!(compute_objects.len(), 1);
+            assert!(compute_objects.contains(&"db.schema.mv".to_string()));
+            assert_eq!(storage_objects.len(), 1);
+            assert!(storage_objects.contains(&"db.schema.source1".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_validate_cluster_isolation_conflict_index_and_sink() {
+        // Create a project with a table and an index on shared_cluster, plus a sink on the same cluster
+        let table_sql = "CREATE TABLE t (id INT)";
+        let sink_sql = "CREATE SINK sink IN CLUSTER shared_cluster FROM t INTO KAFKA CONNECTION conn (TOPIC 'test')";
+
+        let table_parsed = mz_sql_parser::parser::parse_statements(table_sql).unwrap();
+        let sink_parsed = mz_sql_parser::parser::parse_statements(sink_sql).unwrap();
+
+        let table_stmt = if let mz_sql_parser::ast::Statement::CreateTable(s) = &table_parsed[0].ast {
+            Statement::CreateTable(s.clone())
+        } else {
+            panic!("Expected CreateTable");
+        };
+
+        let sink_stmt = if let mz_sql_parser::ast::Statement::CreateSink(s) = &sink_parsed[0].ast {
+            Statement::CreateSink(s.clone())
+        } else {
+            panic!("Expected CreateSink");
+        };
+
+        // Create an index on the table
+        let index_sql = "CREATE INDEX idx IN CLUSTER shared_cluster ON t (id)";
+        let index_parsed = mz_sql_parser::parser::parse_statements(index_sql).unwrap();
+        let index_stmt = if let mz_sql_parser::ast::Statement::CreateIndex(s) = &index_parsed[0].ast {
+            s.clone()
+        } else {
+            panic!("Expected CreateIndex");
+        };
+
+        let table_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "t".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: table_stmt,
+                indexes: vec![index_stmt],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let sink_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "sink".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: sink_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let project = Project {
+            databases: vec![Database {
+                name: "db".to_string(),
+                schemas: vec![Schema {
+                    name: "schema".to_string(),
+                    objects: vec![table_obj, sink_obj],
+                    mod_statements: None,
+                }],
+                mod_statements: None,
+            }],
+            dependency_graph: HashMap::new(),
+            external_dependencies: HashSet::new(),
+            cluster_dependencies: HashSet::new(),
+            tests: vec![],
+        };
+
+        // No sources, but sink and index on same cluster
+        let sources_by_cluster = HashMap::new();
+
+        let result = project.validate_cluster_isolation(&sources_by_cluster);
+        assert!(result.is_err(), "Should fail when index and sink share a cluster");
+
+        if let Err((cluster_name, compute_objects, storage_objects)) = result {
+            assert_eq!(cluster_name, "shared_cluster");
+            assert_eq!(compute_objects.len(), 1);
+            assert_eq!(storage_objects.len(), 1);
+            assert!(storage_objects.contains(&"db.schema.sink".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_validate_cluster_isolation_multiple_storage_objects() {
+        // Create a project with MV on shared_cluster
+        let mv_sql = "CREATE MATERIALIZED VIEW mv IN CLUSTER shared_cluster AS SELECT 1";
+        let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
+
+        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+            Statement::CreateMaterializedView(s.clone())
+        } else {
+            panic!("Expected CreateMaterializedView");
+        };
+
+        // Create a sink on the same cluster
+        let sink_sql = "CREATE SINK sink IN CLUSTER shared_cluster FROM mv INTO KAFKA CONNECTION conn (TOPIC 'test')";
+        let sink_parsed = mz_sql_parser::parser::parse_statements(sink_sql).unwrap();
+
+        let sink_stmt = if let mz_sql_parser::ast::Statement::CreateSink(s) = &sink_parsed[0].ast {
+            Statement::CreateSink(s.clone())
+        } else {
+            panic!("Expected CreateSink");
+        };
+
+        let mv_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: mv_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let sink_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "sink".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: sink_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let project = Project {
+            databases: vec![Database {
+                name: "db".to_string(),
+                schemas: vec![Schema {
+                    name: "schema".to_string(),
+                    objects: vec![mv_obj, sink_obj],
+                    mod_statements: None,
+                }],
+                mod_statements: None,
+            }],
+            dependency_graph: HashMap::new(),
+            external_dependencies: HashSet::new(),
+            cluster_dependencies: HashSet::new(),
+            tests: vec![],
+        };
+
+        // Multiple sources on the same cluster
+        let mut sources_by_cluster = HashMap::new();
+        sources_by_cluster.insert(
+            "shared_cluster".to_string(),
+            vec![
+                "db.schema.source1".to_string(),
+                "db.schema.source2".to_string(),
+            ],
+        );
+
+        let result = project.validate_cluster_isolation(&sources_by_cluster);
+        assert!(result.is_err(), "Should fail when MV shares cluster with sources and sinks");
+
+        if let Err((cluster_name, _compute_objects, storage_objects)) = result {
+            assert_eq!(cluster_name, "shared_cluster");
+            // Should have 2 sources + 1 sink = 3 storage objects
+            assert_eq!(storage_objects.len(), 3);
+        }
+    }
+
+    #[test]
+    fn test_validate_cluster_isolation_only_compute_objects() {
+        // Create a project with only MVs and indexes (no sinks)
+        let mv_sql = "CREATE MATERIALIZED VIEW mv IN CLUSTER compute_cluster AS SELECT 1";
+        let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
+
+        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+            Statement::CreateMaterializedView(s.clone())
+        } else {
+            panic!("Expected CreateMaterializedView");
+        };
+
+        let mv_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: mv_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let project = Project {
+            databases: vec![Database {
+                name: "db".to_string(),
+                schemas: vec![Schema {
+                    name: "schema".to_string(),
+                    objects: vec![mv_obj],
+                    mod_statements: None,
+                }],
+                mod_statements: None,
+            }],
+            dependency_graph: HashMap::new(),
+            external_dependencies: HashSet::new(),
+            cluster_dependencies: HashSet::new(),
+            tests: vec![],
+        };
+
+        // No sources on any cluster
+        let sources_by_cluster = HashMap::new();
+
+        let result = project.validate_cluster_isolation(&sources_by_cluster);
+        assert!(result.is_ok(), "Should succeed when cluster only has compute objects");
+    }
+
+    #[test]
+    fn test_validate_cluster_isolation_only_storage_objects() {
+        // Create a project with only a sink (no MVs or indexes)
+        let sink_sql = "CREATE SINK sink IN CLUSTER storage_cluster FROM t INTO KAFKA CONNECTION conn (TOPIC 'test')";
+        let sink_parsed = mz_sql_parser::parser::parse_statements(sink_sql).unwrap();
+
+        let sink_stmt = if let mz_sql_parser::ast::Statement::CreateSink(s) = &sink_parsed[0].ast {
+            Statement::CreateSink(s.clone())
+        } else {
+            panic!("Expected CreateSink");
+        };
+
+        let sink_obj = DatabaseObject {
+            id: ObjectId::new("db".to_string(), "schema".to_string(), "sink".to_string()),
+            typed_object: typed::DatabaseObject {
+                stmt: sink_stmt,
+                indexes: vec![],
+                grants: vec![],
+                comments: vec![],
+                tests: vec![],
+            },
+            dependencies: HashSet::new(),
+        };
+
+        let project = Project {
+            databases: vec![Database {
+                name: "db".to_string(),
+                schemas: vec![Schema {
+                    name: "schema".to_string(),
+                    objects: vec![sink_obj],
+                    mod_statements: None,
+                }],
+                mod_statements: None,
+            }],
+            dependency_graph: HashMap::new(),
+            external_dependencies: HashSet::new(),
+            cluster_dependencies: HashSet::new(),
+            tests: vec![],
+        };
+
+        // Sources on the same cluster
+        let mut sources_by_cluster = HashMap::new();
+        sources_by_cluster.insert("storage_cluster".to_string(), vec!["db.schema.source1".to_string()]);
+
+        let result = project.validate_cluster_isolation(&sources_by_cluster);
+        assert!(result.is_ok(), "Should succeed when cluster only has storage objects (sources + sinks)");
     }
 }

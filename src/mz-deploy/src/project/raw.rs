@@ -590,41 +590,43 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path();
 
-        // Create database/schema structure
+        // Create database/schema structure with separate schemas for tables and views
         let db_path = root.join("test_db");
-        let schema_path = db_path.join("public");
-        fs::create_dir_all(&schema_path).unwrap();
+        let tables_schema_path = db_path.join("tables");
+        let views_schema_path = db_path.join("views");
+        fs::create_dir_all(&tables_schema_path).unwrap();
+        fs::create_dir_all(&views_schema_path).unwrap();
 
-        // Create a base table
+        // Create a base table in tables schema
         fs::write(
-            schema_path.join("users.sql"),
+            tables_schema_path.join("users.sql"),
             "CREATE TABLE users (id INT, name TEXT);",
         )
         .unwrap();
 
-        // Create materialized views with different clusters
+        // Create materialized views with different clusters in views schema
         fs::write(
-            schema_path.join("mv1.sql"),
-            "CREATE MATERIALIZED VIEW mv1 IN CLUSTER quickstart AS SELECT * FROM users;",
+            views_schema_path.join("mv1.sql"),
+            "CREATE MATERIALIZED VIEW mv1 IN CLUSTER quickstart AS SELECT * FROM tables.users;",
         )
         .unwrap();
 
         fs::write(
-            schema_path.join("mv2.sql"),
-            "CREATE MATERIALIZED VIEW mv2 IN CLUSTER prod AS SELECT id FROM users;",
+            views_schema_path.join("mv2.sql"),
+            "CREATE MATERIALIZED VIEW mv2 IN CLUSTER prod AS SELECT id FROM tables.users;",
         )
         .unwrap();
 
         fs::write(
-            schema_path.join("mv3.sql"),
-            "CREATE MATERIALIZED VIEW mv3 IN CLUSTER quickstart AS SELECT name FROM users;",
+            views_schema_path.join("mv3.sql"),
+            "CREATE MATERIALIZED VIEW mv3 IN CLUSTER quickstart AS SELECT name FROM tables.users;",
         )
         .unwrap();
 
-        // Create a regular view (no cluster)
+        // Create a regular view (no cluster) in views schema
         fs::write(
-            schema_path.join("view1.sql"),
-            "CREATE VIEW view1 AS SELECT * FROM users;",
+            views_schema_path.join("view1.sql"),
+            "CREATE VIEW view1 AS SELECT * FROM tables.users;",
         )
         .unwrap();
 
@@ -656,9 +658,13 @@ mod tests {
         assert_eq!(planned_project.databases.len(), 1);
         let database = &planned_project.databases[0];
         assert_eq!(database.name, "test_db");
-        assert_eq!(database.schemas.len(), 1);
+        assert_eq!(database.schemas.len(), 2); // tables and views schemas
 
-        let schema = &database.schemas[0];
-        assert_eq!(schema.objects.len(), 5); // 1 table + 3 MVs + 1 view
+        // Find the schemas
+        let tables_schema = database.schemas.iter().find(|s| s.name == "tables").unwrap();
+        let views_schema = database.schemas.iter().find(|s| s.name == "views").unwrap();
+
+        assert_eq!(tables_schema.objects.len(), 1); // 1 table
+        assert_eq!(views_schema.objects.len(), 4); // 3 MVs + 1 view
     }
 }

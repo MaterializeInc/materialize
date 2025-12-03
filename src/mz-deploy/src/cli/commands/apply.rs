@@ -60,6 +60,7 @@ pub async fn run(
     // This ensures databases, schemas, clusters, and external dependencies exist
     println!("Validating project...");
     client.validate_project(&planned_project, directory).await?;
+    client.validate_cluster_isolation(&planned_project).await?;
     verbose!("Project validation successful");
 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
