@@ -337,6 +337,12 @@ impl DatabaseObject {
             }
         }
 
+        if let Statement::CreateSink(sink) = &self.stmt {
+            if let Some(RawClusterName::Unresolved(cluster_name)) = &sink.in_cluster {
+                cluster_set.insert(cluster_name.to_string());
+            }
+        }
+
         for index in &self.indexes {
             if let Some(RawClusterName::Unresolved(cluster_name)) = &index.in_cluster {
                 cluster_set.insert(cluster_name.to_string());
@@ -542,12 +548,12 @@ impl TryFrom<super::raw::DatabaseObject> for DatabaseObject {
         // Validate cluster requirements
         validate_index_clusters(&fqn, &indexes, &mut errors);
         validate_mv_cluster(&fqn, &stmt, &mut errors);
+        validate_sink_cluster(&fqn, &stmt, &mut errors);
 
         validate_index_references(&fqn, &mut indexes, &main_ident, &mut errors);
         validate_grant_references(&fqn, &mut grants, &main_ident, obj_type, &mut errors);
         validate_comment_references(&fqn, &mut comments, &main_ident, &obj_type, &mut errors);
 
-        // If there are any errors, return them all
         if !errors.is_empty() {
             return Err(ValidationErrors::new(errors));
         }
@@ -611,6 +617,8 @@ impl TryFrom<super::raw::Schema> for Schema {
                 }
             }
         }
+
+        validate_no_storage_and_computation_in_schema(&value.name, &objects, &mut all_errors);
 
         if !all_errors.is_empty() {
             return Err(ValidationErrors::new(all_errors));
@@ -1134,6 +1142,43 @@ fn validate_mv_cluster(
             ValidationErrorKind::MaterializedViewMissingCluster { view_name },
             fqn.path.clone(),
             mv_sql,
+        ));
+    }
+}
+
+/// Validates that a sink specifies a cluster.
+///
+/// Sinks in Materialize must specify which cluster they run on using the IN CLUSTER clause.
+/// This ensures deterministic deployment and avoids implicit cluster selection.
+///
+/// # Example
+///
+/// Valid:
+/// ```sql
+/// CREATE SINK sink IN CLUSTER quickstart FROM table INTO ...;
+/// ```
+///
+/// Invalid:
+/// ```sql
+/// CREATE SINK sink FROM table INTO ...;  ✗ missing cluster
+/// ```
+fn validate_sink_cluster(
+    fqn: &FullyQualifiedName,
+    stmt: &Statement,
+    errors: &mut Vec<ValidationError>,
+) {
+    if let Statement::CreateSink(sink) = stmt
+        && sink.in_cluster.is_none()
+    {
+        let sink_sql = format!("{};", sink);
+        let sink_name = sink.name.as_ref()
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "<unnamed>".to_string());
+
+        errors.push(ValidationError::with_file_and_sql(
+            ValidationErrorKind::SinkMissingCluster { sink_name },
+            fqn.path.clone(),
+            sink_sql,
         ));
     }
 }
@@ -1693,6 +1738,79 @@ fn validate_schema_mod_statements(
     }
 }
 
+/// Validates that a schema doesn't mix storage objects with computation objects.
+///
+/// This validation prevents accidentally recreating tables or sinks when recreating views,
+/// which would cause data loss. Storage and computation objects should be in separate schemas.
+///
+/// # Object Groups
+///
+/// - **Storage objects**: Tables, Sinks (can coexist in same schema)
+/// - **Computation objects**: Views, Materialized Views (can coexist in same schema)
+/// - These two groups CANNOT mix in the same schema
+///
+/// # Validation Rules
+///
+/// Valid combinations within a schema:
+/// - Tables only
+/// - Tables + Sinks
+/// - Sinks only
+/// - Views only
+/// - Views + Materialized Views
+/// - Materialized Views only
+///
+/// Invalid combinations:
+/// - Tables + Views
+/// - Tables + Materialized Views
+/// - Sinks + Views
+/// - Sinks + Materialized Views
+/// - Tables + Sinks + Views
+/// - (any mix of storage and computation)
+///
+/// # Arguments
+///
+/// * `schema_name` - The name of the schema being validated
+/// * `objects` - All database objects in the schema
+/// * `errors` - Vector to collect validation errors
+fn validate_no_storage_and_computation_in_schema(
+    schema_name: &str,
+    objects: &[DatabaseObject],
+    errors: &mut Vec<ValidationError>,
+) {
+    let mut has_storage = false;
+    let mut has_computation = false;
+    let mut storage_names = Vec::new();
+    let mut computation_names = Vec::new();
+
+    for obj in objects {
+        match &obj.stmt {
+            // Storage objects (persist data)
+            Statement::CreateTable(_) | Statement::CreateTableFromSource(_) | Statement::CreateSink(_) => {
+                has_storage = true;
+                let ident = obj.stmt.ident();
+                storage_names.push(ident.object.clone());
+            }
+            // Computation objects (transform data)
+            Statement::CreateView(_) | Statement::CreateMaterializedView(_) => {
+                has_computation = true;
+                let ident = obj.stmt.ident();
+                computation_names.push(ident.object.clone());
+            }
+        }
+    }
+
+    if has_storage && has_computation {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::StorageAndComputationObjectsInSameSchema {
+                schema_name: schema_name.to_string(),
+                storage_objects: storage_names,
+                computation_objects: computation_names,
+            },
+            PathBuf::from(schema_name),
+        ));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2201,6 +2319,7 @@ mod tests {
         // CREATE SINK with unqualified FROM and connection references
         let sql = r#"
             CREATE SINK kafka_sink
+            IN CLUSTER quickstart
             FROM users
             INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');
         "#;
@@ -3167,6 +3286,532 @@ mod tests {
             );
         } else {
             panic!("Schema should have mod statements");
+        }
+    }
+
+    // Tests for schema segregation validation (storage vs computation objects)
+
+    #[test]
+    fn test_schema_with_tables_and_views_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let table_sql = "CREATE TABLE users (id INT);";
+        let view_sql = "CREATE VIEW active_users AS SELECT * FROM users;";
+
+        let table_stmts = parse_statements(vec![table_sql]).unwrap();
+        let view_stmts = parse_statements(vec![view_sql]).unwrap();
+
+        let raw_table = raw::DatabaseObject {
+            name: "users".to_string(),
+            path: PathBuf::from("materialize/mixed/users.sql"),
+            statements: table_stmts,
+        };
+
+        let raw_view = raw::DatabaseObject {
+            name: "active_users".to_string(),
+            path: PathBuf::from("materialize/mixed/active_users.sql"),
+            statements: view_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "mixed".to_string(),
+            objects: vec![raw_table, raw_view],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Schema with both tables and views should fail validation"
+        );
+
+        let err = result.unwrap_err();
+        let err_msg = format!("{:?}", err);
+        assert!(
+            err_msg.contains("StorageAndComputationObjectsInSameSchema"),
+            "Should report storage and computation mix"
+        );
+        assert!(err_msg.contains("mixed"), "Should mention schema name");
+    }
+
+    #[test]
+    fn test_schema_with_tables_and_materialized_views_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let table_sql = "CREATE TABLE orders (id INT);";
+        let mv_sql = "CREATE MATERIALIZED VIEW order_summary AS SELECT COUNT(*) FROM orders;";
+
+        let table_stmts = parse_statements(vec![table_sql]).unwrap();
+        let mv_stmts = parse_statements(vec![mv_sql]).unwrap();
+
+        let raw_table = raw::DatabaseObject {
+            name: "orders".to_string(),
+            path: PathBuf::from("materialize/mixed/orders.sql"),
+            statements: table_stmts,
+        };
+
+        let raw_mv = raw::DatabaseObject {
+            name: "order_summary".to_string(),
+            path: PathBuf::from("materialize/mixed/order_summary.sql"),
+            statements: mv_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "mixed".to_string(),
+            objects: vec![raw_table, raw_mv],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Schema with both tables and materialized views should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_sinks_and_views_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let sink_sql = "CREATE SINK user_sink IN CLUSTER quickstart FROM users INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');";
+        let view_sql = "CREATE VIEW user_view AS SELECT * FROM users;";
+
+        let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
+        let view_stmts = parse_statements(vec![view_sql]).unwrap();
+
+        let raw_sink = raw::DatabaseObject {
+            name: "user_sink".to_string(),
+            path: PathBuf::from("materialize/mixed/user_sink.sql"),
+            statements: sink_stmts,
+        };
+
+        let raw_view = raw::DatabaseObject {
+            name: "user_view".to_string(),
+            path: PathBuf::from("materialize/mixed/user_view.sql"),
+            statements: view_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "mixed".to_string(),
+            objects: vec![raw_sink, raw_view],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Schema with both sinks and views should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_sinks_and_materialized_views_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let sink_sql = "CREATE SINK order_sink IN CLUSTER quickstart FROM orders INTO KAFKA CONNECTION kafka_conn (TOPIC 'orders');";
+        let mv_sql = "CREATE MATERIALIZED VIEW order_mv IN CLUSTER quickstart AS SELECT COUNT(*) FROM orders;";
+
+        let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
+        let mv_stmts = parse_statements(vec![mv_sql]).unwrap();
+
+        let raw_sink = raw::DatabaseObject {
+            name: "order_sink".to_string(),
+            path: PathBuf::from("materialize/mixed/order_sink.sql"),
+            statements: sink_stmts,
+        };
+
+        let raw_mv = raw::DatabaseObject {
+            name: "order_mv".to_string(),
+            path: PathBuf::from("materialize/mixed/order_mv.sql"),
+            statements: mv_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "mixed".to_string(),
+            objects: vec![raw_sink, raw_mv],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Schema with both sinks and materialized views should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_tables_sinks_and_views_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let table_sql = "CREATE TABLE users (id INT);";
+        let sink_sql = "CREATE SINK user_sink IN CLUSTER quickstart FROM users INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');";
+        let view_sql = "CREATE VIEW user_view AS SELECT * FROM users;";
+
+        let table_stmts = parse_statements(vec![table_sql]).unwrap();
+        let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
+        let view_stmts = parse_statements(vec![view_sql]).unwrap();
+
+        let raw_table = raw::DatabaseObject {
+            name: "users".to_string(),
+            path: PathBuf::from("materialize/mixed/users.sql"),
+            statements: table_stmts,
+        };
+
+        let raw_sink = raw::DatabaseObject {
+            name: "user_sink".to_string(),
+            path: PathBuf::from("materialize/mixed/user_sink.sql"),
+            statements: sink_stmts,
+        };
+
+        let raw_view = raw::DatabaseObject {
+            name: "user_view".to_string(),
+            path: PathBuf::from("materialize/mixed/user_view.sql"),
+            statements: view_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "mixed".to_string(),
+            objects: vec![raw_table, raw_sink, raw_view],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Schema with tables, sinks, and views should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_only_tables_succeeds() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let table1_sql = "CREATE TABLE users (id INT);";
+        let table2_sql = "CREATE TABLE orders (id INT);";
+
+        let table1_stmts = parse_statements(vec![table1_sql]).unwrap();
+        let table2_stmts = parse_statements(vec![table2_sql]).unwrap();
+
+        let raw_table1 = raw::DatabaseObject {
+            name: "users".to_string(),
+            path: PathBuf::from("materialize/tables/users.sql"),
+            statements: table1_stmts,
+        };
+
+        let raw_table2 = raw::DatabaseObject {
+            name: "orders".to_string(),
+            path: PathBuf::from("materialize/tables/orders.sql"),
+            statements: table2_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "tables".to_string(),
+            objects: vec![raw_table1, raw_table2],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_ok(),
+            "Schema with only tables should pass validation"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_tables_and_sinks_succeeds() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let table_sql = "CREATE TABLE users (id INT);";
+        let sink_sql = "CREATE SINK user_sink IN CLUSTER quickstart FROM users INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');";
+
+        let table_stmts = parse_statements(vec![table_sql]).unwrap();
+        let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
+
+        let raw_table = raw::DatabaseObject {
+            name: "users".to_string(),
+            path: PathBuf::from("materialize/storage/users.sql"),
+            statements: table_stmts,
+        };
+
+        let raw_sink = raw::DatabaseObject {
+            name: "user_sink".to_string(),
+            path: PathBuf::from("materialize/storage/user_sink.sql"),
+            statements: sink_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "storage".to_string(),
+            objects: vec![raw_table, raw_sink],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_ok(),
+            "Schema with tables and sinks should pass validation (both storage objects)"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_only_views_succeeds() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let view1_sql = "CREATE VIEW user_view AS SELECT * FROM users;";
+        let view2_sql = "CREATE VIEW order_view AS SELECT * FROM orders;";
+
+        let view1_stmts = parse_statements(vec![view1_sql]).unwrap();
+        let view2_stmts = parse_statements(vec![view2_sql]).unwrap();
+
+        let raw_view1 = raw::DatabaseObject {
+            name: "user_view".to_string(),
+            path: PathBuf::from("materialize/views/user_view.sql"),
+            statements: view1_stmts,
+        };
+
+        let raw_view2 = raw::DatabaseObject {
+            name: "order_view".to_string(),
+            path: PathBuf::from("materialize/views/order_view.sql"),
+            statements: view2_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "views".to_string(),
+            objects: vec![raw_view1, raw_view2],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(result.is_ok(), "Schema with only views should pass validation");
+    }
+
+    #[test]
+    fn test_schema_with_views_and_materialized_views_succeeds() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let view_sql = "CREATE VIEW user_view AS SELECT * FROM users;";
+        let mv_sql = "CREATE MATERIALIZED VIEW user_summary IN CLUSTER quickstart AS SELECT COUNT(*) FROM users;";
+
+        let view_stmts = parse_statements(vec![view_sql]).unwrap();
+        let mv_stmts = parse_statements(vec![mv_sql]).unwrap();
+
+        let raw_view = raw::DatabaseObject {
+            name: "user_view".to_string(),
+            path: PathBuf::from("materialize/computation/user_view.sql"),
+            statements: view_stmts,
+        };
+
+        let raw_mv = raw::DatabaseObject {
+            name: "user_summary".to_string(),
+            path: PathBuf::from("materialize/computation/user_summary.sql"),
+            statements: mv_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "computation".to_string(),
+            objects: vec![raw_view, raw_mv],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_ok(),
+            "Schema with views and materialized views should pass validation (both computation objects)"
+        );
+    }
+
+    #[test]
+    fn test_schema_with_table_from_source_and_view_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let table_sql = "CREATE TABLE users FROM SOURCE kafka_source (REFERENCE users);";
+        let view_sql = "CREATE VIEW user_view AS SELECT * FROM users;";
+
+        let table_stmts = parse_statements(vec![table_sql]).unwrap();
+        let view_stmts = parse_statements(vec![view_sql]).unwrap();
+
+        let raw_table = raw::DatabaseObject {
+            name: "users".to_string(),
+            path: PathBuf::from("materialize/mixed/users.sql"),
+            statements: table_stmts,
+        };
+
+        let raw_view = raw::DatabaseObject {
+            name: "user_view".to_string(),
+            path: PathBuf::from("materialize/mixed/user_view.sql"),
+            statements: view_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "mixed".to_string(),
+            objects: vec![raw_table, raw_view],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Schema with CREATE TABLE FROM SOURCE and view should fail validation (table from source is a storage object)"
+        );
+    }
+
+    #[test]
+    fn test_sink_missing_cluster_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let sink_sql = "CREATE SINK user_sink FROM users INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');";
+        let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
+
+        let raw_sink = raw::DatabaseObject {
+            name: "user_sink".to_string(),
+            path: PathBuf::from("materialize/sinks/user_sink.sql"),
+            statements: sink_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "sinks".to_string(),
+            objects: vec![raw_sink],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Sink without IN CLUSTER clause should fail validation"
+        );
+
+        // Verify it's the correct error type
+        if let Err(ValidationErrors { errors }) = result {
+            assert_eq!(errors.len(), 1);
+            match &errors[0].kind {
+                ValidationErrorKind::SinkMissingCluster { sink_name } => {
+                    // Name is fully qualified after normalization
+                    assert_eq!(sink_name, "materialize.sinks.user_sink");
+                }
+                _ => panic!("Expected SinkMissingCluster error, got {:?}", errors[0].kind),
+            }
+        } else {
+            panic!("Expected ValidationErrors");
+        }
+    }
+
+    #[test]
+    fn test_sink_with_cluster_succeeds() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let sink_sql = "CREATE SINK user_sink IN CLUSTER quickstart FROM users INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');";
+        let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
+
+        let raw_sink = raw::DatabaseObject {
+            name: "user_sink".to_string(),
+            path: PathBuf::from("materialize/sinks/user_sink.sql"),
+            statements: sink_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "sinks".to_string(),
+            objects: vec![raw_sink],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_ok(),
+            "Sink with IN CLUSTER clause should pass validation"
+        );
+    }
+
+    #[test]
+    fn test_materialized_view_missing_cluster_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let mv_sql = "CREATE MATERIALIZED VIEW user_summary AS SELECT COUNT(*) FROM users;";
+        let mv_stmts = parse_statements(vec![mv_sql]).unwrap();
+
+        let raw_mv = raw::DatabaseObject {
+            name: "user_summary".to_string(),
+            path: PathBuf::from("materialize/views/user_summary.sql"),
+            statements: mv_stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "views".to_string(),
+            objects: vec![raw_mv],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Materialized view without IN CLUSTER clause should fail validation"
+        );
+
+        // Verify it's the correct error type
+        if let Err(ValidationErrors { errors }) = result {
+            assert_eq!(errors.len(), 1);
+            match &errors[0].kind {
+                ValidationErrorKind::MaterializedViewMissingCluster { view_name } => {
+                    // Name is fully qualified after normalization
+                    assert_eq!(view_name, "materialize.views.user_summary");
+                }
+                _ => panic!("Expected MaterializedViewMissingCluster error, got {:?}", errors[0].kind),
+            }
+        } else {
+            panic!("Expected ValidationErrors");
+        }
+    }
+
+    #[test]
+    fn test_index_missing_cluster_fails() {
+        use crate::project::parser::parse_statements;
+        use crate::project::raw;
+
+        let table_sql = "CREATE TABLE users (id INT);";
+        let index_sql = "CREATE INDEX idx ON users (id);";
+
+        let stmts = parse_statements(vec![table_sql, index_sql]).unwrap();
+
+        let raw_table = raw::DatabaseObject {
+            name: "users".to_string(),
+            path: PathBuf::from("materialize/tables/users.sql"),
+            statements: stmts,
+        };
+
+        let raw_schema = raw::Schema {
+            name: "tables".to_string(),
+            objects: vec![raw_table],
+            mod_statements: None,
+        };
+
+        let result = Schema::try_from(raw_schema);
+        assert!(
+            result.is_err(),
+            "Index without IN CLUSTER clause should fail validation"
+        );
+
+        // Verify it's the correct error type
+        if let Err(ValidationErrors { errors }) = result {
+            assert_eq!(errors.len(), 1);
+            match &errors[0].kind {
+                ValidationErrorKind::IndexMissingCluster { index_name } => {
+                    assert_eq!(index_name, "idx");
+                }
+                _ => panic!("Expected IndexMissingCluster error, got {:?}", errors[0].kind),
+            }
+        } else {
+            panic!("Expected ValidationErrors");
         }
     }
 }

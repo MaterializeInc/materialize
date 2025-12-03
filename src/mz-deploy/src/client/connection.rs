@@ -101,6 +101,11 @@ pub enum DatabaseValidationError {
         clusters: Vec<String>,
         compilation_errors: Vec<DatabaseValidationError>,
     },
+    ClusterConflict {
+        cluster_name: String,
+        compute_objects: Vec<String>,
+        storage_objects: Vec<String>,
+    },
     QueryError(tokio_postgres::Error),
 }
 
@@ -194,6 +199,35 @@ impl fmt::Display for DatabaseValidationError {
                     }
                 }
 
+                Ok(())
+            }
+            DatabaseValidationError::ClusterConflict {
+                cluster_name,
+                compute_objects,
+                storage_objects,
+            } => {
+                writeln!(
+                    f,
+                    "{}: cluster '{}' contains both storage and computation objects",
+                    "error".bright_red().bold(),
+                    cluster_name
+                )?;
+                writeln!(f)?;
+                writeln!(f, "  Computation objects (indexes, materialized views):")?;
+                for obj in compute_objects {
+                    writeln!(f, "    - {}", obj)?;
+                }
+                writeln!(f)?;
+                writeln!(f, "  Storage objects (sources, sinks):")?;
+                for obj in storage_objects {
+                    writeln!(f, "    - {}", obj)?;
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "  {} Move sources/sinks to a separate cluster to avoid accidental recreation",
+                    "help:".bright_cyan().bold()
+                )?;
                 Ok(())
             }
             DatabaseValidationError::QueryError(e) => {
@@ -1716,5 +1750,85 @@ impl Client {
         } else {
             Ok(())
         }
+    }
+
+    /// Query which sources exist on the given clusters using IN clause
+    async fn query_sources_by_cluster(
+        &self,
+        cluster_names: &HashSet<String>,
+    ) -> Result<HashMap<String, Vec<String>>, DatabaseValidationError> {
+        if cluster_names.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        // Build IN clause with placeholders
+        let placeholders: Vec<String> = (1..=cluster_names.len())
+            .map(|i| format!("${}", i))
+            .collect();
+        let in_clause = placeholders.join(", ");
+
+        let query = format!(
+            r#"
+            SELECT
+                c.name as cluster_name,
+                d.name || '.' || s.name || '.' || mo.name as fqn
+            FROM mz_catalog.mz_sources src
+            JOIN mz_catalog.mz_objects mo ON src.id = mo.id
+            JOIN mz_catalog.mz_schemas s ON mo.schema_id = s.id
+            JOIN mz_catalog.mz_databases d ON s.database_id = d.id
+            JOIN mz_catalog.mz_clusters c ON src.cluster_id = c.id
+            WHERE mo.id LIKE 'u%' AND c.name IN ({})
+            "#,
+            in_clause
+        );
+
+        let params: Vec<&(dyn ToSql + Sync)> = cluster_names
+            .iter()
+            .map(|s| s as &(dyn ToSql + Sync))
+            .collect();
+
+        let rows = self
+            .client
+            .query(&query, &params)
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+
+        let mut result: HashMap<String, Vec<String>> = HashMap::new();
+        for row in rows {
+            let cluster_name: String = row.get("cluster_name");
+            let fqn: String = row.get("fqn");
+            result
+                .entry(cluster_name)
+                .or_insert_with(Vec::new)
+                .push(fqn);
+        }
+
+        Ok(result)
+    }
+
+    /// Validate that sources and sinks don't share clusters with indexes or materialized views
+    pub async fn validate_cluster_isolation(
+        &mut self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        // Get all clusters used by the project
+        let mut all_clusters: HashSet<String> = HashSet::new();
+        for cluster in &planned_project.cluster_dependencies {
+            all_clusters.insert(cluster.name.clone());
+        }
+
+        // Query sources from the database for these clusters
+        let sources_by_cluster = self.query_sources_by_cluster(&all_clusters).await?;
+
+        // Validate cluster isolation using the project's validation method
+        planned_project
+            .validate_cluster_isolation(&sources_by_cluster)
+            .map_err(|(cluster_name, compute_objects, storage_objects)| {
+                DatabaseValidationError::ClusterConflict {
+                    cluster_name,
+                    compute_objects,
+                    storage_objects,
+                }
+            })
     }
 }

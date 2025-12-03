@@ -382,6 +382,8 @@ pub enum ValidationErrorKind {
     IndexMissingCluster { index_name: String },
     /// Materialized view missing required IN CLUSTER clause
     MaterializedViewMissingCluster { view_name: String },
+    /// Sink missing required IN CLUSTER clause
+    SinkMissingCluster { sink_name: String },
     /// Invalid statement type in database mod file
     InvalidDatabaseModStatement {
         statement_type: String,
@@ -423,6 +425,12 @@ pub enum ValidationErrorKind {
     AlterDefaultPrivilegesSchemaMismatch {
         referenced: String,
         expected: String,
+    },
+    /// Storage objects (tables/sinks) and computation objects (views/MVs) cannot share a schema
+    StorageAndComputationObjectsInSameSchema {
+        schema_name: String,
+        storage_objects: Vec<String>,
+        computation_objects: Vec<String>,
     },
 }
 
@@ -549,6 +557,12 @@ impl ValidationErrorKind {
                     view_name
                 )
             }
+            Self::SinkMissingCluster { sink_name } => {
+                format!(
+                    "sink '{}' is missing required IN CLUSTER clause",
+                    sink_name
+                )
+            }
             Self::InvalidDatabaseModStatement {
                 statement_type,
                 database_name,
@@ -645,6 +659,20 @@ impl ValidationErrorKind {
                     referenced, expected
                 )
             }
+            Self::StorageAndComputationObjectsInSameSchema {
+                schema_name,
+                storage_objects,
+                computation_objects,
+            } => {
+                format!(
+                    "schema '{}' contains both storage objects (tables/sinks) and computation objects (views/materialized views)\n  \
+                     Storage objects (tables/sinks): [{}]\n  \
+                     Computation objects (views/MVs): [{}]",
+                    schema_name,
+                    storage_objects.join(", "),
+                    computation_objects.join(", ")
+                )
+            }
         }
     }
 
@@ -711,6 +739,9 @@ impl ValidationErrorKind {
             Self::MaterializedViewMissingCluster { .. } => {
                 Some("add 'IN CLUSTER <cluster_name>' to your CREATE MATERIALIZED VIEW statement (e.g., CREATE MATERIALIZED VIEW mv IN CLUSTER quickstart AS SELECT ...)".to_string())
             }
+            Self::SinkMissingCluster { .. } => {
+                Some("add 'IN CLUSTER <cluster_name>' to your CREATE SINK statement (e.g., CREATE SINK sink IN CLUSTER quickstart FROM ...)".to_string())
+            }
             Self::InvalidDatabaseModStatement { .. } => {
                 Some("database mod files (e.g., materialize.sql) can only contain COMMENT ON DATABASE, GRANT ON DATABASE, and ALTER DEFAULT PRIVILEGES statements".to_string())
             }
@@ -746,6 +777,9 @@ impl ValidationErrorKind {
             }
             Self::AlterDefaultPrivilegesSchemaMismatch { .. } => {
                 Some("ALTER DEFAULT PRIVILEGES in schema mod files must target the schema itself".to_string())
+            }
+            Self::StorageAndComputationObjectsInSameSchema { .. } => {
+                Some("storage objects (tables, sinks) cannot share a schema with computation objects (views, materialized views) to prevent accidentally recreating tables or sinks when recreating views. Organize your schemas: use one schema for storage objects (e.g., 'tables') and another for computation objects (e.g., 'views' or 'public')".to_string())
             }
         }
     }
