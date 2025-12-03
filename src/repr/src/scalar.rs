@@ -3156,16 +3156,20 @@ impl SqlScalarType {
     /// contrast, two `Numeric` values with different scales are never `Eq` to
     /// one another.
     pub fn base_eq(&self, other: &SqlScalarType) -> bool {
-        self.eq_inner(other, false)
+        self.eq_inner(other, false, true)
+    }
+
+    pub fn base_eq_with_nullability(&self, other: &SqlScalarType) -> bool {
+        self.eq_inner(other, false, false)
     }
 
     // Determines equality among scalar types that ignores any custom OIDs or
     // embedded values.
     pub fn structural_eq(&self, other: &SqlScalarType) -> bool {
-        self.eq_inner(other, true)
+        self.eq_inner(other, true, true)
     }
 
-    pub fn eq_inner(&self, other: &SqlScalarType, structure_only: bool) -> bool {
+    pub fn eq_inner(&self, other: &SqlScalarType, structure_only: bool, ignore_nullability: bool) -> bool {
         use SqlScalarType::*;
         match (self, other) {
             (
@@ -3187,9 +3191,9 @@ impl SqlScalarType {
                     value_type: r,
                     custom_id: oid_r,
                 },
-            ) => l.eq_inner(r, structure_only) && (oid_l == oid_r || structure_only),
+            ) => l.eq_inner(r, structure_only, ignore_nullability) && (oid_l == oid_r || structure_only),
             (Array(a), Array(b)) | (Range { element_type: a }, Range { element_type: b }) => {
-                a.eq_inner(b, structure_only)
+                a.eq_inner(b, structure_only, ignore_nullability)
             }
             (
                 Record {
@@ -3209,7 +3213,8 @@ impl SqlScalarType {
                         // Ignore nullability.
                         .all(|(a, b)| {
                             (a.0 == b.0 || structure_only)
-                                && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
+                                && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only, ignore_nullability)
+                                && if !ignore_nullability {a.1.nullable == b.1.nullable} else {true}
                         })
             }
             (s, o) => SqlScalarBaseType::from(s) == SqlScalarBaseType::from(o),
