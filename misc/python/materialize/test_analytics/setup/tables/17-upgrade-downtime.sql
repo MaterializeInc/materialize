@@ -8,20 +8,14 @@
 -- by the Apache License, Version 2.0.
 
 
-CREATE TABLE cluster_spec_sheet_result (
+CREATE TABLE upgrade_downtime_result (
    build_job_id TEXT NOT NULL,
    framework_version TEXT NOT NULL,
    scenario TEXT NOT NULL,
    scenario_version TEXT NOT NULL,
-   scale INT NOT NULL,
-   mode TEXT NOT NULL,
-   category TEXT NOT NULL,
-   test_name TEXT NOT NULL,
-   cluster_size TEXT NOT NULL,
-   repetition INT NOT NULL,
-   size_bytes BIGINT,
-   time_ms BIGINT
+   downtime_initial TEXT NOT NULL,
+   downtime_upgrade TEXT NOT NULL
 );
 
-ALTER TABLE cluster_spec_sheet_result OWNER TO qa;
-GRANT SELECT, INSERT, UPDATE ON TABLE cluster_spec_sheet_result TO "hetzner-ci";
+ALTER TABLE upgrade_downtime_result OWNER TO qa;
+GRANT SELECT, INSERT, UPDATE ON TABLE upgrade_downtime_result TO "hetzner-ci";

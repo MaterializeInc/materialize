@@ -31,7 +31,7 @@ import requests
 import yaml
 from semver.version import Version
 
-from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize import MZ_ROOT, buildkite, ci_util, git, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -41,9 +41,17 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.environmentd import Environmentd
+from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.mz_debug import MzDebug
 from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.upgrade_downtime import (
+    upgrade_downtime_result_storage,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.util import PropagatingThread, all_subclasses
 from materialize.version_list import (
     get_all_self_managed_versions,
@@ -57,6 +65,7 @@ SERVICES = [
     Clusterd(),
     Balancerd(),
     MzDebug(),
+    Mz(app_password=""),
 ]
 
 
@@ -1594,6 +1603,46 @@ def make_mod_source(
         raise ValueError(f"Unhandled properties: {properties}")
 
 
+# Bump this version if the upgrade-downtime workflow is changed in a way that changes the results uploaded to test analytics
+UPGRADE_DOWNTIME_SCENARIO_VERSION = "1.0.0"
+# Used for uploading test analytics results
+ORCHESTRATORD_TEST_VERSION = "1.0.0"
+
+
+def upload_upgrade_downtime_to_test_analytics(
+    composition: Composition,
+    downtime_initial: float,
+    downtime_upgrade: float,
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(composition))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
+
+    result_entries = [
+        upgrade_downtime_result_storage.UpgradeDowntimeResultEntry(
+            scenario="upgrade-downtime",
+            scenario_version=UPGRADE_DOWNTIME_SCENARIO_VERSION,
+            downtime_initial=downtime_initial,
+            downtime_upgrade=downtime_upgrade,
+        )
+    ]
+
+    test_analytics.upgrade_downtime_results.add_result(
+        framework_version=ORCHESTRATORD_TEST_VERSION,
+        results=result_entries,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
+
+
 def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -1614,6 +1663,7 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     args = parser.parse_args()
 
     running = True
+    downtimes: list[float] = []
 
     def measure_downtime() -> None:
         port_forward_process = None
@@ -1650,6 +1700,7 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
                         preexec_fn=os.setpgrp,
                     )
                     connect_port_forward = False
+                time.sleep(1)
                 try:
                     with psycopg.connect(
                         "postgres://materialize@127.0.0.1:6875/materialize",
@@ -1660,11 +1711,10 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
                 except psycopg.OperationalError:
                     connect_port_forward = True
                     continue
-                runtime = time.time() - start_time
-                if runtime > 2:
-                    print(f"Downtime: {runtime}s")
-                assert runtime < 15, f"SELECT 1 took more than 15s: {runtime}s"
-                time.sleep(10)
+                runtime = time.time() - start_time - 1
+                print(f"Time: {runtime}s")
+                if runtime > 1:
+                    downtimes.append(runtime)
                 start_time = time.time()
         finally:
             if port_forward_process:
@@ -1683,6 +1733,20 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     time.sleep(120)  # some time to make sure there is no downtime later
     running = False
     thread.join()
+
+    assert len(downtimes) == 2, f"Wrong number of downtimes: {downtimes}"
+
+    test_failed = False
+    max_downtime = 15
+    for downtime in downtimes:
+        if downtime > max_downtime:
+            print(f"SELECT 1 took more than {max_downtime}s: {downtime}s")
+            test_failed = True
+
+    upload_upgrade_downtime_to_test_analytics(
+        c, downtimes[0], downtimes[1], not test_failed
+    )
+    assert not test_failed
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:

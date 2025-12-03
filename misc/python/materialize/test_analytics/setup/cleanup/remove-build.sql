@@ -15,6 +15,7 @@ DELETE FROM parallel_benchmark_result WHERE build_job_id IN (SELECT build_id FRO
 DELETE FROM product_limits_result WHERE build_job_id IN (SELECT build_id FROM build_job WHERE build_id IN (%build-ids%));
 DELETE FROM cluster_spec_sheet_result WHERE build_job_id IN (SELECT build_id FROM build_job WHERE build_id IN (%build-ids%));
 DELETE FROM cluster_spec_sheet_environmentd_result WHERE build_job_id IN (SELECT build_id FROM build_job WHERE build_id IN (%build-ids%));
+DELETE FROM upgrade_downtime_result WHERE build_job_id IN (SELECT build_id FROM build_job WHERE build_id IN (%build-ids%));
 DELETE FROM build_annotation_error WHERE build_job_id IN (SELECT build_job_id FROM build_annotation WHERE build_id IN (%build-ids%));
 DELETE FROM build_annotation WHERE build_id IN (%build-ids%);
 DELETE FROM build_job WHERE build_id IN (%build-ids%);
