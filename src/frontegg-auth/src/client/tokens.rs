@@ -34,7 +34,7 @@ impl Client {
         let response = self
             .client
             .post(admin_api_token_url)
-            .json(&request)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
             .send()
             .await?;
         let duration = start.elapsed();
