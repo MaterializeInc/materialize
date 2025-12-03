@@ -122,14 +122,6 @@ impl std::fmt::Display for Cluster {
 /// Each variant contains the parsed AST node with the `Raw` resolution state.
 #[derive(Debug, Clone, Hash)]
 pub enum Statement {
-    /// CREATE CONNECTION statement
-    CreateConnection(CreateConnectionStatement<Raw>),
-    /// CREATE SOURCE ... IN CLUSTER ... FROM WEBHOOK statement
-    CreateWebhookSource(CreateWebhookSourceStatement<Raw>),
-    /// CREATE SOURCE statement (Kafka, Postgres, etc.)
-    CreateSource(CreateSourceStatement<Raw>),
-    /// CREATE SOURCE ... FROM ... SUBSOURCE statement
-    CreateSubsource(CreateSubsourceStatement<Raw>),
     /// CREATE SINK statement
     CreateSink(CreateSinkStatement<Raw>),
     /// CREATE VIEW statement
@@ -140,8 +132,6 @@ pub enum Statement {
     CreateTable(CreateTableStatement<Raw>),
     /// CREATE TABLE ... FROM SOURCE statement
     CreateTableFromSource(CreateTableFromSourceStatement<Raw>),
-    /// CREATE SECRET statement
-    CreateSecret(CreateSecretStatement<Raw>),
 }
 
 impl Statement {
@@ -151,16 +141,11 @@ impl Statement {
     /// declared in the CREATE statement.
     pub fn ident(&self) -> DatabaseIdent {
         match self {
-            Statement::CreateConnection(c) => c.name.clone().into(),
-            Statement::CreateWebhookSource(w) => w.name.clone().into(),
-            Statement::CreateSource(s) => s.name.clone().into(),
-            Statement::CreateSubsource(s) => s.name.clone().into(),
             Statement::CreateSink(s) => s.name.clone().unwrap().into(),
             Statement::CreateView(v) => v.definition.name.clone().into(),
             Statement::CreateMaterializedView(m) => m.name.clone().into(),
             Statement::CreateTable(t) => t.name.clone().into(),
             Statement::CreateTableFromSource(t) => t.name.clone().into(),
-            Statement::CreateSecret(s) => s.name.clone().into(),
         }
     }
 }
@@ -168,16 +153,11 @@ impl Statement {
 impl std::fmt::Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Statement::CreateConnection(s) => write!(f, "{}", s),
-            Statement::CreateWebhookSource(s) => write!(f, "{}", s),
-            Statement::CreateSource(s) => write!(f, "{}", s),
-            Statement::CreateSubsource(s) => write!(f, "{}", s),
             Statement::CreateSink(s) => write!(f, "{}", s),
             Statement::CreateView(s) => write!(f, "{}", s),
             Statement::CreateMaterializedView(s) => write!(f, "{}", s),
             Statement::CreateTable(s) => write!(f, "{}", s),
             Statement::CreateTableFromSource(s) => write!(f, "{}", s),
-            Statement::CreateSecret(s) => write!(f, "{}", s),
         }
     }
 }

@@ -575,16 +575,16 @@ impl Client {
             placeholders_str
         );
 
-        let params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = clusters
+        let params: Vec<&(dyn ToSql + Sync)> = clusters
             .iter()
-            .map(|c| c as &(dyn tokio_postgres::types::ToSql + Sync))
+            .map(|c| c as &(dyn ToSql + Sync))
             .collect();
 
         let rows = self.client.query(&select_sql, &params).await?;
 
         // Verify all clusters were found
         if rows.len() != clusters.len() {
-            let found_names: std::collections::HashSet<String> =
+            let found_names: HashSet<String> =
                 rows.iter().map(|row| row.get("name")).collect();
             let missing: Vec<String> = clusters
                 .iter()
@@ -691,6 +691,9 @@ impl Client {
         &self,
         environment: &str,
     ) -> Result<HashMap<String, (i64, i64)>, ConnectionError> {
+        let suffix = format!("_{}", environment);
+        let pattern = format!("%{}", suffix);
+
         let query = r#"
             WITH replica_hydration AS (
                 SELECT
@@ -700,9 +703,8 @@ impl Client {
                     COUNT(*) AS total
                 FROM mz_clusters AS c
                 JOIN mz_cluster_replicas AS r ON c.id = r.cluster_id
-                JOIN deploy.clusters AS dc ON c.id = dc.cluster_id
                 JOIN mz_internal.mz_hydration_statuses AS mhs ON mhs.replica_id = r.id
-                WHERE dc.environment = $1
+                WHERE c.name LIKE $1
                 GROUP BY 1, 2
             )
             SELECT name, MAX(hydrated) AS hydrated, MAX(total) AS total
@@ -712,7 +714,7 @@ impl Client {
 
         let rows = self
             .client
-            .query(query, &[&environment])
+            .query(query, &[&pattern])
             .await
             .map_err(ConnectionError::Query)?;
 
