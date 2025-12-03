@@ -45,7 +45,7 @@ proxy-header = "0.1.2"
 semver = "1.0.27"
 tokio = { version = "1.48.0", default-features = false }
 tokio-openssl = "0.6.5"
-tokio-postgres = { version = "0.7.8" }
+tokio-postgres = { version = "0.7.15" }
 tokio-util = { version = "0.7.17", features = ["codec"] }
 tokio-metrics = "0.4.5"
 tower = "0.5.2"
@@ -57,7 +57,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
 mz-frontegg-mock = { path = "../frontegg-mock" }
-postgres = "0.19.5"
+postgres = "0.19.12"
 reqwest = "0.11.24"
 tempfile = "3.23.0"
 

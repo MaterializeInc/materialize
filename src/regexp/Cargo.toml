@@ -16,7 +16,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [dev-dependencies]
 anyhow = "1.0.100"
 mz-ore = { path = "../ore", features = ["cli"] }
-postgres = "0.19.5"
+postgres = "0.19.12"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

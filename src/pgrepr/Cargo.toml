@@ -19,7 +19,7 @@ mz-ore = { path = "../ore", default-features = false }
 mz-pgrepr-consts = { path = "../pgrepr-consts", default-features = false }
 mz-pgwire-common = { path = "../pgwire-common", default-features = false }
 mz-repr = { path = "../repr", default-features = false }
-postgres-types = { version = "0.2.5", features = [
+postgres-types = { version = "0.2.11", features = [
     "with-chrono-0_4",
     "with-uuid-1",
 ] }
