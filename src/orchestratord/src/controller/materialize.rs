@@ -33,12 +33,13 @@ use crate::{
     k8s::{apply_resource, delete_resource, make_reflector},
     matching_image_from_environmentd_image_ref,
     metrics::Metrics,
-    tls::DefaultCertificateSpecs,
+    tls::{DefaultCertificateSpecs, issuer_ref_defined},
 };
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::{
     ManagedResource,
     balancer::v1alpha1::{Balancer, BalancerSpec},
+    console::v1alpha1::{BalancerdRef, Console, ConsoleSpec, HttpConnectionScheme},
     materialize::v1alpha1::{Materialize, MaterializeRolloutStrategy, MaterializeStatus},
 };
 use mz_license_keys::validate;
@@ -46,7 +47,6 @@ use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
 use mz_orchestrator_tracing::TracingCliArgs;
 use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 
-pub mod console;
 pub mod environmentd;
 
 pub struct Config {
@@ -85,10 +85,6 @@ pub struct Config {
     pub clusterd_node_selector: Vec<KeyValueArg<String, String>>,
     pub clusterd_affinity: Option<Affinity>,
     pub clusterd_tolerations: Option<Vec<Toleration>>,
-    pub console_node_selector: Vec<KeyValueArg<String, String>>,
-    pub console_affinity: Option<Affinity>,
-    pub console_tolerations: Option<Vec<Toleration>>,
-    pub console_default_resources: Option<ResourceRequirements>,
     pub image_pull_policy: KubernetesImagePullPolicy,
     pub network_policies_internal_enabled: bool,
     pub network_policies_ingress_enabled: bool,
@@ -116,10 +112,6 @@ pub struct Config {
     pub environmentd_internal_sql_port: u16,
     pub environmentd_internal_http_port: u16,
     pub environmentd_internal_persist_pubsub_port: u16,
-
-    pub balancerd_http_port: u16,
-
-    pub console_http_port: u16,
 
     pub default_certificate_specs: DefaultCertificateSpecs,
 
@@ -281,6 +273,7 @@ impl k8s_controller::Context for Context {
     ) -> Result<Option<Action>, Self::Error> {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &mz.namespace());
+        let console_api: Api<Console> = Api::namespaced(client.clone(), &mz.namespace());
         let secret_api: Api<Secret> = Api::namespaced(client.clone(), &mz.namespace());
 
         let status = mz.status();
@@ -732,7 +725,7 @@ impl k8s_controller::Context for Context {
                         },
                     ),
                     frontegg_routing: None,
-                    resource_id: Some(status.resource_id),
+                    resource_id: Some(status.resource_id.clone()),
                 },
                 status: None,
             };
@@ -749,33 +742,54 @@ impl k8s_controller::Context for Context {
         // and the console relies on the balancer service existing, which is
         // enforced by wait_for_balancer
 
-        let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
-        else {
-            return Err(Error::Anyhow(anyhow::anyhow!(
-                "failed to parse environmentd image ref: {}",
-                mz.spec.environmentd_image_ref
-            )));
-        };
-        let console_image_tag = self
-            .config
-            .console_image_tag_map
-            .iter()
-            .find(|kv| kv.key == environmentd_image_tag)
-            .map(|kv| kv.value.clone())
-            .unwrap_or_else(|| self.config.console_image_tag_default.clone());
-        let console = console::Resources::new(
-            &self.config,
-            mz,
-            &matching_image_from_environmentd_image_ref(
-                &mz.spec.environmentd_image_ref,
-                "console",
-                Some(&console_image_tag),
-            ),
-        );
         if self.config.create_console {
-            console.apply(&client, &mz.namespace()).await?;
+            let Some((_, environmentd_image_tag)) = mz.spec.environmentd_image_ref.rsplit_once(':')
+            else {
+                return Err(Error::Anyhow(anyhow::anyhow!(
+                    "failed to parse environmentd image ref: {}",
+                    mz.spec.environmentd_image_ref
+                )));
+            };
+            let console_image_tag = self
+                .config
+                .console_image_tag_map
+                .iter()
+                .find(|kv| kv.key == environmentd_image_tag)
+                .map(|kv| kv.value.clone())
+                .unwrap_or_else(|| self.config.console_image_tag_default.clone());
+            let console = Console {
+                metadata: mz.managed_resource_meta(mz.name_unchecked()),
+                spec: ConsoleSpec {
+                    console_image_ref: matching_image_from_environmentd_image_ref(
+                        &mz.spec.environmentd_image_ref,
+                        "console",
+                        Some(&console_image_tag),
+                    ),
+                    resource_requirements: mz.spec.console_resource_requirements.clone(),
+                    replicas: Some(mz.console_replicas()),
+                    external_certificate_spec: mz.spec.console_external_certificate_spec.clone(),
+                    pod_annotations: mz.spec.pod_annotations.clone(),
+                    pod_labels: mz.spec.pod_labels.clone(),
+                    balancerd: BalancerdRef {
+                        service_name: mz.balancerd_service_name(),
+                        namespace: mz.namespace(),
+                        scheme: if issuer_ref_defined(
+                            &self.config.default_certificate_specs.balancerd_external,
+                            &mz.spec.balancerd_external_certificate_spec,
+                        ) {
+                            HttpConnectionScheme::Https
+                        } else {
+                            HttpConnectionScheme::Http
+                        },
+                    },
+                    authenticator_kind: mz.spec.authenticator_kind,
+                    resource_id: Some(status.resource_id),
+                },
+                status: None,
+            };
+            apply_resource(&console_api, &console).await?;
         } else {
-            console.cleanup(&client, &mz.namespace()).await?;
+            delete_resource(&console_api, &mz.name_prefixed("console")).await?;
         }
 
         Ok(result)
