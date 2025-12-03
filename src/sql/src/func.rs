@@ -4646,24 +4646,24 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // ILIKE
         "~~*" => Scalar {
-            params!(String, String) => BF::IsLikeMatch { case_insensitive: true } => Bool, 1627;
+            params!(String, String) => BF::from(func::IsLikeMatchCaseInsensitive) => Bool, 1627;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseInsensitive))
                 )
             }) => Bool, 1629;
         },
         "!~~*" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseInsensitive))
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1628;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseInsensitive))
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1630;
@@ -4672,24 +4672,24 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // LIKE
         "~~" => Scalar {
-            params!(String, String) => BF::IsLikeMatch { case_insensitive: false } => Bool, 1209;
+            params!(String, String) => BF::from(func::IsLikeMatchCaseSensitive) => Bool, 1209;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseSensitive))
                 )
             }) => Bool, 1211;
         },
         "!~~" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseSensitive))
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1210;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseSensitive))
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1212;

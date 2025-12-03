@@ -273,7 +273,8 @@ mod derive {
         GetByte,
         Gt,
         Gte,
-        // IsLikeMatch
+        IsLikeMatchCaseInsensitive,
+        IsLikeMatchCaseSensitive,
         // IsRegexpMatch
         JsonbConcat,
         JsonbContainsJsonb,

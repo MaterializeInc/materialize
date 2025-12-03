@@ -2612,7 +2612,8 @@ pub enum BinaryFunc {
     Gt(Gt),
     Gte(Gte),
     LikeEscape(LikeEscape),
-    IsLikeMatch { case_insensitive: bool },
+    IsLikeMatchCaseInsensitive(IsLikeMatchCaseInsensitive),
+    IsLikeMatchCaseSensitive(IsLikeMatchCaseSensitive),
     IsRegexpMatch { case_insensitive: bool },
     ToCharTimestamp(ToCharTimestampFormat),
     ToCharTimestampTz(ToCharTimestampTzFormat),
@@ -2849,9 +2850,12 @@ impl BinaryFunc {
             BinaryFunc::Gt(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::Gte(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::LikeEscape(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::IsLikeMatch { case_insensitive } => {
-            //     is_like_match_dynamic(a, b, *case_insensitive)
-            // }
+            BinaryFunc::IsLikeMatchCaseInsensitive(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::IsLikeMatchCaseSensitive(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             // BinaryFunc::IsRegexpMatch { case_insensitive } => {
             //     is_regexp_match_dynamic(a, b, *case_insensitive)
             // }
@@ -3015,9 +3019,6 @@ impl BinaryFunc {
             return Ok(Datum::Null);
         }
         match self {
-            BinaryFunc::IsLikeMatch { case_insensitive } => {
-                is_like_match_dynamic(a, b, *case_insensitive)
-            }
             BinaryFunc::IsRegexpMatch { case_insensitive } => {
                 is_regexp_match_dynamic(a, b, *case_insensitive)
             }
@@ -3092,30 +3093,31 @@ impl BinaryFunc {
             Gt(s) => s.output_type(input1_type, input2_type),
             Gte(s) => s.output_type(input1_type, input2_type),
             ArrayContains(s) => s.output_type(input1_type, input2_type),
-            ArrayContainsArray { .. }
+            ArrayContainsArray { .. } => SqlScalarType::Bool.nullable(in_nullable),
             // like and regexp produce errors on invalid like-strings or regexes
-            | IsLikeMatch { .. }
-            | IsRegexpMatch { .. } => SqlScalarType::Bool.nullable(in_nullable),
+            IsLikeMatchCaseInsensitive(s) => s.output_type(input1_type, input2_type),
+            IsLikeMatchCaseSensitive(s) => s.output_type(input1_type, input2_type),
+            IsRegexpMatch { .. } => SqlScalarType::Bool.nullable(in_nullable),
 
             ToCharTimestamp(s) => s.output_type(input1_type, input2_type),
             ToCharTimestampTz(s) => s.output_type(input1_type, input2_type),
             ConvertFrom(s) => s.output_type(input1_type, input2_type),
             Left(s) => s.output_type(input1_type, input2_type),
-            Right (s) => s.output_type(input1_type, input2_type),
+            Right(s) => s.output_type(input1_type, input2_type),
             Trim(s) => s.output_type(input1_type, input2_type),
             TrimLeading(s) => s.output_type(input1_type, input2_type),
-            TrimTrailing (s) => s.output_type(input1_type, input2_type),
+            TrimTrailing(s) => s.output_type(input1_type, input2_type),
             LikeEscape(s) => s.output_type(input1_type, input2_type),
 
-            SubInt16 (s) => s.output_type(input1_type, input2_type),
-            MulInt16 (s) => s.output_type(input1_type, input2_type),
-            DivInt16 (s) => s.output_type(input1_type, input2_type),
-            ModInt16 (s) => s.output_type(input1_type, input2_type),
-            BitAndInt16 (s) => s.output_type(input1_type, input2_type),
+            SubInt16(s) => s.output_type(input1_type, input2_type),
+            MulInt16(s) => s.output_type(input1_type, input2_type),
+            DivInt16(s) => s.output_type(input1_type, input2_type),
+            ModInt16(s) => s.output_type(input1_type, input2_type),
+            BitAndInt16(s) => s.output_type(input1_type, input2_type),
             BitOrInt16(s) => s.output_type(input1_type, input2_type),
-            BitXorInt16 (s) => s.output_type(input1_type, input2_type),
-            BitShiftLeftInt16 (s) => s.output_type(input1_type, input2_type),
-            BitShiftRightInt16 (s) => s.output_type(input1_type, input2_type),
+            BitXorInt16(s) => s.output_type(input1_type, input2_type),
+            BitShiftLeftInt16(s) => s.output_type(input1_type, input2_type),
+            BitShiftRightInt16(s) => s.output_type(input1_type, input2_type),
 
             SubInt32(s) => s.output_type(input1_type, input2_type),
             MulInt32(s) => s.output_type(input1_type, input2_type),
@@ -3149,43 +3151,43 @@ impl BinaryFunc {
             BitShiftLeftUint16(s) => s.output_type(input1_type, input2_type),
             BitShiftRightUint16(s) => s.output_type(input1_type, input2_type),
 
-            SubUint32 (s) => s.output_type(input1_type, input2_type),
-            MulUint32 (s) => s.output_type(input1_type, input2_type),
-            DivUint32 (s) => s.output_type(input1_type, input2_type),
-            ModUint32 (s) => s.output_type(input1_type, input2_type),
+            SubUint32(s) => s.output_type(input1_type, input2_type),
+            MulUint32(s) => s.output_type(input1_type, input2_type),
+            DivUint32(s) => s.output_type(input1_type, input2_type),
+            ModUint32(s) => s.output_type(input1_type, input2_type),
             BitAndUint32(s) => s.output_type(input1_type, input2_type),
-            BitOrUint32 (s) => s.output_type(input1_type, input2_type),
-            BitXorUint32 (s) => s.output_type(input1_type, input2_type),
-            BitShiftLeftUint32 (s) => s.output_type(input1_type, input2_type),
+            BitOrUint32(s) => s.output_type(input1_type, input2_type),
+            BitXorUint32(s) => s.output_type(input1_type, input2_type),
+            BitShiftLeftUint32(s) => s.output_type(input1_type, input2_type),
             BitShiftRightUint32(s) => s.output_type(input1_type, input2_type),
 
-            SubUint64 (s) => s.output_type(input1_type, input2_type),
+            SubUint64(s) => s.output_type(input1_type, input2_type),
             MulUint64(s) => s.output_type(input1_type, input2_type),
-            DivUint64 (s) => s.output_type(input1_type, input2_type),
-            ModUint64 (s) => s.output_type(input1_type, input2_type),
+            DivUint64(s) => s.output_type(input1_type, input2_type),
+            ModUint64(s) => s.output_type(input1_type, input2_type),
             BitAndUint64(s) => s.output_type(input1_type, input2_type),
-            BitOrUint64 (s) => s.output_type(input1_type, input2_type),
-            BitXorUint64 (s) => s.output_type(input1_type, input2_type),
-            BitShiftLeftUint64 (s) => s.output_type(input1_type, input2_type),
+            BitOrUint64(s) => s.output_type(input1_type, input2_type),
+            BitXorUint64(s) => s.output_type(input1_type, input2_type),
+            BitShiftLeftUint64(s) => s.output_type(input1_type, input2_type),
             BitShiftRightUint64(s) => s.output_type(input1_type, input2_type),
 
-            SubFloat32 (s) => s.output_type(input1_type, input2_type),
-            MulFloat32 (s) => s.output_type(input1_type, input2_type),
-            DivFloat32 (s) => s.output_type(input1_type, input2_type),
+            SubFloat32(s) => s.output_type(input1_type, input2_type),
+            MulFloat32(s) => s.output_type(input1_type, input2_type),
+            DivFloat32(s) => s.output_type(input1_type, input2_type),
             ModFloat32(s) => s.output_type(input1_type, input2_type),
 
-            SubFloat64 (s) => s.output_type(input1_type, input2_type),
+            SubFloat64(s) => s.output_type(input1_type, input2_type),
             MulFloat64(s) => s.output_type(input1_type, input2_type),
-            DivFloat64 (s) => s.output_type(input1_type, input2_type),
+            DivFloat64(s) => s.output_type(input1_type, input2_type),
             ModFloat64(s) => s.output_type(input1_type, input2_type),
 
-            SubInterval (s) => s.output_type(input1_type, input2_type),
-            SubTimestamp (s) => s.output_type(input1_type, input2_type),
-            SubTimestampTz (s) => s.output_type(input1_type, input2_type),
+            SubInterval(s) => s.output_type(input1_type, input2_type),
+            SubTimestamp(s) => s.output_type(input1_type, input2_type),
+            SubTimestampTz(s) => s.output_type(input1_type, input2_type),
             MulInterval(s) => s.output_type(input1_type, input2_type),
             DivInterval(s) => s.output_type(input1_type, input2_type),
 
-            AgeTimestamp (s) => s.output_type(input1_type, input2_type),
+            AgeTimestamp(s) => s.output_type(input1_type, input2_type),
             AgeTimestampTz(s) => s.output_type(input1_type, input2_type),
 
             AddTimestampInterval(s) => s.output_type(input1_type, input2_type),
@@ -3196,7 +3198,7 @@ impl BinaryFunc {
             SubTimeInterval(s) => s.output_type(input1_type, input2_type),
 
             AddDateInterval(s) => s.output_type(input1_type, input2_type),
-            SubDateInterval (s) => s.output_type(input1_type, input2_type),
+            SubDateInterval(s) => s.output_type(input1_type, input2_type),
             AddDateTime(s) => s.output_type(input1_type, input2_type),
             DateBinTimestamp(s) => s.output_type(input1_type, input2_type),
             DateTruncTimestamp(s) => s.output_type(input1_type, input2_type),
@@ -3208,17 +3210,17 @@ impl BinaryFunc {
             }
 
             ExtractInterval(s) => s.output_type(input1_type, input2_type),
-            ExtractTime (s) => s.output_type(input1_type, input2_type),
-            ExtractTimestamp (s) => s.output_type(input1_type, input2_type),
-            ExtractTimestampTz (s) => s.output_type(input1_type, input2_type),
+            ExtractTime(s) => s.output_type(input1_type, input2_type),
+            ExtractTimestamp(s) => s.output_type(input1_type, input2_type),
+            ExtractTimestampTz(s) => s.output_type(input1_type, input2_type),
             ExtractDate(s) => s.output_type(input1_type, input2_type),
 
             DatePartInterval(s) => s.output_type(input1_type, input2_type),
-            DatePartTime (s) => s.output_type(input1_type, input2_type),
-            DatePartTimestamp (s) => s.output_type(input1_type, input2_type),
+            DatePartTime(s) => s.output_type(input1_type, input2_type),
+            DatePartTimestamp(s) => s.output_type(input1_type, input2_type),
             DatePartTimestampTz(s) => s.output_type(input1_type, input2_type),
 
-            DateBinTimestampTz (s) => s.output_type(input1_type, input2_type),
+            DateBinTimestampTz(s) => s.output_type(input1_type, input2_type),
             DateTruncTimestampTz(s) => s.output_type(input1_type, input2_type),
 
             TimezoneTimestamp | TimezoneIntervalTimestamp => {
@@ -3231,16 +3233,14 @@ impl BinaryFunc {
 
             SubTime(s) => s.output_type(input1_type, input2_type),
 
-            MzRenderTypmod (s) => s.output_type(input1_type, input2_type),
+            MzRenderTypmod(s) => s.output_type(input1_type, input2_type),
             TextConcat(s) => s.output_type(input1_type, input2_type),
 
-            JsonbGetInt64Stringify
-            | JsonbGetStringStringify
-            | JsonbGetPathStringify => SqlScalarType::String.nullable(true),
+            JsonbGetInt64Stringify | JsonbGetStringStringify | JsonbGetPathStringify => {
+                SqlScalarType::String.nullable(true)
+            }
 
-            JsonbGetInt64
-            | JsonbGetString
-            | JsonbGetPath => SqlScalarType::Jsonb.nullable(true),
+            JsonbGetInt64 | JsonbGetString | JsonbGetPath => SqlScalarType::Jsonb.nullable(true),
             JsonbConcat(s) => s.output_type(input1_type, input2_type),
             JsonbDeleteInt64(s) => s.output_type(input1_type, input2_type),
             JsonbDeleteString(s) => s.output_type(input1_type, input2_type),
@@ -3268,7 +3268,7 @@ impl BinaryFunc {
 
             ElementListConcat(s) => s.output_type(input1_type, input2_type),
 
-            ListContainsList { .. } =>  SqlScalarType::Bool.nullable(in_nullable),
+            ListContainsList { .. } => SqlScalarType::Bool.nullable(in_nullable),
 
             DigestString(s) => s.output_type(input1_type, input2_type),
             DigestBytes(s) => s.output_type(input1_type, input2_type),
@@ -3295,9 +3295,9 @@ impl BinaryFunc {
 
             UuidGenerateV5(s) => s.output_type(input1_type, input2_type),
 
-            RangeContainsElem { .. }
-            | RangeContainsRange { .. }
-            => SqlScalarType::Bool.nullable(in_nullable),
+            RangeContainsElem { .. } | RangeContainsRange { .. } => {
+                SqlScalarType::Bool.nullable(in_nullable)
+            }
             RangeOverlaps(s) => s.output_type(input1_type, input2_type),
             RangeAfter(s) => s.output_type(input1_type, input2_type),
             RangeBefore(s) => s.output_type(input1_type, input2_type),
@@ -3414,7 +3414,8 @@ impl BinaryFunc {
             BinaryFunc::GetByte(s) => s.propagates_nulls(),
             BinaryFunc::Gt(s) => s.propagates_nulls(),
             BinaryFunc::Gte(s) => s.propagates_nulls(),
-            BinaryFunc::IsLikeMatch { .. } => true,
+            BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.propagates_nulls(),
+            BinaryFunc::IsLikeMatchCaseSensitive(s) => s.propagates_nulls(),
             BinaryFunc::IsRegexpMatch { .. } => true,
             BinaryFunc::JsonbConcat(s) => s.propagates_nulls(),
             BinaryFunc::JsonbContainsJsonb(s) => s.propagates_nulls(),
@@ -3617,7 +3618,8 @@ impl BinaryFunc {
             GetByte(s) => s.introduces_nulls(),
             Gt(s) => s.introduces_nulls(),
             Gte(s) => s.introduces_nulls(),
-            IsLikeMatch { .. } => false,
+            IsLikeMatchCaseInsensitive(s) => s.introduces_nulls(),
+            IsLikeMatchCaseSensitive(s) => s.introduces_nulls(),
             IsRegexpMatch { .. } => false,
             JsonbContainsJsonb(s) => s.introduces_nulls(),
             JsonbContainsString(s) => s.introduces_nulls(),
@@ -3795,7 +3797,8 @@ impl BinaryFunc {
             Eq(s) => s.is_infix_op(),
             Gt(s) => s.is_infix_op(),
             Gte(s) => s.is_infix_op(),
-            IsLikeMatch { .. } => true,
+            IsLikeMatchCaseInsensitive(s) => s.is_infix_op(),
+            IsLikeMatchCaseSensitive(s) => s.is_infix_op(),
             IsRegexpMatch { .. } => true,
             JsonbConcat(s) => s.is_infix_op(),
             JsonbContainsJsonb(s) => s.is_infix_op(),
@@ -4024,7 +4027,8 @@ impl BinaryFunc {
             BinaryFunc::GetByte(s) => s.negate(),
             BinaryFunc::Gt(s) => s.negate(),
             BinaryFunc::Gte(s) => s.negate(),
-            BinaryFunc::IsLikeMatch { .. } => None,
+            BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.negate(),
+            BinaryFunc::IsLikeMatchCaseSensitive(s) => s.negate(),
             BinaryFunc::IsRegexpMatch { .. } => None,
             BinaryFunc::JsonbConcat(s) => s.negate(),
             BinaryFunc::JsonbContainsJsonb(s) => s.negate(),
@@ -4266,7 +4270,8 @@ impl BinaryFunc {
             BinaryFunc::ModNumeric(s) => s.could_error(),
             BinaryFunc::RoundNumeric(s) => s.could_error(),
             BinaryFunc::LikeEscape(s) => s.could_error(),
-            BinaryFunc::IsLikeMatch { .. } => true,
+            BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.could_error(),
+            BinaryFunc::IsLikeMatchCaseSensitive(s) => s.could_error(),
             BinaryFunc::IsRegexpMatch { .. } => true,
             BinaryFunc::DateBinTimestamp(s) => s.could_error(),
             BinaryFunc::DateBinTimestampTz(s) => s.could_error(),
@@ -4450,7 +4455,9 @@ impl BinaryFunc {
             BinaryFunc::Gt(s) => s.is_monotone(),
             BinaryFunc::Gte(s) => s.is_monotone(),
             BinaryFunc::LikeEscape(s) => s.is_monotone(),
-            BinaryFunc::IsLikeMatch { .. } | BinaryFunc::IsRegexpMatch { .. } => (false, false),
+            BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.is_monotone(),
+            BinaryFunc::IsLikeMatchCaseSensitive(s) => s.is_monotone(),
+            BinaryFunc::IsRegexpMatch { .. } => (false, false),
             BinaryFunc::ToCharTimestamp(s) => s.is_monotone(),
             BinaryFunc::ToCharTimestampTz(s) => s.is_monotone(),
             BinaryFunc::DateBinTimestamp(s) => s.is_monotone(),
@@ -4655,12 +4662,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::Gt(s) => s.fmt(f),
             BinaryFunc::Gte(s) => s.fmt(f),
             BinaryFunc::LikeEscape(s) => s.fmt(f),
-            BinaryFunc::IsLikeMatch {
-                case_insensitive: false,
-            } => f.write_str("like"),
-            BinaryFunc::IsLikeMatch {
-                case_insensitive: true,
-            } => f.write_str("ilike"),
+            BinaryFunc::IsLikeMatchCaseSensitive(s) => s.fmt(f),
+            BinaryFunc::IsLikeMatchCaseInsensitive(s) => s.fmt(f),
             BinaryFunc::IsRegexpMatch {
                 case_insensitive: false,
             } => f.write_str("~"),
@@ -4803,14 +4806,14 @@ fn like_escape<'a>(
     Ok(temp_storage.push_string(normalized))
 }
 
-fn is_like_match_dynamic<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    case_insensitive: bool,
-) -> Result<Datum<'a>, EvalError> {
-    let haystack = a.unwrap_str();
-    let needle = like_pattern::compile(b.unwrap_str(), case_insensitive)?;
-    Ok(Datum::from(needle.is_match(haystack.as_ref())))
+#[sqlfunc(is_infix_op = true, sqlname = "like")]
+fn is_like_match_case_sensitive(haystack: &str, pattern: &str) -> Result<bool, EvalError> {
+    like_pattern::compile(pattern, false).map(|needle| needle.is_match(haystack))
+}
+
+#[sqlfunc(is_infix_op = true, sqlname = "ilike")]
+fn is_like_match_case_insensitive(haystack: &str, pattern: &str) -> Result<bool, EvalError> {
+    like_pattern::compile(pattern, true).map(|needle| needle.is_match(haystack))
 }
 
 fn is_regexp_match_dynamic<'a>(

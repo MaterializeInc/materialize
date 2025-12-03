@@ -1,0 +1,63 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"like\")]\nfn is_like_match_case_sensitive(\n    haystack: &str,\n    pattern: &str,\n) -> Result<bool, EvalError> {\n    like_pattern::compile(pattern, false).map(|needle| needle.is_match(haystack))\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct IsLikeMatchCaseSensitive;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for IsLikeMatchCaseSensitive {
+    type Input1 = &'a str;
+    type Input2 = &'a str;
+    type Output = Result<bool, EvalError>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        is_like_match_case_sensitive(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for IsLikeMatchCaseSensitive {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("like")
+    }
+}
+fn is_like_match_case_sensitive(
+    haystack: &str,
+    pattern: &str,
+) -> Result<bool, EvalError> {
+    like_pattern::compile(pattern, false).map(|needle| needle.is_match(haystack))
+}
