@@ -32,6 +32,7 @@ use crate::crd::generated::cert_manager::certificates::{
 use mz_ore::retry::Retry;
 
 pub mod balancer;
+pub mod console;
 pub mod generated;
 pub mod materialize;
 #[cfg(feature = "vpc-endpoints")]

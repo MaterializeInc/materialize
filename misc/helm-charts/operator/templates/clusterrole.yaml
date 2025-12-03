@@ -90,6 +90,8 @@ rules:
   - materializes/status
   - balancers
   - balancers/status
+  - consoles
+  - consoles/status
   - vpcendpoints
   verbs:
   - create
