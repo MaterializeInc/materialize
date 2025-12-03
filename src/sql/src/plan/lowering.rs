@@ -139,6 +139,7 @@ pub struct Config {
     /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
     pub enable_guard_subquery_tablefunc: bool,
+    pub enable_cast_elimination: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -147,6 +148,7 @@ impl From<&SystemVars> for Config {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
+            enable_cast_elimination: vars.enable_cast_elimination(),
         }
     }
 }
@@ -969,6 +971,13 @@ impl HirScalarExpr {
                     panic!("cannot decorrelate expression with unbound parameters")
                 }
                 CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
+                CallUnary {
+                    func: func::UnaryFunc::CastVarCharToString(_),
+                    expr,
+                    name: _,
+                } if context.config.enable_cast_elimination => {
+                    expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?
+                }
                 CallUnary {
                     func,
                     expr,
