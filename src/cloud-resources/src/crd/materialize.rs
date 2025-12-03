@@ -30,8 +30,6 @@ use crate::crd::generated::cert_manager::certificates::{
     CertificateIssuerRef, CertificateSecretTemplate,
 };
 
-const V26_0_0: Version = Version::new(26, 0, 0);
-
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
 
@@ -481,14 +479,47 @@ pub mod v1alpha1 {
             }
         }
 
-        /// Checks if the current environmentd image ref is within the upgrade window of the last
-        /// successful rollout.
-        ///
         /// This check isn't strictly required since environmentd will still be able to determine
         /// if the upgrade is allowed or not. However, doing this check allows us to provide
         /// the error as soon as possible and in a more user friendly way.
+        pub fn is_valid_upgrade_version(active_version: &Version, next_version: &Version) -> bool {
+            // Don't allow rolling back
+            // Note: semver comparison handles RC versions correctly:
+            // v26.0.0-rc.1 < v26.0.0-rc.2 < v26.0.0
+            if next_version < active_version {
+                return false;
+            }
+
+            if active_version.major == 0 {
+                // Self managed 25.2 to 26.0
+                if next_version.major != active_version.major {
+                    if next_version.major == 26
+                        && active_version.major == 0
+                        && active_version.minor == 164
+                    {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+                // Self managed 25.1 to 25.2
+                if next_version.minor == 147 && active_version.minor == 130 {
+                    return true;
+                }
+                // only allow upgrading a single minor version at a time
+                return next_version.minor <= active_version.minor + 1;
+            } else if active_version.major >= 26 {
+                // For versions 26.X.X and onwards, we deny upgrades past 1 major version of the active version
+                return next_version.major <= active_version.major + 1;
+            }
+
+            true
+        }
+
+        /// Checks if the current environmentd image ref is within the upgrade window of the last
+        /// successful rollout.
         pub fn within_upgrade_window(&self) -> bool {
-            let current_environmentd_version = self
+            let active_environmentd_version = self
                 .status
                 .as_ref()
                 .and_then(|status| {
@@ -498,19 +529,19 @@ pub mod v1alpha1 {
                 })
                 .and_then(|image_ref| parse_image_ref(image_ref));
 
-            if let (Some(new_environmentd_version), Some(current_environmentd_version)) = (
+            if let (Some(next_environmentd_version), Some(active_environmentd_version)) = (
                 parse_image_ref(&self.spec.environmentd_image_ref),
-                current_environmentd_version,
+                active_environmentd_version,
             ) {
-                if current_environmentd_version >= V26_0_0 {
-                    // We deny upgrades past 1 major version of the last successful rollout
-                    return new_environmentd_version.major
-                        <= current_environmentd_version.major + 1;
-                }
+                Self::is_valid_upgrade_version(
+                    &active_environmentd_version,
+                    &next_environmentd_version,
+                )
+            } else {
+                // If we fail to parse either version,
+                // we still allow the upgrade since environmentd will still error if the upgrade is not allowed.
+                true
             }
-            // If we fail any of the preconditions for the check (e.g. we couldn't parse either version),
-            // we still allow the upgrade since environmentd will still error if the upgrade is not allowed.
-            true
         }
 
         pub fn managed_resource_meta(&self, name: String) -> ObjectMeta {
@@ -711,13 +742,51 @@ mod tests {
             "materialize/environmentd:v28.0.1.not_a_valid_version".to_owned();
         assert!(mz.within_upgrade_window());
 
-        // Pass: upgrading from 0.147.5 to 26.1.0 (any version before 26.0.0 passes)
+        // Pass: upgrading from 0.164.0 to 26.1.0 (self managed 25.2 to 26.0)
         mz.status
             .as_mut()
             .unwrap()
             .last_completed_rollout_environmentd_image_ref =
-            Some("materialize/environmentd:v0.147.5".to_owned());
+            Some("materialize/environmentd:v0.164.0".to_owned());
         mz.spec.environmentd_image_ref = "materialize/environmentd:v26.1.0".to_owned();
         assert!(mz.within_upgrade_window());
+    }
+
+    #[mz_ore::test]
+    fn is_valid_upgrade_version() {
+        let success_tests = [
+            (Version::new(0, 83, 0), Version::new(0, 83, 0)),
+            (Version::new(0, 83, 0), Version::new(0, 84, 0)),
+            (Version::new(0, 9, 0), Version::new(0, 10, 0)),
+            (Version::new(0, 99, 0), Version::new(0, 100, 0)),
+            (Version::new(0, 83, 0), Version::new(0, 83, 1)),
+            (Version::new(0, 83, 0), Version::new(0, 83, 2)),
+            (Version::new(0, 83, 2), Version::new(0, 83, 10)),
+            (Version::new(0, 164, 0), Version::new(26, 0, 0)),
+            (Version::new(26, 0, 0), Version::new(26, 1, 0)),
+            (Version::new(26, 5, 3), Version::new(26, 10, 0)),
+            (Version::new(0, 130, 0), Version::new(0, 147, 0)),
+        ];
+        for (active_version, next_version) in success_tests {
+            assert!(
+                Materialize::is_valid_upgrade_version(&active_version, &next_version),
+                "v{active_version} can upgrade to v{next_version}"
+            );
+        }
+
+        let failure_tests = [
+            (Version::new(0, 83, 0), Version::new(0, 82, 0)),
+            (Version::new(0, 83, 3), Version::new(0, 83, 2)),
+            (Version::new(0, 83, 3), Version::new(1, 83, 3)),
+            (Version::new(0, 83, 0), Version::new(0, 85, 0)),
+            (Version::new(26, 0, 0), Version::new(28, 0, 0)),
+            (Version::new(0, 130, 0), Version::new(26, 1, 0)),
+        ];
+        for (active_version, next_version) in failure_tests {
+            assert!(
+                !Materialize::is_valid_upgrade_version(&active_version, &next_version),
+                "v{active_version} can't upgrade to v{next_version}"
+            );
+        }
     }
 }
