@@ -291,7 +291,7 @@ Explained Query:
           Get l6
   Return
     Project (#0{product_id}, #13, #11{last_update_time})
-      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](varchar_to_text(#1{product_name})) then 0.8 else 1 end))
+      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](#1{product_name}) then 0.8 else 1 end))
         Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=delta
           ArrangeBy keys=[[#0{product_id}]]
             Get l6
