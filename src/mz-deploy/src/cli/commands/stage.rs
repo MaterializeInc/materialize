@@ -7,13 +7,14 @@ use crate::project::object_id::ObjectId;
 use crate::project::planned::extract_external_indexes;
 use crate::project::typed::FullyQualifiedName;
 use crate::project::{self, normalize::NormalizingVisitor};
-use crate::utils::git;
+use crate::utils::{git, progress};
 use crate::utils::git::get_git_commit;
 use crate::verbose;
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
 use std::collections::HashSet;
 use std::path::Path;
+use std::time::SystemTime;
 
 /// Deploy project to staging environment with renamed schemas and clusters.
 ///
@@ -53,6 +54,8 @@ pub async fn run(
     allow_dirty: bool,
     no_rollback: bool,
 ) -> Result<(), CliError> {
+    let start_time = SystemTime::now();
+
     // Check for uncommitted changes before proceeding
     if !allow_dirty && git::is_dirty(directory) {
         return Err(CliError::GitDirty);
@@ -65,6 +68,8 @@ pub async fn run(
             .ok_or(CliError::GitShaFailed)?,
     };
 
+    println!("Deploying to staging environment: {}", stage_name);
+
     // Run compile to validate and get the project (skip type checking for staging deployment)
     let compile_args = super::compile::CompileArgs {
         typecheck: false, // Skip type checking for staging deployment
@@ -74,10 +79,12 @@ pub async fn run(
 
     let staging_suffix = format!("_{}", stage_name);
 
-    println!("Deploying to staging environment: {}", stage_name);
-
     // Connect to the database
     let mut client = helpers::connect_to_database(profile).await?;
+
+    // Stage 1: Analyze project changes
+    progress::stage_start("Analyzing project changes");
+    let analyze_start = SystemTime::now();
 
     // Initialize deployment tracking infrastructure
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
@@ -111,7 +118,7 @@ pub async fn run(
 
     let objects = if let Some(ref cs) = change_set {
         if cs.is_empty() {
-            println!("No changes detected compared to production, skipping deployment");
+            progress::info("No changes detected compared to production, skipping deployment");
             return Ok(());
         }
 
@@ -121,6 +128,12 @@ pub async fn run(
         verbose!("Full deployment: no production deployment found");
         planned_project.get_sorted_objects()?
     };
+
+    let analyze_duration = analyze_start.elapsed().unwrap();
+    progress::stage_success(
+        &format!("Ready to deploy {} objects", objects.len()),
+        analyze_duration
+    );
 
     // Collect schemas and clusters from objects that are actually being deployed
     let mut schema_set = HashSet::new();
@@ -143,15 +156,18 @@ pub async fn run(
         }
     }
 
-    // Validate project before writing any metadata or creating resources
+    // Stage 2: Validate project before writing any metadata or creating resources
     // This ensures databases, schemas, clusters, and external dependencies exist
-    println!("Validating project...");
+    progress::stage_start("Validating project");
+    let validate_start = SystemTime::now();
     client.validate_project(&planned_project, directory).await?;
-    verbose!("Project validation successful");
+    let validate_duration = validate_start.elapsed().unwrap();
+    progress::stage_success("All validations passed", validate_duration);
 
-    // Collect deployment metadata and write to database BEFORE creating resources
+    // Stage 3: Collect deployment metadata and write to database BEFORE creating resources
     // This allows abort logic to clean up even if resource creation fails
-    println!("Recording deployment metadata...");
+    progress::stage_start("Recording deployment metadata");
+    let metadata_start = SystemTime::now();
     let metadata = helpers::collect_deployment_metadata(&client, directory).await;
 
     // Build a snapshot containing all objects that will be deployed
@@ -177,7 +193,8 @@ pub async fn run(
     )
     .await?;
 
-    verbose!("Deployment metadata recorded");
+    let metadata_duration = metadata_start.elapsed().unwrap();
+    progress::stage_success("Deployment metadata recorded", metadata_duration);
 
     // Perform resource creation with automatic rollback on failure
     let result = create_resources_with_rollback(
@@ -194,11 +211,10 @@ pub async fn run(
 
     match result {
         Ok(success_count) => {
-            println!(
-                "\n{} Successfully deployed {} objects to staging environment '{}'",
-                "SUCCESS:".green().bold(),
-                success_count,
-                stage_name.cyan()
+            let total_duration = start_time.elapsed().unwrap();
+            progress::summary(
+                &format!("Successfully deployed to '{}' staging environment", stage_name),
+                total_duration
             );
             Ok(())
         }
@@ -223,14 +239,19 @@ async fn create_resources_with_rollback<'a>(
 ) -> Result<usize, CliError> {
     // Wrap resource creation in a closure that we can call and handle errors from
     let create_result = async {
-        // Create staging schemas
-        println!("Creating staging schemas...");
+        // Stage 4: Create staging schemas
+        progress::stage_start("Creating staging schemas");
+        let schema_start = SystemTime::now();
         for (database, schema) in schema_set {
             let staging_schema = format!("{}{}", schema, staging_suffix);
             client.create_schema(database, &staging_schema).await?;
             verbose!("  Created schema {}.{}", database, staging_schema);
         }
-        verbose!();
+        let schema_duration = schema_start.elapsed().unwrap();
+        progress::stage_success(
+            &format!("Created {} schema(s)", schema_set.len()),
+            schema_duration
+        );
 
         // Write cluster mappings to deploy.clusters table BEFORE creating clusters
         // This allows abort logic to clean up even if cluster creation fails
@@ -240,8 +261,10 @@ async fn create_resources_with_rollback<'a>(
             .await?;
         verbose!("Cluster mappings recorded");
 
-        // Create staging clusters (by cloning production cluster configs)
-        println!("Creating staging clusters ...");
+        // Stage 5: Create staging clusters (by cloning production cluster configs)
+        progress::stage_start("Creating staging clusters");
+        let cluster_start = SystemTime::now();
+        let mut created_clusters = 0;
         for prod_cluster in cluster_set {
             let staging_cluster = format!("{}{}", prod_cluster, staging_suffix);
 
@@ -272,6 +295,7 @@ async fn create_resources_with_rollback<'a>(
             client
                 .create_cluster(&staging_cluster, options.clone())
                 .await?;
+            created_clusters += 1;
             verbose!(
                 "  Created cluster '{}' (size: {}, replication_factor: {}, cloned from '{}')",
                 staging_cluster,
@@ -281,8 +305,15 @@ async fn create_resources_with_rollback<'a>(
             );
         }
 
-        // Deploy objects using staging transformer
-        println!("Deploying objects to staging environment...\n");
+        let cluster_duration = cluster_start.elapsed().unwrap();
+        progress::stage_success(
+            &format!("Created {} cluster(s)", created_clusters),
+            cluster_duration
+        );
+
+        // Stage 6: Deploy objects using staging transformer
+        progress::stage_start("Deploying objects to staging");
+        let deploy_start = SystemTime::now();
 
         // Collect ObjectIds from objects being deployed for the staging transformer
         let objects_to_deploy_set: HashSet<_> = objects.iter().map(|(oid, _)| oid.clone()).collect();
@@ -395,6 +426,12 @@ async fn create_resources_with_rollback<'a>(
             success_count += 1;
         }
 
+        let deploy_duration = deploy_start.elapsed().unwrap();
+        progress::stage_success(
+            &format!("Deployed {} objects", success_count),
+            deploy_duration
+        );
+
         // Return success count
         Ok::<usize, CliError>(success_count)
     }
@@ -405,15 +442,15 @@ async fn create_resources_with_rollback<'a>(
         Ok(count) => Ok(count),
         Err(e) => {
             if no_rollback {
-                eprintln!("\n{} Deployment failed (skipping rollback due to --no-rollback flag)", "ERROR:".red().bold());
+                progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
                 return Err(e);
             }
 
-            eprintln!("\n{} Deployment failed, rolling back...", "ERROR:".red().bold());
+            progress::error("Deployment failed, rolling back...");
             let (schemas, clusters) = rollback_staging_resources(client, stage_name).await;
 
             if schemas > 0 || clusters > 0 {
-                eprintln!("Rolled back: {} schema(s), {} cluster(s)", schemas, clusters);
+                progress::info(&format!("Rolled back: {} schema(s), {} cluster(s)", schemas, clusters));
             }
 
             Err(e)

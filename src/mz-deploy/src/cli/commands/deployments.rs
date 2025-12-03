@@ -88,7 +88,7 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
                 } else {
                     format!("clusters: {} of {} hydrated", total_hydrated, total_clusters)
                 };
-                println!("    {}", text.blue());
+                println!("    {}\n", text.blue());
             }
             Ok(_) => {
                 // Empty hydration status - deployment has no clusters
