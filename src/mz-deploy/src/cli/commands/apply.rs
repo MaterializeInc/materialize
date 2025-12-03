@@ -61,6 +61,7 @@ pub async fn run(
     println!("Validating project...");
     client.validate_project(&planned_project, directory).await?;
     client.validate_cluster_isolation(&planned_project).await?;
+    client.validate_privileges(&planned_project).await?;
     verbose!("Project validation successful");
 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;

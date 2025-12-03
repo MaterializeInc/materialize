@@ -6,6 +6,7 @@
 pub mod abort;
 pub mod apply;
 pub mod compile;
+pub mod create_tables;
 pub mod debug;
 pub mod deployments;
 pub mod gen_data_contracts;
