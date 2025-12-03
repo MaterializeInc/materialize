@@ -322,15 +322,9 @@ fn create_temporary_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Opti
 
             Some(normalized)
         }
-        Statement::CreateTable(table) => {
-            let mut table = table.clone();
-            table.temporary = true;
-
-            let normalized = Statement::CreateTable(table)
-                .normalize_name_with(&visitor, &fqn.to_item_name())
-                .normalize_dependencies_with(&visitor);
-
-            Some(normalized)
+        Statement::CreateTable(_) | Statement::CreateTableFromSource(_)=> {
+            // loaded from types.lock
+            None
         }
         _ => {
             // Other statement types (sources, sinks, connections, secrets)

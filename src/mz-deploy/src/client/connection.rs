@@ -112,6 +112,9 @@ pub enum DatabaseValidationError {
         missing_createcluster: bool,
     },
     MissingSources(Vec<ObjectId>),
+    MissingTableDependencies {
+        objects_needing_tables: Vec<(ObjectId, Vec<ObjectId>)>,
+    },
     QueryError(tokio_postgres::Error),
 }
 
@@ -290,6 +293,32 @@ impl fmt::Display for DatabaseValidationError {
                 }
                 writeln!(f)?;
                 writeln!(f, "Please ensure all sources are created before running this command.")?;
+                Ok(())
+            }
+            DatabaseValidationError::MissingTableDependencies { objects_needing_tables } => {
+                writeln!(
+                    f,
+                    "{}: Objects depend on tables that don't exist in the database",
+                    "error".bright_red().bold()
+                )?;
+                writeln!(f)?;
+                for (object, missing_tables) in objects_needing_tables {
+                    writeln!(f, "  {} {}.{}.{} depends on:",
+                        "×".bright_red(),
+                        object.database,
+                        object.schema,
+                        object.object
+                    )?;
+                    for table in missing_tables {
+                        writeln!(f, "    - {}.{}.{}", table.database, table.schema, table.object)?;
+                    }
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "{} Run 'mz-deploy create-tables' to create the required tables first",
+                    "help:".bright_cyan().bold()
+                )?;
                 Ok(())
             }
             DatabaseValidationError::QueryError(e) => {
@@ -1677,15 +1706,10 @@ impl Client {
             required_databases.insert(ext_dep.database.clone());
         }
 
-        // Collect all required schemas (database, schema) pairs
-        let mut required_schemas = HashSet::new();
-        for db in &planned_project.databases {
-            for schema in &db.schemas {
-                required_schemas.insert((db.name.clone(), schema.name.clone()));
-            }
-        }
+        // Collect schemas - split into project schemas (we can create) vs external schemas (must exist)
+        let mut external_schemas = HashSet::new();
         for ext_dep in &planned_project.external_dependencies {
-            required_schemas.insert((ext_dep.database.clone(), ext_dep.schema.clone()));
+            external_schemas.insert((ext_dep.database.clone(), ext_dep.schema.clone()));
         }
 
         // Check databases exist
@@ -1701,8 +1725,8 @@ impl Client {
             }
         }
 
-        // Check schemas exist
-        for (database, schema) in &required_schemas {
+        // Check only external dependency schemas exist (project schemas will be created if needed)
+        for (database, schema) in &external_schemas {
             let query = r#"
                 SELECT s.name FROM mz_schemas s
                 JOIN mz_databases d ON s.database_id = d.id
@@ -2034,5 +2058,118 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    /// Validate that all tables referenced by objects to be deployed exist in the database
+    pub async fn validate_table_dependencies(
+        &mut self,
+        planned_project: &planned::Project,
+        objects_to_deploy: &HashSet<ObjectId>,
+    ) -> Result<(), DatabaseValidationError> {
+        let mut objects_needing_tables = Vec::new();
+
+        // Build a set of all table IDs in the project
+        let project_tables: HashSet<ObjectId> = planned_project.get_tables().collect();
+
+        // For each object to be deployed, check if it depends on tables
+        for object_id in objects_to_deploy {
+            // Find the object in the planned project
+            if let Some(obj) = planned_project.find_object(object_id) {
+                let mut missing_tables = Vec::new();
+
+                // Check each dependency
+                for dep_id in &obj.dependencies {
+                    // Is this dependency a table?
+                    if project_tables.contains(dep_id) {
+                        // Check if the table exists in the database
+                        let query = r#"
+                            SELECT t.name
+                            FROM mz_tables t
+                            JOIN mz_schemas s ON t.schema_id = s.id
+                            JOIN mz_databases d ON s.database_id = d.id
+                            WHERE t.name = $1 AND s.name = $2 AND d.name = $3"#;
+
+                        let rows = self
+                            .client
+                            .query(query, &[&dep_id.object, &dep_id.schema, &dep_id.database])
+                            .await
+                            .map_err(DatabaseValidationError::QueryError)?;
+
+                        if rows.is_empty() {
+                            missing_tables.push(dep_id.clone());
+                        }
+                    }
+                }
+
+                if !missing_tables.is_empty() {
+                    objects_needing_tables.push((object_id.clone(), missing_tables));
+                }
+            }
+        }
+
+        if !objects_needing_tables.is_empty() {
+            return Err(DatabaseValidationError::MissingTableDependencies {
+                objects_needing_tables,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_missing_table_dependencies_error_display() {
+        let error = DatabaseValidationError::MissingTableDependencies {
+            objects_needing_tables: vec![
+                (
+                    ObjectId::new(
+                        "materialize".to_string(),
+                        "public".to_string(),
+                        "my_view".to_string(),
+                    ),
+                    vec![
+                        ObjectId::new(
+                            "materialize".to_string(),
+                            "tables".to_string(),
+                            "users".to_string(),
+                        ),
+                        ObjectId::new(
+                            "materialize".to_string(),
+                            "tables".to_string(),
+                            "orders".to_string(),
+                        ),
+                    ],
+                ),
+                (
+                    ObjectId::new(
+                        "materialize".to_string(),
+                        "public".to_string(),
+                        "another_view".to_string(),
+                    ),
+                    vec![ObjectId::new(
+                        "materialize".to_string(),
+                        "tables".to_string(),
+                        "products".to_string(),
+                    )],
+                ),
+            ],
+        };
+
+        let error_string = format!("{}", error);
+
+        // Check that error message contains key elements
+        assert!(error_string.contains("error"));
+        assert!(error_string.contains("Objects depend on tables that don't exist"));
+        assert!(error_string.contains("materialize.public.my_view"));
+        assert!(error_string.contains("materialize.tables.users"));
+        assert!(error_string.contains("materialize.tables.orders"));
+        assert!(error_string.contains("materialize.public.another_view"));
+        assert!(error_string.contains("materialize.tables.products"));
+        assert!(error_string.contains("help"));
+        assert!(error_string.contains("mz-deploy create-tables"));
     }
 }
