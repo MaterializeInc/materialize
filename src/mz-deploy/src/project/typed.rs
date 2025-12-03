@@ -208,22 +208,6 @@ impl Statement {
         let transformed_name = visitor.transformer().transform_name(item_name);
 
         match self {
-            Statement::CreateConnection(mut s) => {
-                s.name = transformed_name;
-                Statement::CreateConnection(s)
-            }
-            Statement::CreateWebhookSource(mut s) => {
-                s.name = transformed_name;
-                Statement::CreateWebhookSource(s)
-            }
-            Statement::CreateSource(mut s) => {
-                s.name = transformed_name;
-                Statement::CreateSource(s)
-            }
-            Statement::CreateSubsource(mut s) => {
-                s.name = transformed_name;
-                Statement::CreateSubsource(s)
-            }
             Statement::CreateSink(mut s) => {
                 s.name = Some(transformed_name);
                 Statement::CreateSink(s)
@@ -243,10 +227,6 @@ impl Statement {
             Statement::CreateTableFromSource(mut s) => {
                 s.name = transformed_name;
                 Statement::CreateTableFromSource(s)
-            }
-            Statement::CreateSecret(mut s) => {
-                s.name = transformed_name;
-                Statement::CreateSecret(s)
             }
         }
     }
@@ -274,18 +254,8 @@ impl Statement {
                 visitor.normalize_sink_connection(&mut s.connection);
                 Statement::CreateSink(s)
             }
-            Statement::CreateSubsource(mut s) => {
-                if let Some(ref mut source) = s.of_source {
-                    visitor.normalize_raw_item_name(source);
-                }
-                Statement::CreateSubsource(s)
-            }
             // These statements don't have dependencies on other database objects
-            Statement::CreateConnection(_)
-            | Statement::CreateWebhookSource(_)
-            | Statement::CreateSource(_)
-            | Statement::CreateTable(_)
-            | Statement::CreateSecret(_) => self,
+            Statement::CreateTable(_) => self,
         }
     }
 
@@ -305,14 +275,6 @@ impl Statement {
             Statement::CreateSink(mut s) => {
                 visitor.normalize_cluster_name(&mut s.in_cluster);
                 Statement::CreateSink(s)
-            }
-            Statement::CreateSource(mut s) => {
-                visitor.normalize_cluster_name(&mut s.in_cluster);
-                Statement::CreateSource(s)
-            }
-            Statement::CreateWebhookSource(mut s) => {
-                visitor.normalize_cluster_name(&mut s.in_cluster);
-                Statement::CreateWebhookSource(s)
             }
             // These statements don't have cluster references
             _ => self,
@@ -388,7 +350,7 @@ impl DatabaseObject {
         match &self.stmt {
             Statement::CreateView(stmt) => Some(stmt.definition.query.clone()),
             Statement::CreateMaterializedView(stmt) => Some(stmt.query.clone()),
-            Statement::CreateSource(_) | Statement::CreateTable(_) => None,
+            Statement::CreateTable(_) => None,
             _ => None,
         }
     }
@@ -430,58 +392,6 @@ impl TryFrom<super::raw::DatabaseObject> for DatabaseObject {
 
         for stmt in value.statements {
             match stmt {
-                mz_sql_parser::ast::Statement::CreateConnection(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateConnection(s));
-                        object_type = Some(ObjectType::Connection)
-                    }
-                }
-                mz_sql_parser::ast::Statement::CreateWebhookSource(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateWebhookSource(s));
-                        object_type = Some(ObjectType::Source)
-                    }
-                }
-                mz_sql_parser::ast::Statement::CreateSource(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateSource(s));
-                        object_type = Some(ObjectType::Source)
-                    }
-                }
-                mz_sql_parser::ast::Statement::CreateSubsource(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateSubsource(s));
-                        object_type = Some(ObjectType::Subsource)
-                    }
-                }
                 mz_sql_parser::ast::Statement::CreateSink(s) => {
                     if main_stmt.is_some() {
                         errors.push(ValidationError::with_file(
@@ -545,19 +455,6 @@ impl TryFrom<super::raw::DatabaseObject> for DatabaseObject {
                     } else {
                         main_stmt = Some(Statement::CreateTableFromSource(s));
                         object_type = Some(ObjectType::Table)
-                    }
-                }
-                mz_sql_parser::ast::Statement::CreateSecret(s) => {
-                    if main_stmt.is_some() {
-                        errors.push(ValidationError::with_file(
-                            ValidationErrorKind::MultipleMainStatements {
-                                object_name: value.name.clone(),
-                            },
-                            value.path.clone(),
-                        ));
-                    } else {
-                        main_stmt = Some(Statement::CreateSecret(s));
-                        object_type = Some(ObjectType::Secret)
                     }
                 }
 

@@ -49,7 +49,10 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
         let timestamp = match deployed_at.elapsed() {
             Ok(duration) => {
                 let hours = duration.as_secs() / 3600;
-                if hours < 24 {
+                if hours < 1 {
+                    let minutes = (duration.as_secs() % 3600) / 60;
+                    format!("{} minutes ago", minutes)
+                } else if hours < 24 {
                     format!("{} hours ago", hours)
                 } else {
                     let days = hours / 24;
@@ -66,6 +69,35 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
             deployed_by.yellow(),
             format!("({})", timestamp).dimmed()
         );
+
+        // Get hydration status for this deployment
+        match client.get_deployment_hydration_status(env_name).await {
+            Ok(hydration_status) if !hydration_status.is_empty() => {
+                let mut total_hydrated = 0i64;
+                let mut total_clusters = 0i64;
+
+                for (_cluster_name, (hydrated, total)) in &hydration_status {
+                    if hydrated == total {
+                        total_hydrated += 1;
+                    }
+                    total_clusters += 1;
+                }
+
+                let text = if total_hydrated == total_clusters {
+                    "clusters: all hydrated".to_string()
+                } else {
+                    format!("clusters: {} of {} hydrated", total_hydrated, total_clusters)
+                };
+                println!("    {}", text.blue());
+            }
+            Ok(_) => {
+                // Empty hydration status - deployment has no clusters
+                // Don't display anything
+            }
+            Err(_) => {
+                // Error getting hydration status - don't block display, just skip
+            }
+        }
 
         for (database, schema) in schemas {
             println!("    {}.{}", database.dimmed(), schema);
