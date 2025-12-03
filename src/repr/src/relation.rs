@@ -30,6 +30,7 @@ pub use crate::relation_and_scalar::{
     ProtoRelationVersion,
 };
 use crate::{Datum, ReprScalarType, Row, SqlScalarType, arb_datum_for_column};
+use crate::SqlScalarType::{Array, List, Map, Range};
 
 /// The type of a [`Datum`].
 ///
@@ -68,12 +69,51 @@ impl SqlColumnType {
                     nullable: self.nullable || other.nullable,
                 })
             }
-            (scalar_type, other_scalar_type) if scalar_type.base_eq(other_scalar_type) => {
+            (scalar_type, other_scalar_type) if scalar_type.base_eq_with_nullability(other_scalar_type) => {
                 Ok(SqlColumnType {
                     scalar_type: scalar_type.without_modifiers(),
                     nullable: self.nullable || other.nullable,
                 })
             }
+
+            (
+                List {
+                    element_type: l,
+                    custom_id: oid_l,
+                },
+                List {
+                    element_type: r,
+                    custom_id: _oid_r,
+                },
+            ) if SqlColumnType {scalar_type: (**l).clone(), nullable: true}.union(&SqlColumnType {scalar_type: (**r).clone(), nullable: true}).is_ok() => {
+                Ok(SqlColumnType {
+                    scalar_type: List {
+                        element_type: Box::new(SqlColumnType {scalar_type: (**l).clone(), nullable: true}.union(&SqlColumnType {scalar_type: (**r).clone(), nullable: true}).unwrap().scalar_type),
+                        custom_id: None, //////// todo
+                    },
+                    nullable: self.nullable || other.nullable,
+                })
+            }
+            (
+                Map {
+                    value_type: l,
+                    custom_id: oid_l,
+                },
+                Map {
+                    value_type: r,
+                    custom_id: _oid_r,
+                },
+            ) if SqlColumnType {scalar_type: (**l).clone(), nullable: true}.union(&SqlColumnType {scalar_type: (**r).clone(), nullable: true}).is_ok() => {
+                Ok(SqlColumnType {
+                    scalar_type: Map {
+                        value_type: Box::new(SqlColumnType {scalar_type: (**l).clone(), nullable: true}.union(&SqlColumnType {scalar_type: (**r).clone(), nullable: true}).unwrap().scalar_type),
+                        custom_id: None, //////// todo
+                    },
+                    nullable: self.nullable || other.nullable,
+                })
+            }
+            ///////// todo: Array; Range
+
             (
                 SqlScalarType::Record { fields, custom_id },
                 SqlScalarType::Record {
