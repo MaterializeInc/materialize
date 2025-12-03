@@ -208,7 +208,7 @@ impl<'a> Outcome<'a> {
                 regex::escape(
                     // Take only the first string in the error message, which should be
                     // sufficient for meaningfully matching the error.
-                    error.to_string().split('\n').next().unwrap(),
+                    error.to_string_with_causes().split('\n').next().unwrap(),
                 )
                 // We need to undo the escaping of #. `regex::escape` escapes this because it
                 // expects that we use the `x` flag when building a regex, but this is not the case,
@@ -1460,7 +1460,7 @@ impl<'a> RunnerInner<'a> {
             }
             Err(error) => {
                 if let Some(expected_error) = expected_error {
-                    if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
+                    if Regex::new(expected_error)?.is_match(&error.to_string_with_causes()) {
                         return Ok(Outcome::Success);
                     }
                 }
@@ -1490,7 +1490,7 @@ impl<'a> RunnerInner<'a> {
                     }));
                 }
                 Err(expected_error) => {
-                    if Regex::new(expected_error)?.is_match(&format!("{:#}", e)) {
+                    if Regex::new(expected_error)?.is_match(&e.to_string_with_causes()) {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::Success));
                     } else {
                         return Ok(PrepareQueryOutcome::Outcome(Outcome::ParseFailure {
@@ -1554,9 +1554,9 @@ impl<'a> RunnerInner<'a> {
         let rows = match self.client.query(sql, &[]).await {
             Ok(rows) => rows,
             Err(error) => {
+                let error_string = error.to_string_with_causes();
                 return match output {
                     Ok(_) => {
-                        let error_string = format!("{}", error);
                         if error_string.contains("supported") || error_string.contains("overload") {
                             // this is a failure, but it's caused by lack of support rather than by bugs
                             Ok(Outcome::Unsupported {
@@ -1571,7 +1571,7 @@ impl<'a> RunnerInner<'a> {
                         }
                     }
                     Err(expected_error) => {
-                        if Regex::new(expected_error)?.is_match(&format!("{:#}", error)) {
+                        if Regex::new(expected_error)?.is_match(&error_string) {
                             Ok(Outcome::Success)
                         } else {
                             Ok(Outcome::PlanFailure {
@@ -1696,7 +1696,7 @@ impl<'a> RunnerInner<'a> {
         // Evaluate if we already reached an outcome or not.
         let tentative_outcome = if let Err(view_error) = sql_result {
             if let Err(expected_error) = output {
-                if Regex::new(expected_error)?.is_match(&format!("{:#}", view_error)) {
+                if Regex::new(expected_error)?.is_match(&view_error.to_string_with_causes()) {
                     Some(Outcome::Success)
                 } else {
                     Some(Outcome::PlanFailure {
@@ -1902,13 +1902,21 @@ impl<'a> RunnerInner<'a> {
                 // Errors can contain multiple lines (say if there are details), and rewrite
                 // sticks them each on their own line, so we need to split up the lines here to
                 // each be its own String in the Vec.
-                Err(error) => {
-                    Output::Values(error.to_string().lines().map(|s| s.to_string()).collect())
-                }
+                Err(error) => Output::Values(
+                    error
+                        .to_string_with_causes()
+                        .lines()
+                        .map(|s| s.to_string())
+                        .collect(),
+                ),
             },
-            Err(error) => {
-                Output::Values(error.to_string().lines().map(|s| s.to_string()).collect())
-            }
+            Err(error) => Output::Values(
+                error
+                    .to_string_with_causes()
+                    .lines()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
         };
         if *output != actual {
             Ok(Outcome::OutputFailure {
@@ -2042,7 +2050,7 @@ fn should_warn(outcome: &Outcome) -> bool {
                 INCONSISTENT_VIEW_OUTCOME_WARNING_REGEXPS.iter().any(|s| {
                     Regex::new(s)
                         .expect("unexpected error in regular expression parsing")
-                        .is_match(&format!("{:#}", error))
+                        .is_match(&error.to_string_with_causes())
                 })
             }
             _ => false,

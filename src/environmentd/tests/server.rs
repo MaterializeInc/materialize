@@ -39,6 +39,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME, to_datetime};
 use mz_ore::retry::Retry;
@@ -2141,7 +2142,7 @@ fn test_max_connections_on_all_interfaces() {
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
         let err = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
         assert_contains!(
-            err.to_string(),
+            err.to_string_with_causes(),
             "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
         );
     }
@@ -2233,7 +2234,7 @@ fn test_max_connections_on_all_interfaces() {
         panic!("unexpected success connecting to server");
     };
     assert_contains!(
-        failure.to_string(),
+        failure.to_string_with_causes(),
         "creating connection would violate max_connections limit (desired: 7, limit: 2, current: 6)"
     );
 }
@@ -2334,7 +2335,7 @@ async fn test_max_connections_limits() {
         connect_regular_user()
             .await
             .expect_err("connect should fail")
-            .to_string(),
+            .to_string_with_causes(),
         "creating connection would violate max_connections limit"
     );
 
@@ -2347,7 +2348,7 @@ async fn test_max_connections_limits() {
         connect_regular_user()
             .await
             .expect_err("connect should fail")
-            .to_string(),
+            .to_string_with_causes(),
         "creating connection would violate max_connections limit"
     );
 
@@ -2364,7 +2365,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2372,7 +2373,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2387,7 +2388,7 @@ async fn test_max_connections_limits() {
             connect_external_admin()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2406,7 +2407,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2420,7 +2421,7 @@ async fn test_max_connections_limits() {
             let client = match connect_regular_user().await {
                 Err(e) => {
                     assert_contains!(
-                        e.to_string(),
+                        e.to_string_with_causes(),
                         "creating connection would violate max_connections limit"
                     );
                     return Err(());
@@ -3146,7 +3147,7 @@ fn test_cancel_read_then_write() {
                     .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
                     .unwrap_err();
                 assert_contains!(
-                    err.to_string(),
+                    err.to_string_with_causes(),
                     "statement timeout"
                 );
                 client1
@@ -3157,7 +3158,7 @@ fn test_cancel_read_then_write() {
                 .batch_execute("insert into foo values ('blah', 1);")
                 .unwrap_err();
                 assert_contains!(
-                    err.to_string(),
+                    err.to_string_with_causes(),
                     "canceling statement"
                 );
             });
@@ -3967,8 +3968,14 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
-                Err(err) => Err(err.to_string()),
+                Err(err)
+                    if err
+                        .to_string_with_causes()
+                        .contains("dependency was removed") =>
+                {
+                    Ok(())
+                }
+                Err(err) => Err(err.to_string_with_causes()),
             }
         })
         .await
@@ -3996,8 +4003,14 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
-                Err(err) => Err(err.to_string()),
+                Err(err)
+                    if err
+                        .to_string_with_causes()
+                        .contains("dependency was removed") =>
+                {
+                    Ok(())
+                }
+                Err(err) => Err(err.to_string_with_causes()),
             }
         })
         .await

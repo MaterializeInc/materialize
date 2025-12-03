@@ -30,6 +30,7 @@ use mz_frontegg_auth::{
 };
 use mz_frontegg_mock::{FronteggMockServer, models::ApiToken, models::UserConfig};
 use mz_ore::cast::CastFrom;
+use mz_ore::error::ErrorExt;
 use mz_ore::id_gen::{conn_id_org_uuid, org_id_conn_bits};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
@@ -234,7 +235,10 @@ async fn test_balancer() {
             .unwrap();
         let _ = cancel.cancel_query(tls).await;
         let e = pin!(copy).next().await.unwrap().unwrap_err();
-        assert_contains!(e.to_string(), "canceling statement due to user request");
+        assert_contains!(
+            e.to_string_with_causes(),
+            "canceling statement due to user request"
+        );
 
         // Various tests about reloading of certs.
 

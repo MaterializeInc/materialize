@@ -20,8 +20,8 @@ mz-ore = { path = "../ore", features = ["cli", "id_gen"], default-features = fal
 mz-pgrepr = { path = "../pgrepr", default-features = false }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 openssl = { version = "0.10.75", features = ["vendored"] }
-postgres-openssl = "0.5.0"
-postgres-protocol = { version = "0.6.5" }
+postgres-openssl = "0.5.2"
+postgres-protocol = { version = "0.6.9" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 prost-types = { version = "0.13.5" }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -31,7 +31,7 @@ socket2 = "0.5.10"
 thiserror = "2.0.17"
 tonic = { version = "0.12.1", features = ["gzip"] }
 tokio = { version = "1.48.0", features = ["rt"] }
-tokio-postgres = { version = "0.7.8" }
+tokio-postgres = { version = "0.7.15" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tokio-util = { version = "0.7.17", features = ["io"] }
 tracing = "0.1.37"
