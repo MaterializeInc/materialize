@@ -6,17 +6,72 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER SINK` allows cutting a sink over to a new upstream relation without
-causing disruption to downstream consumers. This is useful in the context
-of [blue/green deployments](/manage/dbt/blue-green-deployments/).
+Use `ALTER SINK` to:
+- Change the relation you want to sink from. This is useful in the context of
+[blue/green deployments](/manage/dbt/blue-green-deployments/).
+- Rename a sink.
+- Change owner of a sink.
 
 ## Syntax
 
+{{< tabs>}}
+{{< tab "Change sink from relation" >}}
+
+### Change sink from relation
+
+To change the relation you want to sink from:
+
 {{% include-example file="examples/alter_sink" example="syntax" %}}
+
+Syntax element | Description
+---------------|------------
+`<name>`| The name of the sink you want to change.
+`<relation_name>`| The name of the relation you want to sink from.
+
+{{< /tab >}}
+{{< tab "Rename" >}}
+
+### Rename
+
+To rename a sink:
+
+```mzsql
+ALTER SINK <name> RENAME TO <new_name>;
+```
+
+Syntax element | Description
+---------------|------------
+`<name>`| The current name of the sink.
+`<new_name>`| The new name of the sink.
+
+See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+{{< /tab >}}
+{{< tab "Change owner" >}}
+
+### Change owner
+
+To change the owner of a sink:
+
+```mzsql
+ALTER SINK <name> OWNER TO <new_owner_role>;
+```
+
+Syntax element | Description
+---------------|------------
+`<name>`| The name of the sink you want to change ownership of.
+`<new_owner_role>`| The new owner of the sink.
+
+To change the owner, you must be a current owner as well as have membership in
+the `<new_owner_role>`.
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
 
-### Valid schema changes
+### Changing sink from relation
+
+#### Valid schema changes
 
 For `ALTER SINK` to be successful, the newly specified relation must lead to a
 valid sink definition with the same conditions as the original `CREATE SINK`
@@ -33,7 +88,7 @@ respective object page in the [Materialize console](/console/),
 or query the [`mz_internal.mz_sink_statuses`](/sql/system-catalog/mz_internal/#mz_sink_statuses)
 system catalog view.
 
-### Cutover timestamp
+#### Cutover timestamp
 
 To alter the upstream relation a sink depends on while ensuring continuity in
 data processing, Materialize must pick a consistent cutover timestamp. When you
@@ -50,12 +105,12 @@ the contents of the new upstream relation are known. Attempting to `ALTER` an
 unhealthy sink that can't make progress will result in the command timing out.
 {{</ note >}}
 
-### Cutover scenarios and workarounds
+#### Cutover scenarios and workarounds
 
 Because Materialize emits updates from the new relation **only** if
 they occur after the cutover timestamp, the following scenarios may occur:
 
-#### Scenario 1: Topic contains stale value for a key
+##### Scenario 1: Topic contains stale value for a key
 
 Since cutting over a sink to a new upstream relation using `ALTER SINK` does not
 emit a snapshot of the new relation, all keys will appear to have the old value
@@ -73,7 +128,7 @@ See [Example: Handle cutover scenarios](#handle-cutover-scenarios).
 - Alternatively, forcing an update to all the keys after `ALTER SINK` will force
 the sink to re-emit all the updates.
 
-#### Scenario 2: Topic is missing a key that exists in the new relation
+##### Scenario 2: Topic is missing a key that exists in the new relation
 
 As a consequence of not re-emitting a snapshot after `ALTER SINK`, if additional
 keys exist in the new relation that are not present in the old one, these will
@@ -89,7 +144,7 @@ See [Example: Handle cutover scenarios](#handle-cutover-scenarios).
 - Alternatively, ensure that both the old and the new relations have identical
 keyspaces to avoid the scenario.
 
-#### Scenario 3: Topic contains a key that does not exist in the new relation
+##### Scenario 3: Topic contains a key that does not exist in the new relation
 
 Materialize does not compare the contents of the old relation with the new
 relation when cutting a sink over. This means that, if the old relation

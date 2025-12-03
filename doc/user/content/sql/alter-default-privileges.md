@@ -6,59 +6,111 @@ menu:
     parent: commands
 ---
 
-`ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied to objects created in
-the future. It does not affect any existing objects.
+Use `ALTER DEFAULT PRIVILEGES` to:
 
-Default privileges are specified for a certain object type and can be applied to all objects of
-that type, all objects of that type created within a specific set of databases, or all objects of
-that type created within a specific set of schemas. Default privileges are also specified for
-objects created by a certain set of roles or by all roles.
+- Define default privileges that will be applied to objects created in the
+future. It does not affect any existing objects.
 
-`ALTER DEFAULT PRIVILEGES` cannot be used to revoke the default owner privileges on objects. Those
-privileges must be revoked manually after the object is created. Though owners can always re-grant
-themselves any privilege on an object that they own.
+- Revoke previously created default privileges on objects created in the future.
 
-The `REVOKE` variant of `ALTER DEFAULT PRIVILEGES` is used to revoke previously created default
-privileges on objects created in the future. It will not revoke any privileges on objects that have
-already been created. When revoking a default privilege, all the fields in the revoke statement
-(`target_role`, `schema_name`, `database_name`, `privilege`, `grantee`) must exactly match an
-existing default privilege. The existing default privileges can easily be viewed by the following
-query: `SELECT * FROM mz_internal.mz_show_default_privileges`.
-
-All new environments are created with a single default privilege, `USAGE` is granted on all `TYPES`
-to the `PUBLIC` role. This can be revoked like any other default privilege.
+All new environments are created with a single default privilege, `USAGE` is
+granted on all `TYPES` to the `PUBLIC` role. This can be revoked like any other
+default privilege.
 
 ## Syntax
 
-{{< diagram "alter-default-privileges.svg" >}}
+{{< tabs >}}
+{{< tab "GRANT" >}}
+### GRANT
 
-### `abreviated_grant`
+`ALTER DEFAULT PRIVILEGES` defines default privileges that will be applied to
+objects created by a role in the future. It does not affect any existing
+objects.
 
-{{< diagram "abbreviated-grant.svg" >}}
+Default privileges are specified for a certain object type and can be applied to
+all objects of that type, all objects of that type created within a specific set
+of databases, or all objects of that type created within a specific set of
+schemas. Default privileges are also specified for objects created by a certain
+set of roles or by all roles.
 
-### `abbreviated_revoke`
+```mzsql
+ALTER DEFAULT PRIVILEGES
+  FOR ROLE <object_creator> [, ...] | ALL ROLES
+  [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
+  GRANT [<privilege> [, ...] | ALL [PRIVILEGES]]
+  ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
+  TO <target_role> [, ...]
+;
+```
 
-{{< diagram "abbreviated-revoke.svg" >}}
+Syntax element | Description
+---------------|------------
+`<object_creator>` | The default privilege will apply to objects created by this role. Use the `PUBLIC` pseudo-role to target objects created by all roles.
+**ALL ROLES** | The default privilege will apply to objects created by all roles. This is shorthand for specifying `PUBLIC` as the target role.
+**IN SCHEMA** `<schema_name>` | Optional. The default privilege will apply only to objects created in this schema.
+**IN DATABASE** `<database_name>` | Optional. The default privilege will apply only to objects created in this database.
+`<privilege>` | A specific privilege (e.g., `SELECT`, `USAGE`, `CREATE`). See [Available privileges](#available-privileges).
+**ALL [PRIVILEGES]** | All applicable privileges for the provided object type.
+**TO** `<target_role>` | The role who will be granted the default privilege. Use the `PUBLIC` pseudo-role to grant privileges to all roles.
 
-### `privilege`
+{{< /tab >}}
+{{< tab "REVOKE" >}}
 
-{{< diagram "privilege.svg" >}}
+### REVOKE
 
-Field              | Use
--------------------|--------------------------------------------------
-_target_role_      | The default privilege will apply to objects created by this role. Use the `PUBLIC` pseudo-role to target objects created by all roles.
-**ALL ROLES**      | The default privilege will apply to objects created by all roles. This is shorthand for specifying `PUBLIC` as the _target_role_.
-_schema_name_      | The default privilege will apply only to objects created in this schema, if specified.
-_database_name_    | The default privilege will apply only to objects created in this database, if specified.
-**SELECT**         | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
-**INSERT**         | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
-**UPDATE**         | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
-**DELETE**         | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
-**CREATE**         | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
-**USAGE**          | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
-**ALL PRIVILEGES** | All applicable privileges for the provided object type.
-_grantee_          | The role name that will gain the default privilege. Use the `PUBLIC` pseudo-role to grant privileges to all roles.
-_revokee_          | The role name that will not gain the default privilege. Use the `PUBLIC` pseudo-role to remove default privileges previously granted to `PUBLIC`.
+{{< note >}}
+`ALTER DEFAULT PRIVILEGES` cannot be used to revoke the default owner privileges
+on objects. Those privileges must be revoked manually after the object is
+created. Though owners can always re-grant themselves any privilege on an object
+that they own.
+{{< /note >}}
+
+The `REVOKE` variant of `ALTER DEFAULT PRIVILEGES` is used to revoke previously
+created default privileges on objects created in the future. It will not revoke
+any privileges on objects that have already been created. When revoking a
+default privilege, all the fields in the revoke statement (`creator_role`,
+`schema_name`, `database_name`, `privilege`, `target_role`) must exactly match
+an existing default privilege. The existing default privileges can easily be
+viewed by the following query: `SELECT * FROM
+mz_internal.mz_show_default_privileges`.
+
+
+```mzsql
+ALTER DEFAULT PRIVILEGES
+  FOR ROLE <creator_role> [, ...] | ALL ROLES
+  [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
+  REVOKE [<privilege> [, ...] | ALL [PRIVILEGES]]
+  ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
+  FROM <target_role> [, ...]
+;
+```
+
+Syntax element | Description
+---------------|------------
+`<creator_role>` | The default privileges for objects created by this role. Use the `PUBLIC` pseudo-role to specify objects created by all roles.
+**ALL ROLES** | The default privilege for objects created by all roles. This is shorthand for specifying `PUBLIC` as the target role.
+**IN SCHEMA** `<schema_name>` | Optional. The default privileges for objects created in this schema.
+**IN DATABASE** `<database_name>` | Optional. The default privilege for objects created in this database.
+`<privilege>` | A specific privilege (e.g., `SELECT`, `USAGE`, `CREATE`). See [Available privileges](#available-privileges).
+**ALL [PRIVILEGES]** | All applicable privileges for the provided object type.
+**FROM** `<target_role>` | The role from whom to remove the default privilege. Use the `PUBLIC` pseudo-role to remove default privileges previously granted to `PUBLIC`.
+
+{{< /tab >}}
+{{< /tabs >}}
+
+## Details
+
+### Available privileges
+
+{{< tabs >}}
+{{< tab "By Privilege" >}}
+{{< yaml-table data="rbac/privileges_objects" >}}
+{{</ tab >}}
+{{< tab "By Object" >}}
+{{< yaml-table data="rbac/object_privileges" >}}
+{{</ tab >}}
+{{</ tabs >}}
+
 
 ### Compatibility
 
@@ -103,6 +155,5 @@ The privileges required to execute this statement are:
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)

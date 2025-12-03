@@ -1,37 +1,106 @@
 ---
 title: "ALTER CONNECTION"
-description: "`ALTER CONNECTION` allows modifying the value of connection options and rotating secrets associated with connections"
+description: "`ALTER CONNECTION` allows you to modify the value of connection options; rotate secrets associated with connections; rename a connection; and change owner of a connection."
 menu:
   main:
     parent: 'commands'
 ---
 
-`ALTER CONNECTION` allows modifying the value of connection options and rotating
-secrets associated with connections. In particular, you can use this command
-to:
+Use `ALTER CONNECTION` to:
 
--   Modify the parameters of a connection, such as the hostname to which it
-    points.
--   Rotate the key pairs associated with an [SSH tunnel connection].
+- Modify the parameters of a connection, such as the hostname to which it
+  points.
+- Rotate the key pairs associated with an [SSH tunnel connection].
+- Rename a connection.
+- Change owner of a connection.
 
 ## Syntax
 
-{{< diagram "alter-connection.svg" >}}
+{{< tabs >}}
+{{< tab "SET/DROP/RESET options" >}}
 
-| Field                     | Use                                                 |
-| ------------------------- | --------------------------------------------------- |
-| _name_                    | The identifier of the connection you want to alter. |
-| **SET**...                | Sets the option to the specified value.             |
-| **DROP**..., **RESET**... | Resets the specified option to its default value.   |
-| **ROTATE KEYS**           | Rotates the key pairs.                              |
+### SET/DROP/RESET options
 
-#### `WITH` options
+To modify connection parameters:
 
-| Field      | Value     | Description                                                                                                                                                       |
-| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VALIDATE` | `boolean` | Whether [connection validation](/sql/create-connection#connection-validation) should be performed. Not available with **ROTATE KEYS**.<br><br>Defaults to `true`. |
+```mzsql
+ALTER CONNECTION [IF EXISTS] <name>
+  SET (<option> = <value>) | DROP (<option>) | RESET (<option>)
+  [, ...]
+  [WITH (VALIDATE [true|false])]
+;
+```
 
-## Description
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified connection does not exist.
+`<name>` | The identifier of the connection you want to alter.
+**SET** | Sets the option to the specified value.
+**DROP** | Resets the specified option to its default value. Synonym for **RESET**.
+**RESET** | Resets the specified option to its default value. Synonym for **DROP**.
+`<option>` | The connection option to modify. See [`CREATE CONNECTION`](/sql/create-connection) for available options.
+`<value>` | The value to assign to the option.
+**WITH (VALIDATE `<bool>`)** | Optional. Whether [connection validation](/sql/create-connection#connection-validation) should be performed. Defaults to `true`.
+
+{{< /tab >}}
+{{< tab "ROTATE KEYS" >}}
+
+### ROTATE KEYS
+
+To rotate SSH tunnel connection key pairs:
+
+```mzsql
+ALTER CONNECTION [IF EXISTS] <name> ROTATE KEYS;
+```
+
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified connection does not exist.
+`<name>` | The identifier of the SSH tunnel connection.
+
+
+{{< /tab >}}
+
+{{< tab "Rename" >}}
+
+### Rename
+
+To rename a connection
+
+```mzsql
+ALTER CONNECTION <name> RENAME TO <new_name>;
+```
+
+Syntax element | Description
+---------------|------------
+`<name>`| The current name of the connection.
+`<new_name>`| The new name of the connection.
+
+See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+{{< /tab >}}
+{{< tab "Change owner" >}}
+
+### Change owner
+
+To change the owner of a connection:
+
+```mzsql
+ALTER CONNECTION <name> OWNER TO <new_owner_role>;
+```
+
+Syntax element | Description
+---------------|------------
+`<name>`| The name of the connection you want to change ownership of.
+`<new_owner_role>`| The new owner of the connection.
+
+To change the owner of a connection, you must be the owner of the connection and
+have membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+
+{{< /tab >}}
+{{< /tabs >}}
+
+## Details
 
 ### `SET`, `RESET`, `DROP`
 

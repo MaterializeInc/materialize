@@ -10,12 +10,14 @@ menu:
 
 ## Syntax
 
-{{< diagram "prepare.svg" >}}
+```mzsql
+PREPARE <name> AS <statement>;
+```
 
-Field | Use
-------|-----
-name | A name for this particular prepared statement that you can later use to execute or deallocate a statement. The name must be unique within a session.
-statement  |  Any `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `FETCH` statement.
+Syntax element | Description
+---------------|------------
+`<name>` | A name for this particular prepared statement that you can later use to execute or deallocate a statement. The name must be unique within a session.
+`<statement>`  |  Any `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `FETCH` statement.
 
 ## Details
 

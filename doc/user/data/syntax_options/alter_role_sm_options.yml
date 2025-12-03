@@ -1,32 +1,32 @@
 columns:
-  - column: "Option"
+  - column: "Syntax element"
   - column: "Description"
 rows:
-    - Option: "`INHERIT`"
+    - Syntax element: "`INHERIT`"
       Description: |
         *Optional.* If specified, grants the role the ability to inherit
         privileges of other roles. *Default.*
-    - Option: "`LOGIN`"
+    - Syntax element: "`LOGIN`"
       Description: |
         *Optional.* If specified, allows a role to login via the PostgreSQL or web endpoints
-    - Option: "`NOLOGIN`"
+    - Syntax element: "`NOLOGIN`"
       Description: |
         *Optional.* If specified, prevents a role from logging in. This is the default behavior if `LOGIN` is not specified.
 
-    - Option: "`SUPERUSER`"
+    - Syntax element: "`SUPERUSER`"
       Description: |
         *Optional.* If specified, grants the role superuser privileges.
 
-    - Option: "`NOSUPERUSER`"
+    - Syntax element: "`NOSUPERUSER`"
       Description: |
        *Optional.* If specified, prevents the role from having superuser privileges. This is the default behavior if `SUPERUSER` is not specified.
-    - Option: "`PASSWORD`"
+    - Syntax element: "`PASSWORD`"
       Description: |
         ***Public Preview***
 
         *Optional.* This feature may have minor stability issues. If specified,
         allows you to set a password for the role.
-    - Option: "`SET <name> TO <value|DEFAULT>`"
+    - Syntax element: "`SET <name> TO <value|DEFAULT>`"
       Description: |
         *Optional.* If specified, sets the configuration parameter for the role
         to the `<value>` or if the value specified is `DEFAULT`, the system's
@@ -43,7 +43,7 @@ rows:
 
         {{< /note >}}
 
-    - Option: "`RESET <name>`"
+    - Syntax element: "`RESET <name>`"
       Description: |
         *Optional.* If specified, resets the configuration parameter for the
         role to the system's default.

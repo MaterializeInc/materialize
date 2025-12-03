@@ -16,25 +16,21 @@ and **will not** terminate active connections.
 
 ## Syntax
 
-{{< diagram "alter-network-policy.svg" >}}
+```mzsql
+ALTER NETWORK POLICY <name> SET (
+  RULES (
+    <rule_name> (action='allow', direction='ingress', address=<address>)
+    [, ...]
+  )
+)
+;
+```
 
-### `network_policy_rule`
-
-{{< diagram "network-policy-rule.svg" >}}
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the Network Policy.
-| `RULES`                                   | `text[]`         | A comma-separated list of Network Policy Rules.
-
-#### Network policy rule options
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the network policy rule. Must be unique within the network policy.
-| `ACTION`                                  | `text`           | The action to take for this rule. `ALLOW` is the only valid option.
-| `DIRECTION`                               | `text`           | The direction of traffic the rule applies to. `INGRESS` is the only valid option.
-| `ADDRESS`                                 | `text`           | The Classless Inter-Domain Routing (CIDR) block the rule will be applied to.
+Syntax element | Description
+---------------|------------
+`<name>`       | The name of the network policy to modify.
+`<rule_name>`  | The name for the network policy rule. Must be unique within the network policy.
+`<address>`    | The Classless Inter-Domain Routing (CIDR) block to which the rule applies.
 
 ## Details
 

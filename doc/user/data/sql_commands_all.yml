@@ -7,16 +7,28 @@ rows:
     object: "Cluster"
     labels:
       - "object"
+      - "owner"
+  - command: "[`ALTER CLUSTER REPLICA`](/sql/alter-cluster-replica)"
+    object: "Cluster Replica"
+    labels:
+      - "object"
+      - "owner"
   - command: "[`ALTER CONNECTION`](/sql/alter-connection)"
     object: "Connection"
     labels:
       - "object"
       - "connection"
+      - "owner"
   - command: "[`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges)"
     object: "Default Privileges"
     labels:
       - "rbac"
       - "privilege"
+  - command: "[`ALTER DATABASE`](/sql/alter-database)"
+    object: "Database"
+    labels:
+      - "object"
+      - "owner"
   - command: "[`ALTER INDEX`](/sql/alter-index)"
     object: "Index"
     labels:
@@ -25,42 +37,40 @@ rows:
     object: "Materialized View"
     labels:
       - "object"
+      - "owner"
   - command: "[`ALTER NETWORK POLICY`](/sql/alter-network-policy)"
     object: "Network Policy"
     labels:
       - "object"
       - "connection"
-  - command: "[`ALTER OWNER`](/sql/alter-owner)"
-    object: "Owner"
-    labels:
-      - "rbac"
-      - "owner"
-  - command: "[`ALTER ... RENAME`](/sql/alter-rename)"
-    labels:
-      - "object"
   - command: "[`ALTER ROLE`](/sql/alter-role)"
     object: "Role"
     labels:
       - "object"
       - "rbac"
       - "role"
+  - command: "[`ALTER SCHEMA`](/sql/alter-schema)"
+    object: "Schema"
+    labels:
+      - "object"
+      - "owner"
   - command: "[`ALTER SECRET`](/sql/alter-secret)"
     object: "Secret"
     labels:
       - "object"
+      - "owner"
   - command: "[`ALTER SINK`](/sql/alter-sink)"
     object: "Sink"
     labels:
       - "object"
       - "output"
       - "sink"
+      - "owner"
   - command: "[`ALTER SOURCE`](/sql/alter-source)"
     object: "Source"
     labels:
       - "object"
-  - command: "[`ALTER ... SWAP`](/sql/alter-swap)"
-    labels:
-      - "object"
+      - "owner"
   - command: "[`ALTER SYSTEM RESET`](/sql/alter-system-reset)"
     labels:
       - "system"
@@ -71,6 +81,17 @@ rows:
     object: "Table"
     labels:
       - "object"
+      - "owner"
+  - command: "[`ALTER TYPE`](/sql/alter-type)"
+    object: "Type"
+    labels:
+      - "object"
+      - "owner"
+  - command: "[`ALTER VIEW`](/sql/alter-view)"
+    object: "View"
+    labels:
+      - "object"
+      - "owner"
   - command: "[`BEGIN`](/sql/begin)"
     labels:
       - "txn"

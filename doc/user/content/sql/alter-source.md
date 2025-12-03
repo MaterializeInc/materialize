@@ -6,40 +6,105 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER SOURCE` changes certain characteristics of a source.
+Use `ALTER SOURCE` to:
+
+- Add a subsource to a source.
+- Rename a source.
+- Change owner of a source.
+- Change retain history configuration for the source.
 
 ## Syntax
 
-{{< diagram "alter-source.svg" >}}
+{{< tabs >}}
+{{< tab "Add subsource" >}}
 
-#### alter_source_add_clause
+### Add subsource
 
-{{< diagram "alter-source-add-clause.svg" >}}
+To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Server source:
 
-#### alter_source_set_retain_history_clause
 
-{{< diagram "alter-source-set-retain-history-clause.svg" >}}
+```mzsql
+ALTER SOURCE [IF EXISTS] <name>
+  ADD SUBSOURCE|TABLE <table> [AS <subsrc>] [, ...]
+  [WITH (<options>)]
+;
+```
 
-#### alter_source_reset_retain_history_clause
+Syntax element | Description
+---------------|------------
+`<name>`       | The name of the PostgreSQL/MySQL/SQL Server source you want to alter.
+`<table>`      | The upstream table to add to the source.
+**AS** `<subsrc>` | Optional. The name for the subsource in Materialize.
+**WITH (TEXT COLUMNS (\<col\> [, ...]))** | Optional. List of columns to decode as `text` for types that are unsupported in Materialize.
 
-{{< diagram "alter-source-reset-retain-history-clause.svg" >}}
-
-#### with_options
-
-{{< diagram "with-options.svg" >}}
-
-Field   | Use
---------|-----
-_name_  | The identifier of the source you want to alter.
-**ADD SUBSOURCE** ... | Add the identified tables from the upstream database (`table_name`) to the named PostgreSQL/MySQL/SQL Server source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options). <br><br>{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+{{< note >}}
+{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
 >}}
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{< /note >}}
 
-### **ADD SUBSOURCE** `with_options`
+{{< /tab >}}
 
-Field                                | Value           | Description
--------------------------------------|-----------------|-------------------------------------
-`TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
+{{< tab "Rename" >}}
+
+### Rename
+
+To rename a source:
+
+```mzsql
+ALTER SOURCE <name> RENAME TO <new_name>;
+```
+
+Syntax element | Description
+---------------|------------
+`<name>`| The current name of the source you want to alter.
+`<new_name>`| The new name of the source.
+
+See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+{{< /tab >}}
+{{< tab "Change owner" >}}
+
+### Change owner
+
+To change the owner of a source:
+
+```mzsql
+ALTER SOURCE <name> OWNER TO <new_owner_role>;
+```
+
+Syntax element | Description
+---------------|------------
+`<name>`| The name of the source you want to change ownership of.
+`<new_owner_role>`| The new owner of the source.
+
+To change the owner of a source, you must be the owner of the source and have
+membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+
+{{< /tab >}}
+{{< tab "(Re)Set retain history config" >}}
+
+### (Re)Set retain history config
+
+To set the retention history for a source:
+
+```mzsql
+ALTER SOURCE [IF EXISTS] <name> SET (RETAIN HISTORY [=] FOR <retention_period>);
+```
+
+To reset the retention history to the default for a source:
+
+```mzsql
+ALTER SOURCE [IF EXISTS] <name>  RESET (RETAIN HISTORY);
+```
+
+Syntax element | Description
+---------------|------------
+`<name>`| The name of the source you want to alter.
+`<retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+
+{{< /tab >}}
+{{< /tabs >}}
+
 
 ## Context
 

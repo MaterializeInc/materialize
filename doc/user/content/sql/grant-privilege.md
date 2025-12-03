@@ -134,7 +134,7 @@ TO <role_name> [, ... ];
 For specific secret(s):
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON SECRET <name> [, ...]
 TO <role_name> [, ... ];
 ```
@@ -142,7 +142,7 @@ TO <role_name> [, ... ];
 For all secrets or all secrets in a specific database(s):
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON ALL SECRET [IN DATABASE <name> [, <name> ...]]
 TO <role_name> [, ... ];
 ```
@@ -277,6 +277,6 @@ GRANT CREATEDB ON SYSTEM TO source_owners;
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
 - [`ALTER DEFAULT PRIVILEGES`](../alter-default-privileges)

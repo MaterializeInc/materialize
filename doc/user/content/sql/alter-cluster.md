@@ -6,8 +6,15 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER CLUSTER` changes the configuration of a cluster, such as the `SIZE` or
+Use `ALTER CLUSTER` to:
+
+- Change configuration of a cluster, such as the `SIZE` or
 `REPLICATON FACTOR`.
+- Rename a cluster.
+- Change owner of a cluster.
+
+For completeness, the syntax for `SWAP WITH` operation is provided. However, in
+general, you will not need to manually perform this operation.
 
 ## Syntax
 
@@ -15,6 +22,8 @@ menu:
 
 {{< tabs >}}
 {{< tab "Set a configuration" >}}
+
+### Set a configuration
 
 To set a cluster configuration:
 
@@ -33,6 +42,8 @@ To set a cluster configuration:
 {{< /tab >}}
 {{< tab "Reset to default" >}}
 
+### Reset to default
+
 To reset a cluster configuration back to its default value:
 
   ```mzsql
@@ -46,7 +57,9 @@ To reset a cluster configuration back to its default value:
   ```
 
 {{< /tab >}}
-{{< tab "Rename cluster" >}}
+{{< tab "Rename" >}}
+
+### Rename
 
 To rename a cluster:
 
@@ -54,8 +67,14 @@ To rename a cluster:
   ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
   ```
 
+{{< note >}}
+You cannot rename system clusters, such as `mz_system` and `mz_catalog_server`.
+{{< /note >}}
+
 {{< /tab >}}
-{{< tab "Change owner to" >}}
+{{< tab "Change owner" >}}
+
+### Change owner
 
 To change the owner of a cluster:
 
@@ -63,11 +82,13 @@ To change the owner of a cluster:
   ALTER CLUSTER <cluster_name> OWNER TO <new_owner_role>;
   ```
 
-To rename a cluster, you must have ownership of the cluster and membership in
+To change the owner, you must have ownership of the cluster and membership in
 the `<new_owner_role>`. See also [Required privileges](#required-privileges).
 
 {{< /tab >}}
-{{< tab "Swap names with" >}}
+{{< tab "Swap with" >}}
+
+### Swap with
 
 {{< important >}}
 
@@ -266,6 +287,11 @@ See also:
 - [Access control (Materialize
   Self-Managed)](/security/self-managed/access-control/)
 
+### Rename restrictions
+
+You cannot rename system clusters, such as `mz_system` and `mz_catalog_server`.
+
+
 ## Examples
 
 ### Replication factor
@@ -350,7 +376,6 @@ compute-specific settings. If needed, these can be set explicitly.
 
 ## See also
 
-- [`ALTER ... RENAME`](/sql/alter-rename/)
 - [`CREATE CLUSTER`](/sql/create-cluster/)
 - [`CREATE SINK`](/sql/create-sink/)
 - [`SHOW SINKS`](/sql/show-sinks)

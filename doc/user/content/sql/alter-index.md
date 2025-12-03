@@ -6,26 +6,33 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER INDEX` changes the parameters of an index.
+Use `ALTER INDEX` to:
+- Rename an index.
 
 ## Syntax
 
-{{< diagram "alter-index-set.svg" >}}
-{{< diagram "alter-index-reset.svg" >}}
+{{< tabs >}}
+{{< tab "Rename" >}}
 
-Field | Use
-------|-----
-_name_ | The identifier of the index you want to alter.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* <br>Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period).  **Note:** Configuring indexes to retain history is not recommended. As an alternative, consider creating a materialized view for your subscription query and configuring the history retention period on the view instead. See [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). <br>Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). <br>Default: `1s`.
+### Rename
 
-## Details
+To rename an index:
 
-#### Tables
+```mzsql
+ALTER INDEX <name> RENAME TO <new_name>;
+```
 
-Note that when enabling indexes on tables, the first index you enable must be
-the table's primary index, which was created at the same time as the table
-itself. Only after enabling the primary index can you enable any secondary
-indexes.
+Syntax element | Description
+---------------|------------
+`<name>`| The current name of the index you want to alter.
+`<new_name>`| The new name of the index.
+
+See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
 
 ## Privileges
 

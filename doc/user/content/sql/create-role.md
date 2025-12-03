@@ -118,6 +118,6 @@ SELECT rolsuper FROM pg_authid WHERE rolname = 'super_user';
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
