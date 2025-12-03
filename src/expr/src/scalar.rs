@@ -1568,6 +1568,18 @@ impl MirScalarExpr {
         /* #endregion */
     }
 
+    pub fn elimimate_noop_casts(&mut self) -> Result<(), RecursionLimitError> {
+        self.visit_mut_post(&mut |e| match e {
+            MirScalarExpr::CallUnary {
+                func: UnaryFunc::CastVarCharToString(_),
+                expr,
+            } => {
+                *e = expr.take();
+            }
+            _ => {}
+        })
+    }
+
     /// Decompose an IsNull expression into a disjunction of
     /// simpler expressions.
     ///

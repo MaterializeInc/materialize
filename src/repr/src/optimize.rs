@@ -130,8 +130,12 @@ optimizer_feature_flags!({
     enable_less_reduce_in_eqprop: bool,
     // See the feature flag of the same name.
     enable_dequadratic_eqprop_map: bool,
+    // See the feature flag of the same name.
     enable_fast_path_plan_insights: bool,
+    // See the feature flag of the same name.
     enable_repr_typecheck: bool,
+    // See the feature flag of the same name.
+    enable_cast_elimination: bool,
 });
 
 /// A trait used to implement layered config construction.
