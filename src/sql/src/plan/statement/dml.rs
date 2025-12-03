@@ -638,6 +638,7 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_dequadratic_eqprop_map: Default::default(),
                 enable_eq_classes_withholding_errors: Default::default(),
                 enable_fast_path_plan_insights: Default::default(),
+                enable_cast_elimination: Default::default(),
             },
         })
     }
