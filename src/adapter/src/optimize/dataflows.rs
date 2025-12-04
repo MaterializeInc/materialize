@@ -221,11 +221,7 @@ impl<'a> DataflowBuilder<'a> {
                     };
                     let entry = self.catalog.get_entry(id);
                     let desc = entry
-                        .desc(
-                            &self
-                                .catalog
-                                .resolve_full_name(entry.name(), entry.conn_id()),
-                        )
+                        .relation_desc()
                         .expect("indexes can only be built on items with descs");
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }

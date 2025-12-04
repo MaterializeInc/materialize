@@ -2485,14 +2485,9 @@ impl Coordinator {
             _ => {
                 let desc_arity = match self.catalog().try_get_entry(&plan.id) {
                     Some(table) => {
-                        let fullname = self
-                            .catalog()
-                            .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
                         // Inserts always occur at the latest version of the table.
-                        table
-                            .desc_latest(&fullname)
-                            .expect("desc called on table")
-                            .arity()
+                        let desc = table.relation_desc_latest().expect("table has a desc");
+                        desc.arity()
                     }
                     None => {
                         ctx.retire(Err(AdapterError::Catalog(
@@ -2598,13 +2593,10 @@ impl Coordinator {
         // Read then writes can be queued, so re-verify the id exists.
         let desc = match self.catalog().try_get_entry(&id) {
             Some(table) => {
-                let full_name = self
-                    .catalog()
-                    .resolve_full_name(table.name(), Some(ctx.session().conn_id()));
                 // Inserts always occur at the latest version of the table.
                 table
-                    .desc_latest(&full_name)
-                    .expect("desc called on table")
+                    .relation_desc_latest()
+                    .expect("table has a desc")
                     .into_owned()
             }
             None => {
@@ -3440,7 +3432,7 @@ impl Coordinator {
         let storage_sink_desc = StorageSinkDesc {
             from: sink_plan.from,
             from_desc: from_entry
-                .desc_opt()
+                .relation_desc()
                 .expect("sinks can only be built on items with descs")
                 .into_owned(),
             connection: sink_plan
