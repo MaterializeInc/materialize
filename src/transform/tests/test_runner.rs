@@ -34,6 +34,7 @@ mod tests {
     use mz_transform::dataflow::{
         DataflowMetainfo, optimize_dataflow_demand_inner, optimize_dataflow_filters_inner,
     };
+    use mz_transform::eliminate_noop_casts::EliminateNoopCasts;
     use mz_transform::{Optimizer, Transform, TransformCtx, reprtypecheck, typecheck};
     use proc_macro2::TokenTree;
 
@@ -427,12 +428,16 @@ mod tests {
                 Some(TEST_GLOBAL_ID),
             );
 
+            let cast_elim = EliminateNoopCasts;
             let log_optimizer = Optimizer::logical_cleanup_pass(&mut transform_ctx, true);
             let phys_optimizer = Optimizer::physical_optimizer(&mut transform_ctx);
             dataflow = dataflow
                 .into_iter()
-                .map(|(id, rel)| {
+                .map(|(id, mut rel)| {
                     transform_ctx.set_global_id(id);
+                    if transform_ctx.features.enable_cast_elimination {
+                        cast_elim.transform(&mut rel, &mut transform_ctx).unwrap();
+                    }
                     let local_mir_plan = log_optimizer
                         .optimize(rel, &mut transform_ctx)
                         .unwrap()

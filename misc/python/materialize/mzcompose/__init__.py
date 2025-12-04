@@ -83,6 +83,7 @@ def get_minimal_system_parameters(
             "true" if version >= MzVersion.parse_mz("v0.132.0-dev") else "false"
         ),
         "enable_alter_swap": "true",
+        "enable_cast_elimination": "true",
         "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",

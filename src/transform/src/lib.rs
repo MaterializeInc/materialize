@@ -40,6 +40,7 @@ use crate::canonicalize_mfp::CanonicalizeMfp;
 use crate::column_knowledge::ColumnKnowledge;
 use crate::dataflow::DataflowMetainfo;
 use crate::demand::Demand;
+use crate::eliminate_noop_casts::EliminateNoopCasts;
 use crate::equivalence_propagation::EquivalencePropagation;
 use crate::fold_constants::FoldConstants;
 use crate::join_implementation::JoinImplementation;
@@ -71,6 +72,7 @@ pub mod compound;
 pub mod cse;
 pub mod dataflow;
 pub mod demand;
+pub mod eliminate_noop_casts;
 pub mod equivalence_propagation;
 pub mod fold_constants;
 pub mod fusion;
@@ -747,6 +749,8 @@ impl Optimizer {
         let transforms: Vec<Box<dyn Transform>> = transforms![
             Box::new(Typecheck::new(ctx.typecheck()).strict_join_equivalences()),
             Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
+            Box::new(EliminateNoopCasts); if ctx.features.enable_cast_elimination,
+            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()); if ctx.features.enable_repr_typecheck && ctx.features.enable_cast_elimination,
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(NonNullRequirements::default()),
@@ -956,8 +960,9 @@ impl Optimizer {
     }
 
     /// Builds a tiny optimizer, which is only suitable for optimizing fast-path queries.
-    pub fn fast_path_optimizer(_ctx: &mut TransformCtx) -> Self {
-        let transforms: Vec<Box<dyn Transform>> = vec![
+    pub fn fast_path_optimizer(ctx: &mut TransformCtx) -> Self {
+        let transforms: Vec<Box<dyn Transform>> = transforms![
+            Box::new(EliminateNoopCasts); if ctx.features.enable_cast_elimination,
             Box::new(canonicalization::ReduceScalars),
             Box::new(LiteralConstraints),
             Box::new(CanonicalizeMfp),
