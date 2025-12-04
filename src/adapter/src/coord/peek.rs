@@ -861,7 +861,7 @@ impl crate::coord::Coordinator {
         // If a dataflow was created, drop it once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
             self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
-            self.drop_indexes(vec![(compute_instance, index_id)]);
+            self.drop_compute_collections(vec![(compute_instance, index_id)]);
         }
 
         let persist_client = self.persist_client.clone();

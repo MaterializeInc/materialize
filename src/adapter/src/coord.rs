@@ -2117,7 +2117,12 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, mview.cluster_id, None).await;
-                    self.allow_writes(mview.cluster_id, mview.global_id_writes());
+
+                    // If this is a replacement MV, it must remain read-only until the replacement
+                    // gets applied.
+                    if mview.replacement_target.is_none() {
+                        self.allow_writes(mview.cluster_id, mview.global_id_writes());
+                    }
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set

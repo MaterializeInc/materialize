@@ -263,6 +263,12 @@ impl Pretty {
                 ")",
             ));
         }
+        if let Some(target) = &v.replacing {
+            docs.push(RcDoc::text(format!(
+                "REPLACING {}",
+                target.to_ast_string_simple()
+            )));
+        }
         if let Some(cluster) = &v.in_cluster {
             docs.push(RcDoc::text(format!(
                 "IN CLUSTER {}",

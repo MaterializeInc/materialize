@@ -106,6 +106,7 @@ def get_minimal_system_parameters(
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
         "enable_refresh_every_mvs": "true",
+        "enable_replacement_materialized_views": "true",
         "enable_repr_typecheck": "true",
         "enable_cluster_schedule_refresh": "true",
         "enable_sql_server_source": "true",

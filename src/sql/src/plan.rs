@@ -193,6 +193,7 @@ pub enum Plan {
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
     AlterTableAddColumn(AlterTablePlan),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementPlan),
     AlterNetworkPolicy(AlterNetworkPolicyPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
@@ -253,6 +254,10 @@ impl Plan {
             StatementKind::AlterTableAddColumn => {
                 &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
             }
+            StatementKind::AlterMaterializedViewApplyReplacement => &[
+                PlanKind::AlterNoop,
+                PlanKind::AlterMaterializedViewApplyReplacement,
+            ],
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
@@ -445,6 +450,9 @@ impl Plan {
                 ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
+            Plan::AlterMaterializedViewApplyReplacement(_) => {
+                "alter materialized view apply replacement"
+            }
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -1329,6 +1337,12 @@ pub struct AlterTablePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterMaterializedViewApplyReplacementPlan {
+    pub id: CatalogItemId,
+    pub replacement_id: CatalogItemId,
+}
+
+#[derive(Debug)]
 pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
@@ -1815,6 +1829,7 @@ pub struct MaterializedView {
     pub dependencies: DependencyIds,
     /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,

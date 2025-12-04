@@ -1375,6 +1375,7 @@ impl CatalogState {
                     desc,
                     resolved_ids,
                     dependencies,
+                    replacement_target: materialized_view.replacement_target,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,

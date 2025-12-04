@@ -1045,6 +1045,7 @@ impl Coordinator {
                     | Statement::AlterConnection(_)
                     | Statement::AlterDefaultPrivileges(_)
                     | Statement::AlterIndex(_)
+                    | Statement::AlterMaterializedViewApplyReplacement(_)
                     | Statement::AlterSetCluster(_)
                     | Statement::AlterOwner(_)
                     | Statement::AlterRetainHistory(_)
@@ -1286,6 +1287,7 @@ impl Coordinator {
                         if_exists: cmvs.if_exists,
                         name: cmvs.name,
                         columns: cmvs.columns,
+                        replacing: cmvs.replacing,
                         in_cluster: cmvs.in_cluster,
                         query: cmvs.query,
                         with_options: cmvs.with_options,

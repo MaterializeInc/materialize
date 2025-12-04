@@ -101,6 +101,10 @@ pub enum Op {
         typ: SqlColumnType,
         sql: RawDataType,
     },
+    AlterMaterializedViewApplyReplacement {
+        id: CatalogItemId,
+        replacement_id: CatalogItemId,
+    },
     CreateDatabase {
         name: String,
         owner_id: RoleId,
@@ -819,6 +823,30 @@ impl Catalog {
                 tx.update_item(id, new_entry.into())?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
             }
+            Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let replacement = state.get_entry(&replacement_id);
+
+                let CatalogItem::MaterializedView(mv) = &mut new_entry.item else {
+                    return Err(AdapterError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "id must refer to a materialized view",
+                    ));
+                };
+                let CatalogItem::MaterializedView(replacement_mv) = &replacement.item else {
+                    return Err(AdapterError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "replacement_id must refer to a materialized view",
+                    ));
+                };
+
+                mv.apply_replacement(replacement_mv.clone());
+
+                tx.remove_item(replacement_id)?;
+                tx.update_item(id, new_entry.into())?;
+
+                // TODO(alter-mv): audit logging
+            }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(
                     mz_sql::catalog::ObjectType::Database,
@@ -1130,7 +1158,15 @@ impl Catalog {
                         storage_collections_to_create.insert(source.global_id());
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        storage_collections_to_create.insert(mv.global_id_writes());
+                        let mv_gid = mv.global_id_writes();
+                        if let Some(target_id) = mv.replacement_target {
+                            let target_gid = state.get_entry(&target_id).latest_global_id();
+                            let shard_id =
+                                state.storage_metadata().get_collection_shard(target_gid)?;
+                            storage_collections_to_register.insert(mv_gid, shard_id);
+                        } else {
+                            storage_collections_to_create.insert(mv_gid);
+                        }
                     }
                     CatalogItem::ContinualTask(ct) => {
                         storage_collections_to_create.insert(ct.global_id());
