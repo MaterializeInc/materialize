@@ -77,33 +77,14 @@ enum Command {
         allow_dirty: bool,
     },
 
-    /// Deploy to production directly or promote a staging environment
-    ///
-    /// This command has two modes:
-    ///
-    /// 1. Promote staging (recommended): Atomically swap a tested staging environment
-    ///    with production for zero-downtime deployment.
-    ///
-    /// 2. Direct deployment: Apply changes directly to production. Safe for new objects
-    ///    and initial deployments. Will error if it would overwrite existing objects.
-    ///
-    /// Examples:
-    ///   # Promote staging environment to production (blue/green swap)
-    ///   mz-deploy apply my-staging-env
-    ///
-    ///   # Deploy directly to production (safe for new objects)
-    ///   mz-deploy apply
+    /// Promote a staging environment to production
     Apply {
-        /// Staging deployment to promote to production (blue/green deployment)
+        /// Staging deployment to promote to production
         ///
         /// Specifies which staging deployment to swap with production. The staging
         /// schemas will become production and vice versa in an atomic operation.
         #[arg(value_name = "DEPLOY_ID")]
-        staging_deploy_id: Option<String>,
-
-        /// Allow deployment with uncommitted git changes
-        #[arg(long)]
-        allow_dirty: bool,
+        deploy_id: String,
 
         /// Skip conflict detection when promoting staging deployments
         ///
@@ -115,9 +96,6 @@ enum Command {
         /// Skip cluster hydration when promoting staging deployments
         #[arg(long)]
         skip_ready: bool,
-
-        #[arg(long, hide = true)]
-        in_place_dangerous_will_cause_downtime: bool,
     },
 
     /// Create a staging deployment for testing changes
@@ -267,33 +245,17 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Apply {
-            staging_deploy_id,
-            allow_dirty,
+            deploy_id,
             force,
             skip_ready,
-            in_place_dangerous_will_cause_downtime,
         }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
-            match staging_deploy_id {
-                None => {
-                    cli::commands::apply::run(
-                        &profile,
-                        &args.directory,
-                        in_place_dangerous_will_cause_downtime,
-                        allow_dirty,
-                    )
-                    .await
-                }
-
-                Some(deploy_id) => {
-                    if !skip_ready {
-                        cli::commands::ready::run(&profile, &deploy_id, true, None).await?;
-                    }
-                    cli::commands::swap::run(&profile, &deploy_id, force).await
-                }
+            if !skip_ready {
+                cli::commands::ready::run(&profile, &deploy_id, true, None).await?;
             }
+            cli::commands::apply::run(&profile, &deploy_id, force).await
         }
         Some(Command::Stage { name, allow_dirty, no_rollback }) => {
             let profile =
