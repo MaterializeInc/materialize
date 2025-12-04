@@ -693,7 +693,7 @@ impl Serialize for SerializableDataFile {
         let mut structure = serializer.serialize_struct("SerializableDataFile", 2)?;
 
         structure.serialize_field("schema", &self.schema)?;
-        structure.serialize_field("avro_bytes", &buffer)?;
+        structure.serialize_field("data_file", &buffer)?;
 
         structure.end()
     }
@@ -725,7 +725,7 @@ impl<'de> Deserialize<'de> for SerializableDataFile {
                 A: serde::de::MapAccess<'de>,
             {
                 let mut schema: Option<Schema> = None;
-                let mut avro_bytes: Option<Vec<u8>> = None;
+                let mut data_file: Option<Vec<u8>> = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -736,17 +736,17 @@ impl<'de> Deserialize<'de> for SerializableDataFile {
                             schema = Some(map.next_value()?);
                         }
                         Field::AvroBytes => {
-                            if avro_bytes.is_some() {
-                                return Err(serde::de::Error::duplicate_field("avro_bytes"));
+                            if data_file.is_some() {
+                                return Err(serde::de::Error::duplicate_field("data_file"));
                             }
-                            avro_bytes = Some(map.next_value()?);
+                            data_file = Some(map.next_value()?);
                         }
                     }
                 }
 
                 let schema = schema.ok_or_else(|| serde::de::Error::missing_field("schema"))?;
                 let bytes =
-                    avro_bytes.ok_or_else(|| serde::de::Error::missing_field("avro_bytes"))?;
+                    data_file.ok_or_else(|| serde::de::Error::missing_field("data_file"))?;
 
                 let mut cursor = std::io::Cursor::new(&bytes);
                 let data_files = read_data_files_from_avro(
@@ -771,7 +771,7 @@ impl<'de> Deserialize<'de> for SerializableDataFile {
             }
         }
 
-        const FIELDS: &[&str] = &["schema", "avro_bytes"];
+        const FIELDS: &[&str] = &["schema", "data_file"];
         deserializer.deserialize_struct("SerializableDataFile", FIELDS, DataFileVisitor)
     }
 }
