@@ -7,7 +7,8 @@ menu:
     identifier: "commands"
     parent: "reference"
     weight: 100
-
+aliases:
+  - /sql/alter-owner/
 ---
 
 ## Create/Alter/Drop Objects
@@ -23,10 +24,9 @@ sources, and tables:
 
 ## RBAC
 
-Commands to manage roles and privileges:
+Commands to manage roles and privileges and owners:
 
 {{< yaml-table data="sql_commands_rbac" noHeader=true >}}
-
 
 ## Query Introspection (`Explain`)
 

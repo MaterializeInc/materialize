@@ -1,12 +1,12 @@
 columns:
-  - column: "Option"
+  - column: "Syntax element"
   - column: "Description"
 rows:
-    - Option: "`INHERIT`"
+    - Syntax element: "`INHERIT`"
       Description: |
         *Optional.* If specified, grants the role the ability to inherit
         privileges of other roles. *Default.*
-    - Option: "`SET <name> TO <value|DEFAULT>`"
+    - Syntax element: "`SET <name> TO <value|DEFAULT>`"
       Description: |
         *Optional.* If specified, sets the configuration parameter for the role
         to the `<value>` or if the value specified is `DEFAULT`, the system's
@@ -23,7 +23,7 @@ rows:
 
         {{< /note >}}
 
-    - Option: "`RESET <name>`"
+    - Syntax element: "`RESET <name>`"
       Description: |
         *Optional.* If specified, resets the configuration parameter for the
         role to the system's default.

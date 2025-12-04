@@ -1,0 +1,65 @@
+- name: "syntax-add-subsource"
+  code: |
+    ALTER SOURCE [IF EXISTS] <name>
+      ADD SUBSOURCE|TABLE <table> [AS <subsrc>] [, ...]
+      [WITH (<options>)]
+    ;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the PostgreSQL/MySQL/SQL Server source you want to alter.
+    - name: "`<table>`"
+      description: |
+        The upstream table to add to the source.
+    - name: "**AS** `<subsrc>`"
+      description: |
+        Optional. The name for the subsource in Materialize.
+    - name: "**WITH (TEXT COLUMNS (`<col>` [, ...]))**"
+      description: |
+        Optional. List of columns to decode as `text` for types that are unsupported in Materialize.
+
+- name: "syntax-rename"
+  code: |
+    ALTER SOURCE <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the source you want to alter.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the source.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER SOURCE <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the source you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the source.
+  addenda: |
+    To change the owner of a source, you must be the owner of the source and have
+    membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+
+- name: "syntax-set-retain-history"
+  code: |
+    ALTER SOURCE [IF EXISTS] <name> SET (RETAIN HISTORY [=] FOR <retention_period>);
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the source you want to alter.
+    - name: "`<retention_period>`"
+      description: |
+        ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+
+- name: "syntax-reset-retain-history"
+  code: |
+    ALTER SOURCE [IF EXISTS] <name>  RESET (RETAIN HISTORY);
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the source you want to alter.

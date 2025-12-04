@@ -1,37 +1,63 @@
 ---
 title: "ALTER CONNECTION"
-description: "`ALTER CONNECTION` allows modifying the value of connection options and rotating secrets associated with connections"
+description: "`ALTER CONNECTION` allows you to modify the value of connection options; rotate secrets associated with connections; rename a connection; and change owner of a connection."
 menu:
   main:
     parent: 'commands'
 ---
 
-`ALTER CONNECTION` allows modifying the value of connection options and rotating
-secrets associated with connections. In particular, you can use this command
-to:
+Use `ALTER CONNECTION` to:
 
--   Modify the parameters of a connection, such as the hostname to which it
-    points.
--   Rotate the key pairs associated with an [SSH tunnel connection].
+- Modify the parameters of a connection, such as the hostname to which it
+  points.
+- Rotate the key pairs associated with an [SSH tunnel connection].
+- Rename a connection.
+- Change owner of a connection.
 
 ## Syntax
 
-{{< diagram "alter-connection.svg" >}}
+{{< tabs >}}
+{{< tab "SET/DROP/RESET options" >}}
 
-| Field                     | Use                                                 |
-| ------------------------- | --------------------------------------------------- |
-| _name_                    | The identifier of the connection you want to alter. |
-| **SET**...                | Sets the option to the specified value.             |
-| **DROP**..., **RESET**... | Resets the specified option to its default value.   |
-| **ROTATE KEYS**           | Rotates the key pairs.                              |
+### SET/DROP/RESET options
 
-#### `WITH` options
+To modify connection parameters:
 
-| Field      | Value     | Description                                                                                                                                                       |
-| ---------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `VALIDATE` | `boolean` | Whether [connection validation](/sql/create-connection#connection-validation) should be performed. Not available with **ROTATE KEYS**.<br><br>Defaults to `true`. |
+{{% include-syntax file="examples/alter_connection" example="syntax-set-drop-reset" %}}
 
-## Description
+{{< /tab >}}
+{{< tab "ROTATE KEYS" >}}
+
+### ROTATE KEYS
+
+To rotate SSH tunnel connection key pairs:
+
+{{% include-syntax file="examples/alter_connection" example="syntax-rotate-keys" %}}
+
+
+{{< /tab >}}
+
+{{< tab "Rename" >}}
+
+### Rename
+
+To rename a connection
+
+{{% include-syntax file="examples/alter_connection" example="syntax-rename" %}}
+
+{{< /tab >}}
+{{< tab "Change owner" >}}
+
+### Change owner
+
+To change the owner of a connection:
+
+{{% include-syntax file="examples/alter_connection" example="syntax-change-owner" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
+
+## Details
 
 ### `SET`, `RESET`, `DROP`
 

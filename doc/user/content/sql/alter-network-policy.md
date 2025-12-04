@@ -16,25 +16,7 @@ and **will not** terminate active connections.
 
 ## Syntax
 
-{{< diagram "alter-network-policy.svg" >}}
-
-### `network_policy_rule`
-
-{{< diagram "network-policy-rule.svg" >}}
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the Network Policy.
-| `RULES`                                   | `text[]`         | A comma-separated list of Network Policy Rules.
-
-#### Network policy rule options
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------------------------
-| _name_                                    | `text`           | A name for the network policy rule. Must be unique within the network policy.
-| `ACTION`                                  | `text`           | The action to take for this rule. `ALLOW` is the only valid option.
-| `DIRECTION`                               | `text`           | The direction of traffic the rule applies to. `INGRESS` is the only valid option.
-| `ADDRESS`                                 | `text`           | The Classless Inter-Domain Routing (CIDR) block the rule will be applied to.
+{{% include-syntax file="examples/alter_network_policy" example="syntax" %}}
 
 ## Details
 

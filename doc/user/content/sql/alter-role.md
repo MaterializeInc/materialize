@@ -17,6 +17,8 @@ menu:
 
 {{< tab "Cloud" >}}
 
+### Cloud
+
 {{% include-example file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
 
 {{% include-example file="examples/rbac-cloud/alter_roles"
@@ -27,6 +29,7 @@ example="alter-role-options" %}}
 example="alter-role-details" %}}
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
+### Self-Managed
 
 {{% include-example file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
 
@@ -142,6 +145,6 @@ The privileges required to execute this statement are:
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)

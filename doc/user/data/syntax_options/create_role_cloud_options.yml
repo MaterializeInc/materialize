@@ -1,8 +1,8 @@
 columns:
-  - column: "Option"
+  - column: "Syntax element"
   - column: "Description"
 rows:
-    - Option: "`INHERIT`"
+    - Syntax element: "`INHERIT`"
       Description: |
         *Optional.* If specified, grants the role the ability to inherit
         privileges of other roles. *Default.*
