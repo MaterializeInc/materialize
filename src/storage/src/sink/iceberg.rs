@@ -114,6 +114,7 @@ use mz_interchange::avro::DiffPair;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::InTask;
+use mz_ore::result::ResultExt;
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
@@ -129,8 +130,8 @@ use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::{Event, OperatorBuilder, PressOnDropButton};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
-use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
+use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::{
@@ -138,7 +139,6 @@ use timely::dataflow::operators::{
 };
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
-use timely::{Container, PartialOrder};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::render::sinks::SinkRender;
@@ -662,6 +662,13 @@ where
     )
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(try_from = "AvroDataFile", into = "AvroDataFile")]
+struct SerializableDataFile {
+    pub data_file: DataFile,
+    pub schema: Schema,
+}
+
 /// A wrapper around Iceberg's DataFile that implements Serialize and Deserialize.
 /// This is slightly complicated by the fact that Iceberg's DataFile doesn't implement
 /// these traits directly, so we serialize to/from Avro bytes (which Iceberg supports natively).
@@ -669,110 +676,48 @@ where
 /// It is distinctly possible that this is overkill, but it avoids re-implementing
 /// Iceberg's serialization logic here.
 /// If at some point this becomes a serious overhead, we can revisit this decision.
-#[derive(Clone, Debug)]
-struct SerializableDataFile {
-    pub data_file: DataFile,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AvroDataFile {
+    pub data_file: Vec<u8>,
     pub schema: Schema,
 }
 
-impl Serialize for SerializableDataFile {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut buffer = Vec::new();
+impl From<SerializableDataFile> for AvroDataFile {
+    fn from(value: SerializableDataFile) -> Self {
+        let mut data_file = Vec::new();
         write_data_files_to_avro(
-            &mut buffer,
-            [self.data_file.clone()],
+            &mut data_file,
+            [value.data_file],
             &StructType::new(vec![]),
             FormatVersion::V2,
         )
-        .map_err(|e| {
-            serde::ser::Error::custom(format!("Failed to serialize DataFile to Avro: {}", e))
-        })?;
-        let mut structure = serializer.serialize_struct("SerializableDataFile", 2)?;
-
-        structure.serialize_field("schema", &self.schema)?;
-        structure.serialize_field("avro_bytes", &buffer)?;
-
-        structure.end()
+        .expect("serialization into buffer");
+        AvroDataFile {
+            data_file,
+            schema: value.schema,
+        }
     }
 }
 
-impl<'de> Deserialize<'de> for SerializableDataFile {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(field_identifier, rename_all = "snake_case")]
-        enum Field {
-            Schema,
-            AvroBytes,
-        }
+impl TryFrom<AvroDataFile> for SerializableDataFile {
+    type Error = String;
 
-        struct DataFileVisitor;
-
-        impl<'de> serde::de::Visitor<'de> for DataFileVisitor {
-            type Value = SerializableDataFile;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("struct SerializableDataFile")
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: serde::de::MapAccess<'de>,
-            {
-                let mut schema: Option<Schema> = None;
-                let mut avro_bytes: Option<Vec<u8>> = None;
-
-                while let Some(key) = map.next_key()? {
-                    match key {
-                        Field::Schema => {
-                            if schema.is_some() {
-                                return Err(serde::de::Error::duplicate_field("schema"));
-                            }
-                            schema = Some(map.next_value()?);
-                        }
-                        Field::AvroBytes => {
-                            if avro_bytes.is_some() {
-                                return Err(serde::de::Error::duplicate_field("avro_bytes"));
-                            }
-                            avro_bytes = Some(map.next_value()?);
-                        }
-                    }
-                }
-
-                let schema = schema.ok_or_else(|| serde::de::Error::missing_field("schema"))?;
-                let bytes =
-                    avro_bytes.ok_or_else(|| serde::de::Error::missing_field("avro_bytes"))?;
-
-                let mut cursor = std::io::Cursor::new(&bytes);
-                let data_files = read_data_files_from_avro(
-                    &mut cursor,
-                    &schema,
-                    0,
-                    &StructType::new(vec![]),
-                    FormatVersion::V2,
-                )
-                .map_err(|e| {
-                    serde::de::Error::custom(format!(
-                        "Failed to deserialize DataFile from Avro: {}",
-                        e
-                    ))
-                })?;
-
-                if let Some(data_file) = data_files.into_iter().next() {
-                    Ok(SerializableDataFile { data_file, schema })
-                } else {
-                    Err(serde::de::Error::custom("No DataFile found in Avro data"))
-                }
-            }
-        }
-
-        const FIELDS: &[&str] = &["schema", "avro_bytes"];
-        deserializer.deserialize_struct("SerializableDataFile", FIELDS, DataFileVisitor)
+    fn try_from(value: AvroDataFile) -> Result<Self, Self::Error> {
+        let data_files = read_data_files_from_avro(
+            &mut &*value.data_file,
+            &value.schema,
+            0,
+            &StructType::new(vec![]),
+            FormatVersion::V2,
+        )
+        .map_err_to_string_with_causes()?;
+        let Some(data_file) = data_files.into_iter().next() else {
+            return Err("No DataFile found in Avro data".into());
+        };
+        Ok(SerializableDataFile {
+            data_file,
+            schema: value.schema,
+        })
     }
 }
 
@@ -1157,7 +1102,7 @@ where
     let hashed_id = sink_id.hashed();
     let is_active_worker = usize::cast_from(hashed_id) % scope.peers() == scope.index();
 
-    let mut input = builder.new_disconnected_input(&batch_input, Exchange::new(move |_| hashed_id));
+    let mut input = builder.new_disconnected_input(batch_input, Exchange::new(move |_| hashed_id));
     let mut batch_desc_input =
         builder.new_disconnected_input(batch_desc_input, Exchange::new(move |_| hashed_id));
 
