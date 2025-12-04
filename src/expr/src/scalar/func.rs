@@ -81,13 +81,13 @@ pub use variadic::VariadicFunc;
 /// function where it applies.
 const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
 
-pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&'a str> {
     match a {
-        Datum::JsonNull => Datum::Null,
-        Datum::String(_) => a,
+        Datum::JsonNull => None,
+        Datum::String(s) => Some(s),
         _ => {
             let s = cast_jsonb_to_string(JsonbRef::from_datum(a));
-            Datum::String(temp_storage.push_string(s))
+            Some(temp_storage.push_string(s))
         }
     }
 }
@@ -1743,13 +1743,12 @@ fn to_char_timestamp_tz_format(
     fmt.render(&*ts)
 }
 
-fn jsonb_get_int64<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    temp_storage: &'a RowArena,
-    stringify: bool,
-) -> Datum<'a> {
-    let i = b.unwrap_int64();
+#[sqlfunc(
+    sqlname = "->",
+    output_type = "Option<mz_repr::adt::jsonb::Jsonb>",
+    is_infix_op = true
+)]
+fn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {
     match a {
         Datum::List(list) => {
             let i = if i >= 0 {
@@ -1760,7 +1759,6 @@ fn jsonb_get_int64<'a>(
                 (list.iter().count()).wrapping_sub(i)
             };
             match list.iter().nth(i) {
-                Some(d) if stringify => jsonb_stringify(d, temp_storage),
                 Some(d) => d,
                 None => Datum::Null,
             }
@@ -1769,11 +1767,7 @@ fn jsonb_get_int64<'a>(
         _ => {
             if i == 0 || i == -1 {
                 // I have no idea why postgres does this, but we're stuck with it
-                if stringify {
-                    jsonb_stringify(a, temp_storage)
-                } else {
-                    a
-                }
+                a
             } else {
                 Datum::Null
             }
@@ -1781,16 +1775,42 @@ fn jsonb_get_int64<'a>(
     }
 }
 
-fn jsonb_get_string<'a>(
+#[sqlfunc(sqlname = "->>", is_infix_op = true)]
+fn jsonb_get_int64_stringify<'a>(
     a: Datum<'a>,
-    b: Datum<'a>,
+    i: i64,
     temp_storage: &'a RowArena,
-    stringify: bool,
-) -> Datum<'a> {
-    let k = b.unwrap_str();
+) -> Option<&'a str> {
+    match a {
+        Datum::List(list) => {
+            let i = if i >= 0 {
+                usize::cast_from(i.unsigned_abs())
+            } else {
+                // index backwards from the end
+                let i = usize::cast_from(i.unsigned_abs());
+                (list.iter().count()).wrapping_sub(i)
+            };
+            match list.iter().nth(i) {
+                Some(d) => jsonb_stringify(d, temp_storage),
+                None => None,
+            }
+        }
+        Datum::Map(_) => None,
+        _ => {
+            if i == 0 || i == -1 {
+                // I have no idea why postgres does this, but we're stuck with it
+                jsonb_stringify(a, temp_storage)
+            } else {
+                None
+            }
+        }
+    }
+}
+
+#[sqlfunc(sqlname = "->", output_type = "Option<mz_repr::adt::jsonb::Jsonb>")]
+fn jsonb_get_string<'a>(a: Datum<'a>, k: &str) -> Datum<'a> {
     match a {
         Datum::Map(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
-            Some((_k, v)) if stringify => jsonb_stringify(v, temp_storage),
             Some((_k, v)) => v,
             None => Datum::Null,
         },
@@ -1798,14 +1818,29 @@ fn jsonb_get_string<'a>(
     }
 }
 
-fn jsonb_get_path<'a>(
+#[sqlfunc(sqlname = "->>", is_infix_op = true)]
+fn jsonb_get_string_stringify<'a>(
     a: Datum<'a>,
-    b: Datum<'a>,
+    k: &str,
     temp_storage: &'a RowArena,
-    stringify: bool,
-) -> Datum<'a> {
+) -> Option<&'a str> {
+    match a {
+        Datum::Map(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
+            Some((_k, v)) => jsonb_stringify(v, temp_storage),
+            None => None,
+        },
+        _ => None,
+    }
+}
+
+#[sqlfunc(
+    sqlname = "#>",
+    output_type = "Option<mz_repr::adt::jsonb::Jsonb>",
+    is_infix_op = true
+)]
+fn jsonb_get_path<'a>(a: Datum<'a>, b: Array<'a>) -> Datum<'a> {
     let mut json = a;
-    let path = b.unwrap_array().elements();
+    let path = b.elements();
     for key in path.iter() {
         let key = match key {
             Datum::String(s) => s,
@@ -1836,11 +1871,17 @@ fn jsonb_get_path<'a>(
             _ => return Datum::Null,
         }
     }
-    if stringify {
-        jsonb_stringify(json, temp_storage)
-    } else {
-        json
-    }
+    json
+}
+
+#[sqlfunc(sqlname = "#>>", is_infix_op = true)]
+fn jsonb_get_path_stringify<'a>(
+    a: Datum<'a>,
+    b: Array<'a>,
+    temp_storage: &'a RowArena,
+) -> Option<&'a str> {
+    let json = jsonb_get_path(a, b);
+    jsonb_stringify(json, temp_storage)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "?", propagates_nulls = true)]
@@ -2638,12 +2679,12 @@ pub enum BinaryFunc {
     TimezoneIntervalTime,
     TimezoneOffset(TimezoneOffset),
     TextConcat(TextConcatBinary),
-    JsonbGetInt64,
-    JsonbGetInt64Stringify,
-    JsonbGetString,
-    JsonbGetStringStringify,
-    JsonbGetPath,
-    JsonbGetPathStringify,
+    JsonbGetInt64(JsonbGetInt64),
+    JsonbGetInt64Stringify(JsonbGetInt64Stringify),
+    JsonbGetString(JsonbGetString),
+    JsonbGetStringStringify(JsonbGetStringStringify),
+    JsonbGetPath(JsonbGetPath),
+    JsonbGetPathStringify(JsonbGetPathStringify),
     JsonbContainsString(JsonbContainsString),
     JsonbConcat(JsonbConcat),
     JsonbContainsJsonb(JsonbContainsJsonb),
@@ -2898,12 +2939,18 @@ impl BinaryFunc {
             // BinaryFunc::TimezoneIntervalTime(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::TimezoneOffset(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::TextConcat(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::JsonbGetInt64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::JsonbGetInt64Stringify(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::JsonbGetString(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::JsonbGetStringStringify(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::JsonbGetPath(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::JsonbGetPathStringify(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::JsonbGetInt64(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::JsonbGetInt64Stringify(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::JsonbGetString(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::JsonbGetStringStringify(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::JsonbGetPath(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::JsonbGetPathStringify(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             BinaryFunc::JsonbContainsString(s) => {
                 return s.eval(datums, temp_storage, a_expr, b_expr);
             }
@@ -3031,12 +3078,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
-            BinaryFunc::JsonbGetInt64 => Ok(jsonb_get_int64(a, b, temp_storage, false)),
-            BinaryFunc::JsonbGetInt64Stringify => Ok(jsonb_get_int64(a, b, temp_storage, true)),
-            BinaryFunc::JsonbGetString => Ok(jsonb_get_string(a, b, temp_storage, false)),
-            BinaryFunc::JsonbGetStringStringify => Ok(jsonb_get_string(a, b, temp_storage, true)),
-            BinaryFunc::JsonbGetPath => Ok(jsonb_get_path(a, b, temp_storage, false)),
-            BinaryFunc::JsonbGetPathStringify => Ok(jsonb_get_path(a, b, temp_storage, true)),
             BinaryFunc::ListLengthMax { max_layer } => list_length_max(a, b, *max_layer),
             BinaryFunc::ArrayContainsArray { rev: false } => Ok(array_contains_array(a, b)),
             BinaryFunc::ArrayContainsArray { rev: true } => Ok(array_contains_array(b, a)),
@@ -3236,11 +3277,13 @@ impl BinaryFunc {
             MzRenderTypmod(s) => s.output_type(input1_type, input2_type),
             TextConcat(s) => s.output_type(input1_type, input2_type),
 
-            JsonbGetInt64Stringify | JsonbGetStringStringify | JsonbGetPathStringify => {
-                SqlScalarType::String.nullable(true)
-            }
+            JsonbGetInt64Stringify(s) => s.output_type(input1_type, input2_type),
+            JsonbGetStringStringify(s) => s.output_type(input1_type, input2_type),
+            JsonbGetPathStringify(s) => s.output_type(input1_type, input2_type),
 
-            JsonbGetInt64 | JsonbGetString | JsonbGetPath => SqlScalarType::Jsonb.nullable(true),
+            JsonbGetInt64(s) => s.output_type(input1_type, input2_type),
+            JsonbGetString(s) => s.output_type(input1_type, input2_type),
+            JsonbGetPath(s) => s.output_type(input1_type, input2_type),
             JsonbConcat(s) => s.output_type(input1_type, input2_type),
             JsonbDeleteInt64(s) => s.output_type(input1_type, input2_type),
             JsonbDeleteString(s) => s.output_type(input1_type, input2_type),
@@ -3422,12 +3465,12 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsString(s) => s.propagates_nulls(),
             BinaryFunc::JsonbDeleteInt64(s) => s.propagates_nulls(),
             BinaryFunc::JsonbDeleteString(s) => s.propagates_nulls(),
-            BinaryFunc::JsonbGetInt64 => true,
-            BinaryFunc::JsonbGetInt64Stringify => true,
-            BinaryFunc::JsonbGetPath => true,
-            BinaryFunc::JsonbGetPathStringify => true,
-            BinaryFunc::JsonbGetString => true,
-            BinaryFunc::JsonbGetStringStringify => true,
+            BinaryFunc::JsonbGetInt64(s) => s.propagates_nulls(),
+            BinaryFunc::JsonbGetInt64Stringify(s) => s.propagates_nulls(),
+            BinaryFunc::JsonbGetPath(s) => s.propagates_nulls(),
+            BinaryFunc::JsonbGetPathStringify(s) => s.propagates_nulls(),
+            BinaryFunc::JsonbGetString(s) => s.propagates_nulls(),
+            BinaryFunc::JsonbGetStringStringify(s) => s.propagates_nulls(),
             BinaryFunc::Left(s) => s.propagates_nulls(),
             BinaryFunc::LikeEscape(s) => s.propagates_nulls(),
             BinaryFunc::ListContainsList { .. } => true,
@@ -3718,12 +3761,12 @@ impl BinaryFunc {
             JsonbConcat(s) => s.introduces_nulls(),
             JsonbDeleteInt64(s) => s.introduces_nulls(),
             JsonbDeleteString(s) => s.introduces_nulls(),
-            JsonbGetInt64 => true,
-            JsonbGetInt64Stringify => true,
-            JsonbGetPath => true,
-            JsonbGetPathStringify => true,
-            JsonbGetString => true,
-            JsonbGetStringStringify => true,
+            JsonbGetInt64(s) => s.introduces_nulls(),
+            JsonbGetInt64Stringify(s) => s.introduces_nulls(),
+            JsonbGetPath(s) => s.introduces_nulls(),
+            JsonbGetPathStringify(s) => s.introduces_nulls(),
+            JsonbGetString(s) => s.introduces_nulls(),
+            JsonbGetStringStringify(s) => s.introduces_nulls(),
             ListLengthMax { .. } => true,
             MapGetValue(s) => s.introduces_nulls(),
         }
@@ -3805,12 +3848,12 @@ impl BinaryFunc {
             JsonbContainsString(s) => s.is_infix_op(),
             JsonbDeleteInt64(s) => s.is_infix_op(),
             JsonbDeleteString(s) => s.is_infix_op(),
-            JsonbGetInt64 => true,
-            JsonbGetInt64Stringify => true,
-            JsonbGetPath => true,
-            JsonbGetPathStringify => true,
-            JsonbGetString => true,
-            JsonbGetStringStringify => true,
+            JsonbGetInt64(s) => s.is_infix_op(),
+            JsonbGetInt64Stringify(s) => s.is_infix_op(),
+            JsonbGetPath(s) => s.is_infix_op(),
+            JsonbGetPathStringify(s) => s.is_infix_op(),
+            JsonbGetString(s) => s.is_infix_op(),
+            JsonbGetStringStringify(s) => s.is_infix_op(),
             ListContainsList { .. } => true,
             ListElementConcat(s) => s.is_infix_op(),
             ListListConcat(s) => s.is_infix_op(),
@@ -4035,12 +4078,12 @@ impl BinaryFunc {
             BinaryFunc::JsonbContainsString(s) => s.negate(),
             BinaryFunc::JsonbDeleteInt64(s) => s.negate(),
             BinaryFunc::JsonbDeleteString(s) => s.negate(),
-            BinaryFunc::JsonbGetInt64 => None,
-            BinaryFunc::JsonbGetInt64Stringify => None,
-            BinaryFunc::JsonbGetPath => None,
-            BinaryFunc::JsonbGetPathStringify => None,
-            BinaryFunc::JsonbGetString => None,
-            BinaryFunc::JsonbGetStringStringify => None,
+            BinaryFunc::JsonbGetInt64(s) => s.negate(),
+            BinaryFunc::JsonbGetInt64Stringify(s) => s.negate(),
+            BinaryFunc::JsonbGetPath(s) => s.negate(),
+            BinaryFunc::JsonbGetPathStringify(s) => s.negate(),
+            BinaryFunc::JsonbGetString(s) => s.negate(),
+            BinaryFunc::JsonbGetStringStringify(s) => s.negate(),
             BinaryFunc::Left(s) => s.negate(),
             BinaryFunc::LikeEscape(s) => s.negate(),
             BinaryFunc::ListContainsList { .. } => None,
@@ -4182,12 +4225,12 @@ impl BinaryFunc {
             BinaryFunc::Eq(s) => s.could_error(),
             BinaryFunc::Gt(s) => s.could_error(),
             BinaryFunc::Gte(s) => s.could_error(),
-            BinaryFunc::JsonbGetInt64 => false,
-            BinaryFunc::JsonbGetInt64Stringify => false,
-            BinaryFunc::JsonbGetPath => false,
-            BinaryFunc::JsonbGetPathStringify => false,
-            BinaryFunc::JsonbGetString => false,
-            BinaryFunc::JsonbGetStringStringify => false,
+            BinaryFunc::JsonbGetInt64(s) => s.could_error(),
+            BinaryFunc::JsonbGetInt64Stringify(s) => s.could_error(),
+            BinaryFunc::JsonbGetPath(s) => s.could_error(),
+            BinaryFunc::JsonbGetPathStringify(s) => s.could_error(),
+            BinaryFunc::JsonbGetString(s) => s.could_error(),
+            BinaryFunc::JsonbGetStringStringify(s) => s.could_error(),
             BinaryFunc::ListContainsList { rev: _ } => false,
             BinaryFunc::ListElementConcat(s) => s.could_error(),
             BinaryFunc::ListListConcat(s) => s.could_error(),
@@ -4486,12 +4529,12 @@ impl BinaryFunc {
             | BinaryFunc::TimezoneIntervalTimestampTz
             | BinaryFunc::TimezoneIntervalTime => (false, false),
             BinaryFunc::TimezoneOffset(s) => s.is_monotone(),
-            BinaryFunc::JsonbGetInt64
-            | BinaryFunc::JsonbGetInt64Stringify
-            | BinaryFunc::JsonbGetString
-            | BinaryFunc::JsonbGetStringStringify
-            | BinaryFunc::JsonbGetPath
-            | BinaryFunc::JsonbGetPathStringify => (false, false),
+            BinaryFunc::JsonbGetInt64(s) => s.is_monotone(),
+            BinaryFunc::JsonbGetInt64Stringify(s) => s.is_monotone(),
+            BinaryFunc::JsonbGetString(s) => s.is_monotone(),
+            BinaryFunc::JsonbGetStringStringify(s) => s.is_monotone(),
+            BinaryFunc::JsonbGetPath(s) => s.is_monotone(),
+            BinaryFunc::JsonbGetPathStringify(s) => s.is_monotone(),
             BinaryFunc::JsonbContainsString(s) => s.is_monotone(),
             BinaryFunc::JsonbConcat(s) => s.is_monotone(),
             BinaryFunc::JsonbContainsJsonb(s) => s.is_monotone(),
@@ -4693,12 +4736,12 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TimezoneIntervalTime => f.write_str("timezoneit"),
             BinaryFunc::TimezoneOffset(s) => s.fmt(f),
             BinaryFunc::TextConcat(s) => s.fmt(f),
-            BinaryFunc::JsonbGetInt64 => f.write_str("->"),
-            BinaryFunc::JsonbGetInt64Stringify => f.write_str("->>"),
-            BinaryFunc::JsonbGetString => f.write_str("->"),
-            BinaryFunc::JsonbGetStringStringify => f.write_str("->>"),
-            BinaryFunc::JsonbGetPath => f.write_str("#>"),
-            BinaryFunc::JsonbGetPathStringify => f.write_str("#>>"),
+            BinaryFunc::JsonbGetInt64(s) => s.fmt(f),
+            BinaryFunc::JsonbGetInt64Stringify(s) => s.fmt(f),
+            BinaryFunc::JsonbGetString(s) => s.fmt(f),
+            BinaryFunc::JsonbGetStringStringify(s) => s.fmt(f),
+            BinaryFunc::JsonbGetPath(s) => s.fmt(f),
+            BinaryFunc::JsonbGetPathStringify(s) => s.fmt(f),
             BinaryFunc::JsonbContainsString(s) => s.fmt(f),
             BinaryFunc::MapContainsKey(s) => s.fmt(f),
             BinaryFunc::JsonbConcat(s) => s.fmt(f),

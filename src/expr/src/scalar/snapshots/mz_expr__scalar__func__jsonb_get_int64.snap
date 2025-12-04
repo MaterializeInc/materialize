@@ -1,0 +1,78 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(\n    sqlname = \"->\",\n    output_type = \"Option<mz_repr::adt::jsonb::Jsonb>\",\n    is_infix_op = true\n)]\nfn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {\n    match a {\n        Datum::List(list) => {\n            let i = if i >= 0 {\n                usize::cast_from(i.unsigned_abs())\n            } else {\n                let i = usize::cast_from(i.unsigned_abs());\n                (list.iter().count()).wrapping_sub(i)\n            };\n            match list.iter().nth(i) {\n                Some(d) => d,\n                None => Datum::Null,\n            }\n        }\n        Datum::Map(_) => Datum::Null,\n        _ => if i == 0 || i == -1 { a } else { Datum::Null }\n    }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct JsonbGetInt64;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetInt64 {
+    type Input1 = Datum<'a>;
+    type Input2 = i64;
+    type Output = Datum<'a>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        jsonb_get_int64(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = <Option<mz_repr::adt::jsonb::Jsonb>>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        <Option<mz_repr::adt::jsonb::Jsonb> as ::mz_repr::DatumType<'_, ()>>::nullable()
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for JsonbGetInt64 {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("->")
+    }
+}
+fn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {
+    match a {
+        Datum::List(list) => {
+            let i = if i >= 0 {
+                usize::cast_from(i.unsigned_abs())
+            } else {
+                let i = usize::cast_from(i.unsigned_abs());
+                (list.iter().count()).wrapping_sub(i)
+            };
+            match list.iter().nth(i) {
+                Some(d) => d,
+                None => Datum::Null,
+            }
+        }
+        Datum::Map(_) => Datum::Null,
+        _ => if i == 0 || i == -1 { a } else { Datum::Null }
+    }
+}

@@ -1,0 +1,68 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(sqlname = \"->\", output_type = \"Option<mz_repr::adt::jsonb::Jsonb>\")]\nfn jsonb_get_string<'a>(a: Datum<'a>, k: &str) -> Datum<'a> {\n    match a {\n        Datum::Map(dict) => {\n            match dict.iter().find(|(k2, _v)| k == *k2) {\n                Some((_k, v)) => v,\n                None => Datum::Null,\n            }\n        }\n        _ => Datum::Null,\n    }\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct JsonbGetString;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetString {
+    type Input1 = Datum<'a>;
+    type Input2 = &'a str;
+    type Output = Datum<'a>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        jsonb_get_string(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = <Option<mz_repr::adt::jsonb::Jsonb>>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        <Option<mz_repr::adt::jsonb::Jsonb> as ::mz_repr::DatumType<'_, ()>>::nullable()
+    }
+}
+impl std::fmt::Display for JsonbGetString {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("->")
+    }
+}
+fn jsonb_get_string<'a>(a: Datum<'a>, k: &str) -> Datum<'a> {
+    match a {
+        Datum::Map(dict) => {
+            match dict.iter().find(|(k2, _v)| k == *k2) {
+                Some((_k, v)) => v,
+                None => Datum::Null,
+            }
+        }
+        _ => Datum::Null,
+    }
+}

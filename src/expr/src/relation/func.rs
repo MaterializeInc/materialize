@@ -2665,10 +2665,20 @@ impl AggregateFunc {
     }
 }
 
-fn jsonb_each<'a>(
+fn jsonb_each<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    // First produce a map, so that a common iterator can be returned.
+    let map = match a {
+        Datum::Map(dict) => dict,
+        _ => mz_repr::DatumMap::empty(),
+    };
+
+    map.iter()
+        .map(move |(k, v)| (Row::pack_slice(&[Datum::String(k), v]), Diff::ONE))
+}
+
+fn jsonb_each_stringify<'a>(
     a: Datum<'a>,
     temp_storage: &'a RowArena,
-    stringify: bool,
 ) -> impl Iterator<Item = (Row, Diff)> + 'a {
     // First produce a map, so that a common iterator can be returned.
     let map = match a {
@@ -2677,9 +2687,9 @@ fn jsonb_each<'a>(
     };
 
     map.iter().map(move |(k, mut v)| {
-        if stringify {
-            v = jsonb_stringify(v, temp_storage);
-        }
+        v = jsonb_stringify(v, temp_storage)
+            .map(Datum::String)
+            .unwrap_or(Datum::Null);
         (Row::pack_slice(&[Datum::String(k), v]), Diff::ONE)
     })
 }
@@ -2694,19 +2704,26 @@ fn jsonb_object_keys<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a
         .map(move |(k, _)| (Row::pack_slice(&[Datum::String(k)]), Diff::ONE))
 }
 
-fn jsonb_array_elements<'a>(
+fn jsonb_array_elements<'a>(a: Datum<'a>) -> impl Iterator<Item = (Row, Diff)> + 'a {
+    let list = match a {
+        Datum::List(list) => list,
+        _ => mz_repr::DatumList::empty(),
+    };
+    list.iter().map(move |e| (Row::pack_slice(&[e]), Diff::ONE))
+}
+
+fn jsonb_array_elements_stringify<'a>(
     a: Datum<'a>,
     temp_storage: &'a RowArena,
-    stringify: bool,
 ) -> impl Iterator<Item = (Row, Diff)> + 'a {
     let list = match a {
         Datum::List(list) => list,
         _ => mz_repr::DatumList::empty(),
     };
     list.iter().map(move |mut e| {
-        if stringify {
-            e = jsonb_stringify(e, temp_storage);
-        }
+        e = jsonb_stringify(e, temp_storage)
+            .map(Datum::String)
+            .unwrap_or(Datum::Null);
         (Row::pack_slice(&[e]), Diff::ONE)
     })
 }
@@ -3244,13 +3261,11 @@ fn mz_acl_explode<'a>(
 pub enum TableFunc {
     AclExplode,
     MzAclExplode,
-    JsonbEach {
-        stringify: bool,
-    },
+    JsonbEach,
+    JsonbEachStringify,
     JsonbObjectKeys,
-    JsonbArrayElements {
-        stringify: bool,
-    },
+    JsonbArrayElements,
+    JsonbArrayElementsStringify,
     RegexpExtract(AnalyzedRegex),
     CsvExtract(usize),
     GenerateSeriesInt32,
@@ -3372,14 +3387,15 @@ impl TableFunc {
         match self {
             TableFunc::AclExplode => Ok(Box::new(acl_explode(datums[0], temp_storage)?)),
             TableFunc::MzAclExplode => Ok(Box::new(mz_acl_explode(datums[0], temp_storage)?)),
-            TableFunc::JsonbEach { stringify } => {
-                Ok(Box::new(jsonb_each(datums[0], temp_storage, *stringify)))
+            TableFunc::JsonbEach => Ok(Box::new(jsonb_each(datums[0]))),
+            TableFunc::JsonbEachStringify => {
+                Ok(Box::new(jsonb_each_stringify(datums[0], temp_storage)))
             }
             TableFunc::JsonbObjectKeys => Ok(Box::new(jsonb_object_keys(datums[0]))),
-            TableFunc::JsonbArrayElements { stringify } => Ok(Box::new(jsonb_array_elements(
+            TableFunc::JsonbArrayElements => Ok(Box::new(jsonb_array_elements(datums[0]))),
+            TableFunc::JsonbArrayElementsStringify => Ok(Box::new(jsonb_array_elements_stringify(
                 datums[0],
                 temp_storage,
-                *stringify,
             ))),
             TableFunc::RegexpExtract(a) => Ok(Box::new(regexp_extract(datums[0], a).into_iter())),
             TableFunc::CsvExtract(n_cols) => Ok(Box::new(csv_extract(datums[0], *n_cols))),
@@ -3474,18 +3490,18 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbEach { stringify: true } => {
+            TableFunc::JsonbEach => {
                 let column_types = vec![
                     SqlScalarType::String.nullable(false),
-                    SqlScalarType::String.nullable(true),
+                    SqlScalarType::Jsonb.nullable(false),
                 ];
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbEach { stringify: false } => {
+            TableFunc::JsonbEachStringify => {
                 let column_types = vec![
                     SqlScalarType::String.nullable(false),
-                    SqlScalarType::Jsonb.nullable(false),
+                    SqlScalarType::String.nullable(true),
                 ];
                 let keys = vec![];
                 (column_types, keys)
@@ -3495,13 +3511,13 @@ impl TableFunc {
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbArrayElements { stringify: true } => {
-                let column_types = vec![SqlScalarType::String.nullable(true)];
+            TableFunc::JsonbArrayElements => {
+                let column_types = vec![SqlScalarType::Jsonb.nullable(false)];
                 let keys = vec![];
                 (column_types, keys)
             }
-            TableFunc::JsonbArrayElements { stringify: false } => {
-                let column_types = vec![SqlScalarType::Jsonb.nullable(false)];
+            TableFunc::JsonbArrayElementsStringify => {
+                let column_types = vec![SqlScalarType::String.nullable(true)];
                 let keys = vec![];
                 (column_types, keys)
             }
@@ -3613,9 +3629,11 @@ impl TableFunc {
         match self {
             TableFunc::AclExplode => 4,
             TableFunc::MzAclExplode => 4,
-            TableFunc::JsonbEach { .. } => 2,
+            TableFunc::JsonbEach => 2,
+            TableFunc::JsonbEachStringify => 2,
             TableFunc::JsonbObjectKeys => 1,
-            TableFunc::JsonbArrayElements { .. } => 1,
+            TableFunc::JsonbArrayElements => 1,
+            TableFunc::JsonbArrayElementsStringify => 1,
             TableFunc::RegexpExtract(a) => a.capture_groups_len(),
             TableFunc::CsvExtract(n_cols) => *n_cols,
             TableFunc::GenerateSeriesInt32 => 1,
@@ -3639,9 +3657,11 @@ impl TableFunc {
         match self {
             TableFunc::AclExplode
             | TableFunc::MzAclExplode
-            | TableFunc::JsonbEach { .. }
+            | TableFunc::JsonbEach
+            | TableFunc::JsonbEachStringify
             | TableFunc::JsonbObjectKeys
-            | TableFunc::JsonbArrayElements { .. }
+            | TableFunc::JsonbArrayElements
+            | TableFunc::JsonbArrayElementsStringify
             | TableFunc::GenerateSeriesInt32
             | TableFunc::GenerateSeriesInt64
             | TableFunc::GenerateSeriesTimestamp
@@ -3668,9 +3688,11 @@ impl TableFunc {
         match self {
             TableFunc::AclExplode => false,
             TableFunc::MzAclExplode => false,
-            TableFunc::JsonbEach { .. } => true,
+            TableFunc::JsonbEach => true,
+            TableFunc::JsonbEachStringify => true,
             TableFunc::JsonbObjectKeys => true,
-            TableFunc::JsonbArrayElements { .. } => true,
+            TableFunc::JsonbArrayElements => true,
+            TableFunc::JsonbArrayElementsStringify => true,
             TableFunc::RegexpExtract(_) => true,
             TableFunc::CsvExtract(_) => true,
             TableFunc::GenerateSeriesInt32 => true,
@@ -3696,9 +3718,11 @@ impl fmt::Display for TableFunc {
         match self {
             TableFunc::AclExplode => f.write_str("aclexplode"),
             TableFunc::MzAclExplode => f.write_str("mz_aclexplode"),
-            TableFunc::JsonbEach { .. } => f.write_str("jsonb_each"),
+            TableFunc::JsonbEach => f.write_str("jsonb_each"),
+            TableFunc::JsonbEachStringify => f.write_str("jsonb_each"),
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
-            TableFunc::JsonbArrayElements { .. } => f.write_str("jsonb_array_elements"),
+            TableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
+            TableFunc::JsonbArrayElementsStringify => f.write_str("jsonb_array_elements"),
             TableFunc::RegexpExtract(a) => write!(f, "regexp_extract({:?}, _)", a.0),
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),

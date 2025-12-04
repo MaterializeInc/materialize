@@ -4540,7 +4540,7 @@ fn plan_subscript_jsonb(
             },
             exprs,
         ),
-        BinaryFunc::JsonbGetPath,
+        expr_func::JsonbGetPath,
     );
     Ok(expr.into())
 }

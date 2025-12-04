@@ -1,0 +1,98 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(\n    sqlname = \"#>\",\n    output_type = \"Option<mz_repr::adt::jsonb::Jsonb>\",\n    is_infix_op = true\n)]\nfn jsonb_get_path<'a>(a: Datum<'a>, b: Array<'a>) -> Datum<'a> {\n    let mut json = a;\n    let path = b.elements();\n    for key in path.iter() {\n        let key = match key {\n            Datum::String(s) => s,\n            Datum::Null => return Datum::Null,\n            _ => unreachable!(\"keys in jsonb_get_path known to be strings\"),\n        };\n        json = match json {\n            Datum::Map(map) => {\n                match map.iter().find(|(k, _)| key == *k) {\n                    Some((_k, v)) => v,\n                    None => return Datum::Null,\n                }\n            }\n            Datum::List(list) => {\n                match strconv::parse_int64(key) {\n                    Ok(i) => {\n                        let i = if i >= 0 {\n                            usize::cast_from(i.unsigned_abs())\n                        } else {\n                            let i = usize::cast_from(i.unsigned_abs());\n                            (list.iter().count()).wrapping_sub(i)\n                        };\n                        match list.iter().nth(i) {\n                            Some(e) => e,\n                            None => return Datum::Null,\n                        }\n                    }\n                    Err(_) => return Datum::Null,\n                }\n            }\n            _ => return Datum::Null,\n        };\n    }\n    json\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct JsonbGetPath;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetPath {
+    type Input1 = Datum<'a>;
+    type Input2 = Array<'a>;
+    type Output = Datum<'a>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        jsonb_get_path(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = <Option<mz_repr::adt::jsonb::Jsonb>>::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn introduces_nulls(&self) -> bool {
+        <Option<mz_repr::adt::jsonb::Jsonb> as ::mz_repr::DatumType<'_, ()>>::nullable()
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for JsonbGetPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("#>")
+    }
+}
+fn jsonb_get_path<'a>(a: Datum<'a>, b: Array<'a>) -> Datum<'a> {
+    let mut json = a;
+    let path = b.elements();
+    for key in path.iter() {
+        let key = match key {
+            Datum::String(s) => s,
+            Datum::Null => return Datum::Null,
+            _ => unreachable!("keys in jsonb_get_path known to be strings"),
+        };
+        json = match json {
+            Datum::Map(map) => {
+                match map.iter().find(|(k, _)| key == *k) {
+                    Some((_k, v)) => v,
+                    None => return Datum::Null,
+                }
+            }
+            Datum::List(list) => {
+                match strconv::parse_int64(key) {
+                    Ok(i) => {
+                        let i = if i >= 0 {
+                            usize::cast_from(i.unsigned_abs())
+                        } else {
+                            let i = usize::cast_from(i.unsigned_abs());
+                            (list.iter().count()).wrapping_sub(i)
+                        };
+                        match list.iter().nth(i) {
+                            Some(e) => e,
+                            None => return Datum::Null,
+                        }
+                    }
+                    Err(_) => return Datum::Null,
+                }
+            }
+            _ => return Datum::Null,
+        };
+    }
+    json
+}
