@@ -1031,7 +1031,7 @@ mod tests {
 
             assert!(
                 main_select_part.contains("FROM products")
-                && !main_select_part.contains("materialize.public.products"),
+                    && !main_select_part.contains("materialize.public.products"),
                 "CTE reference in main query should remain unqualified (shadowing), got: {}",
                 normalized_sql
             );

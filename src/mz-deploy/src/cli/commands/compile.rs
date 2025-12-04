@@ -57,17 +57,21 @@ pub async fn run(
     let parse_duration = parse_start.elapsed().unwrap();
 
     // Count objects and schemas
-    let object_count: usize = planned_project.databases.iter()
+    let object_count: usize = planned_project
+        .databases
+        .iter()
         .flat_map(|db| &db.schemas)
         .map(|schema| schema.objects.len())
         .sum();
-    let schema_count: usize = planned_project.databases.iter()
+    let schema_count: usize = planned_project
+        .databases
+        .iter()
         .map(|db| db.schemas.len())
         .sum();
 
     progress::stage_success(
         &format!("Found {} objects in {} schemas", object_count, schema_count),
-        parse_duration
+        parse_duration,
     );
 
     // Stage 2: Validate project structure
@@ -80,7 +84,7 @@ pub async fn run(
 
     progress::stage_success(
         &format!("All {} objects validated", sorted.len()),
-        validate_duration
+        validate_duration,
     );
 
     // Stage 3: Build dependency graph
@@ -88,42 +92,44 @@ pub async fn run(
     let deps_start = SystemTime::now();
 
     // Count internal dependencies (excluding external)
-    let internal_dep_count: usize = planned_project.dependency_graph.values()
-        .map(|deps| deps.iter()
-            .filter(|dep| !planned_project.external_dependencies.contains(dep))
-            .count())
+    let internal_dep_count: usize = planned_project
+        .dependency_graph
+        .values()
+        .map(|deps| {
+            deps.iter()
+                .filter(|dep| !planned_project.external_dependencies.contains(dep))
+                .count()
+        })
         .sum();
 
     let deps_duration = deps_start.elapsed().unwrap();
     progress::stage_success(
         &format!("Resolved {} dependencies", internal_dep_count),
-        deps_duration
+        deps_duration,
     );
 
     // Show additional info
     if !planned_project.external_dependencies.is_empty() {
-        progress::info(&format!("{} external dependencies detected",
-            planned_project.external_dependencies.len()));
+        progress::info(&format!(
+            "{} external dependencies detected",
+            planned_project.external_dependencies.len()
+        ));
     }
     if !planned_project.cluster_dependencies.is_empty() {
-        progress::info(&format!("{} clusters required",
-            planned_project.cluster_dependencies.len()));
+        progress::info(&format!(
+            "{} clusters required",
+            planned_project.cluster_dependencies.len()
+        ));
     }
 
     // Type checking with Docker if enabled
     if args.typecheck {
-        let typecheck_duration = typecheck_with_docker(
-            directory,
-            &planned_project,
-            args.docker_image,
-            object_count
-        ).await?;
+        let typecheck_duration =
+            typecheck_with_docker(directory, &planned_project, args.docker_image, object_count)
+                .await?;
 
         if let Some(duration) = typecheck_duration {
-            progress::stage_success(
-                &format!("{} objects passed", object_count),
-                duration
-            );
+            progress::stage_success(&format!("{} objects passed", object_count), duration);
         }
     }
 

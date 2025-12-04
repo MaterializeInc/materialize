@@ -54,7 +54,12 @@ pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError
         let date_str = datetime.format("%a %b %d %H:%M:%S %Y %z").to_string();
 
         // Display deployment header (like a git commit)
-        println!("{} {} [{}]", "deployment".yellow().bold(), environment.cyan(), kind.dimmed());
+        println!(
+            "{} {} [{}]",
+            "deployment".yellow().bold(),
+            environment.cyan(),
+            kind.dimmed()
+        );
         if let Some(commit_sha) = commit {
             println!("{}: {}", "Commit".dimmed(), commit_sha);
         }
