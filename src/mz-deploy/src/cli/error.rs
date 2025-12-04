@@ -138,7 +138,7 @@ impl CliError {
                     .map(|c| format!("  - {}.{} (last promoted by '{}' at {:?})",
                         c.database.yellow(),
                         c.schema.yellow(),
-                        c.environment,
+                        c.deploy_id,
                         c.promoted_at))
                     .collect::<Vec<_>>()
                     .join("\n");

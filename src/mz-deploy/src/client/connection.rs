@@ -51,12 +51,12 @@ pub enum ConnectionError {
     },
     #[error("cluster '{name}' not found")]
     ClusterNotFound { name: String },
-    #[error("deployment '{environment}' already exists")]
-    DeploymentAlreadyExists { environment: String },
-    #[error("deployment '{environment}' not found")]
-    DeploymentNotFound { environment: String },
-    #[error("deployment '{environment}' has already been promoted to production")]
-    DeploymentAlreadyPromoted { environment: String },
+    #[error("deployment '{deploy_id}' already exists")]
+    DeploymentAlreadyExists { deploy_id: String },
+    #[error("deployment '{deploy_id}' not found")]
+    DeploymentNotFound { deploy_id: String },
+    #[error("deployment '{deploy_id}' has already been promoted to production")]
+    DeploymentAlreadyPromoted { deploy_id: String },
     #[error("unsupported statement type: {0}")]
     UnsupportedStatementType(String),
 }
@@ -557,7 +557,7 @@ impl Client {
 
         self.execute(
             r#"CREATE TABLE IF NOT EXISTS deploy.deployments (
-                environment TEXT NOT NULL,
+                deploy_id TEXT NOT NULL,
                 deployed_at TIMESTAMP NOT NULL,
                 promoted_at TIMESTAMP,
                 database    TEXT NOT NULL,
@@ -565,7 +565,7 @@ impl Client {
                 deployed_by TEXT NOT NULL,
                 commit      TEXT
             ) WITH (
-                PARTITION BY (environment, deployed_at, promoted_at)
+                PARTITION BY (deploy_id, deployed_at, promoted_at)
             );"#,
             &[],
         )
@@ -573,13 +573,13 @@ impl Client {
 
         self.execute(
             r#"CREATE TABLE IF NOT EXISTS deploy.objects (
-                environment TEXT NOT NULL,
+                deploy_id TEXT NOT NULL,
                 database TEXT NOT NULL,
                 schema   TEXT NOT NULL,
                 object   TEXT NOT NULL,
                 hash     TEXT NOT NULL
             ) WITH (
-                PARTITION BY (environment, database, schema)
+                PARTITION BY (deploy_id, database, schema)
             );"#,
             &[],
         )
@@ -587,10 +587,10 @@ impl Client {
 
         self.execute(
             r#"CREATE TABLE IF NOT EXISTS deploy.clusters (
-                environment TEXT NOT NULL,
+                deploy_id TEXT NOT NULL,
                 cluster_id TEXT NOT NULL
             ) WITH (
-                PARTITION BY (environment)
+                PARTITION BY (deploy_id)
             );"#,
             &[],
         )
@@ -600,13 +600,13 @@ impl Client {
             r#"
             CREATE VIEW IF NOT EXISTS deploy.production AS
             WITH candidates AS (
-                SELECT DISTINCT ON (database, schema) database, schema, environment, promoted_at, commit
+                SELECT DISTINCT ON (database, schema) database, schema, deploy_id, promoted_at, commit
                 FROM deploy.deployments
                 WHERE promoted_at IS NOT NULL
                 ORDER BY database, schema, promoted_at DESC
             )
 
-            SELECT c.database, c.schema, c.environment, c.promoted_at, c.commit
+            SELECT c.database, c.schema, c.deploy_id, c.promoted_at, c.commit
             FROM candidates c
             JOIN mz_schemas s ON c.schema = s.name
             JOIN mz_databases d ON c.database = d.name;
@@ -629,7 +629,7 @@ impl Client {
 
         let insert_sql = r#"
             INSERT INTO deploy.deployments
-                (environment, database, schema, deployed_at, deployed_by, promoted_at, commit)
+                (deploy_id, database, schema, deployed_at, deployed_by, promoted_at, commit)
             VALUES
                 ($1, $2, $3, $4, $5, $6, $7)
         "#;
@@ -638,7 +638,7 @@ impl Client {
             self.execute(
                 insert_sql,
                 &[
-                    &deployment.environment,
+                    &deployment.deploy_id,
                     &deployment.database,
                     &deployment.schema,
                     &deployment.deployed_at,
@@ -664,7 +664,7 @@ impl Client {
 
         let insert_sql = r#"
             INSERT INTO deploy.objects
-                (environment, database, schema, object, hash)
+                (deploy_id, database, schema, object, hash)
             VALUES
                 ($1, $2, $3, $4, $5)
         "#;
@@ -673,7 +673,7 @@ impl Client {
             self.execute(
                 insert_sql,
                 &[
-                    &obj.environment,
+                    &obj.deploy_id,
                     &obj.database,
                     &obj.schema,
                     &obj.object,
@@ -692,7 +692,7 @@ impl Client {
     /// Fails if any cluster names cannot be resolved (cluster doesn't exist).
     pub async fn insert_deployment_clusters(
         &self,
-        environment: &str,
+        deploy_id: &str,
         clusters: &[String],
     ) -> Result<(), ConnectionError> {
         if clusters.is_empty() {
@@ -737,13 +737,13 @@ impl Client {
 
         // Step 2: Insert the cluster IDs into deploy.clusters
         let insert_sql = r#"
-            INSERT INTO deploy.clusters (environment, cluster_id)
+            INSERT INTO deploy.clusters (deploy_id, cluster_id)
             VALUES ($1, $2)
         "#;
 
         for row in rows {
             let cluster_id: String = row.get("id");
-            self.execute(insert_sql, &[&environment, &cluster_id])
+            self.execute(insert_sql, &[&deploy_id, &cluster_id])
                 .await?;
         }
 
@@ -757,19 +757,19 @@ impl Client {
     /// that cluster will be silently omitted from results.
     pub async fn get_deployment_clusters(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<Vec<String>, ConnectionError> {
         let query = r#"
             SELECT c.name
             FROM deploy.clusters dc
             JOIN mz_catalog.mz_clusters c ON dc.cluster_id = c.id
-            WHERE dc.environment = $1
+            WHERE dc.deploy_id = $1
             ORDER BY c.name
         "#;
 
         let rows = self
             .client
-            .query(query, &[&environment])
+            .query(query, &[&deploy_id])
             .await
             .map_err(ConnectionError::Query)?;
 
@@ -782,18 +782,18 @@ impl Client {
     /// to clusters in mz_catalog.mz_clusters (i.e., clusters were deleted).
     pub async fn validate_deployment_clusters(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<(), ConnectionError> {
         let query = r#"
             SELECT dc.cluster_id
             FROM deploy.clusters dc
             LEFT JOIN mz_catalog.mz_clusters c ON dc.cluster_id = c.id
-            WHERE dc.environment = $1 AND c.id IS NULL
+            WHERE dc.deploy_id = $1 AND c.id IS NULL
         "#;
 
         let rows = self
             .client
-            .query(query, &[&environment])
+            .query(query, &[&deploy_id])
             .await
             .map_err(ConnectionError::Query)?;
 
@@ -804,10 +804,10 @@ impl Client {
                 source: format!(
                     "Deployment '{}' references {} cluster(s) that no longer exist: {}. \
                      These clusters may have been deleted. Run 'mz-deploy abort {}' to clean up.",
-                    environment,
+                    deploy_id,
                     missing_ids.len(),
                     missing_ids.join(", "),
-                    environment
+                    deploy_id
                 )
                 .into(),
             });
@@ -822,9 +822,9 @@ impl Client {
     /// This provides a snapshot of the current hydration state.
     pub async fn get_deployment_hydration_status(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<HashMap<String, (i64, i64)>, ConnectionError> {
-        let suffix = format!("_{}", environment);
+        let suffix = format!("_{}", deploy_id);
         let pattern = format!("%{}", suffix);
 
         let query = r#"
@@ -878,7 +878,7 @@ impl Client {
     /// 3. Use rows where mz_diff = +1 as the current state (no merging needed)
     pub async fn subscribe_deployment_hydration(
         &mut self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<tokio_postgres::Transaction<'_>, ConnectionError> {
         let txn = self.client.transaction().await?;
 
@@ -894,7 +894,7 @@ impl Client {
                     JOIN mz_cluster_replicas AS r ON c.id = r.cluster_id
                     JOIN deploy.clusters AS dc ON c.id = dc.cluster_id
                     JOIN mz_internal.mz_hydration_statuses AS mhs ON mhs.replica_id = r.id
-                    WHERE dc.environment = $1
+                    WHERE dc.deploy_id = $1
                     GROUP BY 1, 2
                 )
                 SELECT name, MAX(hydrated) AS hydrated, MAX(total) AS total
@@ -903,7 +903,7 @@ impl Client {
             )
         "#;
 
-        txn.execute(subscribe_sql, &[&environment]).await?;
+        txn.execute(subscribe_sql, &[&deploy_id]).await?;
 
         Ok(txn)
     }
@@ -911,38 +911,38 @@ impl Client {
     /// Delete cluster records for a staging deployment.
     pub async fn delete_deployment_clusters(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<(), ConnectionError> {
         self.execute(
-            "DELETE FROM deploy.clusters WHERE environment = $1",
-            &[&environment],
+            "DELETE FROM deploy.clusters WHERE deploy_id = $1",
+            &[&deploy_id],
         )
         .await?;
         Ok(())
     }
 
-    /// Update promoted_at timestamp for a staging environment.
-    pub async fn update_promoted_at(&self, environment: &str) -> Result<(), ConnectionError> {
+    /// Update promoted_at timestamp for a staging deployment.
+    pub async fn update_promoted_at(&self, deploy_id: &str) -> Result<(), ConnectionError> {
         let update_sql = r#"
             UPDATE deploy.deployments
             SET promoted_at = NOW()
-            WHERE environment = $1
+            WHERE deploy_id = $1
         "#;
 
-        self.execute(update_sql, &[&environment]).await?;
+        self.execute(update_sql, &[&deploy_id]).await?;
         Ok(())
     }
 
-    /// Delete all deployment records for a specific environment.
-    pub async fn delete_deployment(&self, environment: &str) -> Result<(), ConnectionError> {
+    /// Delete all deployment records for a specific deployment.
+    pub async fn delete_deployment(&self, deploy_id: &str) -> Result<(), ConnectionError> {
         self.execute(
-            "DELETE FROM deploy.deployments WHERE environment = $1",
-            &[&environment],
+            "DELETE FROM deploy.deployments WHERE deploy_id = $1",
+            &[&deploy_id],
         )
         .await?;
         self.execute(
-            "DELETE FROM deploy.objects WHERE environment = $1",
-            &[&environment],
+            "DELETE FROM deploy.objects WHERE deploy_id = $1",
+            &[&deploy_id],
         )
         .await?;
         Ok(())
@@ -1186,16 +1186,16 @@ impl Client {
         Ok(existing)
     }
 
-    /// Get schema deployment records from the database for a specific environment.
+    /// Get schema deployment records from the database for a specific deployment.
     pub async fn get_schema_deployments(
         &self,
-        environment: Option<&str>,
+        deploy_id: Option<&str>,
     ) -> Result<Vec<SchemaDeploymentRecord>, ConnectionError> {
         use std::time::UNIX_EPOCH;
 
-        let query = if environment.is_none() {
+        let query = if deploy_id.is_none() {
             r#"
-                SELECT environment, database, schema,
+                SELECT deploy_id, database, schema,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                        '' as deployed_by,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
@@ -1205,32 +1205,32 @@ impl Client {
             "#
         } else {
             r#"
-                SELECT environment, database, schema,
+                SELECT deploy_id, database, schema,
                        CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                        deployed_by,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                        commit
                 FROM deploy.deployments
-                WHERE environment = $1
+                WHERE deploy_id = $1
                 ORDER BY database, schema
             "#
         };
 
-        let rows = if environment.is_none() {
+        let rows = if deploy_id.is_none() {
             self.client
                 .query(query, &[])
                 .await
                 .map_err(ConnectionError::Query)?
         } else {
             self.client
-                .query(query, &[&environment])
+                .query(query, &[&deploy_id])
                 .await
                 .map_err(ConnectionError::Query)?
         };
 
         let mut records = Vec::new();
         for row in rows {
-            let environment: String = row.get("environment");
+            let deploy_id: String = row.get("deploy_id");
             let database: String = row.get("database");
             let schema: String = row.get("schema");
             let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
@@ -1243,7 +1243,7 @@ impl Client {
                 .map(|epoch| UNIX_EPOCH + std::time::Duration::from_secs_f64(epoch));
 
             records.push(SchemaDeploymentRecord {
-                environment,
+                deploy_id,
                 database,
                 schema,
                 deployed_at,
@@ -1256,35 +1256,35 @@ impl Client {
         Ok(records)
     }
 
-    /// Get deployment object records from the database for a specific environment.
+    /// Get deployment object records from the database for a specific deployment.
     pub async fn get_deployment_objects(
         &self,
-        environment: Option<&str>,
+        deploy_id: Option<&str>,
     ) -> Result<DeploymentSnapshot, ConnectionError> {
-        let query = if environment.is_none() {
+        let query = if deploy_id.is_none() {
             r#"
                 SELECT o.database, o.schema, o.object, o.hash
                 FROM deploy.objects o
                 JOIN deploy.production p
                   ON o.database = p.database AND o.schema = p.schema
-                WHERE o.environment = p.environment
+                WHERE o.deploy_id = p.deploy_id
             "#
         } else {
             r#"
                 SELECT database, schema, object, hash
                 FROM deploy.objects
-                WHERE environment = $1
+                WHERE deploy_id = $1
             "#
         };
 
-        let rows = if environment.is_none() {
+        let rows = if deploy_id.is_none() {
             self.client
                 .query(query, &[])
                 .await
                 .map_err(ConnectionError::Query)?
         } else {
             self.client
-                .query(query, &[&environment])
+                .query(query, &[&deploy_id])
                 .await
                 .map_err(ConnectionError::Query)?
         };
@@ -1309,25 +1309,25 @@ impl Client {
         Ok(DeploymentSnapshot { objects, schemas })
     }
 
-    /// Get metadata about a deployment environment for validation.
+    /// Get metadata about a deployment for validation.
     pub async fn get_deployment_metadata(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<Option<DeploymentMetadata>, ConnectionError> {
         use std::time::UNIX_EPOCH;
 
         let query = r#"
-            SELECT environment,
+            SELECT deploy_id,
                    CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                    database,
                    schema
             FROM deploy.deployments
-            WHERE environment = $1
+            WHERE deploy_id = $1
         "#;
 
         let rows = self
             .client
-            .query(query, &[&environment])
+            .query(query, &[&deploy_id])
             .await
             .map_err(ConnectionError::Query)?;
 
@@ -1336,7 +1336,7 @@ impl Client {
         }
 
         let first_row = &rows[0];
-        let environment: String = first_row.get("environment");
+        let deploy_id: String = first_row.get("deploy_id");
         let promoted_at_epoch: Option<f64> = first_row.get("promoted_at_epoch");
         let promoted_at =
             promoted_at_epoch.map(|epoch| UNIX_EPOCH + std::time::Duration::from_secs_f64(epoch));
@@ -1349,15 +1349,15 @@ impl Client {
         }
 
         Ok(Some(DeploymentMetadata {
-            environment,
+            deploy_id,
             promoted_at,
             schemas,
         }))
     }
 
-    /// List all staging deployments (promoted_at IS NULL), grouped by environment.
+    /// List all staging deployments (promoted_at IS NULL), grouped by deploy_id.
     ///
-    /// Returns a map from environment name to list of (database, schema) tuples and deployment metadata.
+    /// Returns a map from deploy_id to list of (database, schema) tuples and deployment metadata.
     pub async fn list_staging_deployments(
         &self,
     ) -> Result<
@@ -1367,7 +1367,7 @@ impl Client {
         use std::time::UNIX_EPOCH;
 
         let query = r#"
-            SELECT environment,
+            SELECT deploy_id,
                    CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                    deployed_by,
                    commit,
@@ -1375,7 +1375,7 @@ impl Client {
                    schema
             FROM deploy.deployments
             WHERE promoted_at IS NULL
-            ORDER BY environment, database, schema
+            ORDER BY deploy_id, database, schema
         "#;
 
         let rows = self
@@ -1390,7 +1390,7 @@ impl Client {
         > = HashMap::new();
 
         for row in rows {
-            let environment: String = row.get("environment");
+            let deploy_id: String = row.get("deploy_id");
             let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
             let deployed_by: String = row.get("deployed_by");
             let commit: Option<String> = row.get("commit");
@@ -1400,7 +1400,7 @@ impl Client {
             let deployed_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(deployed_at_epoch);
 
             deployments
-                .entry(environment)
+                .entry(deploy_id)
                 .or_insert_with(|| (deployed_at, deployed_by.clone(), commit.clone(), Vec::new()))
                 .3
                 .push((database, schema));
@@ -1411,7 +1411,7 @@ impl Client {
 
     /// List deployment history in chronological order (promoted deployments only).
     ///
-    /// Returns a map from (environment, promoted_at, deployed_by, commit) to list of schemas,
+    /// Returns a map from (deploy_id, promoted_at, deployed_by, commit) to list of schemas,
     /// representing complete deployments ordered by promotion time.
     pub async fn list_deployment_history(
         &self,
@@ -1426,13 +1426,13 @@ impl Client {
             format!(
                 r#"
                 WITH unique_deployments AS (
-                    SELECT DISTINCT environment, promoted_at, deployed_by, commit
+                    SELECT DISTINCT deploy_id, promoted_at, deployed_by, commit
                     FROM deploy.deployments
                     WHERE promoted_at IS NOT NULL
                     ORDER BY promoted_at DESC
                     LIMIT {}
                 )
-                SELECT d.environment,
+                SELECT d.deploy_id,
                        CAST(EXTRACT(EPOCH FROM d.promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                        d.deployed_by,
                        d.commit,
@@ -1440,7 +1440,7 @@ impl Client {
                        d.schema
                 FROM deploy.deployments d
                 JOIN unique_deployments u
-                  ON d.environment = u.environment
+                  ON d.deploy_id = u.deploy_id
                   AND d.promoted_at = u.promoted_at
                   AND d.deployed_by = u.deployed_by
                 ORDER BY d.promoted_at DESC, d.database, d.schema
@@ -1449,7 +1449,7 @@ impl Client {
             )
         } else {
             r#"
-                SELECT environment,
+                SELECT deploy_id,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                        deployed_by,
                        commit,
@@ -1468,13 +1468,13 @@ impl Client {
             .await
             .map_err(ConnectionError::Query)?;
 
-        // Group by (environment, promoted_at, deployed_by, commit)
+        // Group by (deploy_id, promoted_at, deployed_by, commit)
         let mut deployments: Vec<(String, std::time::SystemTime, String, Option<String>, Vec<(String, String)>)> =
             Vec::new();
         let mut current_key: Option<(String, std::time::SystemTime, String, Option<String>)> = None;
 
         for row in rows {
-            let environment: String = row.get("environment");
+            let deploy_id: String = row.get("deploy_id");
             let promoted_at_epoch: f64 = row.get("promoted_at_epoch");
             let deployed_by: String = row.get("deployed_by");
             let commit: Option<String> = row.get("commit");
@@ -1482,13 +1482,13 @@ impl Client {
             let schema: String = row.get("schema");
 
             let promoted_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(promoted_at_epoch);
-            let key = (environment.clone(), promoted_at, deployed_by.clone(), commit.clone());
+            let key = (deploy_id.clone(), promoted_at, deployed_by.clone(), commit.clone());
 
             // Check if this is a new deployment or same as current
             if current_key.as_ref() != Some(&key) {
                 // Start a new deployment group
                 deployments.push((
-                    environment,
+                    deploy_id,
                     promoted_at,
                     deployed_by,
                     commit,
@@ -1506,12 +1506,12 @@ impl Client {
         Ok(deployments)
     }
 
-    /// Get staging schema names for a specific environment.
+    /// Get staging schema names for a specific deployment.
     pub async fn get_staging_schemas(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<Vec<(String, String)>, ConnectionError> {
-        let suffix = format!("_{}", environment);
+        let suffix = format!("_{}", deploy_id);
         let pattern = format!("%{}", suffix);
 
         let query = r#"
@@ -1537,12 +1537,12 @@ impl Client {
             .collect())
     }
 
-    /// Get staging cluster names for a specific environment.
+    /// Get staging cluster names for a specific deployment.
     pub async fn get_staging_clusters(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<Vec<String>, ConnectionError> {
-        let suffix = format!("_{}", environment);
+        let suffix = format!("_{}", deploy_id);
         let pattern = format!("%{}", suffix);
 
         let query = r#"
@@ -1563,21 +1563,21 @@ impl Client {
     /// Check for deployment conflicts (schemas updated after deployment started).
     pub async fn check_deployment_conflicts(
         &self,
-        environment: &str,
+        deploy_id: &str,
     ) -> Result<Vec<ConflictRecord>, ConnectionError> {
         use std::time::{Duration, UNIX_EPOCH};
 
         let query = r#"
-            SELECT p.database, p.schema, p.environment,
+            SELECT p.database, p.schema, p.deploy_id,
                    CAST(EXTRACT(EPOCH FROM p.promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch
             FROM deploy.production p
             JOIN deploy.deployments d USING (database, schema)
-            WHERE d.environment = $1 AND p.promoted_at > d.deployed_at
+            WHERE d.deploy_id = $1 AND p.promoted_at > d.deployed_at
         "#;
 
         let rows = self
             .client
-            .query(query, &[&environment])
+            .query(query, &[&deploy_id])
             .await
             .map_err(ConnectionError::Query)?;
 
@@ -1590,7 +1590,7 @@ impl Client {
                 ConflictRecord {
                     database: row.get("database"),
                     schema: row.get("schema"),
-                    environment: row.get("environment"),
+                    deploy_id: row.get("deploy_id"),
                     promoted_at,
                 }
             })

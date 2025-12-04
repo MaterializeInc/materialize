@@ -94,25 +94,25 @@ enum Command {
     ///   # Deploy directly to production (safe for new objects)
     ///   mz-deploy apply
     Apply {
-        /// Staging environment to promote to production (blue/green deployment)
+        /// Staging deployment to promote to production (blue/green deployment)
         ///
-        /// Specifies which staging environment to swap with production. The staging
+        /// Specifies which staging deployment to swap with production. The staging
         /// schemas will become production and vice versa in an atomic operation.
-        #[arg(value_name = "ENV")]
-        staging_env: Option<String>,
+        #[arg(value_name = "DEPLOY_ID")]
+        staging_deploy_id: Option<String>,
 
         /// Allow deployment with uncommitted git changes
         #[arg(long)]
         allow_dirty: bool,
 
-        /// Skip conflict detection when promoting staging environments
+        /// Skip conflict detection when promoting staging deployments
         ///
         /// When promoting staging, apply normally checks if production schemas were
         /// modified after staging was created. This flag bypasses that check.
         #[arg(long)]
         force: bool,
 
-        /// Skip cluster hydration when promoting staging environments
+        /// Skip cluster hydration when promoting staging deployments
         #[arg(long)]
         skip_ready: bool,
 
@@ -267,7 +267,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Apply {
-            staging_env,
+            staging_deploy_id,
             allow_dirty,
             force,
             skip_ready,
@@ -276,7 +276,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
-            match staging_env {
+            match staging_deploy_id {
                 None => {
                     cli::commands::apply::run(
                         &profile,
@@ -287,11 +287,11 @@ async fn run(args: Args) -> Result<(), CliError> {
                     .await
                 }
 
-                Some(stage_env) => {
+                Some(deploy_id) => {
                     if !skip_ready {
-                        cli::commands::ready::run(&profile, &stage_env, true, None).await?;
+                        cli::commands::ready::run(&profile, &deploy_id, true, None).await?;
                     }
-                    cli::commands::swap::run(&profile, &stage_env, force).await
+                    cli::commands::swap::run(&profile, &deploy_id, force).await
                 }
             }
         }

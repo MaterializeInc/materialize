@@ -16,13 +16,13 @@ use std::path::Path;
 /// - Creates schemas if they don't exist
 /// - Deploys only CREATE TABLE and CREATE TABLE FROM SOURCE statements
 /// - Deploys associated indexes, grants, and comments
-/// - Tracks deployment under an environment name
+/// - Tracks deployment under a deploy ID
 /// - Only records tables that were actually created
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
 /// * `directory` - Project root directory
-/// * `environment_name` - Optional environment name (defaults to first 7 chars of git SHA)
+/// * `deploy_id` - Optional deploy ID (defaults to random 7-char hex)
 /// * `allow_dirty` - Allow deploying with uncommitted changes
 ///
 /// # Returns
@@ -33,7 +33,7 @@ use std::path::Path;
 pub async fn run(
     profile: &Profile,
     directory: &Path,
-    environment_name: Option<&str>,
+    deploy_id: Option<&str>,
     allow_dirty: bool,
 ) -> Result<(), CliError> {
     // Check for uncommitted changes before proceeding
@@ -41,13 +41,13 @@ pub async fn run(
         return Err(CliError::GitDirty);
     }
 
-    // Determine environment name (use provided name or random 7-char hex)
-    let environment_name = match environment_name {
+    // Determine deploy ID (use provided name or random 7-char hex)
+    let deploy_id = match deploy_id {
         Some(name) => name.to_string(),
         None => helpers::generate_random_env_name(),
     };
 
-    println!("Creating tables in environment: {}", environment_name);
+    println!("Creating tables in deployment: {}", deploy_id);
 
     // Compile the project first (skip type checking since we're deploying)
     let compile_args = super::compile::CompileArgs {
@@ -67,10 +67,10 @@ pub async fn run(
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Validate deployment doesn't already exist
-    let existing_metadata = client.get_deployment_metadata(&environment_name).await?;
+    let existing_metadata = client.get_deployment_metadata(&deploy_id).await?;
     if existing_metadata.is_some() {
         return Err(CliError::InvalidEnvironmentName {
-            name: format!("deployment '{}' already exists", environment_name),
+            name: format!("deployment '{}' already exists", deploy_id),
         });
     }
 
@@ -207,7 +207,7 @@ pub async fn run(
     project::deployment_snapshot::write_to_database(
         &client,
         &new_snapshot,
-        &environment_name,
+        &deploy_id,
         &metadata,
         Some(now),
     )

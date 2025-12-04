@@ -10,14 +10,14 @@ use std::time::Duration;
 /// Wait for a staging deployment to become ready by monitoring hydration status.
 ///
 /// This command:
-/// - Validates the staging environment exists and hasn't been promoted
+/// - Validates the staging deployment exists and hasn't been promoted
 /// - Subscribes to cluster hydration status
 /// - Shows progress bars tracking hydration for each cluster
 /// - Exits when all clusters are hydrated or timeout is reached
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
-/// * `environment` - Staging environment name
+/// * `deploy_id` - Staging deployment ID
 /// * `snapshot` - If true, check once and exit; if false, track continuously
 /// * `timeout` - Optional timeout in seconds
 ///
@@ -25,53 +25,53 @@ use std::time::Duration;
 /// Ok(()) if deployment becomes ready
 ///
 /// # Errors
-/// Returns `CliError::StagingEnvironmentNotFound` if environment doesn't exist
+/// Returns `CliError::StagingEnvironmentNotFound` if deployment doesn't exist
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
 /// Returns `CliError::ReadyTimeout` if timeout is reached
 pub async fn run(
     profile: &Profile,
-    environment: &str,
+    deploy_id: &str,
     snapshot: bool,
     timeout: Option<u64>,
 ) -> Result<(), CliError> {
     // Connect to database
     let mut client = helpers::connect_to_database(profile).await?;
 
-    // Validate staging environment exists and is not promoted
-    let metadata = client.get_deployment_metadata(environment).await?;
+    // Validate staging deployment exists and is not promoted
+    let metadata = client.get_deployment_metadata(deploy_id).await?;
     match metadata {
         Some(meta) if meta.promoted_at.is_some() => {
             return Err(CliError::StagingAlreadyPromoted {
-                name: environment.to_string(),
+                name: deploy_id.to_string(),
             });
         }
         Some(_) => {}
         None => {
             return Err(CliError::StagingEnvironmentNotFound {
-                name: environment.to_string(),
+                name: deploy_id.to_string(),
             });
         }
     }
 
     if snapshot {
         // Snapshot mode: query once and display status
-        run_snapshot(environment, &client).await
+        run_snapshot(deploy_id, &client).await
     } else {
         // Continuous mode: subscribe and track with progress bars
-        run_continuous(environment, &mut client, timeout).await
+        run_continuous(deploy_id, &mut client, timeout).await
     }
 }
 
 /// Run in snapshot mode: query hydration status once and display.
-async fn run_snapshot(environment: &str, client: &crate::client::Client) -> Result<(), CliError> {
-    let status = client.get_deployment_hydration_status(environment).await?;
+async fn run_snapshot(deploy_id: &str, client: &crate::client::Client) -> Result<(), CliError> {
+    let status = client.get_deployment_hydration_status(deploy_id).await?;
 
     if status.is_empty() {
-        println!("No clusters found in staging deployment '{}'", environment);
+        println!("No clusters found in staging deployment '{}'", deploy_id);
         return Ok(());
     }
 
-    println!("Hydration status for deployment '{}':", environment);
+    println!("Hydration status for deployment '{}':", deploy_id);
     println!();
 
     let mut all_ready = true;
@@ -115,15 +115,15 @@ async fn run_snapshot(environment: &str, client: &crate::client::Client) -> Resu
 
 /// Run in continuous mode: subscribe to hydration updates and show progress bars.
 async fn run_continuous(
-    environment: &str,
+    deploy_id: &str,
     client: &mut crate::client::Client,
     timeout: Option<u64>,
 ) -> Result<(), CliError> {
     // Get initial hydration status
-    let initial_status = client.get_deployment_hydration_status(environment).await?;
+    let initial_status = client.get_deployment_hydration_status(deploy_id).await?;
 
     if initial_status.is_empty() {
-        println!("No clusters found in staging deployment '{}'", environment);
+        println!("No clusters found in staging deployment '{}'", deploy_id);
         return Ok(());
     }
 
@@ -137,7 +137,7 @@ async fn run_continuous(
         return Ok(());
     }
 
-    println!("Waiting for deployment '{}' to be ready...", environment);
+    println!("Waiting for deployment '{}' to be ready...", deploy_id);
     println!();
 
     // Set up progress bars
@@ -161,13 +161,13 @@ async fn run_continuous(
     }
 
     // Subscribe to hydration updates and monitor
-    let monitor_future = monitor_hydration(environment, client, progress_bars);
+    let monitor_future = monitor_hydration(deploy_id, client, progress_bars);
 
     if let Some(secs) = timeout {
         match tokio::time::timeout(Duration::from_secs(secs), monitor_future).await {
             Ok(result) => result,
             Err(_) => Err(CliError::ReadyTimeout {
-                name: environment.to_string(),
+                name: deploy_id.to_string(),
                 seconds: secs,
             }),
         }
@@ -178,11 +178,11 @@ async fn run_continuous(
 
 /// Monitor hydration status via SUBSCRIBE and update progress bars.
 async fn monitor_hydration(
-    environment: &str,
+    deploy_id: &str,
     client: &mut crate::client::Client,
     progress_bars: HashMap<String, ProgressBar>,
 ) -> Result<(), CliError> {
-    let txn = client.subscribe_deployment_hydration(environment).await?;
+    let txn = client.subscribe_deployment_hydration(deploy_id).await?;
 
     loop {
         // Fetch next batch of updates

@@ -59,8 +59,8 @@ impl ClusterOptions {
 /// atomically - all objects in a dirty schema are redeployed together.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaDeploymentRecord {
-    /// Environment name (e.g., "<init>" for direct deploy, "staging" for staged deploy)
-    pub environment: String,
+    /// Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged deploy)
+    pub deploy_id: String,
     /// Database name (e.g., "materialize")
     pub database: String,
     /// Schema name (e.g., "public")
@@ -79,11 +79,11 @@ pub struct SchemaDeploymentRecord {
 ///
 /// Stored in the `deploy.objects` table (append-only).
 /// Each row records that an object with a specific hash was deployed
-/// to an environment at a point in time.
+/// to a deployment at a point in time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentObjectRecord {
-    /// Environment name (e.g., "<init>" for direct deploy, "staging" for staged deploy)
-    pub environment: String,
+    /// Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged deploy)
+    pub deploy_id: String,
     /// Database name (e.g., "materialize")
     pub database: String,
     /// Schema name (e.g., "public")
@@ -96,13 +96,13 @@ pub struct DeploymentObjectRecord {
     pub deployed_at: std::time::SystemTime,
 }
 
-/// Metadata about a deployment environment.
+/// Metadata about a deployment.
 ///
 /// Used for validation before operations like apply or abort.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeploymentMetadata {
-    /// Environment name
-    pub environment: String,
+    /// Deploy ID
+    pub deploy_id: String,
     /// When this deployment was promoted (NULL if not promoted)
     pub promoted_at: Option<std::time::SystemTime>,
     /// List of (database, schema) tuples in this deployment
@@ -120,8 +120,8 @@ pub struct ConflictRecord {
     pub database: String,
     /// Schema name that has a conflict
     pub schema: String,
-    /// Environment that last promoted this schema
-    pub environment: String,
+    /// Deploy ID that last promoted this schema
+    pub deploy_id: String,
     /// When the schema was last promoted to production
     pub promoted_at: std::time::SystemTime,
 }
