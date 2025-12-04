@@ -48,13 +48,16 @@ pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError
     println!("Deployment history (promoted):");
     println!();
 
-    for (environment, promoted_at, deployed_by, schemas) in history {
+    for (environment, promoted_at, deployed_by, commit, schemas) in history {
         // Convert SystemTime to DateTime for formatting
         let datetime: DateTime<Local> = promoted_at.into();
         let date_str = datetime.format("%a %b %d %H:%M:%S %Y %z").to_string();
 
         // Display deployment header (like a git commit)
         println!("{} {}", "deployment".yellow().bold(), environment.cyan());
+        if let Some(commit_sha) = commit {
+            println!("{}: {}", "Commit".dimmed(), commit_sha);
+        }
         println!("{}: {}", "Promoted by".dimmed(), deployed_by.yellow());
         println!("{}:   {}", "Date".dimmed(), date_str);
         println!();

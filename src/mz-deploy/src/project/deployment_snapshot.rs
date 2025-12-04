@@ -239,7 +239,7 @@ pub async fn write_to_database(
             deployed_at: now,
             deployed_by: metadata.deployed_by.clone(),
             promoted_at,
-            git_commit: None,
+            git_commit: metadata.git_commit.clone(),
         });
     }
 

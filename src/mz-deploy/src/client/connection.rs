@@ -562,7 +562,8 @@ impl Client {
                 promoted_at TIMESTAMP,
                 database    TEXT NOT NULL,
                 schema      TEXT NOT NULL,
-                deployed_by TEXT NOT NULL
+                deployed_by TEXT NOT NULL,
+                commit      TEXT
             ) WITH (
                 PARTITION BY (environment, deployed_at, promoted_at)
             );"#,
@@ -599,13 +600,13 @@ impl Client {
             r#"
             CREATE VIEW IF NOT EXISTS deploy.production AS
             WITH candidates AS (
-                SELECT DISTINCT ON (database, schema) database, schema, environment, promoted_at
+                SELECT DISTINCT ON (database, schema) database, schema, environment, promoted_at, commit
                 FROM deploy.deployments
                 WHERE promoted_at IS NOT NULL
                 ORDER BY database, schema, promoted_at DESC
             )
 
-            SELECT c.database, c.schema, c.environment, c.promoted_at
+            SELECT c.database, c.schema, c.environment, c.promoted_at, c.commit
             FROM candidates c
             JOIN mz_schemas s ON c.schema = s.name
             JOIN mz_databases d ON c.database = d.name;
@@ -628,9 +629,9 @@ impl Client {
 
         let insert_sql = r#"
             INSERT INTO deploy.deployments
-                (environment, database, schema, deployed_at, deployed_by, promoted_at)
+                (environment, database, schema, deployed_at, deployed_by, promoted_at, commit)
             VALUES
-                ($1, $2, $3, $4, $5, $6)
+                ($1, $2, $3, $4, $5, $6, $7)
         "#;
 
         for deployment in deployments {
@@ -643,6 +644,7 @@ impl Client {
                     &deployment.deployed_at,
                     &deployment.deployed_by,
                     &deployment.promoted_at,
+                    &deployment.git_commit,
                 ],
             )
             .await?;
@@ -1133,6 +1135,57 @@ impl Client {
         Ok(rows.iter().map(|row| row.get("fqn")).collect())
     }
 
+    /// Check which tables from the given set exist in the database.
+    ///
+    /// Returns a HashSet of ObjectIds for tables that already exist.
+    pub async fn check_tables_exist(
+        &self,
+        tables: &HashSet<ObjectId>,
+    ) -> Result<HashSet<ObjectId>, ConnectionError> {
+        let fqns: Vec<String> = tables.iter().map(|o| o.to_string()).collect();
+        if fqns.is_empty() {
+            return Ok(HashSet::new());
+        }
+
+        let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
+        let placeholders_str = placeholders.join(", ");
+
+        let query = format!(
+            r#"
+            SELECT d.name || '.' || s.name || '.' || t.name as fqn
+            FROM mz_tables t
+            JOIN mz_schemas s ON t.schema_id = s.id
+            JOIN mz_databases d ON s.database_id = d.id
+            WHERE d.name || '.' || s.name || '.' || t.name IN ({})
+            ORDER BY fqn
+        "#,
+            placeholders_str
+        );
+
+        let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+        for fqn in &fqns {
+            params.push(fqn);
+        }
+
+        let rows = self
+            .client
+            .query(&query, &params)
+            .await
+            .map_err(ConnectionError::Query)?;
+
+        // Convert FQN strings back to ObjectIds
+        let mut existing = HashSet::new();
+        for row in rows {
+            let fqn: String = row.get("fqn");
+            // Find the matching ObjectId from the input set
+            if let Some(obj_id) = tables.iter().find(|o| o.to_string() == fqn) {
+                existing.insert(obj_id.clone());
+            }
+        }
+
+        Ok(existing)
+    }
+
     /// Get schema deployment records from the database for a specific environment.
     pub async fn get_schema_deployments(
         &self,
@@ -1145,7 +1198,8 @@ impl Client {
                 SELECT environment, database, schema,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                        '' as deployed_by,
-                       CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch
+                       CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                       commit
                 FROM deploy.production
                 ORDER BY database, schema
             "#
@@ -1154,7 +1208,8 @@ impl Client {
                 SELECT environment, database, schema,
                        CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                        deployed_by,
-                       CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch
+                       CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                       commit
                 FROM deploy.deployments
                 WHERE environment = $1
                 ORDER BY database, schema
@@ -1181,6 +1236,7 @@ impl Client {
             let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
             let deployed_by: String = row.get("deployed_by");
             let promoted_at_epoch: Option<f64> = row.get("promoted_at_epoch");
+            let git_commit: Option<String> = row.get("commit");
 
             let deployed_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(deployed_at_epoch);
             let promoted_at = promoted_at_epoch
@@ -1193,7 +1249,7 @@ impl Client {
                 deployed_at,
                 deployed_by,
                 promoted_at,
-                git_commit: None,
+                git_commit,
             });
         }
 
@@ -1305,7 +1361,7 @@ impl Client {
     pub async fn list_staging_deployments(
         &self,
     ) -> Result<
-        HashMap<String, (std::time::SystemTime, String, Vec<(String, String)>)>,
+        HashMap<String, (std::time::SystemTime, String, Option<String>, Vec<(String, String)>)>,
         ConnectionError,
     > {
         use std::time::UNIX_EPOCH;
@@ -1314,6 +1370,7 @@ impl Client {
             SELECT environment,
                    CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                    deployed_by,
+                   commit,
                    database,
                    schema
             FROM deploy.deployments
@@ -1329,13 +1386,14 @@ impl Client {
 
         let mut deployments: HashMap<
             String,
-            (std::time::SystemTime, String, Vec<(String, String)>),
+            (std::time::SystemTime, String, Option<String>, Vec<(String, String)>),
         > = HashMap::new();
 
         for row in rows {
             let environment: String = row.get("environment");
             let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
             let deployed_by: String = row.get("deployed_by");
+            let commit: Option<String> = row.get("commit");
             let database: String = row.get("database");
             let schema: String = row.get("schema");
 
@@ -1343,8 +1401,8 @@ impl Client {
 
             deployments
                 .entry(environment)
-                .or_insert_with(|| (deployed_at, deployed_by.clone(), Vec::new()))
-                .2
+                .or_insert_with(|| (deployed_at, deployed_by.clone(), commit.clone(), Vec::new()))
+                .3
                 .push((database, schema));
         }
 
@@ -1353,12 +1411,12 @@ impl Client {
 
     /// List deployment history in chronological order (promoted deployments only).
     ///
-    /// Returns a map from (environment, promoted_at, deployed_by) to list of schemas,
+    /// Returns a map from (environment, promoted_at, deployed_by, commit) to list of schemas,
     /// representing complete deployments ordered by promotion time.
     pub async fn list_deployment_history(
         &self,
         limit: Option<usize>,
-    ) -> Result<Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)>, ConnectionError>
+    ) -> Result<Vec<(String, std::time::SystemTime, String, Option<String>, Vec<(String, String)>)>, ConnectionError>
     {
         use std::time::UNIX_EPOCH;
 
@@ -1368,7 +1426,7 @@ impl Client {
             format!(
                 r#"
                 WITH unique_deployments AS (
-                    SELECT DISTINCT environment, promoted_at, deployed_by
+                    SELECT DISTINCT environment, promoted_at, deployed_by, commit
                     FROM deploy.deployments
                     WHERE promoted_at IS NOT NULL
                     ORDER BY promoted_at DESC
@@ -1377,6 +1435,7 @@ impl Client {
                 SELECT d.environment,
                        CAST(EXTRACT(EPOCH FROM d.promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                        d.deployed_by,
+                       d.commit,
                        d.database,
                        d.schema
                 FROM deploy.deployments d
@@ -1393,6 +1452,7 @@ impl Client {
                 SELECT environment,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                        deployed_by,
+                       commit,
                        database,
                        schema
                 FROM deploy.deployments
@@ -1408,20 +1468,21 @@ impl Client {
             .await
             .map_err(ConnectionError::Query)?;
 
-        // Group by (environment, promoted_at, deployed_by)
-        let mut deployments: Vec<(String, std::time::SystemTime, String, Vec<(String, String)>)> =
+        // Group by (environment, promoted_at, deployed_by, commit)
+        let mut deployments: Vec<(String, std::time::SystemTime, String, Option<String>, Vec<(String, String)>)> =
             Vec::new();
-        let mut current_key: Option<(String, std::time::SystemTime, String)> = None;
+        let mut current_key: Option<(String, std::time::SystemTime, String, Option<String>)> = None;
 
         for row in rows {
             let environment: String = row.get("environment");
             let promoted_at_epoch: f64 = row.get("promoted_at_epoch");
             let deployed_by: String = row.get("deployed_by");
+            let commit: Option<String> = row.get("commit");
             let database: String = row.get("database");
             let schema: String = row.get("schema");
 
             let promoted_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(promoted_at_epoch);
-            let key = (environment.clone(), promoted_at, deployed_by.clone());
+            let key = (environment.clone(), promoted_at, deployed_by.clone(), commit.clone());
 
             // Check if this is a new deployment or same as current
             if current_key.as_ref() != Some(&key) {
@@ -1430,13 +1491,14 @@ impl Client {
                     environment,
                     promoted_at,
                     deployed_by,
+                    commit,
                     vec![(database, schema)],
                 ));
                 current_key = Some(key);
             } else {
                 // Add schema to current deployment
                 if let Some(last) = deployments.last_mut() {
-                    last.3.push((database, schema));
+                    last.4.push((database, schema));
                 }
             }
         }
