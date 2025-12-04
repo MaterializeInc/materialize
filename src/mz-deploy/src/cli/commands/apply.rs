@@ -299,6 +299,7 @@ pub async fn run(
         "<init>",
         &metadata,
         Some(now),
+        crate::client::DeploymentKind::Objects,
     )
     .await?;
 

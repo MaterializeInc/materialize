@@ -3,6 +3,39 @@
 //! These types represent objects in the Materialize system catalog and provide
 //! a type-safe interface over raw database rows.
 
+use std::fmt;
+use std::str::FromStr;
+
+/// The type of deployment - either tables-only or full objects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentKind {
+    /// Table creation deployment (create-tables command)
+    Tables,
+    /// Full object deployment (stage, apply commands)
+    Objects,
+}
+
+impl fmt::Display for DeploymentKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DeploymentKind::Tables => write!(f, "tables"),
+            DeploymentKind::Objects => write!(f, "objects"),
+        }
+    }
+}
+
+impl FromStr for DeploymentKind {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "tables" => Ok(DeploymentKind::Tables),
+            "objects" => Ok(DeploymentKind::Objects),
+            _ => Err(format!("Invalid deployment kind: {}", s)),
+        }
+    }
+}
+
 /// A compute cluster in Materialize.
 ///
 /// Clusters provide the compute resources for materialized views, indexes, and sinks.
@@ -73,6 +106,8 @@ pub struct SchemaDeploymentRecord {
     pub promoted_at: Option<std::time::SystemTime>,
     /// Git commit hash if available
     pub git_commit: Option<String>,
+    /// Type of deployment (tables or objects)
+    pub kind: DeploymentKind,
 }
 
 /// An object deployment record tracking object-level deployment history.

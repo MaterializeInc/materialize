@@ -43,7 +43,7 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
     env_names.sort();
 
     for env_name in env_names {
-        let (deployed_at, deployed_by, commit, schemas) = &deployments[env_name];
+        let (deployed_at, deployed_by, commit, kind, schemas) = &deployments[env_name];
 
         // Format timestamp
         let timestamp = match deployed_at.elapsed() {
@@ -63,11 +63,12 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
         };
 
         println!(
-            "  {} {} by {} {}",
+            "  {} {} by {} {} [{}]",
             "●".green(),
             env_name.cyan().bold(),
             deployed_by.yellow(),
-            format!("({})", timestamp).dimmed()
+            format!("({})", timestamp).dimmed(),
+            kind.dimmed()
         );
 
         // Display commit if available
