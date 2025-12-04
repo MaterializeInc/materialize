@@ -13,5 +13,4 @@ pub mod gen_data_contracts;
 pub mod history;
 pub mod ready;
 pub mod stage;
-pub mod swap;
 pub mod test;
