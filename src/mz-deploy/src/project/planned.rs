@@ -154,7 +154,12 @@ impl Project {
             .iter()
             .flat_map(|db| db.schemas.iter())
             .flat_map(|schema| schema.objects.iter())
-            .filter(|object| matches!(object.typed_object.stmt, Statement::CreateTable(_) | Statement::CreateTableFromSource(_)))
+            .filter(|object| {
+                matches!(
+                    object.typed_object.stmt,
+                    Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
+                )
+            })
             .map(|object| object.id.clone())
     }
 
@@ -914,7 +919,13 @@ fn extract_select_dependencies_with_ctes(
     // Extract from SELECT items (subqueries, function calls)
     for item in &select.projection {
         if let SelectItem::Expr { expr, .. } = item {
-            extract_expr_dependencies_with_ctes(expr, default_database, default_schema, deps, cte_names);
+            extract_expr_dependencies_with_ctes(
+                expr,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
         }
     }
 }
@@ -1057,8 +1068,20 @@ fn extract_expr_dependencies_with_ctes(
                 deps,
                 cte_names,
             );
-            extract_expr_dependencies_with_ctes(low, default_database, default_schema, deps, cte_names);
-            extract_expr_dependencies_with_ctes(high, default_database, default_schema, deps, cte_names);
+            extract_expr_dependencies_with_ctes(
+                low,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
+            extract_expr_dependencies_with_ctes(
+                high,
+                default_database,
+                default_schema,
+                deps,
+                cte_names,
+            );
         }
         Expr::Op { expr1, expr2, .. } => {
             // Extract from operands of binary/unary operations (e.g., AND, OR, =, +, etc.)
@@ -2113,11 +2136,12 @@ mod tests {
         let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
         let sink_parsed = mz_sql_parser::parser::parse_statements(sink_sql).unwrap();
 
-        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
-            Statement::CreateMaterializedView(s.clone())
-        } else {
-            panic!("Expected CreateMaterializedView");
-        };
+        let mv_stmt =
+            if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+                Statement::CreateMaterializedView(s.clone())
+            } else {
+                panic!("Expected CreateMaterializedView");
+            };
 
         let sink_stmt = if let mz_sql_parser::ast::Statement::CreateSink(s) = &sink_parsed[0].ast {
             Statement::CreateSink(s.clone())
@@ -2168,10 +2192,16 @@ mod tests {
 
         // Sources on storage_cluster (different from compute objects)
         let mut sources_by_cluster = HashMap::new();
-        sources_by_cluster.insert("storage_cluster".to_string(), vec!["db.schema.source1".to_string()]);
+        sources_by_cluster.insert(
+            "storage_cluster".to_string(),
+            vec!["db.schema.source1".to_string()],
+        );
 
         let result = project.validate_cluster_isolation(&sources_by_cluster);
-        assert!(result.is_ok(), "Should succeed when storage and compute are on separate clusters");
+        assert!(
+            result.is_ok(),
+            "Should succeed when storage and compute are on separate clusters"
+        );
     }
 
     #[test]
@@ -2180,11 +2210,12 @@ mod tests {
         let mv_sql = "CREATE MATERIALIZED VIEW mv IN CLUSTER shared_cluster AS SELECT 1";
         let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
 
-        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
-            Statement::CreateMaterializedView(s.clone())
-        } else {
-            panic!("Expected CreateMaterializedView");
-        };
+        let mv_stmt =
+            if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+                Statement::CreateMaterializedView(s.clone())
+            } else {
+                panic!("Expected CreateMaterializedView");
+            };
 
         let mv_obj = DatabaseObject {
             id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
@@ -2217,10 +2248,16 @@ mod tests {
 
         // Source on the same cluster as MV
         let mut sources_by_cluster = HashMap::new();
-        sources_by_cluster.insert("shared_cluster".to_string(), vec!["db.schema.source1".to_string()]);
+        sources_by_cluster.insert(
+            "shared_cluster".to_string(),
+            vec!["db.schema.source1".to_string()],
+        );
 
         let result = project.validate_cluster_isolation(&sources_by_cluster);
-        assert!(result.is_err(), "Should fail when MV and source share a cluster");
+        assert!(
+            result.is_err(),
+            "Should fail when MV and source share a cluster"
+        );
 
         if let Err((cluster_name, compute_objects, storage_objects)) = result {
             assert_eq!(cluster_name, "shared_cluster");
@@ -2240,7 +2277,8 @@ mod tests {
         let table_parsed = mz_sql_parser::parser::parse_statements(table_sql).unwrap();
         let sink_parsed = mz_sql_parser::parser::parse_statements(sink_sql).unwrap();
 
-        let table_stmt = if let mz_sql_parser::ast::Statement::CreateTable(s) = &table_parsed[0].ast {
+        let table_stmt = if let mz_sql_parser::ast::Statement::CreateTable(s) = &table_parsed[0].ast
+        {
             Statement::CreateTable(s.clone())
         } else {
             panic!("Expected CreateTable");
@@ -2255,7 +2293,8 @@ mod tests {
         // Create an index on the table
         let index_sql = "CREATE INDEX idx IN CLUSTER shared_cluster ON t (id)";
         let index_parsed = mz_sql_parser::parser::parse_statements(index_sql).unwrap();
-        let index_stmt = if let mz_sql_parser::ast::Statement::CreateIndex(s) = &index_parsed[0].ast {
+        let index_stmt = if let mz_sql_parser::ast::Statement::CreateIndex(s) = &index_parsed[0].ast
+        {
             s.clone()
         } else {
             panic!("Expected CreateIndex");
@@ -2306,7 +2345,10 @@ mod tests {
         let sources_by_cluster = HashMap::new();
 
         let result = project.validate_cluster_isolation(&sources_by_cluster);
-        assert!(result.is_err(), "Should fail when index and sink share a cluster");
+        assert!(
+            result.is_err(),
+            "Should fail when index and sink share a cluster"
+        );
 
         if let Err((cluster_name, compute_objects, storage_objects)) = result {
             assert_eq!(cluster_name, "shared_cluster");
@@ -2322,11 +2364,12 @@ mod tests {
         let mv_sql = "CREATE MATERIALIZED VIEW mv IN CLUSTER shared_cluster AS SELECT 1";
         let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
 
-        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
-            Statement::CreateMaterializedView(s.clone())
-        } else {
-            panic!("Expected CreateMaterializedView");
-        };
+        let mv_stmt =
+            if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+                Statement::CreateMaterializedView(s.clone())
+            } else {
+                panic!("Expected CreateMaterializedView");
+            };
 
         // Create a sink on the same cluster
         let sink_sql = "CREATE SINK sink IN CLUSTER shared_cluster FROM mv INTO KAFKA CONNECTION conn (TOPIC 'test')";
@@ -2390,7 +2433,10 @@ mod tests {
         );
 
         let result = project.validate_cluster_isolation(&sources_by_cluster);
-        assert!(result.is_err(), "Should fail when MV shares cluster with sources and sinks");
+        assert!(
+            result.is_err(),
+            "Should fail when MV shares cluster with sources and sinks"
+        );
 
         if let Err((cluster_name, _compute_objects, storage_objects)) = result {
             assert_eq!(cluster_name, "shared_cluster");
@@ -2405,11 +2451,12 @@ mod tests {
         let mv_sql = "CREATE MATERIALIZED VIEW mv IN CLUSTER compute_cluster AS SELECT 1";
         let mv_parsed = mz_sql_parser::parser::parse_statements(mv_sql).unwrap();
 
-        let mv_stmt = if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
-            Statement::CreateMaterializedView(s.clone())
-        } else {
-            panic!("Expected CreateMaterializedView");
-        };
+        let mv_stmt =
+            if let mz_sql_parser::ast::Statement::CreateMaterializedView(s) = &mv_parsed[0].ast {
+                Statement::CreateMaterializedView(s.clone())
+            } else {
+                panic!("Expected CreateMaterializedView");
+            };
 
         let mv_obj = DatabaseObject {
             id: ObjectId::new("db".to_string(), "schema".to_string(), "mv".to_string()),
@@ -2444,7 +2491,10 @@ mod tests {
         let sources_by_cluster = HashMap::new();
 
         let result = project.validate_cluster_isolation(&sources_by_cluster);
-        assert!(result.is_ok(), "Should succeed when cluster only has compute objects");
+        assert!(
+            result.is_ok(),
+            "Should succeed when cluster only has compute objects"
+        );
     }
 
     #[test]
@@ -2490,9 +2540,15 @@ mod tests {
 
         // Sources on the same cluster
         let mut sources_by_cluster = HashMap::new();
-        sources_by_cluster.insert("storage_cluster".to_string(), vec!["db.schema.source1".to_string()]);
+        sources_by_cluster.insert(
+            "storage_cluster".to_string(),
+            vec!["db.schema.source1".to_string()],
+        );
 
         let result = project.validate_cluster_isolation(&sources_by_cluster);
-        assert!(result.is_ok(), "Should succeed when cluster only has storage objects (sources + sinks)");
+        assert!(
+            result.is_ok(),
+            "Should succeed when cluster only has storage objects (sources + sinks)"
+        );
     }
 }

@@ -241,7 +241,13 @@ async fn run(args: Args) -> Result<(), CliError> {
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
 
-            cli::commands::create_tables::run(&profile, &args.directory, name.as_deref(), allow_dirty).await?;
+            cli::commands::create_tables::run(
+                &profile,
+                &args.directory,
+                name.as_deref(),
+                allow_dirty,
+            )
+            .await?;
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Apply {
@@ -257,12 +263,23 @@ async fn run(args: Args) -> Result<(), CliError> {
             }
             cli::commands::apply::run(&profile, &deploy_id, force).await
         }
-        Some(Command::Stage { name, allow_dirty, no_rollback }) => {
+        Some(Command::Stage {
+            name,
+            allow_dirty,
+            no_rollback,
+        }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
 
-            cli::commands::stage::run(&profile, name.as_deref(), &args.directory, allow_dirty, no_rollback).await
+            cli::commands::stage::run(
+                &profile,
+                name.as_deref(),
+                &args.directory,
+                allow_dirty,
+                no_rollback,
+            )
+            .await
         }
         Some(Command::Debug) => {
             let profile =

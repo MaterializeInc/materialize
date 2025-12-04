@@ -156,8 +156,11 @@ pub async fn run(
 
     let analyze_duration = analyze_start.elapsed().unwrap();
     progress::stage_success(
-        &format!("Ready to deploy {} view(s)/materialized view(s)", objects.len()),
-        analyze_duration
+        &format!(
+            "Ready to deploy {} view(s)/materialized view(s)",
+            objects.len()
+        ),
+        analyze_duration,
     );
 
     // Collect schemas and clusters from objects that are actually being deployed
@@ -241,8 +244,11 @@ pub async fn run(
         Ok(success_count) => {
             let total_duration = start_time.elapsed().unwrap();
             progress::summary(
-                &format!("Successfully deployed to '{}' staging environment", stage_name),
-                total_duration
+                &format!(
+                    "Successfully deployed to '{}' staging environment",
+                    stage_name
+                ),
+                total_duration,
             );
             Ok(())
         }
@@ -278,7 +284,7 @@ async fn create_resources_with_rollback<'a>(
         let schema_duration = schema_start.elapsed().unwrap();
         progress::stage_success(
             &format!("Created {} staging schema(s)", schema_set.len()),
-            schema_duration
+            schema_duration,
         );
 
         // Create production schemas if they don't exist (needed for swap)
@@ -293,7 +299,10 @@ async fn create_resources_with_rollback<'a>(
         let mod_start = SystemTime::now();
         for mod_stmt in planned_project.iter_mod_statements() {
             match mod_stmt {
-                project::ModStatement::Database { database, statement } => {
+                project::ModStatement::Database {
+                    database,
+                    statement,
+                } => {
                     // Check if any schema in this database is in our schema_set
                     let has_schema = schema_set.iter().any(|(db, _)| db == database);
                     if has_schema {
@@ -315,17 +324,18 @@ async fn create_resources_with_rollback<'a>(
                     if schema_set.contains(&(database.to_string(), schema.to_string())) {
                         // Transform schema name to staging version
                         let staging_schema = format!("{}{}", schema, staging_suffix);
-                        let transformed_stmt = statement.to_string()
-                            .replace(&format!("{}.{}", database, schema), &format!("{}.{}", database, staging_schema));
+                        let transformed_stmt = statement.to_string().replace(
+                            &format!("{}.{}", database, schema),
+                            &format!("{}.{}", database, staging_schema),
+                        );
 
                         verbose!("Applying schema setup for: {}.{}", database, staging_schema);
-                        client
-                            .execute(&transformed_stmt, &[])
-                            .await
-                            .map_err(|e| CliError::SqlExecutionFailed {
+                        client.execute(&transformed_stmt, &[]).await.map_err(|e| {
+                            CliError::SqlExecutionFailed {
                                 statement: transformed_stmt.clone(),
                                 source: e,
-                            })?;
+                            }
+                        })?;
                     }
                 }
             }
@@ -388,7 +398,7 @@ async fn create_resources_with_rollback<'a>(
         let cluster_duration = cluster_start.elapsed().unwrap();
         progress::stage_success(
             &format!("Created {} cluster(s)", created_clusters),
-            cluster_duration
+            cluster_duration,
         );
 
         // Stage 6: Deploy objects using staging transformer
@@ -396,7 +406,8 @@ async fn create_resources_with_rollback<'a>(
         let deploy_start = SystemTime::now();
 
         // Collect ObjectIds from objects being deployed for the staging transformer
-        let objects_to_deploy_set: HashSet<_> = objects.iter().map(|(oid, _)| oid.clone()).collect();
+        let objects_to_deploy_set: HashSet<_> =
+            objects.iter().map(|(oid, _)| oid.clone()).collect();
 
         // Deploy external indexes
         let mut external_indexes: Vec<_> = planned_project
@@ -509,7 +520,7 @@ async fn create_resources_with_rollback<'a>(
         let deploy_duration = deploy_start.elapsed().unwrap();
         progress::stage_success(
             &format!("Deployed {} view(s)/materialized view(s)", success_count),
-            deploy_duration
+            deploy_duration,
         );
 
         // Return success count
@@ -530,7 +541,10 @@ async fn create_resources_with_rollback<'a>(
             let (schemas, clusters) = rollback_staging_resources(client, stage_name).await;
 
             if schemas > 0 || clusters > 0 {
-                progress::info(&format!("Rolled back: {} schema(s), {} cluster(s)", schemas, clusters));
+                progress::info(&format!(
+                    "Rolled back: {} schema(s), {} cluster(s)",
+                    schemas, clusters
+                ));
             }
 
             Err(e)

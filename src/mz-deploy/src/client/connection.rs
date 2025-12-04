@@ -291,13 +291,22 @@ impl fmt::Display for DatabaseValidationError {
                     "error".bright_red().bold()
                 )?;
                 for source in sources {
-                    writeln!(f, "  - {}.{}.{}", source.database, source.schema, source.object)?;
+                    writeln!(
+                        f,
+                        "  - {}.{}.{}",
+                        source.database, source.schema, source.object
+                    )?;
                 }
                 writeln!(f)?;
-                writeln!(f, "Please ensure all sources are created before running this command.")?;
+                writeln!(
+                    f,
+                    "Please ensure all sources are created before running this command."
+                )?;
                 Ok(())
             }
-            DatabaseValidationError::MissingTableDependencies { objects_needing_tables } => {
+            DatabaseValidationError::MissingTableDependencies {
+                objects_needing_tables,
+            } => {
                 writeln!(
                     f,
                     "{}: Objects depend on tables that don't exist in the database",
@@ -305,14 +314,20 @@ impl fmt::Display for DatabaseValidationError {
                 )?;
                 writeln!(f)?;
                 for (object, missing_tables) in objects_needing_tables {
-                    writeln!(f, "  {} {}.{}.{} depends on:",
+                    writeln!(
+                        f,
+                        "  {} {}.{}.{} depends on:",
                         "×".bright_red(),
                         object.database,
                         object.schema,
                         object.object
                     )?;
                     for table in missing_tables {
-                        writeln!(f, "    - {}.{}.{}", table.database, table.schema, table.object)?;
+                        writeln!(
+                            f,
+                            "    - {}.{}.{}",
+                            table.database, table.schema, table.object
+                        )?;
                     }
                 }
                 writeln!(f)?;
@@ -713,17 +728,14 @@ impl Client {
             placeholders_str
         );
 
-        let params: Vec<&(dyn ToSql + Sync)> = clusters
-            .iter()
-            .map(|c| c as &(dyn ToSql + Sync))
-            .collect();
+        let params: Vec<&(dyn ToSql + Sync)> =
+            clusters.iter().map(|c| c as &(dyn ToSql + Sync)).collect();
 
         let rows = self.client.query(&select_sql, &params).await?;
 
         // Verify all clusters were found
         if rows.len() != clusters.len() {
-            let found_names: HashSet<String> =
-                rows.iter().map(|row| row.get("name")).collect();
+            let found_names: HashSet<String> = rows.iter().map(|row| row.get("name")).collect();
             let missing: Vec<String> = clusters
                 .iter()
                 .filter(|name| !found_names.contains(*name))
@@ -748,8 +760,7 @@ impl Client {
 
         for row in rows {
             let cluster_id: String = row.get("id");
-            self.execute(insert_sql, &[&deploy_id, &cluster_id])
-                .await?;
+            self.execute(insert_sql, &[&deploy_id, &cluster_id]).await?;
         }
 
         Ok(())
@@ -914,10 +925,7 @@ impl Client {
     }
 
     /// Delete cluster records for a staging deployment.
-    pub async fn delete_deployment_clusters(
-        &self,
-        deploy_id: &str,
-    ) -> Result<(), ConnectionError> {
+    pub async fn delete_deployment_clusters(&self, deploy_id: &str) -> Result<(), ConnectionError> {
         self.execute(
             "DELETE FROM deploy.clusters WHERE deploy_id = $1",
             &[&deploy_id],
@@ -1374,7 +1382,16 @@ impl Client {
     pub async fn list_staging_deployments(
         &self,
     ) -> Result<
-        HashMap<String, (std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>)>,
+        HashMap<
+            String,
+            (
+                std::time::SystemTime,
+                String,
+                Option<String>,
+                String,
+                Vec<(String, String)>,
+            ),
+        >,
         ConnectionError,
     > {
         use std::time::UNIX_EPOCH;
@@ -1400,7 +1417,13 @@ impl Client {
 
         let mut deployments: HashMap<
             String,
-            (std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>),
+            (
+                std::time::SystemTime,
+                String,
+                Option<String>,
+                String,
+                Vec<(String, String)>,
+            ),
         > = HashMap::new();
 
         for row in rows {
@@ -1416,7 +1439,15 @@ impl Client {
 
             deployments
                 .entry(deploy_id)
-                .or_insert_with(|| (deployed_at, deployed_by.clone(), commit.clone(), kind.clone(), Vec::new()))
+                .or_insert_with(|| {
+                    (
+                        deployed_at,
+                        deployed_by.clone(),
+                        commit.clone(),
+                        kind.clone(),
+                        Vec::new(),
+                    )
+                })
                 .4
                 .push((database, schema));
         }
@@ -1431,8 +1462,17 @@ impl Client {
     pub async fn list_deployment_history(
         &self,
         limit: Option<usize>,
-    ) -> Result<Vec<(String, std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>)>, ConnectionError>
-    {
+    ) -> Result<
+        Vec<(
+            String,
+            std::time::SystemTime,
+            String,
+            Option<String>,
+            String,
+            Vec<(String, String)>,
+        )>,
+        ConnectionError,
+    > {
         use std::time::UNIX_EPOCH;
 
         // We need to limit unique deployments, not individual schema rows
@@ -1486,9 +1526,21 @@ impl Client {
             .map_err(ConnectionError::Query)?;
 
         // Group by (deploy_id, promoted_at, deployed_by, commit, kind)
-        let mut deployments: Vec<(String, std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>)> =
-            Vec::new();
-        let mut current_key: Option<(String, std::time::SystemTime, String, Option<String>, String)> = None;
+        let mut deployments: Vec<(
+            String,
+            std::time::SystemTime,
+            String,
+            Option<String>,
+            String,
+            Vec<(String, String)>,
+        )> = Vec::new();
+        let mut current_key: Option<(
+            String,
+            std::time::SystemTime,
+            String,
+            Option<String>,
+            String,
+        )> = None;
 
         for row in rows {
             let deploy_id: String = row.get("deploy_id");
@@ -1500,7 +1552,13 @@ impl Client {
             let schema: String = row.get("schema");
 
             let promoted_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(promoted_at_epoch);
-            let key = (deploy_id.clone(), promoted_at, deployed_by.clone(), commit.clone(), kind.clone());
+            let key = (
+                deploy_id.clone(),
+                promoted_at,
+                deployed_by.clone(),
+                commit.clone(),
+                kind.clone(),
+            );
 
             // Check if this is a new deployment or same as current
             if current_key.as_ref() != Some(&key) {
@@ -2108,11 +2166,8 @@ impl Client {
         for obj in planned_project.iter_objects() {
             if let Statement::CreateTableFromSource(ref stmt) = obj.typed_object.stmt {
                 // Extract the source ObjectId from the statement
-                let source_id = ObjectId::from_raw_item_name(
-                    &stmt.source,
-                    &obj.id.database,
-                    &obj.id.schema,
-                );
+                let source_id =
+                    ObjectId::from_raw_item_name(&stmt.source, &obj.id.database, &obj.id.schema);
 
                 // Check if source exists in the database
                 let query = r#"
@@ -2124,7 +2179,10 @@ impl Client {
 
                 let rows = self
                     .client
-                    .query(query, &[&source_id.object, &source_id.schema, &source_id.database])
+                    .query(
+                        query,
+                        &[&source_id.object, &source_id.schema, &source_id.database],
+                    )
                     .await
                     .map_err(DatabaseValidationError::QueryError)?;
 

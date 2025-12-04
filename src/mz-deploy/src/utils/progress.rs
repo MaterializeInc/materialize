@@ -27,7 +27,12 @@ pub fn stage_start(name: &str) {
 /// ```
 pub fn stage_success(message: &str, duration: Duration) {
     let seconds = duration.as_secs_f64();
-    println!("  {} {} {}", "✓".green(), message, format!("({}s)", format_duration(seconds)).dimmed());
+    println!(
+        "  {} {} {}",
+        "✓".green(),
+        message,
+        format!("({}s)", format_duration(seconds)).dimmed()
+    );
 }
 
 /// Print an informational message with blue info symbol.
@@ -72,7 +77,12 @@ pub fn error(message: &str) {
 /// ```
 pub fn summary(message: &str, duration: Duration) {
     let seconds = duration.as_secs_f64();
-    println!("\n{} {} {}", "✓".green().bold(), message, format!("in {}s", format_duration(seconds)).dimmed());
+    println!(
+        "\n{} {} {}",
+        "✓".green().bold(),
+        message,
+        format!("in {}s", format_duration(seconds)).dimmed()
+    );
 }
 
 /// Format duration to show appropriate precision.

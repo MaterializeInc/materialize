@@ -82,7 +82,10 @@ pub fn generate_random_env_name() -> String {
     let hash = hasher.finalize();
 
     // Take first 4 bytes of hash and format as 7-char hex
-    format!("{:07x}", u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) & 0xFFFFFFF)
+    format!(
+        "{:07x}",
+        u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) & 0xFFFFFFF
+    )
 }
 
 /// Helper for executing database object deployments.

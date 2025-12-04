@@ -322,7 +322,7 @@ fn create_temporary_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> Opti
 
             Some(normalized)
         }
-        Statement::CreateTable(_) | Statement::CreateTableFromSource(_)=> {
+        Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => {
             // loaded from types.lock
             None
         }

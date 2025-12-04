@@ -1171,7 +1171,9 @@ fn validate_sink_cluster(
         && sink.in_cluster.is_none()
     {
         let sink_sql = format!("{};", sink);
-        let sink_name = sink.name.as_ref()
+        let sink_name = sink
+            .name
+            .as_ref()
             .map(|n| n.to_string())
             .unwrap_or_else(|| "<unnamed>".to_string());
 
@@ -1785,7 +1787,9 @@ fn validate_no_storage_and_computation_in_schema(
     for obj in objects {
         match &obj.stmt {
             // Storage objects (persist data)
-            Statement::CreateTable(_) | Statement::CreateTableFromSource(_) | Statement::CreateSink(_) => {
+            Statement::CreateTable(_)
+            | Statement::CreateTableFromSource(_)
+            | Statement::CreateSink(_) => {
                 has_storage = true;
                 let ident = obj.stmt.ident();
                 storage_names.push(ident.object.clone());
@@ -3589,7 +3593,10 @@ mod tests {
         };
 
         let result = Schema::try_from(raw_schema);
-        assert!(result.is_ok(), "Schema with only views should pass validation");
+        assert!(
+            result.is_ok(),
+            "Schema with only views should pass validation"
+        );
     }
 
     #[test]
@@ -3669,7 +3676,8 @@ mod tests {
         use crate::project::parser::parse_statements;
         use crate::project::raw;
 
-        let sink_sql = "CREATE SINK user_sink FROM users INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');";
+        let sink_sql =
+            "CREATE SINK user_sink FROM users INTO KAFKA CONNECTION kafka_conn (TOPIC 'users');";
         let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
 
         let raw_sink = raw::DatabaseObject {
@@ -3698,7 +3706,10 @@ mod tests {
                     // Name is fully qualified after normalization
                     assert_eq!(sink_name, "materialize.sinks.user_sink");
                 }
-                _ => panic!("Expected SinkMissingCluster error, got {:?}", errors[0].kind),
+                _ => panic!(
+                    "Expected SinkMissingCluster error, got {:?}",
+                    errors[0].kind
+                ),
             }
         } else {
             panic!("Expected ValidationErrors");
@@ -3766,7 +3777,10 @@ mod tests {
                     // Name is fully qualified after normalization
                     assert_eq!(view_name, "materialize.views.user_summary");
                 }
-                _ => panic!("Expected MaterializedViewMissingCluster error, got {:?}", errors[0].kind),
+                _ => panic!(
+                    "Expected MaterializedViewMissingCluster error, got {:?}",
+                    errors[0].kind
+                ),
             }
         } else {
             panic!("Expected ValidationErrors");
@@ -3808,7 +3822,10 @@ mod tests {
                 ValidationErrorKind::IndexMissingCluster { index_name } => {
                     assert_eq!(index_name, "idx");
                 }
-                _ => panic!("Expected IndexMissingCluster error, got {:?}", errors[0].kind),
+                _ => panic!(
+                    "Expected IndexMissingCluster error, got {:?}",
+                    errors[0].kind
+                ),
             }
         } else {
             panic!("Expected ValidationErrors");

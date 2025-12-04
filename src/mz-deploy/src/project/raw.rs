@@ -661,7 +661,11 @@ mod tests {
         assert_eq!(database.schemas.len(), 2); // tables and views schemas
 
         // Find the schemas
-        let tables_schema = database.schemas.iter().find(|s| s.name == "tables").unwrap();
+        let tables_schema = database
+            .schemas
+            .iter()
+            .find(|s| s.name == "tables")
+            .unwrap();
         let views_schema = database.schemas.iter().find(|s| s.name == "views").unwrap();
 
         assert_eq!(tables_schema.objects.len(), 1); // 1 table

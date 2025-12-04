@@ -77,10 +77,12 @@ pub async fn run(
     // Filter to only table objects (CreateTable and CreateTableFromSource)
     let table_object_ids: HashSet<project::object_id::ObjectId> = planned_project
         .iter_objects()
-        .filter(|obj| matches!(
-            obj.typed_object.stmt,
-            Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
-        ))
+        .filter(|obj| {
+            matches!(
+                obj.typed_object.stmt,
+                Statement::CreateTable(_) | Statement::CreateTableFromSource(_)
+            )
+        })
         .map(|obj| obj.id.clone())
         .collect();
 
@@ -109,13 +111,19 @@ pub async fn run(
         let mut existing_list: Vec<_> = existing_tables.iter().collect();
         existing_list.sort_by_key(|obj| (&obj.database, &obj.schema, &obj.object));
         for table_id in existing_list {
-            println!("  - {}.{}.{}", table_id.database, table_id.schema, table_id.object);
+            println!(
+                "  - {}.{}.{}",
+                table_id.database, table_id.schema, table_id.object
+            );
         }
     }
 
     // If all tables exist, exit early
     if tables_to_create.is_empty() {
-        println!("\nAll {} table(s) already exist. Nothing to create.", table_object_ids.len());
+        println!(
+            "\nAll {} table(s) already exist. Nothing to create.",
+            table_object_ids.len()
+        );
         return Ok(());
     }
 
@@ -139,7 +147,10 @@ pub async fn run(
         // Execute schema mod statements for schemas that contain tables
         for mod_stmt in planned_project.iter_mod_statements() {
             match mod_stmt {
-                project::ModStatement::Database { database, statement } => {
+                project::ModStatement::Database {
+                    database,
+                    statement,
+                } => {
                     // Check if any schema in this database contains tables
                     let has_tables = table_schemas.iter().any(|(db, _)| db == database);
                     if has_tables {
@@ -178,12 +189,20 @@ pub async fn run(
     let mut success_count = 0;
 
     for (idx, (object_id, typed_obj)) in tables_to_create.iter().enumerate() {
-        verbose!("Creating {}/{}: {}", idx + 1, tables_to_create.len(), object_id);
+        verbose!(
+            "Creating {}/{}: {}",
+            idx + 1,
+            tables_to_create.len(),
+            object_id
+        );
 
         // Execute the table statement along with indexes, grants, and comments
         executor.execute_object(typed_obj).await?;
 
-        println!("  ✓ {}.{}.{}", object_id.database, object_id.schema, object_id.object);
+        println!(
+            "  ✓ {}.{}.{}",
+            object_id.database, object_id.schema, object_id.object
+        );
         success_count += 1;
     }
 
@@ -196,7 +215,7 @@ pub async fn run(
 
     let new_snapshot = project::deployment_snapshot::DeploymentSnapshot {
         objects: snapshot_objects,
-        schemas: table_schemas.clone(),  // Already contains only schemas with tables
+        schemas: table_schemas.clone(), // Already contains only schemas with tables
     };
 
     // Collect deployment metadata
@@ -216,7 +235,10 @@ pub async fn run(
 
     println!("\n✓ Successfully created {} new table(s)", success_count);
     if !existing_tables.is_empty() {
-        println!("  Skipped {} table(s) that already existed", existing_tables.len());
+        println!(
+            "  Skipped {} table(s) that already existed",
+            existing_tables.len()
+        );
     }
 
     Ok(())

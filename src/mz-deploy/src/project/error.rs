@@ -558,10 +558,7 @@ impl ValidationErrorKind {
                 )
             }
             Self::SinkMissingCluster { sink_name } => {
-                format!(
-                    "sink '{}' is missing required IN CLUSTER clause",
-                    sink_name
-                )
+                format!("sink '{}' is missing required IN CLUSTER clause", sink_name)
             }
             Self::InvalidDatabaseModStatement {
                 statement_type,

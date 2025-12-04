@@ -92,7 +92,10 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
                 let text = if total_hydrated == total_clusters {
                     "clusters: all hydrated".to_string()
                 } else {
-                    format!("clusters: {} of {} hydrated", total_hydrated, total_clusters)
+                    format!(
+                        "clusters: {} of {} hydrated",
+                        total_hydrated, total_clusters
+                    )
                 };
                 println!("    {}\n", text.blue());
             }
