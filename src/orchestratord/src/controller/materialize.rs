@@ -270,7 +270,8 @@ impl k8s_controller::Context for Context {
     type Resource = Materialize;
     type Error = Error;
 
-    const FINALIZER_NAME: &'static str = "orchestratord.materialize.cloud/materialize";
+    const FINALIZER_NAME: Option<&'static str> =
+        Some("orchestratord.materialize.cloud/materialize");
 
     #[instrument(fields(organization_name=mz.name_unchecked()))]
     async fn apply(
