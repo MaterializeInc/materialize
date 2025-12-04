@@ -21,14 +21,7 @@ Use `ALTER SECRET` to:
 
 To change the value of a secret:
 
-```mzsql
-ALTER SECRET [IF EXISTS] <name> AS <value>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>` | The identifier of the secret you want to alter.
-`<value>` | The new value for the secret. The _value_ expression may not reference any relations, and must be implicitly castable to `bytea`.
+{{% include-syntax file="examples/alter_secret" example="syntax-change-value" %}}
 
 {{< /tab >}}
 {{< tab "Rename" >}}
@@ -37,16 +30,7 @@ Syntax element | Description
 
 To rename a secret:
 
-```mzsql
-ALTER SECRET [IF EXISTS] <name> RENAME TO <new_name>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the secret.
-`<new_name>`| The new name of the secret.
-
-See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+{{% include-syntax file="examples/alter_secret" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
@@ -55,17 +39,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 To change the owner of a secret:
 
-```mzsql
-ALTER SECRET [IF EXISTS] <name> OWNER TO <new_owner_role>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the secret you want to change ownership of.
-`<new_owner_role>`| The new owner of the secret.
-
-To change the owner, you must be a current owner as well as have membership in
-the `<new_owner_role>`.
+{{% include-syntax file="examples/alter_secret" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< /tabs >}}

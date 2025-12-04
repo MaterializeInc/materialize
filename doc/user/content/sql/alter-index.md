@@ -18,16 +18,7 @@ Use `ALTER INDEX` to:
 
 To rename an index:
 
-```mzsql
-ALTER INDEX <name> RENAME TO <new_name>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the index you want to alter.
-`<new_name>`| The new name of the index.
-
-See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+{{% include-syntax file="examples/alter_index" example="syntax-rename" %}}
 
 {{< /tab >}}
 

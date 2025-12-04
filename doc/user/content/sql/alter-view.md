@@ -19,16 +19,7 @@ Use `ALTER VIEW` to:
 
 To rename a view:
 
-```mzsql
-ALTER VIEW <name> RENAME TO <new_name>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the view.
-`<new_name>`| The new name of the view.
-
-See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+{{% include-syntax file="examples/alter_view" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
@@ -37,17 +28,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 To change the owner of a view:
 
-```mzsql
-ALTER VIEW <name> OWNER TO <new_owner_role>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the view you want to change ownership of.
-`<new_owner_role>`| The new owner of the view.
-
-To change the owner of a view, you must be the current owner and have
-membership in the `<new_owner_role>`.
+{{% include-syntax file="examples/alter_view" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 

@@ -23,24 +23,7 @@ Use `ALTER CONNECTION` to:
 
 To modify connection parameters:
 
-```mzsql
-ALTER CONNECTION [IF EXISTS] <name>
-  SET (<option> = <value>) | DROP (<option>) | RESET (<option>)
-  [, ...]
-  [WITH (VALIDATE [true|false])]
-;
-```
-
-Syntax element | Description
----------------|------------
-**IF EXISTS** | Optional. If specified, do not return an error if the specified connection does not exist.
-`<name>` | The identifier of the connection you want to alter.
-**SET** | Sets the option to the specified value.
-**DROP** | Resets the specified option to its default value. Synonym for **RESET**.
-**RESET** | Resets the specified option to its default value. Synonym for **DROP**.
-`<option>` | The connection option to modify. See [`CREATE CONNECTION`](/sql/create-connection) for available options.
-`<value>` | The value to assign to the option.
-**WITH (VALIDATE `<bool>`)** | Optional. Whether [connection validation](/sql/create-connection#connection-validation) should be performed. Defaults to `true`.
+{{% include-syntax file="examples/alter_connection" example="syntax-set-drop-reset" %}}
 
 {{< /tab >}}
 {{< tab "ROTATE KEYS" >}}
@@ -49,14 +32,7 @@ Syntax element | Description
 
 To rotate SSH tunnel connection key pairs:
 
-```mzsql
-ALTER CONNECTION [IF EXISTS] <name> ROTATE KEYS;
-```
-
-Syntax element | Description
----------------|------------
-**IF EXISTS** | Optional. If specified, do not return an error if the specified connection does not exist.
-`<name>` | The identifier of the SSH tunnel connection.
+{{% include-syntax file="examples/alter_connection" example="syntax-rotate-keys" %}}
 
 
 {{< /tab >}}
@@ -67,16 +43,7 @@ Syntax element | Description
 
 To rename a connection
 
-```mzsql
-ALTER CONNECTION <name> RENAME TO <new_name>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the connection.
-`<new_name>`| The new name of the connection.
-
-See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+{{% include-syntax file="examples/alter_connection" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
@@ -85,17 +52,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 To change the owner of a connection:
 
-```mzsql
-ALTER CONNECTION <name> OWNER TO <new_owner_role>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the connection you want to change ownership of.
-`<new_owner_role>`| The new owner of the connection.
-
-To change the owner of a connection, you must be the owner of the connection and
-have membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+{{% include-syntax file="examples/alter_connection" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< /tabs >}}

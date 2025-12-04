@@ -27,17 +27,7 @@ general, you will not need to manually perform this operation.
 
 To set a cluster configuration:
 
-  ```mzsql
-  ALTER CLUSTER <cluster_name>
-  SET (
-      SIZE = <text>,
-      REPLICATION FACTOR = <int>,
-      MANAGED = <bool>,
-      SCHEDULE = { MANUAL | ON REFRESH (...) }
-  )
-  [WITH ({ WAIT UNTIL READY({TIMEOUT | ON TIMEOUT {COMMIT|ROLLBACK}}) | WAIT FOR <duration> })]
-  ;
-  ```
+{{% include-syntax file="examples/alter_cluster" example="syntax-set-configuration" %}}
 
 {{< /tab >}}
 {{< tab "Reset to default" >}}
@@ -46,15 +36,7 @@ To set a cluster configuration:
 
 To reset a cluster configuration back to its default value:
 
-  ```mzsql
-  ALTER CLUSTER <cluster_name>
-  RESET (
-      REPLICATION FACTOR,
-      MANAGED,
-      SCHEDULE
-  )
-  ;
-  ```
+{{% include-syntax file="examples/alter_cluster" example="syntax-reset-to-default" %}}
 
 {{< /tab >}}
 {{< tab "Rename" >}}
@@ -63,9 +45,7 @@ To reset a cluster configuration back to its default value:
 
 To rename a cluster:
 
-  ```mzsql
-  ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
-  ```
+{{% include-syntax file="examples/alter_cluster" example="syntax-rename" %}}
 
 {{< note >}}
 You cannot rename system clusters, such as `mz_system` and `mz_catalog_server`.
@@ -78,12 +58,7 @@ You cannot rename system clusters, such as `mz_system` and `mz_catalog_server`.
 
 To change the owner of a cluster:
 
-  ```mzsql
-  ALTER CLUSTER <cluster_name> OWNER TO <new_owner_role>;
-  ```
-
-To change the owner, you must have ownership of the cluster and membership in
-the `<new_owner_role>`. See also [Required privileges](#required-privileges).
+{{% include-syntax file="examples/alter_cluster" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< tab "Swap with" >}}
@@ -100,9 +75,7 @@ not need to manually perform this operation.
 
 To swap the name of this cluster with another cluster:
 
-  ```mzsql
-  ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
-  ```
+{{% include-syntax file="examples/alter_cluster" example="syntax-swap-with" %}}
 
 {{< /tab >}}
 {{< /tabs >}}

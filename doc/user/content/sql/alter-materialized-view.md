@@ -21,16 +21,7 @@ Use `ALTER  MATERIALIZED VIEW` to:
 
 To rename a materialized view:
 
-```mzsql
-ALTER MATERIALIZED VIEW <name> RENAME TO <new_name>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the materialized view you want to alter.
-`<new_name>`| The new name of the materialized view.
-
-See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
@@ -39,17 +30,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 To change the owner of a materialized view:
 
-```mzsql
-ALTER MATERIALIZED VIEW <name> OWNER TO <new_owner_role>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the materialized view you want to change ownership of.
-`<new_owner_role>`| The new owner of the materialized view.
-
-To change the owner of a materialized view, you must be the owner of the materialized view and have
-membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 {{< tab "(Re)Set retain history config" >}}
@@ -58,20 +39,11 @@ membership in the `<new_owner_role>`. See also [Privileges](#privileges).
 
 To set the retention history for a materialized view:
 
-```mzsql
-ALTER MATERIALIZED VIEW <name> SET (RETAIN HISTORY [=] FOR <retention_period>);
-```
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-set-retain-history" %}}
 
 To reset the retention history to the default for a materialized view:
 
-```mzsql
-ALTER MATERIALIZED VIEW <name> RESET (RETAIN HISTORY);
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the materialized view you want to alter.
-`<retention_period>` | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-reset-retain-history" %}}
 
 {{< /tab >}}
 {{< /tabs >}}

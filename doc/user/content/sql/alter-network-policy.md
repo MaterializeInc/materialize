@@ -16,21 +16,7 @@ and **will not** terminate active connections.
 
 ## Syntax
 
-```mzsql
-ALTER NETWORK POLICY <name> SET (
-  RULES (
-    <rule_name> (action='allow', direction='ingress', address=<address>)
-    [, ...]
-  )
-)
-;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`       | The name of the network policy to modify.
-`<rule_name>`  | The name for the network policy rule. Must be unique within the network policy.
-`<address>`    | The Classless Inter-Domain Routing (CIDR) block to which the rule applies.
+{{% include-syntax file="examples/alter_network_policy" example="syntax" %}}
 
 ## Details
 

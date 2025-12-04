@@ -33,29 +33,10 @@ of databases, or all objects of that type created within a specific set of
 schemas. Default privileges are also specified for objects created by a certain
 set of roles or by all roles.
 
-```mzsql
-ALTER DEFAULT PRIVILEGES
-  FOR ROLE <object_creator> [, ...] | ALL ROLES
-  [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
-  GRANT [<privilege> [, ...] | ALL [PRIVILEGES]]
-  ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
-  TO <target_role> [, ...]
-;
-```
-
-Syntax element | Description
----------------|------------
-`<object_creator>` | The default privilege will apply to objects created by this role. Use the `PUBLIC` pseudo-role to target objects created by all roles.
-**ALL ROLES** | The default privilege will apply to objects created by all roles. This is shorthand for specifying `PUBLIC` as the target role.
-**IN SCHEMA** `<schema_name>` | Optional. The default privilege will apply only to objects created in this schema.
-**IN DATABASE** `<database_name>` | Optional. The default privilege will apply only to objects created in this database.
-`<privilege>` | A specific privilege (e.g., `SELECT`, `USAGE`, `CREATE`). See [Available privileges](#available-privileges).
-**ALL [PRIVILEGES]** | All applicable privileges for the provided object type.
-**TO** `<target_role>` | The role who will be granted the default privilege. Use the `PUBLIC` pseudo-role to grant privileges to all roles.
+{{% include-syntax file="examples/alter_default_privileges" example="syntax-grant" %}}
 
 {{< /tab >}}
 {{< tab "REVOKE" >}}
-
 ### REVOKE
 
 {{< note >}}
@@ -74,26 +55,7 @@ an existing default privilege. The existing default privileges can easily be
 viewed by the following query: `SELECT * FROM
 mz_internal.mz_show_default_privileges`.
 
-
-```mzsql
-ALTER DEFAULT PRIVILEGES
-  FOR ROLE <creator_role> [, ...] | ALL ROLES
-  [IN SCHEMA <schema_name> [, ...] | IN DATABASE <database_name> [, ...]]
-  REVOKE [<privilege> [, ...] | ALL [PRIVILEGES]]
-  ON TABLES | TYPES | SECRETS | CONNECTIONS | DATABASES | SCHEMAS | CLUSTERS
-  FROM <target_role> [, ...]
-;
-```
-
-Syntax element | Description
----------------|------------
-`<creator_role>` | The default privileges for objects created by this role. Use the `PUBLIC` pseudo-role to specify objects created by all roles.
-**ALL ROLES** | The default privilege for objects created by all roles. This is shorthand for specifying `PUBLIC` as the target role.
-**IN SCHEMA** `<schema_name>` | Optional. The default privileges for objects created in this schema.
-**IN DATABASE** `<database_name>` | Optional. The default privilege for objects created in this database.
-`<privilege>` | A specific privilege (e.g., `SELECT`, `USAGE`, `CREATE`). See [Available privileges](#available-privileges).
-**ALL [PRIVILEGES]** | All applicable privileges for the provided object type.
-**FROM** `<target_role>` | The role from whom to remove the default privilege. Use the `PUBLIC` pseudo-role to remove default privileges previously granted to `PUBLIC`.
+{{% include-syntax file="examples/alter_default_privileges" example="syntax-revoke" %}}
 
 {{< /tab >}}
 {{< /tabs >}}

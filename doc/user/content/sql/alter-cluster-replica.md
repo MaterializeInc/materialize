@@ -19,14 +19,7 @@ Use `ALTER CLUSTER REPLICA` to:
 
 To rename a cluster replica:
 
-```mzsql
-ALTER CLUSTER REPLICA <name> RENAME TO <new_name>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the cluster replica.
-`<new_name>`| The new name of the cluster replica.
+{{% include-syntax file="examples/alter_cluster_replica" example="syntax-rename" %}}
 
 {{< note >}}
 You cannot rename replicas in system clusters.
@@ -39,17 +32,7 @@ You cannot rename replicas in system clusters.
 
 To change the owner of a cluster replica:
 
-```mzsql
-ALTER CLUSTER REPLICA <name> OWNER TO <new_owner_role>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the cluster replica you want to change ownership of.
-`<new_owner_role>`| The new owner of the cluster replica.
-
-To change the owner of a cluster replica, you must be the current owner and have
-membership in the `<new_owner_role>`.
+{{% include-syntax file="examples/alter_cluster_replica" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 

@@ -21,12 +21,7 @@ Use `ALTER SINK` to:
 
 To change the relation you want to sink from:
 
-{{% include-example file="examples/alter_sink" example="syntax" %}}
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the sink you want to change.
-`<relation_name>`| The name of the relation you want to sink from.
+{{% include-syntax file="examples/alter_sink" example="syntax-set-from" %}}
 
 {{< /tab >}}
 {{< tab "Rename" >}}
@@ -35,16 +30,9 @@ Syntax element | Description
 
 To rename a sink:
 
-```mzsql
-ALTER SINK <name> RENAME TO <new_name>;
-```
+{{% include-syntax file="examples/alter_sink" example="syntax-rename" %}}
 
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the sink.
-`<new_name>`| The new name of the sink.
 
-See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 {{< /tab >}}
 {{< tab "Change owner" >}}
@@ -53,17 +41,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 To change the owner of a sink:
 
-```mzsql
-ALTER SINK <name> OWNER TO <new_owner_role>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the sink you want to change ownership of.
-`<new_owner_role>`| The new owner of the sink.
-
-To change the owner, you must be a current owner as well as have membership in
-the `<new_owner_role>`.
+{{% include-syntax file="examples/alter_sink" example="syntax-change-owner" %}}
 {{< /tab >}}
 {{< /tabs >}}
 

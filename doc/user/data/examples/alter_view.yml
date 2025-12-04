@@ -1,0 +1,26 @@
+- name: "syntax-rename"
+  code: |
+    ALTER VIEW <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the view.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the view.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER VIEW <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the view you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the view.
+  addenda: |
+    To change the owner of a view, you must be the current owner and have
+    membership in the `<new_owner_role>`.

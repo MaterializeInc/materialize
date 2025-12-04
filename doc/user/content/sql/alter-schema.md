@@ -23,14 +23,7 @@ Use `ALTER SCHEMA` to:
 
 To swap the name of a schema with that of another schema:
 
-```mzsql
-ALTER SCHEMA <schema1> SWAP WITH <schema2>;
-```
-
-Syntax element       | Description
----------------------|------------
-`<schema1>`         | The name of the schema you want to swap.
-`<schema2>`         | The name of the other schema you want to swap with.
+{{% include-syntax file="examples/alter_schema" example="syntax-swap-with" %}}
 
 {{< /tab >}}
 {{< tab "Rename schema" >}}
@@ -39,16 +32,7 @@ Syntax element       | Description
 
 To rename a schema:
 
-```mzsql
-ALTER SCHEMA <name> RENAME TO <new_name>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The current name of the schema.
-`<new_name>`| The new name of the schema.
-
-See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+{{% include-syntax file="examples/alter_schema" example="syntax-rename" %}}
 
 {{< /tab >}}
 {{< tab "Change owner to" >}}
@@ -57,17 +41,7 @@ See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
 
 To change the owner of a schema:
 
-```mzsql
-ALTER SCHEMA <name> OWNER TO <new_owner_role>;
-```
-
-Syntax element | Description
----------------|------------
-`<name>`| The name of the schema you want to change ownership of.
-`<new_owner_role>`| The new owner of the schema.
-
-To change the owner of a schema, you must be the owner of the schema and have
-membership in the `<new_owner_role>`. See also [Privileges](#privileges).
+{{% include-syntax file="examples/alter_schema" example="syntax-change-owner" %}}
 
 {{< /tab >}}
 
