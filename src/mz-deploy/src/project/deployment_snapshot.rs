@@ -217,12 +217,14 @@ pub async fn load_from_database(
 /// * `deploy_id` - Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged)
 /// * `metadata` - Deployment metadata (user, git commit, etc.)
 /// * `promoted_at` - Optional promoted_at timestamp (Some(now) for direct apply, None for stage)
+/// * `kind` - Type of deployment (Tables or Objects)
 pub async fn write_to_database(
     client: &Client,
     snapshot: &DeploymentSnapshot,
     deploy_id: &str,
     metadata: &DeploymentMetadata,
     promoted_at: Option<std::time::SystemTime>,
+    kind: crate::client::DeploymentKind,
 ) -> Result<(), DeploymentSnapshotError> {
     use crate::client::{DeploymentObjectRecord, SchemaDeploymentRecord};
     use std::time::SystemTime;
@@ -240,6 +242,7 @@ pub async fn write_to_database(
             deployed_by: metadata.deployed_by.clone(),
             promoted_at,
             git_commit: metadata.git_commit.clone(),
+            kind,
         });
     }
 

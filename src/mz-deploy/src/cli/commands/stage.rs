@@ -217,6 +217,7 @@ pub async fn run(
         &stage_name,
         &metadata,
         None,
+        crate::client::DeploymentKind::Objects,
     )
     .await?;
 

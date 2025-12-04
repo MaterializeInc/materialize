@@ -59,6 +59,8 @@ pub enum ConnectionError {
     DeploymentAlreadyPromoted { deploy_id: String },
     #[error("unsupported statement type: {0}")]
     UnsupportedStatementType(String),
+    #[error("{0}")]
+    Message(String),
 }
 
 fn format_query_error(error: &tokio_postgres::Error) -> String {
@@ -563,7 +565,8 @@ impl Client {
                 database    TEXT NOT NULL,
                 schema      TEXT NOT NULL,
                 deployed_by TEXT NOT NULL,
-                commit      TEXT
+                commit      TEXT,
+                kind        TEXT NOT NULL
             ) WITH (
                 PARTITION BY (deploy_id, deployed_at, promoted_at)
             );"#,
@@ -600,13 +603,13 @@ impl Client {
             r#"
             CREATE VIEW IF NOT EXISTS deploy.production AS
             WITH candidates AS (
-                SELECT DISTINCT ON (database, schema) database, schema, deploy_id, promoted_at, commit
+                SELECT DISTINCT ON (database, schema) database, schema, deploy_id, promoted_at, commit, kind
                 FROM deploy.deployments
                 WHERE promoted_at IS NOT NULL
                 ORDER BY database, schema, promoted_at DESC
             )
 
-            SELECT c.database, c.schema, c.deploy_id, c.promoted_at, c.commit
+            SELECT c.database, c.schema, c.deploy_id, c.promoted_at, c.commit, c.kind
             FROM candidates c
             JOIN mz_schemas s ON c.schema = s.name
             JOIN mz_databases d ON c.database = d.name;
@@ -629,12 +632,13 @@ impl Client {
 
         let insert_sql = r#"
             INSERT INTO deploy.deployments
-                (deploy_id, database, schema, deployed_at, deployed_by, promoted_at, commit)
+                (deploy_id, database, schema, deployed_at, deployed_by, promoted_at, commit, kind)
             VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
+                ($1, $2, $3, $4, $5, $6, $7, $8)
         "#;
 
         for deployment in deployments {
+            let kind_str = deployment.kind.to_string();
             self.execute(
                 insert_sql,
                 &[
@@ -645,6 +649,7 @@ impl Client {
                     &deployment.deployed_by,
                     &deployment.promoted_at,
                     &deployment.git_commit,
+                    &kind_str,
                 ],
             )
             .await?;
@@ -1199,7 +1204,8 @@ impl Client {
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                        '' as deployed_by,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
-                       commit
+                       commit,
+                       kind
                 FROM deploy.production
                 ORDER BY database, schema
             "#
@@ -1209,7 +1215,8 @@ impl Client {
                        CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                        deployed_by,
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
-                       commit
+                       commit,
+                       kind
                 FROM deploy.deployments
                 WHERE deploy_id = $1
                 ORDER BY database, schema
@@ -1237,10 +1244,15 @@ impl Client {
             let deployed_by: String = row.get("deployed_by");
             let promoted_at_epoch: Option<f64> = row.get("promoted_at_epoch");
             let git_commit: Option<String> = row.get("commit");
+            let kind_str: String = row.get("kind");
 
             let deployed_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(deployed_at_epoch);
             let promoted_at = promoted_at_epoch
                 .map(|epoch| UNIX_EPOCH + std::time::Duration::from_secs_f64(epoch));
+
+            let kind = kind_str.parse().map_err(|e| {
+                ConnectionError::Message(format!("Failed to parse deployment kind: {}", e))
+            })?;
 
             records.push(SchemaDeploymentRecord {
                 deploy_id,
@@ -1250,6 +1262,7 @@ impl Client {
                 deployed_by,
                 promoted_at,
                 git_commit,
+                kind,
             });
         }
 
@@ -1361,7 +1374,7 @@ impl Client {
     pub async fn list_staging_deployments(
         &self,
     ) -> Result<
-        HashMap<String, (std::time::SystemTime, String, Option<String>, Vec<(String, String)>)>,
+        HashMap<String, (std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>)>,
         ConnectionError,
     > {
         use std::time::UNIX_EPOCH;
@@ -1371,6 +1384,7 @@ impl Client {
                    CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
                    deployed_by,
                    commit,
+                   kind,
                    database,
                    schema
             FROM deploy.deployments
@@ -1386,7 +1400,7 @@ impl Client {
 
         let mut deployments: HashMap<
             String,
-            (std::time::SystemTime, String, Option<String>, Vec<(String, String)>),
+            (std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>),
         > = HashMap::new();
 
         for row in rows {
@@ -1394,6 +1408,7 @@ impl Client {
             let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
             let deployed_by: String = row.get("deployed_by");
             let commit: Option<String> = row.get("commit");
+            let kind: String = row.get("kind");
             let database: String = row.get("database");
             let schema: String = row.get("schema");
 
@@ -1401,8 +1416,8 @@ impl Client {
 
             deployments
                 .entry(deploy_id)
-                .or_insert_with(|| (deployed_at, deployed_by.clone(), commit.clone(), Vec::new()))
-                .3
+                .or_insert_with(|| (deployed_at, deployed_by.clone(), commit.clone(), kind.clone(), Vec::new()))
+                .4
                 .push((database, schema));
         }
 
@@ -1411,12 +1426,12 @@ impl Client {
 
     /// List deployment history in chronological order (promoted deployments only).
     ///
-    /// Returns a map from (deploy_id, promoted_at, deployed_by, commit) to list of schemas,
+    /// Returns a map from (deploy_id, promoted_at, deployed_by, commit, kind) to list of schemas,
     /// representing complete deployments ordered by promotion time.
     pub async fn list_deployment_history(
         &self,
         limit: Option<usize>,
-    ) -> Result<Vec<(String, std::time::SystemTime, String, Option<String>, Vec<(String, String)>)>, ConnectionError>
+    ) -> Result<Vec<(String, std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>)>, ConnectionError>
     {
         use std::time::UNIX_EPOCH;
 
@@ -1426,7 +1441,7 @@ impl Client {
             format!(
                 r#"
                 WITH unique_deployments AS (
-                    SELECT DISTINCT deploy_id, promoted_at, deployed_by, commit
+                    SELECT DISTINCT deploy_id, promoted_at, deployed_by, commit, kind
                     FROM deploy.deployments
                     WHERE promoted_at IS NOT NULL
                     ORDER BY promoted_at DESC
@@ -1436,6 +1451,7 @@ impl Client {
                        CAST(EXTRACT(EPOCH FROM d.promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                        d.deployed_by,
                        d.commit,
+                       d.kind,
                        d.database,
                        d.schema
                 FROM deploy.deployments d
@@ -1453,6 +1469,7 @@ impl Client {
                        CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
                        deployed_by,
                        commit,
+                       kind,
                        database,
                        schema
                 FROM deploy.deployments
@@ -1468,21 +1485,22 @@ impl Client {
             .await
             .map_err(ConnectionError::Query)?;
 
-        // Group by (deploy_id, promoted_at, deployed_by, commit)
-        let mut deployments: Vec<(String, std::time::SystemTime, String, Option<String>, Vec<(String, String)>)> =
+        // Group by (deploy_id, promoted_at, deployed_by, commit, kind)
+        let mut deployments: Vec<(String, std::time::SystemTime, String, Option<String>, String, Vec<(String, String)>)> =
             Vec::new();
-        let mut current_key: Option<(String, std::time::SystemTime, String, Option<String>)> = None;
+        let mut current_key: Option<(String, std::time::SystemTime, String, Option<String>, String)> = None;
 
         for row in rows {
             let deploy_id: String = row.get("deploy_id");
             let promoted_at_epoch: f64 = row.get("promoted_at_epoch");
             let deployed_by: String = row.get("deployed_by");
             let commit: Option<String> = row.get("commit");
+            let kind: String = row.get("kind");
             let database: String = row.get("database");
             let schema: String = row.get("schema");
 
             let promoted_at = UNIX_EPOCH + std::time::Duration::from_secs_f64(promoted_at_epoch);
-            let key = (deploy_id.clone(), promoted_at, deployed_by.clone(), commit.clone());
+            let key = (deploy_id.clone(), promoted_at, deployed_by.clone(), commit.clone(), kind.clone());
 
             // Check if this is a new deployment or same as current
             if current_key.as_ref() != Some(&key) {
@@ -1492,13 +1510,14 @@ impl Client {
                     promoted_at,
                     deployed_by,
                     commit,
+                    kind,
                     vec![(database, schema)],
                 ));
                 current_key = Some(key);
             } else {
                 // Add schema to current deployment
                 if let Some(last) = deployments.last_mut() {
-                    last.4.push((database, schema));
+                    last.5.push((database, schema));
                 }
             }
         }

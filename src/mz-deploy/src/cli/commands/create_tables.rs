@@ -210,6 +210,7 @@ pub async fn run(
         &deploy_id,
         &metadata,
         Some(now),
+        crate::client::DeploymentKind::Tables,
     )
     .await?;
 
