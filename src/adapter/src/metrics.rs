@@ -50,6 +50,8 @@ pub struct Metrics {
     pub pgwire_ensure_transaction_seconds: HistogramVec,
     pub catalog_snapshot_seconds: HistogramVec,
     pub pgwire_recv_scheduling_delay_ms: HistogramVec,
+    pub catalog_transact_seconds: HistogramVec,
+    pub apply_catalog_implications_seconds: Histogram,
 }
 
 impl Metrics {
@@ -221,6 +223,17 @@ impl Metrics {
                 help: "The time between a pgwire connection's receiver task being woken up by incoming data and getting polled.",
                 var_labels: ["message_type"],
                 buckets: histogram_milliseconds_buckets(0.128, 512000.),
+            )),
+            catalog_transact_seconds: registry.register(metric!(
+                name: "mz_catalog_transact_seconds",
+                help: "The time it takes to run various catalog transact methods.",
+                var_labels: ["method"],
+                buckets: histogram_seconds_buckets(0.001, 32.0),
+            )),
+            apply_catalog_implications_seconds: registry.register(metric!(
+                name: "mz_apply_catalog_implications_seconds",
+                help: "The time it takes to apply catalog implications.",
+                buckets: histogram_seconds_buckets(0.001, 32.0),
             ))
         }
     }

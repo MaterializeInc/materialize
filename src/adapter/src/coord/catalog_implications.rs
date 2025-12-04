@@ -28,7 +28,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fail::fail_point;
 use itertools::Itertools;
@@ -82,6 +82,8 @@ impl Coordinator {
         ctx: Option<&mut ExecuteContext>,
         catalog_updates: Vec<ParsedStateUpdate>,
     ) -> Result<(), AdapterError> {
+        let start = Instant::now();
+
         let mut catalog_implications: BTreeMap<CatalogItemId, CatalogImplication> = BTreeMap::new();
         let mut cluster_commands: BTreeMap<ClusterId, CatalogImplication> = BTreeMap::new();
         let mut cluster_replica_commands: BTreeMap<(ClusterId, ReplicaId), CatalogImplication> =
@@ -143,6 +145,10 @@ impl Coordinator {
             cluster_replica_commands.into_iter().collect_vec(),
         )
         .await?;
+
+        self.metrics
+            .apply_catalog_implications_seconds
+            .observe(start.elapsed().as_secs_f64());
 
         Ok(())
     }
