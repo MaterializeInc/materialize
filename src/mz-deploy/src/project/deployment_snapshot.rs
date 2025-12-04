@@ -214,13 +214,13 @@ pub async fn load_from_database(
 /// # Arguments
 /// * `client` - Database client connection
 /// * `snapshot` - The deployment snapshot to write
-/// * `environment` - Environment name (e.g., "<init>" for direct deploy, "staging" for staged)
+/// * `deploy_id` - Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged)
 /// * `metadata` - Deployment metadata (user, git commit, etc.)
 /// * `promoted_at` - Optional promoted_at timestamp (Some(now) for direct apply, None for stage)
 pub async fn write_to_database(
     client: &Client,
     snapshot: &DeploymentSnapshot,
-    environment: &str,
+    deploy_id: &str,
     metadata: &DeploymentMetadata,
     promoted_at: Option<std::time::SystemTime>,
 ) -> Result<(), DeploymentSnapshotError> {
@@ -233,7 +233,7 @@ pub async fn write_to_database(
     let mut schema_records = Vec::new();
     for (database, schema) in &snapshot.schemas {
         schema_records.push(SchemaDeploymentRecord {
-            environment: environment.to_string(),
+            deploy_id: deploy_id.to_string(),
             database: database.clone(),
             schema: schema.clone(),
             deployed_at: now,
@@ -247,7 +247,7 @@ pub async fn write_to_database(
     let mut object_records = Vec::new();
     for (object_id, hash) in &snapshot.objects {
         object_records.push(DeploymentObjectRecord {
-            environment: environment.to_string(),
+            deploy_id: deploy_id.to_string(),
             database: object_id.database.clone(),
             schema: object_id.schema.clone(),
             object: object_id.object.clone(),
