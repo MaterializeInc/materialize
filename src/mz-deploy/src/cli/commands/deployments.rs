@@ -43,7 +43,7 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
     env_names.sort();
 
     for env_name in env_names {
-        let (deployed_at, deployed_by, schemas) = &deployments[env_name];
+        let (deployed_at, deployed_by, commit, schemas) = &deployments[env_name];
 
         // Format timestamp
         let timestamp = match deployed_at.elapsed() {
@@ -69,6 +69,11 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
             deployed_by.yellow(),
             format!("({})", timestamp).dimmed()
         );
+
+        // Display commit if available
+        if let Some(commit_sha) = commit {
+            println!("    commit: {}", commit_sha.dimmed());
+        }
 
         // Get hydration status for this deployment
         match client.get_deployment_hydration_status(env_name).await {

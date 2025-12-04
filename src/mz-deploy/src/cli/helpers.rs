@@ -61,6 +61,30 @@ pub async fn collect_deployment_metadata(
     }
 }
 
+/// Generate a random 7-character hex environment name.
+///
+/// Uses SHA256 hash of current timestamp to generate a unique identifier
+/// for deployments when no explicit name is provided.
+///
+/// # Returns
+/// A 7-character lowercase hex string (e.g., "a3f7b2c")
+pub fn generate_random_env_name() -> String {
+    use sha2::{Digest, Sha256};
+    use std::time::SystemTime;
+
+    let now = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .expect("system time before Unix epoch")
+        .as_nanos();
+
+    let mut hasher = Sha256::new();
+    hasher.update(now.to_le_bytes());
+    let hash = hasher.finalize();
+
+    // Take first 4 bytes of hash and format as 7-char hex
+    format!("{:07x}", u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) & 0xFFFFFFF)
+}
+
 /// Helper for executing database object deployments.
 ///
 /// This struct consolidates the pattern of executing a database object's

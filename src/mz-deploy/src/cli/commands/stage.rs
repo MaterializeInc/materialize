@@ -9,7 +9,6 @@ use crate::project::planned::extract_external_indexes;
 use crate::project::typed::FullyQualifiedName;
 use crate::project::{self, normalize::NormalizingVisitor};
 use crate::utils::{git, progress};
-use crate::utils::git::get_git_commit;
 use crate::verbose;
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
@@ -35,7 +34,7 @@ use std::time::SystemTime;
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
-/// * `stage_name` - Optional staging environment name (defaults to first 5 chars of git SHA)
+/// * `stage_name` - Optional staging environment name (defaults to random 7-char hex)
 /// * `directory` - Project root directory
 /// * `allow_dirty` - Allow deploying with uncommitted changes
 /// * `no_rollback` - Skip automatic rollback on failure (for debugging)
@@ -44,7 +43,6 @@ use std::time::SystemTime;
 /// Ok(()) if staging deployment succeeds
 ///
 /// # Errors
-/// Returns `CliError::GitShaFailed` if no git SHA and no --name provided
 /// Returns `CliError::GitDirty` if repository has uncommitted changes and allow_dirty is false
 /// Returns `CliError::Connection` for database errors
 /// Returns `CliError::Project` for project compilation errors
@@ -64,9 +62,7 @@ pub async fn run(
 
     let stage_name = match stage_name {
         Some(name) => name.to_string(),
-        None => get_git_commit(directory)
-            .map(|commit| commit.chars().take(7).collect())
-            .ok_or(CliError::GitShaFailed)?,
+        None => helpers::generate_random_env_name(),
     };
 
     println!("Deploying to staging environment: {}", stage_name);

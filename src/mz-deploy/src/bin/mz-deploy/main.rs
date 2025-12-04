@@ -55,15 +55,23 @@ enum Command {
         docker_image: Option<String>,
     },
 
-    /// Create all tables in the project with IF NOT EXISTS
+    /// Create tables that don't exist in the database
     ///
-    /// Safely deploys only CREATE TABLE and CREATE TABLE FROM SOURCE statements
-    /// with IF NOT EXISTS flags. Schemas are created if they don't exist.
-    /// This is useful for initial setup or ensuring table structures exist.
+    /// Queries the database first and only creates tables that don't already exist.
+    /// Tracks the deployment under an environment name (default: random 7-char hex).
+    /// Only tables that are actually created are recorded in deployment metadata.
     ///
     /// Example:
-    ///   mz-deploy create-tables
+    ///   mz-deploy create-tables              # Use random name
+    ///   mz-deploy create-tables --name v1    # Use custom name
     CreateTables {
+        /// Name for this deployment (default: random 7-char hex)
+        ///
+        /// The name will be used to track this table deployment separately.
+        /// Must contain only alphanumeric characters, hyphens, and underscores.
+        #[arg(long, value_name = "NAME")]
+        name: Option<String>,
+
         /// Allow deployment with uncommitted git changes
         #[arg(long)]
         allow_dirty: bool,
@@ -122,7 +130,7 @@ enum Command {
     /// Example:
     ///   mz-deploy stage --name my-feature
     Stage {
-        /// Name for this staging environment (default: first 7 chars of git commit SHA)
+        /// Name for this staging environment (default: random 7-char hex)
         ///
         /// The name will be used as a suffix for schemas and clusters. Must contain
         /// only alphanumeric characters, hyphens, and underscores.
@@ -250,12 +258,12 @@ async fn run(args: Args) -> Result<(), CliError> {
                 .await
                 .map(|_| ())
         }
-        Some(Command::CreateTables { allow_dirty }) => {
+        Some(Command::CreateTables { name, allow_dirty }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
 
-            cli::commands::create_tables::run(&profile, &args.directory, allow_dirty).await?;
+            cli::commands::create_tables::run(&profile, &args.directory, name.as_deref(), allow_dirty).await?;
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Apply {
