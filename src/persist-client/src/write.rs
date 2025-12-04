@@ -60,7 +60,7 @@ pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
     "persist_validate_part_bounds_on_write",
-    true,
+    false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch being appended.",
 );
