@@ -493,11 +493,13 @@ pub mod v1alpha1 {
             if active_version.major == 0 {
                 // Self managed 25.2 to 26.0
                 if next_version.major != active_version.major {
-                    if next_version.major == 26
-                        && active_version.major == 0
-                        && active_version.minor >= 147
-                    {
-                        return true;
+                    if next_version.major == 26 {
+                        // We require customers to upgrade to 0.147.20 or higher before upgrading to 26.0.0
+                        let is_v_147_20_or_higher = (active_version.minor == 147
+                            && active_version.patch >= 20)
+                            || active_version.minor > 147;
+
+                        return is_v_147_20_or_higher;
                     } else {
                         return false;
                     }
@@ -747,7 +749,7 @@ mod tests {
             .as_mut()
             .unwrap()
             .last_completed_rollout_environmentd_image_ref =
-            Some("materialize/environmentd:v0.147.0".to_owned());
+            Some("materialize/environmentd:v0.147.20".to_owned());
         mz.spec.environmentd_image_ref = "materialize/environmentd:v26.1.0".to_owned();
         assert!(mz.within_upgrade_window());
     }
@@ -762,7 +764,8 @@ mod tests {
             (Version::new(0, 83, 0), Version::new(0, 83, 1)),
             (Version::new(0, 83, 0), Version::new(0, 83, 2)),
             (Version::new(0, 83, 2), Version::new(0, 83, 10)),
-            (Version::new(0, 147, 0), Version::new(26, 0, 0)),
+            // 0.147.20 to 26.0.0 represents the Self Managed 25.2 to 26.0 upgrade
+            (Version::new(0, 147, 20), Version::new(26, 0, 0)),
             (Version::new(0, 164, 0), Version::new(26, 0, 0)),
             (Version::new(26, 0, 0), Version::new(26, 1, 0)),
             (Version::new(26, 5, 3), Version::new(26, 10, 0)),
@@ -782,6 +785,8 @@ mod tests {
             (Version::new(0, 83, 0), Version::new(0, 85, 0)),
             (Version::new(26, 0, 0), Version::new(28, 0, 0)),
             (Version::new(0, 130, 0), Version::new(26, 1, 0)),
+            // Disallow anything before 0.147.20 to upgrade
+            (Version::new(0, 147, 1), Version::new(26, 0, 0)),
         ];
         for (active_version, next_version) in failure_tests {
             assert!(
