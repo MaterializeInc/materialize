@@ -15,6 +15,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;
+use mz_repr::user::ExternalUserMetadataDiff;
 use mz_sql::session::metadata::SessionMetadata;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
@@ -35,7 +36,7 @@ use mz_sql::ast::{
     ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
     SubscribeStatement,
 };
-use mz_sql::catalog::RoleAttributesRaw;
+use mz_sql::catalog::{CatalogRole, RoleAttributesRaw};
 use mz_sql::names::{Aug, PartialItemName, ResolvedIds};
 use mz_sql::plan::{
     AbortTransactionPlan, CommitTransactionPlan, CreateRolePlan, Params, Plan,
@@ -88,7 +89,38 @@ impl Coordinator {
     pub(crate) fn handle_command(&mut self, mut cmd: Command) -> LocalBoxFuture<'_, ()> {
         async move {
             if let Some(session) = cmd.session_mut() {
-                session.apply_external_metadata_updates();
+                if let Some(updates) = session.get_external_metadata_updates() {
+                    let diff = ExternalUserMetadataDiff::new(
+                        session.user().external_metadata.as_ref(),
+                        &updates,
+                    );
+
+                    // If we notice a change to the admin flag, we need to update the catalog.
+                    if let Some(admin) = diff.admin {
+                        let conn_id = session.conn_id();
+                        let conn = &self.active_conns[conn_id];
+
+                        let role = self.catalog().try_get_role(conn.authenticated_role_id());
+
+                        if let Some(role) = role {
+                            let mut attributes = role.attributes().clone();
+                            attributes.superuser = Some(admin);
+
+                            let op = catalog::Op::AlterRole {
+                                id: role.id(),
+                                name: role.name.clone(),
+                                attributes: RoleAttributesRaw::from(attributes),
+                                nopassword: false,
+                                vars: role.vars.clone(),
+                            };
+                            if let Err(e) = self.catalog_transact_with_context(Some(&conn_id), None, vec![op]).await {
+                                tracing::warn!("failed to sync superuser attribute from external metadata: {:?}", e);
+                            }
+                        }
+                    }
+
+                    session.apply_external_metadata_updates(updates);
+                }
             }
             match cmd {
                 Command::Startup {

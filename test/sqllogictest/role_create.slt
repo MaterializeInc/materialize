@@ -64,8 +64,7 @@ COMPLETE 0
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_superuser SUPERUSER;
 ----
-db error: ERROR: permission denied to create superuser role
-DETAIL: You must be a superuser to create superuser role
+db error: ERROR: SUPERUSER attribute is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=regress_role_limited_admin,user=regress_role_limited_admin
 CREATE ROLE regress_nosuch_createdb CREATEDB;
@@ -150,8 +149,7 @@ DETAIL: Use system privileges instead.
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb SUPERUSER;
 ----
-db error: ERROR: permission denied to alter superuser role
-DETAIL: You must be a superuser to alter superuser role
+db error: ERROR: SUPERUSER attribute is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createdb NOSUPERUSER;
@@ -181,7 +179,7 @@ db error: ERROR: Expected end of statement, found CONNECTION
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_password_null PASSWORD NULL;
 ----
-COMPLETE 0
+db error: ERROR: PASSWORD attribute is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details
 
 simple conn=regress_role_admin,user=regress_role_admin
 CREATE ROLE regress_noiseword SYSID 12345;

@@ -1999,11 +1999,14 @@ async fn test_auth_admin_superuser_revoked() {
 
     assert_eq!(
         pg_client
-            .query_one("SHOW is_superuser", &[])
+            .query_one(
+                "SELECT rolsuperuser FROM mz_roles WHERE name = 'user@_.com'",
+                &[]
+            )
             .await
             .unwrap()
             .get::<_, String>(0),
-        "off"
+        "false"
     );
 
     frontegg_server
@@ -2014,11 +2017,14 @@ async fn test_auth_admin_superuser_revoked() {
 
     assert_eq!(
         pg_client
-            .query_one("SHOW is_superuser", &[])
+            .query_one(
+                "SELECT rolsuperuser FROM mz_roles WHERE name = 'user@_.com'",
+                &[]
+            )
             .await
             .unwrap()
             .get::<_, String>(0),
-        "on"
+        "true"
     );
 
     frontegg_server
@@ -2029,11 +2035,14 @@ async fn test_auth_admin_superuser_revoked() {
 
     assert_eq!(
         pg_client
-            .query_one("SHOW is_superuser", &[])
+            .query_one(
+                "SELECT rolsuperuser FROM mz_roles WHERE name = 'user@_.com'",
+                &[]
+            )
             .await
             .unwrap()
             .get::<_, String>(0),
-        "off"
+        "false"
     );
 }
 
