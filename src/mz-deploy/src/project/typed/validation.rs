@@ -349,7 +349,7 @@ fn validate_comment_target(
 /// - An unsupported comment type is used
 pub(super) fn validate_comment_references(
     fqn: &FullyQualifiedName,
-    comments: &mut [CommentStatement<Raw>],
+    comments: &[CommentStatement<Raw>],
     main_ident: &DatabaseIdent,
     obj_type: &ObjectType,
     errors: &mut Vec<ValidationError>,

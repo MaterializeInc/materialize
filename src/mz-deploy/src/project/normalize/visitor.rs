@@ -17,7 +17,7 @@ use mz_sql_parser::ast::*;
 /// transformation strategies to reuse the same traversal logic.
 pub struct NormalizingVisitor<T: NameTransformer> {
     transformer: T,
-    cte_scope: std::cell::RefCell<Vec<std::collections::HashSet<String>>>,
+    cte_scope: std::cell::RefCell<Vec<std::collections::BTreeSet<String>>>,
 }
 
 impl<T: NameTransformer> NormalizingVisitor<T> {
@@ -38,7 +38,7 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
     }
 
     /// Push a new CTE scope onto the stack.
-    fn push_cte_scope(&self, cte_names: std::collections::HashSet<String>) {
+    fn push_cte_scope(&self, cte_names: std::collections::BTreeSet<String>) {
         self.cte_scope.borrow_mut().push(cte_names);
     }
 
@@ -128,12 +128,12 @@ impl<T: NameTransformer> NormalizingVisitor<T> {
             CteBlock::Simple(ctes) => ctes
                 .iter()
                 .map(|cte| cte.alias.name.to_string())
-                .collect::<std::collections::HashSet<String>>(),
+                .collect::<std::collections::BTreeSet<String>>(),
             CteBlock::MutuallyRecursive(mut_rec_block) => mut_rec_block
                 .ctes
                 .iter()
                 .map(|cte| cte.name.to_string())
-                .collect::<std::collections::HashSet<String>>(),
+                .collect::<std::collections::BTreeSet<String>>(),
         };
 
         // Push CTE names onto scope stack
@@ -492,8 +492,8 @@ impl<'a> NormalizingVisitor<StagingTransformer<'a>> {
     pub fn staging(
         fqn: &'a FullyQualifiedName,
         suffix: String,
-        external_dependencies: &'a std::collections::HashSet<ObjectId>,
-        objects_to_deploy: Option<&'a std::collections::HashSet<ObjectId>>,
+        external_dependencies: &'a std::collections::BTreeSet<ObjectId>,
+        objects_to_deploy: Option<&'a std::collections::BTreeSet<ObjectId>>,
     ) -> Self {
         Self::new(StagingTransformer::new(
             fqn,

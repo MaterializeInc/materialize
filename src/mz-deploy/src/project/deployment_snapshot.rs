@@ -8,7 +8,7 @@
 //! enabling change detection (like git diff but for database objects) and supporting
 //! blue/green deployment workflows.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use sha2::{Digest, Sha256};
@@ -59,7 +59,7 @@ pub struct DeploymentSnapshot {
     /// Map of ObjectId to content hash
     pub objects: BTreeMap<ObjectId, String>,
     /// Set of (database, schema) tuples that were deployed
-    pub schemas: HashSet<(String, String)>,
+    pub schemas: BTreeSet<(String, String)>,
 }
 
 /// Metadata collected during deployment.
@@ -97,7 +97,7 @@ impl Default for DeploymentSnapshot {
     fn default() -> Self {
         Self {
             objects: BTreeMap::new(),
-            schemas: HashSet::new(),
+            schemas: BTreeSet::new(),
         }
     }
 }
@@ -156,7 +156,7 @@ pub fn build_snapshot_from_planned(
     planned_project: &planned::Project,
 ) -> Result<DeploymentSnapshot, DeploymentSnapshotError> {
     let mut objects = BTreeMap::new();
-    let mut schemas = HashSet::new();
+    let mut schemas = BTreeSet::new();
 
     // Get all objects in topological order
     let sorted_objects = planned_project

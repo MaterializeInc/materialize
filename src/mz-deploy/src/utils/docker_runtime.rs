@@ -68,7 +68,7 @@ impl DockerRuntime {
         };
 
         verbose!("Connecting to Materialize...");
-        let mut client = Client::connect_with_profile(profile).await?;
+        let client = Client::connect_with_profile(profile).await?;
 
         // Create external dependencies
         if !project.external_dependencies.is_empty() {
@@ -76,7 +76,7 @@ impl DockerRuntime {
                 "Creating {} external dependency tables",
                 project.external_dependencies.len()
             );
-            self.create_external_dependencies(&mut client, project, types)
+            self.create_external_dependencies(&client, project, types)
                 .await?;
         }
 

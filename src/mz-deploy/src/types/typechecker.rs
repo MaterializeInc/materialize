@@ -11,7 +11,7 @@ use mz_sql_parser::ast::{
     CreateViewStatement, Ident, IfExistsBehavior, UnresolvedItemName, ViewDefinition,
 };
 use owo_colors::OwoColorize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -279,8 +279,8 @@ pub async fn typecheck_with_client(
 }
 
 /// Build object path mapping for error reporting
-fn build_object_paths(project: &Project, project_root: &Path) -> HashMap<ObjectId, PathBuf> {
-    let mut paths = HashMap::new();
+fn build_object_paths(project: &Project, project_root: &Path) -> BTreeMap<ObjectId, PathBuf> {
+    let mut paths = BTreeMap::new();
     for obj in project.iter_objects() {
         let path = project_root
             .join(&obj.id.database)

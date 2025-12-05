@@ -7,7 +7,7 @@ use crate::client::errors::ConnectionError;
 use crate::client::models::Cluster;
 use crate::project::object_id::ObjectId;
 use crate::utils::sql_utils::quote_identifier;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
@@ -79,11 +79,11 @@ pub async fn get_cluster(
         .try_get("replication_factor")
         .or_else(|_| {
             row.try_get::<_, Option<i32>>("replication_factor")
-                .map(|v| v.map(|x| x as i64))
+                .map(|v| v.map(i64::from))
         })
         .or_else(|_| {
             row.try_get::<_, Option<i16>>("replication_factor")
-                .map(|v| v.map(|x| x as i64))
+                .map(|v| v.map(i64::from))
         })
         .unwrap_or(None);
 
@@ -138,7 +138,7 @@ pub async fn get_current_user(client: &PgClient) -> Result<String, ConnectionErr
 /// Returns fully-qualified names of objects that exist.
 pub async fn check_objects_exist(
     client: &PgClient,
-    objects: &HashSet<ObjectId>,
+    objects: &BTreeSet<ObjectId>,
 ) -> Result<Vec<String>, ConnectionError> {
     let fqns: Vec<String> = objects.iter().map(|o| o.to_string()).collect();
     if fqns.is_empty() {
@@ -179,11 +179,11 @@ pub async fn check_objects_exist(
 /// Returns a HashSet of ObjectIds for tables that already exist.
 pub async fn check_tables_exist(
     client: &PgClient,
-    tables: &HashSet<ObjectId>,
-) -> Result<HashSet<ObjectId>, ConnectionError> {
+    tables: &BTreeSet<ObjectId>,
+) -> Result<BTreeSet<ObjectId>, ConnectionError> {
     let fqns: Vec<String> = tables.iter().map(|o| o.to_string()).collect();
     if fqns.is_empty() {
-        return Ok(HashSet::new());
+        return Ok(BTreeSet::new());
     }
 
     let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
@@ -212,7 +212,7 @@ pub async fn check_tables_exist(
         .map_err(ConnectionError::Query)?;
 
     // Convert FQN strings back to ObjectIds
-    let mut existing = HashSet::new();
+    let mut existing = BTreeSet::new();
     for row in rows {
         let fqn: String = row.get("fqn");
         // Find the matching ObjectId from the input set
@@ -336,7 +336,7 @@ pub async fn drop_schema_objects(
 /// Returns the fully-qualified names of dropped objects.
 pub async fn drop_objects(
     client: &PgClient,
-    objects: &HashSet<ObjectId>,
+    objects: &BTreeSet<ObjectId>,
 ) -> Result<Vec<String>, ConnectionError> {
     let mut dropped = Vec::new();
 

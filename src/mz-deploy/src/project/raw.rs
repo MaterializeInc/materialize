@@ -54,7 +54,7 @@
 use super::error::{LoadError, ProjectError};
 use super::parser::parse_statements_with_context;
 use mz_sql_parser::ast::{Raw, Statement};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -180,7 +180,7 @@ pub struct Database {
     ///
     /// Each schema corresponds to one subdirectory in the database directory.
     /// Hidden directories (starting with `.`) are excluded.
-    pub schemas: HashMap<String, Schema>,
+    pub schemas: BTreeMap<String, Schema>,
 }
 
 /// The complete unvalidated project structure loaded from the file system.
@@ -205,7 +205,7 @@ pub struct Project {
     ///
     /// Each database corresponds to one subdirectory in the project root.
     /// Hidden directories (starting with `.`) are excluded.
-    pub databases: HashMap<String, Database>,
+    pub databases: BTreeMap<String, Database>,
 }
 
 /// Loads and parses a Materialize project from a directory structure.
@@ -226,7 +226,7 @@ pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
         .into());
     }
 
-    let mut databases = HashMap::new();
+    let mut databases = BTreeMap::new();
 
     // Iterate over database directories (first level)
     for db_entry in fs::read_dir(root).map_err(|source| LoadError::DirectoryReadFailed {
@@ -245,7 +245,7 @@ pub fn load_project<P: AsRef<Path>>(root: P) -> Result<Project, ProjectError> {
         }
 
         let db_name = db_entry.file_name().to_string_lossy().to_string();
-        let mut schemas = HashMap::new();
+        let mut schemas = BTreeMap::new();
 
         // Check for database-level sibling .sql file (e.g., materialize.sql next to materialize/)
         let db_mod_path = root.join(format!("{}.sql", db_name));

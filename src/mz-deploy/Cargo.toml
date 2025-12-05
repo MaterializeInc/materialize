@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 async-trait = "0.1"
 mz-build-info = { path = "../build-info" }
+mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 thiserror = "2.0"
 clap = { version = "4.5.23", features = ["derive", "env"] }

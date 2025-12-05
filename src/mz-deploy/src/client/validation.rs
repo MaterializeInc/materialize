@@ -7,7 +7,7 @@ use crate::client::errors::DatabaseValidationError;
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
 use tokio_postgres::Client as PgClient;
@@ -16,10 +16,10 @@ use tokio_postgres::types::ToSql;
 /// Internal helper to query which sources exist on the given clusters using IN clause.
 pub(crate) async fn query_sources_by_cluster(
     client: &PgClient,
-    cluster_names: &HashSet<String>,
-) -> Result<HashMap<String, Vec<String>>, DatabaseValidationError> {
+    cluster_names: &BTreeSet<String>,
+) -> Result<BTreeMap<String, Vec<String>>, DatabaseValidationError> {
     if cluster_names.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(BTreeMap::new());
     }
 
     // Build IN clause with placeholders
@@ -43,6 +43,7 @@ pub(crate) async fn query_sources_by_cluster(
         in_clause
     );
 
+    #[allow(clippy::as_conversions)]
     let params: Vec<&(dyn ToSql + Sync)> = cluster_names
         .iter()
         .map(|s| s as &(dyn ToSql + Sync))
@@ -53,7 +54,7 @@ pub(crate) async fn query_sources_by_cluster(
         .await
         .map_err(DatabaseValidationError::QueryError)?;
 
-    let mut result: HashMap<String, Vec<String>> = HashMap::new();
+    let mut result: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for row in rows {
         let cluster_name: String = row.get("cluster_name");
         let fqn: String = row.get("fqn");
@@ -77,7 +78,7 @@ pub(crate) async fn validate_project_impl(
     let mut missing_clusters = Vec::new();
 
     // Collect all required databases
-    let mut required_databases = HashSet::new();
+    let mut required_databases = BTreeSet::new();
     for db in &planned_project.databases {
         required_databases.insert(db.name.clone());
     }
@@ -86,7 +87,7 @@ pub(crate) async fn validate_project_impl(
     }
 
     // Collect schemas - split into project schemas (we can create) vs external schemas (must exist)
-    let mut external_schemas = HashSet::new();
+    let mut external_schemas = BTreeSet::new();
     for ext_dep in &planned_project.external_dependencies {
         external_schemas.insert((ext_dep.database.clone(), ext_dep.schema.clone()));
     }
@@ -132,7 +133,7 @@ pub(crate) async fn validate_project_impl(
 
     // Build ObjectId to file path mapping by reconstructing paths from ObjectIds
     // Path format: <root>/<database>/<schema>/<object>.sql
-    let mut object_paths: HashMap<ObjectId, PathBuf> = HashMap::new();
+    let mut object_paths: BTreeMap<ObjectId, PathBuf> = BTreeMap::new();
     for db in &planned_project.databases {
         for schema in &db.schemas {
             for obj in &schema.objects {
@@ -146,7 +147,7 @@ pub(crate) async fn validate_project_impl(
     }
 
     // Check external dependencies and group missing ones by file
-    let mut missing_external_deps = HashSet::new();
+    let mut missing_external_deps = BTreeSet::new();
     for ext_dep in &planned_project.external_dependencies {
         let query = r#"
             SELECT mo.name
@@ -169,7 +170,7 @@ pub(crate) async fn validate_project_impl(
     }
 
     // Group missing dependencies by the files that reference them
-    let mut file_missing_deps: HashMap<PathBuf, (ObjectId, Vec<ObjectId>)> = HashMap::new();
+    let mut file_missing_deps: BTreeMap<PathBuf, (ObjectId, Vec<ObjectId>)> = BTreeMap::new();
 
     for db in &planned_project.databases {
         for schema in &db.schemas {
@@ -225,7 +226,7 @@ pub(crate) async fn validate_cluster_isolation_impl(
     planned_project: &planned::Project,
 ) -> Result<(), DatabaseValidationError> {
     // Get all clusters used by the project
-    let mut all_clusters: HashSet<String> = HashSet::new();
+    let mut all_clusters: BTreeSet<String> = BTreeSet::new();
     for cluster in &planned_project.cluster_dependencies {
         all_clusters.insert(cluster.name.clone());
     }
@@ -262,15 +263,15 @@ pub(crate) async fn validate_privileges_impl(
     }
 
     // Collect all required databases from the project
-    let mut required_databases = HashSet::new();
+    let mut priv_required_databases = BTreeSet::new();
     for db in &planned_project.databases {
-        required_databases.insert(db.name.clone());
+        priv_required_databases.insert(db.name.clone());
     }
 
     // Check USAGE privileges on databases using the provided query
-    let missing_usage = if !required_databases.is_empty() {
+    let missing_usage = if !priv_required_databases.is_empty() {
         // Build IN clause with placeholders
-        let placeholders: Vec<String> = (1..=required_databases.len())
+        let placeholders: Vec<String> = (1..=priv_required_databases.len())
             .map(|i| format!("${}", i))
             .collect();
         let in_clause = placeholders.join(", ");
@@ -286,7 +287,8 @@ pub(crate) async fn validate_privileges_impl(
             in_clause
         );
 
-        let params: Vec<&(dyn ToSql + Sync)> = required_databases
+        #[allow(clippy::as_conversions)]
+        let params: Vec<&(dyn ToSql + Sync)> = priv_required_databases
             .iter()
             .map(|s| s as &(dyn ToSql + Sync))
             .collect();
@@ -381,12 +383,12 @@ pub(crate) async fn validate_sources_exist_impl(
 pub(crate) async fn validate_table_dependencies_impl(
     client: &PgClient,
     planned_project: &planned::Project,
-    objects_to_deploy: &HashSet<ObjectId>,
+    objects_to_deploy: &BTreeSet<ObjectId>,
 ) -> Result<(), DatabaseValidationError> {
     let mut objects_needing_tables = Vec::new();
 
     // Build a set of all table IDs in the project
-    let project_tables: HashSet<ObjectId> = planned_project.get_tables().collect();
+    let project_tables: BTreeSet<ObjectId> = planned_project.get_tables().collect();
 
     // For each object to be deployed, check if it depends on tables
     for object_id in objects_to_deploy {

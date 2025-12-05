@@ -4,7 +4,7 @@ use crate::cli::{CliError, helpers};
 use crate::client::Profile;
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::time::SystemTime;
 
 /// Promote a staging deployment to production using ALTER SWAP.
@@ -98,8 +98,8 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
 
     // Get schemas and clusters from deployment tables
     let staging_suffix = format!("_{}", stage_id);
-    let mut staging_schemas = HashSet::new();
-    let mut staging_clusters = HashSet::new();
+    let mut staging_schemas = BTreeSet::new();
+    let mut staging_clusters = BTreeSet::new();
 
     // Get schemas from deploy.deployments table for this deployment
     let deployment_records = client.get_schema_deployments(Some(stage_id)).await?;

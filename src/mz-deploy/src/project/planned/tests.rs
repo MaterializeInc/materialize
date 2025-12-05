@@ -6,7 +6,7 @@ use super::dependency::extract_dependencies;
 use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::Ident;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
 fn test_object_id_from_item_name() {
@@ -56,7 +56,7 @@ fn test_cluster_equality() {
 
 #[test]
 fn test_cluster_in_hashset() {
-    let mut clusters = HashSet::new();
+    let mut clusters = BTreeSet::new();
     clusters.insert(Cluster::new("quickstart".to_string()));
     clusters.insert(Cluster::new("quickstart".to_string())); // duplicate
     clusters.insert(Cluster::new("prod".to_string()));
@@ -134,7 +134,7 @@ fn test_multiple_materialized_views_with_different_clusters() {
         "CREATE MATERIALIZED VIEW mv3 IN CLUSTER quickstart AS SELECT * FROM t3",
     ];
 
-    let mut all_clusters = HashSet::new();
+    let mut all_clusters = BTreeSet::new();
 
     for sql in sqls {
         let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
@@ -154,30 +154,30 @@ fn test_multiple_materialized_views_with_different_clusters() {
 #[test]
 fn test_build_reverse_dependency_graph() {
     // Create a simple dependency graph
-    let mut dependency_graph = HashMap::new();
+    let mut dependency_graph = BTreeMap::new();
 
     let obj1 = ObjectId::new("db".to_string(), "public".to_string(), "table1".to_string());
     let obj2 = ObjectId::new("db".to_string(), "public".to_string(), "view1".to_string());
     let obj3 = ObjectId::new("db".to_string(), "public".to_string(), "view2".to_string());
 
     // view1 depends on table1
-    let mut deps1 = HashSet::new();
+    let mut deps1 = BTreeSet::new();
     deps1.insert(obj1.clone());
     dependency_graph.insert(obj2.clone(), deps1);
 
     // view2 depends on view1
-    let mut deps2 = HashSet::new();
+    let mut deps2 = BTreeSet::new();
     deps2.insert(obj2.clone());
     dependency_graph.insert(obj3.clone(), deps2);
 
     // table1 has no dependencies
-    dependency_graph.insert(obj1.clone(), HashSet::new());
+    dependency_graph.insert(obj1.clone(), BTreeSet::new());
 
     let project = Project {
         databases: vec![],
         dependency_graph,
-        external_dependencies: HashSet::new(),
-        cluster_dependencies: HashSet::new(),
+        external_dependencies: BTreeSet::new(),
+        cluster_dependencies: BTreeSet::new(),
         tests: vec![],
     };
 
@@ -238,7 +238,7 @@ fn test_get_sorted_objects_filtered() {
     let planned_project = Project::from(typed_project);
 
     // Create filter that only includes view1
-    let mut filter = HashSet::new();
+    let mut filter = BTreeSet::new();
     let view1_id = ObjectId::new(
         "test_db".to_string(),
         "views".to_string(),
@@ -907,9 +907,9 @@ fn test_wmr_with_correlated_subquery() {
 fn create_test_project_for_cluster_validation() -> Project {
     Project {
         databases: vec![],
-        dependency_graph: HashMap::new(),
-        external_dependencies: HashSet::new(),
-        cluster_dependencies: HashSet::new(),
+        dependency_graph: BTreeMap::new(),
+        external_dependencies: BTreeSet::new(),
+        cluster_dependencies: BTreeSet::new(),
         tests: vec![],
     }
 }
@@ -917,7 +917,7 @@ fn create_test_project_for_cluster_validation() -> Project {
 #[test]
 fn test_validate_cluster_isolation_no_conflicts() {
     let project = create_test_project_for_cluster_validation();
-    let sources_by_cluster = HashMap::new();
+    let sources_by_cluster = BTreeMap::new();
 
     let result = project.validate_cluster_isolation(&sources_by_cluster);
     assert!(result.is_ok());
@@ -954,7 +954,7 @@ fn test_validate_cluster_isolation_separate_clusters() {
             comments: vec![],
             tests: vec![],
         },
-        dependencies: HashSet::new(),
+        dependencies: BTreeSet::new(),
     };
 
     let sink_obj = DatabaseObject {
@@ -966,7 +966,7 @@ fn test_validate_cluster_isolation_separate_clusters() {
             comments: vec![],
             tests: vec![],
         },
-        dependencies: HashSet::new(),
+        dependencies: BTreeSet::new(),
     };
 
     let project = Project {
@@ -980,14 +980,14 @@ fn test_validate_cluster_isolation_separate_clusters() {
             }],
             mod_statements: None,
         }],
-        dependency_graph: HashMap::new(),
-        external_dependencies: HashSet::new(),
-        cluster_dependencies: HashSet::new(),
+        dependency_graph: BTreeMap::new(),
+        external_dependencies: BTreeSet::new(),
+        cluster_dependencies: BTreeSet::new(),
         tests: vec![],
     };
 
     // Sources on storage_cluster (different from compute objects)
-    let mut sources_by_cluster = HashMap::new();
+    let mut sources_by_cluster = BTreeMap::new();
     sources_by_cluster.insert(
         "storage_cluster".to_string(),
         vec!["db.schema.source1".to_string()],
@@ -1022,7 +1022,7 @@ fn test_validate_cluster_isolation_conflict_mv_and_source() {
             comments: vec![],
             tests: vec![],
         },
-        dependencies: HashSet::new(),
+        dependencies: BTreeSet::new(),
     };
 
     let project = Project {
@@ -1036,14 +1036,14 @@ fn test_validate_cluster_isolation_conflict_mv_and_source() {
             }],
             mod_statements: None,
         }],
-        dependency_graph: HashMap::new(),
-        external_dependencies: HashSet::new(),
-        cluster_dependencies: HashSet::new(),
+        dependency_graph: BTreeMap::new(),
+        external_dependencies: BTreeSet::new(),
+        cluster_dependencies: BTreeSet::new(),
         tests: vec![],
     };
 
     // Source on the same cluster as MV
-    let mut sources_by_cluster = HashMap::new();
+    let mut sources_by_cluster = BTreeMap::new();
     sources_by_cluster.insert(
         "shared_cluster".to_string(),
         vec!["db.schema.source1".to_string()],
@@ -1086,7 +1086,7 @@ fn test_validate_cluster_isolation_only_compute_objects() {
             comments: vec![],
             tests: vec![],
         },
-        dependencies: HashSet::new(),
+        dependencies: BTreeSet::new(),
     };
 
     let project = Project {
@@ -1100,14 +1100,14 @@ fn test_validate_cluster_isolation_only_compute_objects() {
             }],
             mod_statements: None,
         }],
-        dependency_graph: HashMap::new(),
-        external_dependencies: HashSet::new(),
-        cluster_dependencies: HashSet::new(),
+        dependency_graph: BTreeMap::new(),
+        external_dependencies: BTreeSet::new(),
+        cluster_dependencies: BTreeSet::new(),
         tests: vec![],
     };
 
     // No sources on any cluster
-    let sources_by_cluster = HashMap::new();
+    let sources_by_cluster = BTreeMap::new();
 
     let result = project.validate_cluster_isolation(&sources_by_cluster);
     assert!(
@@ -1137,7 +1137,7 @@ fn test_validate_cluster_isolation_only_storage_objects() {
             comments: vec![],
             tests: vec![],
         },
-        dependencies: HashSet::new(),
+        dependencies: BTreeSet::new(),
     };
 
     let project = Project {
@@ -1151,14 +1151,14 @@ fn test_validate_cluster_isolation_only_storage_objects() {
             }],
             mod_statements: None,
         }],
-        dependency_graph: HashMap::new(),
-        external_dependencies: HashSet::new(),
-        cluster_dependencies: HashSet::new(),
+        dependency_graph: BTreeMap::new(),
+        external_dependencies: BTreeSet::new(),
+        cluster_dependencies: BTreeSet::new(),
         tests: vec![],
     };
 
     // Sources on the same cluster
-    let mut sources_by_cluster = HashMap::new();
+    let mut sources_by_cluster = BTreeMap::new();
     sources_by_cluster.insert(
         "storage_cluster".to_string(),
         vec!["db.schema.source1".to_string()],

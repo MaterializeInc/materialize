@@ -23,7 +23,7 @@ use crate::project::object_id::ObjectId;
 use crate::project::planned;
 use crate::types::{ColumnType, Types};
 use crate::utils::sql_utils::quote_identifier;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tokio_postgres::types::ToSql;
 use tokio_postgres::{Client as PgClient, NoTls, Row, ToStatement};
@@ -93,7 +93,7 @@ impl Client {
                 })?;
 
         // Spawn the connection handler
-        tokio::spawn(async move {
+        mz_ore::task::spawn(|| "mz-deploy-connection", async move {
             if let Err(e) = connection.await {
                 eprintln!("connection error: {}", e);
             }
@@ -530,7 +530,7 @@ impl Client {
     pub async fn list_staging_deployments(
         &self,
     ) -> Result<
-        HashMap<
+        BTreeMap<
             String,
             (
                 std::time::SystemTime,
@@ -584,7 +584,7 @@ impl Client {
     /// Check which objects from a set exist in the production database.
     pub async fn check_objects_exist(
         &self,
-        objects: &HashSet<ObjectId>,
+        objects: &BTreeSet<ObjectId>,
     ) -> Result<Vec<String>, ConnectionError> {
         introspection::check_objects_exist(&self.client, objects).await
     }
@@ -592,8 +592,8 @@ impl Client {
     /// Check which tables from the given set exist in the database.
     pub async fn check_tables_exist(
         &self,
-        tables: &HashSet<ObjectId>,
-    ) -> Result<HashSet<ObjectId>, ConnectionError> {
+        tables: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
         introspection::check_tables_exist(&self.client, tables).await
     }
 
@@ -625,7 +625,7 @@ impl Client {
     /// Drop specific objects by their ObjectIds.
     pub async fn drop_objects(
         &self,
-        objects: &HashSet<ObjectId>,
+        objects: &BTreeSet<ObjectId>,
     ) -> Result<Vec<String>, ConnectionError> {
         introspection::drop_objects(&self.client, objects).await
     }
@@ -684,7 +684,7 @@ impl Client {
     pub async fn validate_table_dependencies(
         &mut self,
         planned_project: &planned::Project,
-        objects_to_deploy: &HashSet<ObjectId>,
+        objects_to_deploy: &BTreeSet<ObjectId>,
     ) -> Result<(), DatabaseValidationError> {
         validation::validate_table_dependencies_impl(
             &self.client,

@@ -10,7 +10,7 @@ use crate::client::models::{
 };
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio_postgres::Client as PgClient;
@@ -256,6 +256,7 @@ pub async fn insert_deployment_clusters(
         placeholders_str
     );
 
+    #[allow(clippy::as_conversions)]
     let params: Vec<&(dyn ToSql + Sync)> =
         clusters.iter().map(|c| c as &(dyn ToSql + Sync)).collect();
 
@@ -263,7 +264,7 @@ pub async fn insert_deployment_clusters(
 
     // Verify all clusters were found
     if rows.len() != clusters.len() {
-        let found_names: HashSet<String> = rows.iter().map(|row| row.get("name")).collect();
+        let found_names: BTreeSet<String> = rows.iter().map(|row| row.get("name")).collect();
         let missing: Vec<&str> = clusters
             .iter()
             .filter(|name| !found_names.contains(*name))
@@ -520,7 +521,7 @@ pub async fn get_deployment_objects(
     };
 
     let mut objects = BTreeMap::new();
-    let mut schemas = HashSet::new();
+    let mut schemas = BTreeSet::new();
     for row in rows {
         let database: String = row.get("database");
         let schema: String = row.get("schema");
@@ -587,7 +588,7 @@ pub async fn get_deployment_metadata(
 pub async fn list_staging_deployments(
     client: &PgClient,
 ) -> Result<
-    HashMap<
+    BTreeMap<
         String,
         (
             SystemTime,
@@ -617,7 +618,7 @@ pub async fn list_staging_deployments(
         .await
         .map_err(ConnectionError::Query)?;
 
-    let mut deployments: HashMap<
+    let mut deployments: BTreeMap<
         String,
         (
             SystemTime,
@@ -626,7 +627,7 @@ pub async fn list_staging_deployments(
             String,
             Vec<(String, String)>,
         ),
-    > = HashMap::new();
+    > = BTreeMap::new();
 
     for row in rows {
         let deploy_id: String = row.get("deploy_id");

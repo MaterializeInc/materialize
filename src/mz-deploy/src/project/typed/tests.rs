@@ -670,7 +670,7 @@ fn test_already_fully_qualified_unchanged() {
 
 #[test]
 fn test_valid_database_mod_comment() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Valid COMMENT ON DATABASE statement
     let sql = "COMMENT ON DATABASE materialize IS 'Main database';";
@@ -679,7 +679,7 @@ fn test_valid_database_mod_comment() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -688,7 +688,7 @@ fn test_valid_database_mod_comment() {
 
 #[test]
 fn test_valid_database_mod_grant() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Valid GRANT ON DATABASE statement
     let sql = "GRANT USAGE ON DATABASE materialize TO user1;";
@@ -697,7 +697,7 @@ fn test_valid_database_mod_grant() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -706,7 +706,7 @@ fn test_valid_database_mod_grant() {
 
 #[test]
 fn test_invalid_database_mod_wrong_statement_type() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: CREATE TABLE in database mod file
     let sql = "CREATE TABLE users (id INT);";
@@ -715,7 +715,7 @@ fn test_invalid_database_mod_wrong_statement_type() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -734,7 +734,7 @@ fn test_invalid_database_mod_wrong_statement_type() {
 
 #[test]
 fn test_invalid_database_mod_comment_wrong_target() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: COMMENT ON SCHEMA in database mod file
     let sql = "COMMENT ON SCHEMA public IS 'Public schema';";
@@ -743,7 +743,7 @@ fn test_invalid_database_mod_comment_wrong_target() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -762,7 +762,7 @@ fn test_invalid_database_mod_comment_wrong_target() {
 
 #[test]
 fn test_invalid_database_mod_comment_wrong_database() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: COMMENT ON different database
     let sql = "COMMENT ON DATABASE other_db IS 'Other database';";
@@ -771,7 +771,7 @@ fn test_invalid_database_mod_comment_wrong_database() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -790,7 +790,7 @@ fn test_invalid_database_mod_comment_wrong_database() {
 
 #[test]
 fn test_valid_schema_mod_comment() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Valid COMMENT ON SCHEMA statement (unqualified, will be normalized)
     let sql = "COMMENT ON SCHEMA public IS 'Public schema';";
@@ -802,7 +802,7 @@ fn test_valid_schema_mod_comment() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -821,7 +821,7 @@ fn test_valid_schema_mod_comment() {
 
 #[test]
 fn test_valid_schema_mod_grant() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Valid GRANT ON SCHEMA statement (unqualified, will be normalized)
     let sql = "GRANT USAGE ON SCHEMA public TO user1;";
@@ -833,7 +833,7 @@ fn test_valid_schema_mod_grant() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -852,7 +852,7 @@ fn test_valid_schema_mod_grant() {
 
 #[test]
 fn test_invalid_schema_mod_wrong_statement_type() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: CREATE VIEW in schema mod file
     let sql = "CREATE VIEW v AS SELECT 1;";
@@ -864,7 +864,7 @@ fn test_invalid_schema_mod_wrong_statement_type() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -889,7 +889,7 @@ fn test_invalid_schema_mod_wrong_statement_type() {
 
 #[test]
 fn test_invalid_schema_mod_comment_wrong_target() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: COMMENT ON TABLE in schema mod file
     let sql = "COMMENT ON TABLE users IS 'Users table';";
@@ -901,7 +901,7 @@ fn test_invalid_schema_mod_comment_wrong_target() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -926,7 +926,7 @@ fn test_invalid_schema_mod_comment_wrong_target() {
 
 #[test]
 fn test_invalid_schema_mod_comment_wrong_schema() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: COMMENT ON different schema
     let sql = "COMMENT ON SCHEMA other_schema IS 'Other schema';";
@@ -938,7 +938,7 @@ fn test_invalid_schema_mod_comment_wrong_schema() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -963,7 +963,7 @@ fn test_invalid_schema_mod_comment_wrong_schema() {
 
 #[test]
 fn test_valid_database_mod_alter_default_privileges() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Valid ALTER DEFAULT PRIVILEGES with IN DATABASE
     let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN DATABASE materialize GRANT SELECT ON TABLES TO user2;";
@@ -972,7 +972,7 @@ fn test_valid_database_mod_alter_default_privileges() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -985,7 +985,7 @@ fn test_valid_database_mod_alter_default_privileges() {
 
 #[test]
 fn test_invalid_database_mod_alter_default_privileges_no_scope() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: Missing IN DATABASE
     let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 GRANT SELECT ON TABLES TO user2;";
@@ -994,7 +994,7 @@ fn test_invalid_database_mod_alter_default_privileges_no_scope() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -1013,7 +1013,7 @@ fn test_invalid_database_mod_alter_default_privileges_no_scope() {
 
 #[test]
 fn test_invalid_database_mod_alter_default_privileges_wrong_database() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: Wrong database
     let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN DATABASE other_db GRANT SELECT ON TABLES TO user2;";
@@ -1022,7 +1022,7 @@ fn test_invalid_database_mod_alter_default_privileges_wrong_database() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -1041,7 +1041,7 @@ fn test_invalid_database_mod_alter_default_privileges_wrong_database() {
 
 #[test]
 fn test_invalid_database_mod_alter_default_privileges_with_schema() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: IN SCHEMA not allowed in database mod
     let sql =
@@ -1051,7 +1051,7 @@ fn test_invalid_database_mod_alter_default_privileges_with_schema() {
     let raw_db = raw::Database {
         name: "materialize".to_string(),
         mod_statements: Some(statements),
-        schemas: HashMap::new(),
+        schemas: BTreeMap::new(),
     };
 
     let result = Database::try_from(raw_db);
@@ -1070,7 +1070,7 @@ fn test_invalid_database_mod_alter_default_privileges_with_schema() {
 
 #[test]
 fn test_valid_schema_mod_alter_default_privileges_unqualified() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Valid ALTER DEFAULT PRIVILEGES with unqualified schema
     let sql =
@@ -1083,7 +1083,7 @@ fn test_valid_schema_mod_alter_default_privileges_unqualified() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1102,7 +1102,7 @@ fn test_valid_schema_mod_alter_default_privileges_unqualified() {
 
 #[test]
 fn test_valid_schema_mod_alter_default_privileges_qualified() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Valid ALTER DEFAULT PRIVILEGES with qualified schema
     let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA materialize.public GRANT SELECT ON TABLES TO user2;";
@@ -1114,7 +1114,7 @@ fn test_valid_schema_mod_alter_default_privileges_qualified() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1133,7 +1133,7 @@ fn test_valid_schema_mod_alter_default_privileges_qualified() {
 
 #[test]
 fn test_invalid_schema_mod_alter_default_privileges_no_scope() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: Missing IN SCHEMA
     let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 GRANT SELECT ON TABLES TO user2;";
@@ -1145,7 +1145,7 @@ fn test_invalid_schema_mod_alter_default_privileges_no_scope() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1170,7 +1170,7 @@ fn test_invalid_schema_mod_alter_default_privileges_no_scope() {
 
 #[test]
 fn test_invalid_schema_mod_alter_default_privileges_with_database() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: IN DATABASE not allowed in schema mod
     let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN DATABASE materialize GRANT SELECT ON TABLES TO user2;";
@@ -1182,7 +1182,7 @@ fn test_invalid_schema_mod_alter_default_privileges_with_database() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1207,7 +1207,7 @@ fn test_invalid_schema_mod_alter_default_privileges_with_database() {
 
 #[test]
 fn test_invalid_schema_mod_alter_default_privileges_wrong_schema() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Invalid: Wrong schema
     let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA other_schema GRANT SELECT ON TABLES TO user2;";
@@ -1219,7 +1219,7 @@ fn test_invalid_schema_mod_alter_default_privileges_wrong_schema() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1244,7 +1244,7 @@ fn test_invalid_schema_mod_alter_default_privileges_wrong_schema() {
 
 #[test]
 fn test_schema_mod_comment_normalization() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Test that unqualified schema name gets normalized to qualified
     let sql = "COMMENT ON SCHEMA public IS 'Public schema';";
@@ -1256,7 +1256,7 @@ fn test_schema_mod_comment_normalization() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1291,7 +1291,7 @@ fn test_schema_mod_comment_normalization() {
 
 #[test]
 fn test_schema_mod_grant_normalization() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Test that unqualified schema name gets normalized to qualified
     let sql = "GRANT USAGE ON SCHEMA public TO user1;";
@@ -1303,7 +1303,7 @@ fn test_schema_mod_grant_normalization() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1338,7 +1338,7 @@ fn test_schema_mod_grant_normalization() {
 
 #[test]
 fn test_schema_mod_alter_default_privileges_normalization() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Test that unqualified schema name gets normalized to qualified
     let sql =
@@ -1351,7 +1351,7 @@ fn test_schema_mod_alter_default_privileges_normalization() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {
@@ -1386,7 +1386,7 @@ fn test_schema_mod_alter_default_privileges_normalization() {
 
 #[test]
 fn test_schema_mod_already_qualified_names() {
-    use std::collections::HashMap;
+    use std::collections::BTreeMap;
 
     // Test that already qualified names remain unchanged
     let sql = "COMMENT ON SCHEMA materialize.public IS 'test';";
@@ -1398,7 +1398,7 @@ fn test_schema_mod_already_qualified_names() {
         objects: Vec::new(),
     };
 
-    let mut schemas = HashMap::new();
+    let mut schemas = BTreeMap::new();
     schemas.insert("public".to_string(), raw_schema);
 
     let raw_db = raw::Database {

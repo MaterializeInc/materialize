@@ -127,8 +127,8 @@ impl<'a> NameTransformer for FlatteningTransformer<'a> {
 pub struct StagingTransformer<'a> {
     fqn: &'a FullyQualifiedName,
     staging_suffix: String,
-    external_dependencies: &'a std::collections::HashSet<ObjectId>,
-    objects_to_deploy: Option<&'a std::collections::HashSet<ObjectId>>,
+    external_dependencies: &'a std::collections::BTreeSet<ObjectId>,
+    objects_to_deploy: Option<&'a std::collections::BTreeSet<ObjectId>>,
 }
 
 impl<'a> StagingTransformer<'a> {
@@ -142,8 +142,8 @@ impl<'a> StagingTransformer<'a> {
     pub fn new(
         fqn: &'a FullyQualifiedName,
         staging_suffix: String,
-        external_dependencies: &'a std::collections::HashSet<ObjectId>,
-        objects_to_deploy: Option<&'a std::collections::HashSet<ObjectId>>,
+        external_dependencies: &'a std::collections::BTreeSet<ObjectId>,
+        objects_to_deploy: Option<&'a std::collections::BTreeSet<ObjectId>>,
     ) -> Self {
         Self {
             fqn,
