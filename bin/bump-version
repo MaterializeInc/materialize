@@ -18,10 +18,11 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 if [[ $# -lt 1 ]]; then
-    die "usage: $0 VERSION [--no-commit] [--sbom]"
+    die "usage: $0 VERSION [--no-commit] [--no-console-bump] [--sbom]"
 fi
 
 commit=true
+console_bump=true
 sbom=false
 
 version=${1#v}
@@ -31,16 +32,53 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--no-commit" ]]; then
         commit=false
         shift
+    elif [[ "$1" == "--no-console-bump" ]]; then
+        console_bump=false
+        shift
     elif [[ "$1" == "--sbom" ]]; then
         sbom=true
         shift
     else
-        die "invalid flag: $2, only --no-commit and --sbom are supported"
+        die "invalid flag: $2, only --no-commit, --no-console-bump and --sbom are supported"
     fi
 done
 
 if ! run git diff HEAD --compact-summary --exit-code; then
     die "cannot begin bump with uncommitted content"
+fi
+
+if $console_bump; then
+    console_dir=console
+    if is_truthy "${CI:-0}"; then
+        GIT_TERMINAL_PROMPT=0 git clone "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/console" $console_dir
+    else
+        GIT_TERMINAL_PROMPT=0 git clone git@github.com:MaterializeInc/console $console_dir
+    fi
+    echo "Bumping console version to $version"
+    (
+        cd "$console_dir"
+        git tag -a "$version" -m "$version"
+        git push origin "$version"
+    )
+
+    echo "Waiting for console version to be released on DockerHub (~15 min)"
+    console_version="${version#v}"
+    console_image="materialize/console:$console_version"
+    sleep $((15 * 60))
+    while true; do
+        if docker manifest inspect "$console_image" >/dev/null 2>&1; then
+            break
+        fi
+        echo "$console_image not yet on DockerHub, sleeping 1 min"
+        sleep 60
+    done
+    echo "$console_image found on DockerHub"
+    sed -i.bak \
+        "s/FROM materialize/console:.* AS console/FROM $console_image AS console/" \
+        misc/images/materialized-base/Dockerfile
+    sed -i.bak \
+        "s/\"--console-image-tag-default=[^\"]*\"/\"--console-image-tag-default=$console_version\"/" \
+        misc/helm-charts/operator/templates/deployment.yaml
 fi
 
 sed -i.bak \
