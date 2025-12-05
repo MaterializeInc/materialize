@@ -186,6 +186,7 @@ pub mod v1alpha1 {
         /// The cert-manager Issuer or ClusterIssuer to use for database internal communication.
         /// The `issuerRef` field is required.
         /// This currently is only used for environmentd, but will eventually support clusterd.
+        /// Not yet implemented.
         pub internal_certificate_spec: Option<MaterializeCertSpec>,
     }
 
