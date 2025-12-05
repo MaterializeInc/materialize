@@ -49,6 +49,15 @@ pub struct Types {
     pub objects: BTreeMap<String, BTreeMap<String, ColumnType>>,
 }
 
+impl Default for Types {
+    fn default() -> Self {
+        Types {
+            version: 1,
+            objects: BTreeMap::new(),
+        }
+    }
+}
+
 /// Load the types.lock file from the specified directory.
 /// Returns an error if the file doesn't exist or cannot be parsed.
 pub fn load_types_lock(directory: &Path) -> Result<Types, TypesError> {

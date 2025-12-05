@@ -105,8 +105,8 @@ impl<'a> NameTransformer for FlatteningTransformer<'a> {
             }
         };
 
-        // Flatten to single identifier: database_schema_object
-        let flattened = fully_qualified.join("_");
+        // Flatten to single identifier: "database.schema.object"
+        let flattened = fully_qualified.join(".");
         let flattened_ident = Ident::new(&flattened).expect("valid flattened identifier");
         UnresolvedItemName(vec![flattened_ident])
     }
