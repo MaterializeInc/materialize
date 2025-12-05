@@ -10,6 +10,191 @@ use crate::project::error::{ValidationError, ValidationErrorKind};
 use mz_sql_parser::ast::*;
 use std::path::PathBuf;
 
+/// The type of identifier being validated (for error messages).
+#[derive(Debug, Clone, Copy)]
+pub enum IdentifierKind {
+    Database,
+    Schema,
+    Object,
+    Cluster,
+}
+
+impl std::fmt::Display for IdentifierKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Database => write!(f, "database"),
+            Self::Schema => write!(f, "schema"),
+            Self::Object => write!(f, "object"),
+            Self::Cluster => write!(f, "cluster"),
+        }
+    }
+}
+
+/// Validates an identifier follows naming rules.
+///
+/// # Rules
+///
+/// - **Start Character**: Must begin with a lowercase letter (a-z, including letters with
+///   diacritical marks and non-Latin letters) or an underscore (_).
+/// - **Subsequent Characters**: Can include lowercase letters, digits (0-9), underscores (_),
+///   or dollar signs ($).
+/// - **Case**: All characters must be lowercase.
+///
+/// # Arguments
+///
+/// * `name` - The identifier name to validate
+/// * `kind` - The type of identifier (for error messages)
+///
+/// # Returns
+///
+/// * `Ok(())` if the identifier is valid
+/// * `Err(String)` with a descriptive error message if invalid
+///
+/// # Examples
+///
+/// ```text
+/// Valid identifiers:
+///   users, _temp, my_table, café, 日本語, user123, price$
+///
+/// Invalid identifiers:
+///   Users (uppercase)
+///   123table (starts with digit)
+///   my-table (contains hyphen)
+///   MY_TABLE (uppercase)
+/// ```
+pub fn validate_identifier_format(name: &str, kind: IdentifierKind) -> Result<(), String> {
+    if name.is_empty() {
+        return Err(format!("{} name cannot be empty", kind));
+    }
+
+    let mut chars = name.chars().peekable();
+
+    // Check first character
+    if let Some(first) = chars.next() {
+        if first.is_uppercase() {
+            return Err(format!(
+                "{} name '{}' contains uppercase character '{}' at position 1. \
+                 Identifiers must be lowercase.",
+                kind, name, first
+            ));
+        }
+
+        if first.is_ascii_digit() {
+            return Err(format!(
+                "{} name '{}' starts with digit '{}'. \
+                 Identifiers must start with a letter or underscore.",
+                kind, name, first
+            ));
+        }
+
+        // First char must be a letter (including unicode letters) or underscore
+        if !first.is_alphabetic() && first != '_' {
+            return Err(format!(
+                "{} name '{}' starts with invalid character '{}'. \
+                 Identifiers must start with a letter or underscore.",
+                kind, name, first
+            ));
+        }
+    }
+
+    // Check subsequent characters
+    for (pos, ch) in chars.enumerate() {
+        let position = pos + 2; // +2 because we already consumed first char and positions are 1-indexed
+
+        if ch.is_uppercase() {
+            return Err(format!(
+                "{} name '{}' contains uppercase character '{}' at position {}. \
+                 Identifiers must be lowercase.",
+                kind, name, ch, position
+            ));
+        }
+
+        // Valid subsequent chars: letters (lowercase), digits, underscore, dollar sign
+        let is_valid = ch.is_alphabetic() || ch.is_ascii_digit() || ch == '_' || ch == '$';
+
+        if !is_valid {
+            return Err(format!(
+                "{} name '{}' contains invalid character '{}' at position {}. \
+                 Identifiers can only contain letters, digits, underscores, and dollar signs.",
+                kind, name, ch, position
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+/// Validates all identifiers in a FullyQualifiedName (database, schema, object).
+///
+/// # Arguments
+///
+/// * `fqn` - The fully qualified name to validate
+/// * `path` - The file path (for error reporting)
+/// * `errors` - Vector to collect validation errors
+pub fn validate_fqn_identifiers(
+    fqn: &FullyQualifiedName,
+    errors: &mut Vec<ValidationError>,
+) {
+    // Validate database name
+    if let Err(reason) = validate_identifier_format(fqn.database(), IdentifierKind::Database) {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::InvalidIdentifier {
+                name: fqn.database().to_string(),
+                reason,
+            },
+            fqn.path.clone(),
+        ));
+    }
+
+    // Validate schema name
+    if let Err(reason) = validate_identifier_format(fqn.schema(), IdentifierKind::Schema) {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::InvalidIdentifier {
+                name: fqn.schema().to_string(),
+                reason,
+            },
+            fqn.path.clone(),
+        ));
+    }
+
+    // Validate object name
+    if let Err(reason) = validate_identifier_format(fqn.object(), IdentifierKind::Object) {
+        errors.push(ValidationError::with_file(
+            ValidationErrorKind::InvalidIdentifier {
+                name: fqn.object().to_string(),
+                reason,
+            },
+            fqn.path.clone(),
+        ));
+    }
+}
+
+/// Validates a cluster name follows naming rules.
+///
+/// # Arguments
+///
+/// * `cluster_name` - The cluster name to validate
+/// * `path` - The file path (for error reporting)
+///
+/// # Returns
+///
+/// * `Ok(())` if valid
+/// * `Err(ValidationError)` if invalid
+pub fn validate_cluster_name(
+    cluster_name: &str,
+    path: &PathBuf,
+) -> Result<(), ValidationError> {
+    validate_identifier_format(cluster_name, IdentifierKind::Cluster).map_err(|reason| {
+        ValidationError::with_file(
+            ValidationErrorKind::InvalidIdentifier {
+                name: cluster_name.to_string(),
+                reason,
+            },
+            path.clone(),
+        )
+    })
+}
+
 /// Validates that the statement's identifier matches the expected file path structure.
 ///
 /// Ensures that the object name in the CREATE statement matches the file name, and
@@ -312,19 +497,28 @@ pub(super) fn validate_index_clusters(
     errors: &mut Vec<ValidationError>,
 ) {
     for index in indexes.iter() {
-        if index.in_cluster.is_none() {
-            let index_sql = format!("{};", index);
-            let index_name = index
-                .name
-                .as_ref()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "<unnamed>".to_string());
+        match &index.in_cluster {
+            None => {
+                let index_sql = format!("{};", index);
+                let index_name = index
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "<unnamed>".to_string());
 
-            errors.push(ValidationError::with_file_and_sql(
-                ValidationErrorKind::IndexMissingCluster { index_name },
-                fqn.path.clone(),
-                index_sql,
-            ));
+                errors.push(ValidationError::with_file_and_sql(
+                    ValidationErrorKind::IndexMissingCluster { index_name },
+                    fqn.path.clone(),
+                    index_sql,
+                ));
+            }
+            Some(cluster) => {
+                // Validate cluster name format
+                let cluster_name = cluster.to_string();
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                    errors.push(e);
+                }
+            }
         }
     }
 }
@@ -350,17 +544,26 @@ pub(super) fn validate_mv_cluster(
     stmt: &Statement,
     errors: &mut Vec<ValidationError>,
 ) {
-    if let Statement::CreateMaterializedView(mv) = stmt
-        && mv.in_cluster.is_none()
-    {
-        let mv_sql = format!("{};", mv);
-        let view_name = mv.name.to_string();
+    if let Statement::CreateMaterializedView(mv) = stmt {
+        match &mv.in_cluster {
+            None => {
+                let mv_sql = format!("{};", mv);
+                let view_name = mv.name.to_string();
 
-        errors.push(ValidationError::with_file_and_sql(
-            ValidationErrorKind::MaterializedViewMissingCluster { view_name },
-            fqn.path.clone(),
-            mv_sql,
-        ));
+                errors.push(ValidationError::with_file_and_sql(
+                    ValidationErrorKind::MaterializedViewMissingCluster { view_name },
+                    fqn.path.clone(),
+                    mv_sql,
+                ));
+            }
+            Some(cluster) => {
+                // Validate cluster name format
+                let cluster_name = cluster.to_string();
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                    errors.push(e);
+                }
+            }
+        }
     }
 }
 
@@ -385,21 +588,30 @@ pub(super) fn validate_sink_cluster(
     stmt: &Statement,
     errors: &mut Vec<ValidationError>,
 ) {
-    if let Statement::CreateSink(sink) = stmt
-        && sink.in_cluster.is_none()
-    {
-        let sink_sql = format!("{};", sink);
-        let sink_name = sink
-            .name
-            .as_ref()
-            .map(|n| n.to_string())
-            .unwrap_or_else(|| "<unnamed>".to_string());
+    if let Statement::CreateSink(sink) = stmt {
+        match &sink.in_cluster {
+            None => {
+                let sink_sql = format!("{};", sink);
+                let sink_name = sink
+                    .name
+                    .as_ref()
+                    .map(|n| n.to_string())
+                    .unwrap_or_else(|| "<unnamed>".to_string());
 
-        errors.push(ValidationError::with_file_and_sql(
-            ValidationErrorKind::SinkMissingCluster { sink_name },
-            fqn.path.clone(),
-            sink_sql,
-        ));
+                errors.push(ValidationError::with_file_and_sql(
+                    ValidationErrorKind::SinkMissingCluster { sink_name },
+                    fqn.path.clone(),
+                    sink_sql,
+                ));
+            }
+            Some(cluster) => {
+                // Validate cluster name format
+                let cluster_name = cluster.to_string();
+                if let Err(e) = validate_cluster_name(&cluster_name, &fqn.path) {
+                    errors.push(e);
+                }
+            }
+        }
     }
 }
 
