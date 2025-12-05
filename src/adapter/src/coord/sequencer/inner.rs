@@ -1105,6 +1105,7 @@ impl Coordinator {
             with_snapshot,
             resolved_ids,
             cluster_id: in_cluster,
+            commit_interval: sink.commit_interval,
         };
 
         let ops = vec![catalog::Op::CreateItem {
@@ -3421,6 +3422,7 @@ impl Coordinator {
             with_snapshot,
             resolved_ids: resolved_ids.clone(),
             cluster_id: in_cluster,
+            commit_interval: sink_plan.commit_interval,
         };
 
         let ops = vec![catalog::Op::UpdateItem {
@@ -3456,6 +3458,7 @@ impl Coordinator {
             version: sink_plan.version,
             from_storage_metadata: (),
             to_storage_metadata: (),
+            commit_interval: sink_plan.commit_interval,
         };
 
         self.controller

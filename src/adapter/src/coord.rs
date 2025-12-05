@@ -2865,6 +2865,7 @@ impl Coordinator {
                                     version: sink.version,
                                     from_storage_metadata: (),
                                     to_storage_metadata: (),
+                                    commit_interval: sink.commit_interval,
                                 },
                                 instance_id: sink.cluster_id,
                             },
