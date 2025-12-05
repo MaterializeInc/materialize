@@ -195,8 +195,8 @@ INSERT INTO table_e VALUES (3, 'three');
 4
 
 > SHOW MATERIALIZED VIEWS
-mv_e quickstart ""
-mv_f quickstart ""
+mv_e quickstart "" <null>
+mv_f quickstart "" <null>
 
 # RESTRICT works
 ! DROP SOURCE table_e RESTRICT;
