@@ -46,7 +46,7 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
-use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::errors::{CollectionMissing, CollectionMissingOrUnreadable};
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
@@ -341,7 +341,7 @@ pub trait StorageCollections: Debug + Sync {
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing>;
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissingOrUnreadable>;
 
     /// Get the time dependence for a storage collection. Returns no value if unknown or if
     /// the object isn't managed by storage.
@@ -2509,7 +2509,7 @@ where
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing> {
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissingOrUnreadable> {
         if desired_holds.is_empty() {
             return Ok(vec![]);
         }
@@ -2550,8 +2550,14 @@ where
 
         let acquired_holds = advanced_holds
             .into_iter()
-            .map(|(id, since)| ReadHold::with_channel(id, since, self.holds_tx.clone()))
-            .collect_vec();
+            .map(|(id, since)| {
+                if since.is_empty() {
+                    Err(CollectionMissingOrUnreadable::CollectionUnreadable(id))
+                } else {
+                    Ok(ReadHold::with_channel(id, since, self.holds_tx.clone()))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         trace!(?desired_holds, ?acquired_holds, "acquire_read_holds");
 

@@ -1104,6 +1104,20 @@ pub enum CsrConnectError {
 #[error("collection does not exist: {0}")]
 pub struct CollectionMissing(pub GlobalId);
 
+#[derive(Error, Debug)]
+pub enum CollectionMissingOrUnreadable {
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+    #[error("collection has an empty read frontier: {0}")]
+    CollectionUnreadable(GlobalId),
+}
+
+impl From<CollectionMissing> for CollectionMissingOrUnreadable {
+    fn from(cm: CollectionMissing) -> Self {
+        CollectionMissingOrUnreadable::CollectionMissing(cm.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::errors::DecodeErrorKind;

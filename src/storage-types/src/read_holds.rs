@@ -10,6 +10,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use mz_ore::soft_assert_or_log;
 use mz_repr::GlobalId;
 use thiserror::Error;
 use timely::PartialOrder;
@@ -63,7 +64,16 @@ pub enum ReadHoldDowngradeError<T> {
 }
 
 impl<T: TimelyTimestamp> ReadHold<T> {
+    /// Creates a new ReadHold.
+    ///
+    /// # Panics
+    ///
+    /// Soft-panics if the `since` is empty.
     pub fn new(id: GlobalId, since: Antichain<T>, change_tx: ChangeTx<T>) -> Self {
+        soft_assert_or_log!(
+            !since.is_empty(),
+            "Creating an empty ReadHold is useless. We should return an error instead."
+        );
         Self {
             id,
             since,
@@ -71,6 +81,12 @@ impl<T: TimelyTimestamp> ReadHold<T> {
         }
     }
 
+    /// Creates a new ReadHold with the given channel.
+    ///
+    /// # Panics
+    ///
+    /// Soft-panics if the `since` is empty. (The soft panic comes from the underlying `new()`
+    /// call.)
     pub fn with_channel(
         id: GlobalId,
         since: Antichain<T>,

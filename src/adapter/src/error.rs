@@ -16,7 +16,9 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
-use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
+use mz_compute_client::controller::error::{
+    CollectionLookupError, CollectionUnreadableOrLookupError, InstanceMissing,
+};
 use mz_compute_client::controller::instance::PeekError;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::EvalError;
@@ -658,10 +660,43 @@ impl AdapterError {
         }
     }
 
+    pub fn concurrent_dependency_drop_from_collection_unreadable_or_lookup_error(
+        e: CollectionUnreadableOrLookupError,
+        compute_instance: ComputeInstanceId,
+    ) -> Self {
+        match e {
+            CollectionUnreadableOrLookupError::InstanceMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: id.to_string(),
+                }
+            }
+            CollectionUnreadableOrLookupError::CollectionMissing(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+            CollectionUnreadableOrLookupError::InstanceShutDown => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "cluster",
+                    dependency_id: compute_instance.to_string(),
+                }
+            }
+            // An empty read frontier means that the collection was dropped.
+            CollectionUnreadableOrLookupError::CollectionUnreadable(id) => {
+                AdapterError::ConcurrentDependencyDrop {
+                    dependency_kind: "collection",
+                    dependency_id: id.to_string(),
+                }
+            }
+        }
+    }
+
     pub fn concurrent_dependency_drop_from_peek_error(
         e: PeekError,
         compute_instance: ComputeInstanceId,
-    ) -> AdapterError {
+    ) -> Self {
         match e {
             PeekError::ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "replica",
@@ -691,6 +726,11 @@ impl AdapterError {
             },
             ReplicaMissing(id) => AdapterError::ConcurrentDependencyDrop {
                 dependency_kind: "replica",
+                dependency_id: id.to_string(),
+            },
+            // An empty read frontier means that the collection was dropped.
+            CollectionUnreadable(id) => AdapterError::ConcurrentDependencyDrop {
+                dependency_kind: "collection",
                 dependency_id: id.to_string(),
             },
             MissingAsOf | SinceViolation(..) | EmptyAsOfForSubscribe | EmptyAsOfForCopyTo => {

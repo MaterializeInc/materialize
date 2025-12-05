@@ -18,6 +18,7 @@
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
 use mz_repr::GlobalId;
+use mz_storage_types::errors::CollectionMissingOrUnreadable;
 use thiserror::Error;
 
 pub use mz_storage_types::errors::CollectionMissing;
@@ -74,6 +75,62 @@ impl From<InstanceShutDown> for CollectionLookupError {
 impl From<CollectionMissing> for CollectionLookupError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
+    }
+}
+
+/// Errors arising during trying to look up a collection for reading purposes.
+#[derive(Error, Debug)]
+pub enum CollectionUnreadableOrLookupError {
+    /// The specified compute instance does not exist.
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    /// The specified compute instance has shut down.
+    #[error("the instance has shut down")]
+    InstanceShutDown,
+    /// The compute collection does not exist.
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+    /// The collection has an empty read frontier, so it's not readable at any time.
+    #[error("collection has an empty read frontier: {0}")]
+    CollectionUnreadable(GlobalId),
+}
+
+impl From<CollectionMissing> for CollectionUnreadableOrLookupError {
+    fn from(error: CollectionMissing) -> Self {
+        Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<InstanceMissing> for CollectionUnreadableOrLookupError {
+    fn from(error: InstanceMissing) -> Self {
+        Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<InstanceShutDown> for CollectionUnreadableOrLookupError {
+    fn from(_error: InstanceShutDown) -> Self {
+        Self::InstanceShutDown
+    }
+}
+
+impl From<CollectionMissingOrUnreadable> for CollectionUnreadableOrLookupError {
+    fn from(error: CollectionMissingOrUnreadable) -> Self {
+        match error {
+            CollectionMissingOrUnreadable::CollectionMissing(id) => Self::CollectionMissing(id),
+            CollectionMissingOrUnreadable::CollectionUnreadable(id) => {
+                Self::CollectionUnreadable(id)
+            }
+        }
+    }
+}
+
+impl From<CollectionLookupError> for CollectionUnreadableOrLookupError {
+    fn from(error: CollectionLookupError) -> Self {
+        match error {
+            CollectionLookupError::InstanceMissing(id) => Self::InstanceMissing(id),
+            CollectionLookupError::InstanceShutDown => Self::InstanceShutDown,
+            CollectionLookupError::CollectionMissing(id) => Self::CollectionMissing(id),
+        }
     }
 }
 
@@ -137,6 +194,9 @@ pub enum DataflowCreationError {
     /// because it should always have an external side effect.
     #[error("copy to dataflow has an empty as_of")]
     EmptyAsOfForCopyTo,
+    /// An input collection has an empty read frontier, so it's not readable at any time.
+    #[error("input collection has an empty read frontier: {0}")]
+    CollectionUnreadable(GlobalId),
 }
 
 impl From<InstanceMissing> for DataflowCreationError {
@@ -148,6 +208,17 @@ impl From<InstanceMissing> for DataflowCreationError {
 impl From<CollectionMissing> for DataflowCreationError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
+    }
+}
+
+impl From<CollectionMissingOrUnreadable> for DataflowCreationError {
+    fn from(e: CollectionMissingOrUnreadable) -> Self {
+        match e {
+            CollectionMissingOrUnreadable::CollectionMissing(id) => Self::CollectionMissing(id),
+            CollectionMissingOrUnreadable::CollectionUnreadable(id) => {
+                Self::CollectionUnreadable(id)
+            }
+        }
     }
 }
 
@@ -166,6 +237,9 @@ pub enum PeekError {
     /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
+    /// An input collection has an empty read frontier, so it's not readable at any time.
+    #[error("collection has an empty read frontier: {0}")]
+    CollectionUnreadable(GlobalId),
 }
 
 impl From<InstanceMissing> for PeekError {
@@ -180,13 +254,24 @@ impl From<CollectionMissing> for PeekError {
     }
 }
 
+impl From<CollectionMissingOrUnreadable> for PeekError {
+    fn from(e: CollectionMissingOrUnreadable) -> Self {
+        match e {
+            CollectionMissingOrUnreadable::CollectionMissing(id) => Self::CollectionMissing(id),
+            CollectionMissingOrUnreadable::CollectionUnreadable(id) => {
+                Self::CollectionUnreadable(id)
+            }
+        }
+    }
+}
+
 /// Errors arising during collection updates.
 #[derive(Error, Debug)]
 pub enum CollectionUpdateError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The collection does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
@@ -200,6 +285,38 @@ impl From<InstanceMissing> for CollectionUpdateError {
 impl From<CollectionMissing> for CollectionUpdateError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
+    }
+}
+
+/// Collection is unreadable at any time, or the instance or collection does not exist (similarly to
+/// the above `CollectionUpdateError`).
+#[derive(Error, Debug)]
+pub enum CollectionUpdateOrUnreadableError {
+    /// The instance does not exist.
+    #[error("instance does not exist: {0}")]
+    InstanceMissing(ComputeInstanceId),
+    /// The collection does not exist.
+    #[error("collection does not exist: {0}")]
+    CollectionMissing(GlobalId),
+    /// The collection has an empty read frontier, so it's not readable at any time.
+    #[error("collection has an empty read frontier: {0}")]
+    CollectionUnreadable(GlobalId),
+}
+
+impl From<InstanceMissing> for CollectionUpdateOrUnreadableError {
+    fn from(error: InstanceMissing) -> Self {
+        Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<CollectionMissingOrUnreadable> for CollectionUpdateOrUnreadableError {
+    fn from(e: CollectionMissingOrUnreadable) -> Self {
+        match e {
+            CollectionMissingOrUnreadable::CollectionMissing(id) => Self::CollectionMissing(id),
+            CollectionMissingOrUnreadable::CollectionUnreadable(id) => {
+                Self::CollectionUnreadable(id)
+            }
+        }
     }
 }
 

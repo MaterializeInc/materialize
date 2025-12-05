@@ -1064,7 +1064,7 @@ impl PeekClient {
             .acquire_read_holds_and_least_valid_write(id_bundle)
             .await
             .map_err(|err| {
-                AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                AdapterError::concurrent_dependency_drop_from_collection_unreadable_or_lookup_error(
                     err,
                     compute_instance,
                 )
