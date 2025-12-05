@@ -7,10 +7,10 @@ use super::super::ast::Statement;
 use super::super::normalize::NormalizingVisitor;
 use super::types::{Database, DatabaseObject, FullyQualifiedName, Project, Schema};
 use super::validation::{
-    validate_comment_references, validate_database_mod_statements, validate_grant_references,
-    validate_ident, validate_index_clusters, validate_index_references, validate_mv_cluster,
-    validate_no_storage_and_computation_in_schema, validate_schema_mod_statements,
-    validate_sink_cluster,
+    validate_comment_references, validate_database_mod_statements, validate_fqn_identifiers,
+    validate_grant_references, validate_ident, validate_index_clusters, validate_index_references,
+    validate_mv_cluster, validate_no_storage_and_computation_in_schema,
+    validate_schema_mod_statements, validate_sink_cluster,
 };
 use crate::project::error::{ValidationError, ValidationErrorKind, ValidationErrors};
 use mz_sql_parser::ast::*;
@@ -189,6 +189,9 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
 
         // Validate the original statement identifier against FQN
         validate_ident(&stmt, &fqn, &mut errors);
+
+        // Validate identifier format (lowercase, valid characters)
+        validate_fqn_identifiers(&fqn, &mut errors);
 
         // Normalize statement name and dependencies
         let stmt = stmt.normalize_stmt(&fqn);

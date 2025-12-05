@@ -1924,3 +1924,160 @@ fn test_index_missing_cluster_fails() {
         panic!("Expected ValidationErrors");
     }
 }
+
+// ============================================================================
+// Identifier format validation tests
+// ============================================================================
+
+mod identifier_validation {
+    use super::super::validation::{validate_identifier_format, IdentifierKind};
+
+    #[test]
+    fn test_valid_lowercase_identifier() {
+        assert!(validate_identifier_format("users", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("my_table", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("user123", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("_private", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("price$", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("a1b2c3", IdentifierKind::Object).is_ok());
+    }
+
+    #[test]
+    fn test_valid_unicode_identifiers() {
+        // Letters with diacritical marks
+        assert!(validate_identifier_format("café", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("naïve", IdentifierKind::Object).is_ok());
+        // Non-Latin letters
+        assert!(validate_identifier_format("日本語", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("данные", IdentifierKind::Object).is_ok());
+    }
+
+    #[test]
+    fn test_invalid_uppercase_start() {
+        let result = validate_identifier_format("Users", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("uppercase"),
+            "Error should mention uppercase: {}",
+            err
+        );
+        assert!(err.contains("position 1"), "Error should mention position 1: {}", err);
+    }
+
+    #[test]
+    fn test_invalid_uppercase_middle() {
+        let result = validate_identifier_format("myTable", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("uppercase"),
+            "Error should mention uppercase: {}",
+            err
+        );
+        assert!(err.contains("'T'"), "Error should mention the character: {}", err);
+    }
+
+    #[test]
+    fn test_invalid_digit_start() {
+        let result = validate_identifier_format("123table", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("starts with digit"),
+            "Error should mention starting with digit: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_invalid_special_char_start() {
+        let result = validate_identifier_format("$price", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("starts with invalid character"),
+            "Error should mention invalid start: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_invalid_hyphen() {
+        let result = validate_identifier_format("my-table", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid character"),
+            "Error should mention invalid character: {}",
+            err
+        );
+        assert!(err.contains("'-'"), "Error should mention hyphen: {}", err);
+    }
+
+    #[test]
+    fn test_invalid_space() {
+        let result = validate_identifier_format("my table", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid character"),
+            "Error should mention invalid character: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_empty_identifier() {
+        let result = validate_identifier_format("", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("cannot be empty"),
+            "Error should mention empty: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_all_identifier_kinds() {
+        // Test that error messages correctly use the identifier kind
+        let db_err = validate_identifier_format("MyDB", IdentifierKind::Database).unwrap_err();
+        assert!(db_err.contains("database name"), "Should mention database: {}", db_err);
+
+        let schema_err = validate_identifier_format("MySchema", IdentifierKind::Schema).unwrap_err();
+        assert!(schema_err.contains("schema name"), "Should mention schema: {}", schema_err);
+
+        let obj_err = validate_identifier_format("MyObject", IdentifierKind::Object).unwrap_err();
+        assert!(obj_err.contains("object name"), "Should mention object: {}", obj_err);
+
+        let cluster_err = validate_identifier_format("MyCluster", IdentifierKind::Cluster).unwrap_err();
+        assert!(cluster_err.contains("cluster name"), "Should mention cluster: {}", cluster_err);
+    }
+
+    #[test]
+    fn test_all_uppercase() {
+        let result = validate_identifier_format("MY_TABLE", IdentifierKind::Object);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("uppercase"),
+            "Error should mention uppercase: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_valid_underscore_only_start() {
+        // Single underscore followed by valid chars
+        assert!(validate_identifier_format("_", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("__", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("___test", IdentifierKind::Object).is_ok());
+    }
+
+    #[test]
+    fn test_valid_dollar_sign_in_middle() {
+        assert!(validate_identifier_format("price$usd", IdentifierKind::Object).is_ok());
+        assert!(validate_identifier_format("a$b$c", IdentifierKind::Object).is_ok());
+    }
+}
