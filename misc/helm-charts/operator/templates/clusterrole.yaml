@@ -88,6 +88,8 @@ rules:
   resources:
   - materializes
   - materializes/status
+  - balancers
+  - balancers/status
   - vpcendpoints
   verbs:
   - create
