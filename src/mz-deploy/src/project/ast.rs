@@ -141,7 +141,11 @@ impl Statement {
     /// declared in the CREATE statement.
     pub fn ident(&self) -> DatabaseIdent {
         match self {
-            Statement::CreateSink(s) => s.name.clone().unwrap().into(),
+            Statement::CreateSink(s) => s
+                .name
+                .clone()
+                .expect("CREATE SINK statement should have a name")
+                .into(),
             Statement::CreateView(v) => v.definition.name.clone().into(),
             Statement::CreateMaterializedView(m) => m.name.clone().into(),
             Statement::CreateTable(t) => t.name.clone().into(),
