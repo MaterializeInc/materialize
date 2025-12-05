@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use itertools::{Either, Itertools};
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
-use mz_adapter_types::dyncfgs::ENABLE_MULTI_REPLICA_SOURCES;
+use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
 use mz_auth::password::Password;
 use mz_controller_types::{ClusterId, DEFAULT_REPLICA_LOGGING_INTERVAL, ReplicaId};
 use mz_expr::{CollectionPlan, UnmaterializableFunc};
@@ -4392,6 +4392,13 @@ pub struct PlannedRoleAttributes {
     pub login: Option<bool>,
 }
 
+fn format_password_auth_bail_message(attribute: &str) -> String {
+    format!(
+        "{} attribute is not supported in this environment. For more information consult the documentation at https://materialize.com/docs/sql/create-role/#details",
+        attribute
+    )
+}
+
 fn plan_role_attributes(
     options: Vec<RoleAttribute>,
     scx: &StatementContext,
@@ -4404,6 +4411,8 @@ fn plan_role_attributes(
         login: None,
         nopassword: None,
     };
+
+    let password_auth_enabled = ENABLE_PASSWORD_AUTH.get(scx.catalog.system_vars().dyncfgs());
 
     for option in options {
         match option {
@@ -4440,6 +4449,11 @@ fn plan_role_attributes(
             RoleAttribute::Inherit => planned_attributes.inherit = Some(true),
             RoleAttribute::NoInherit => planned_attributes.inherit = Some(false),
             RoleAttribute::Password(password) => {
+                if !password_auth_enabled {
+                    let msg = format_password_auth_bail_message("PASSWORD");
+                    sql_bail!("{}", msg);
+                }
+
                 if let Some(password) = password {
                     planned_attributes.password = Some(password.into());
                     planned_attributes.scram_iterations =
@@ -4449,24 +4463,43 @@ fn plan_role_attributes(
                 }
             }
             RoleAttribute::SuperUser => {
+                if !password_auth_enabled {
+                    let msg =
+                        format_password_auth_bail_message(&RoleAttribute::SuperUser.to_string());
+                    sql_bail!("{}", msg);
+                }
                 if planned_attributes.superuser == Some(false) {
                     sql_bail!("conflicting or redundant options");
                 }
                 planned_attributes.superuser = Some(true);
             }
             RoleAttribute::NoSuperUser => {
+                if !password_auth_enabled {
+                    let msg =
+                        format_password_auth_bail_message(&RoleAttribute::NoSuperUser.to_string());
+                    sql_bail!("{}", msg);
+                }
                 if planned_attributes.superuser == Some(true) {
                     sql_bail!("conflicting or redundant options");
                 }
                 planned_attributes.superuser = Some(false);
             }
             RoleAttribute::Login => {
+                if !password_auth_enabled {
+                    let msg = format_password_auth_bail_message(&RoleAttribute::Login.to_string());
+                    sql_bail!("{}", msg);
+                }
                 if planned_attributes.login == Some(false) {
                     sql_bail!("conflicting or redundant options");
                 }
                 planned_attributes.login = Some(true);
             }
             RoleAttribute::NoLogin => {
+                if !password_auth_enabled {
+                    let msg =
+                        format_password_auth_bail_message(&RoleAttribute::NoLogin.to_string());
+                    sql_bail!("{}", msg);
+                }
                 if planned_attributes.login == Some(true) {
                     sql_bail!("conflicting or redundant options");
                 }
