@@ -94,7 +94,7 @@ s4  mz_support
 s5  mz_analytics
 u1  quickstart
 u4  foo
-u7  bar
+u8  bar
 
 query T rowsort
 SELECT name FROM (SHOW CLUSTERS LIKE 'q%')
@@ -176,83 +176,83 @@ FROM
 WHERE clusters.name = 'bar'
 ORDER BY on_name, seq_in_index ASC;
 ----
-bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u7_primary_idx  1  id  NULL  false
-bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_batcher_allocations_raw  mz_arrangement_batcher_allocations_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_batcher_allocations_raw  mz_arrangement_batcher_allocations_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_batcher_capacity_raw  mz_arrangement_batcher_capacity_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_batcher_capacity_raw  mz_arrangement_batcher_capacity_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_batcher_records_raw  mz_arrangement_batcher_records_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_batcher_records_raw  mz_arrangement_batcher_records_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_batcher_size_raw  mz_arrangement_batcher_size_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_batcher_size_raw  mz_arrangement_batcher_size_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  1  operator_id  NULL  false
-bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  1  id  NULL  false
-bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  1  export_id  NULL  false
-bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  1  export_id  NULL  false
-bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
-bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u7_primary_idx  1  export_id  NULL  false
-bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
-bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  2  import_id  NULL  false
-bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  3  worker_id  NULL  false
-bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  1  global_id  NULL  false
-bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  2  lir_id  NULL  false
-bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  3  worker_id  NULL  false
-bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  1  id  NULL  false
-bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u7_primary_idx  3  duration_ns  NULL  false
-bar  mz_compute_operator_hydration_statuses_per_worker  mz_compute_operator_hydration_statuses_per_worker_u7_primary_idx  1  export_id  NULL  false
-bar  mz_compute_operator_hydration_statuses_per_worker  mz_compute_operator_hydration_statuses_per_worker_u7_primary_idx  2  lir_id  NULL  false
-bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u7_primary_idx  1  id  NULL  false
-bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u7_primary_idx  1  id  NULL  false
-bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  1  id  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  3  source  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  4  port  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  5  update_type  NULL  false
-bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u7_primary_idx  6  time  NULL  true
-bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  1  id  NULL  false
-bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
-bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u7_primary_idx  2  duration_ns  NULL  false
-bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u7_primary_idx  1  channel_id  NULL  false
-bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u7_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u7_primary_idx  3  to_worker_id  NULL  false
-bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u7_primary_idx  1  channel_id  NULL  false
-bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u7_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u7_primary_idx  3  to_worker_id  NULL  false
-bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  1  channel_id  NULL  false
-bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u7_primary_idx  3  to_worker_id  NULL  false
-bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  1  channel_id  NULL  false
-bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  2  from_worker_id  NULL  false
-bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u7_primary_idx  3  to_worker_id  NULL  false
-bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
-bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  2  type  NULL  false
-bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u7_primary_idx  3  duration_ns  NULL  false
-bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u7_primary_idx  1  id  NULL  false
-bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u7_primary_idx  2  worker_id  NULL  false
-bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  1  worker_id  NULL  false
-bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  2  slept_for_ns  NULL  false
-bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u7_primary_idx  3  requested_ns  NULL  false
+bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u8_primary_idx  1  id  NULL  false
+bar  mz_active_peeks_per_worker  mz_active_peeks_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_batcher_allocations_raw  mz_arrangement_batcher_allocations_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batcher_allocations_raw  mz_arrangement_batcher_allocations_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_batcher_capacity_raw  mz_arrangement_batcher_capacity_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batcher_capacity_raw  mz_arrangement_batcher_capacity_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_batcher_records_raw  mz_arrangement_batcher_records_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batcher_records_raw  mz_arrangement_batcher_records_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_batcher_size_raw  mz_arrangement_batcher_size_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batcher_size_raw  mz_arrangement_batcher_size_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_batches_raw  mz_arrangement_batches_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_allocations_raw  mz_arrangement_heap_allocations_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_capacity_raw  mz_arrangement_heap_capacity_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_heap_size_raw  mz_arrangement_heap_size_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_records_raw  mz_arrangement_records_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u8_primary_idx  1  operator_id  NULL  false
+bar  mz_arrangement_sharing_raw  mz_arrangement_sharing_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u8_primary_idx  1  id  NULL  false
+bar  mz_compute_dataflow_global_ids_per_worker  mz_compute_dataflow_global_ids_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u8_primary_idx  1  export_id  NULL  false
+bar  mz_compute_error_counts_raw  mz_compute_error_counts_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u8_primary_idx  1  export_id  NULL  false
+bar  mz_compute_exports_per_worker  mz_compute_exports_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u8_primary_idx  1  export_id  NULL  false
+bar  mz_compute_frontiers_per_worker  mz_compute_frontiers_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u8_primary_idx  1  export_id  NULL  false
+bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u8_primary_idx  1  export_id  NULL  false
+bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u8_primary_idx  2  import_id  NULL  false
+bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u8_primary_idx  3  worker_id  NULL  false
+bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u8_primary_idx  1  global_id  NULL  false
+bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u8_primary_idx  2  lir_id  NULL  false
+bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u8_primary_idx  3  worker_id  NULL  false
+bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u8_primary_idx  1  id  NULL  false
+bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_operator_durations_histogram_raw  mz_compute_operator_durations_histogram_raw_u8_primary_idx  3  duration_ns  NULL  false
+bar  mz_compute_operator_hydration_statuses_per_worker  mz_compute_operator_hydration_statuses_per_worker_u8_primary_idx  1  export_id  NULL  false
+bar  mz_compute_operator_hydration_statuses_per_worker  mz_compute_operator_hydration_statuses_per_worker_u8_primary_idx  2  lir_id  NULL  false
+bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u8_primary_idx  1  id  NULL  false
+bar  mz_dataflow_addresses_per_worker  mz_dataflow_addresses_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u8_primary_idx  1  id  NULL  false
+bar  mz_dataflow_channels_per_worker  mz_dataflow_channels_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u8_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u8_primary_idx  3  source  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u8_primary_idx  4  port  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u8_primary_idx  5  update_type  NULL  false
+bar  mz_dataflow_operator_reachability_raw  mz_dataflow_operator_reachability_raw_u8_primary_idx  6  time  NULL  true
+bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u8_primary_idx  1  id  NULL  false
+bar  mz_dataflow_operators_per_worker  mz_dataflow_operators_per_worker_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u8_primary_idx  1  worker_id  NULL  false
+bar  mz_dataflow_shutdown_durations_histogram_raw  mz_dataflow_shutdown_durations_histogram_raw_u8_primary_idx  2  duration_ns  NULL  false
+bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u8_primary_idx  1  channel_id  NULL  false
+bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u8_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_batch_counts_received_raw  mz_message_batch_counts_received_raw_u8_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u8_primary_idx  1  channel_id  NULL  false
+bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u8_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_batch_counts_sent_raw  mz_message_batch_counts_sent_raw_u8_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u8_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u8_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_received_raw  mz_message_counts_received_raw_u8_primary_idx  3  to_worker_id  NULL  false
+bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u8_primary_idx  1  channel_id  NULL  false
+bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u8_primary_idx  2  from_worker_id  NULL  false
+bar  mz_message_counts_sent_raw  mz_message_counts_sent_raw_u8_primary_idx  3  to_worker_id  NULL  false
+bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u8_primary_idx  1  worker_id  NULL  false
+bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u8_primary_idx  2  type  NULL  false
+bar  mz_peek_durations_histogram_raw  mz_peek_durations_histogram_raw_u8_primary_idx  3  duration_ns  NULL  false
+bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u8_primary_idx  1  id  NULL  false
+bar  mz_scheduling_elapsed_raw  mz_scheduling_elapsed_raw_u8_primary_idx  2  worker_id  NULL  false
+bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u8_primary_idx  1  worker_id  NULL  false
+bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u8_primary_idx  2  slept_for_ns  NULL  false
+bar  mz_scheduling_parks_histogram_raw  mz_scheduling_parks_histogram_raw_u8_primary_idx  3  requested_ns  NULL  false
 bar  v  v_primary_idx  1  ?column?  NULL  false
 
 query TTTTT
@@ -779,7 +779,7 @@ COMPLETE 0
 query TTTT
 SELECT event_type, object_type, regexp_replace(details::text, '"replica_id":"u[^"]*"', '"replica_id":"u%"'), user FROM mz_audit_events ORDER BY occurred_at DESC LIMIT 1;
 ----
-create  cluster-replica  {"billed_as":"free","cluster_id":"u4","cluster_name":"t1","internal":true,"logical_size":"scale=1,workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
+create  cluster-replica  {"billed_as":"free","cluster_id":"u9","cluster_name":"t1","internal":true,"logical_size":"scale=1,workers=2","reason":"manual","replica_id":"u%","replica_name":"free"}  mz_system
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.internal_r2 SIZE 'scale=1,workers=2', INTERNAL
@@ -798,10 +798,11 @@ statement ok
 DROP CLUSTER REPLICA t1.r2
 
 query TTTT rowsort
-SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u4'
+SELECT name, cluster_id, size, owner_id FROM mz_cluster_replicas WHERE cluster_id = 'u9'
 ----
-r1  u4  scale=1,workers=1  u1
-free  u4  scale=1,workers=2  u1
+free  u9  scale=1,workers=2  u1
+r1  u9  scale=1,workers=1  u1
+
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER REPLICA t1.r3 SIZE 'scale=1,workers=2', BILLED AS 'free'
@@ -967,14 +968,14 @@ CREATE CLUSTER c1 SIZE 'scale=1,workers=1'
 query TT colnames
 SELECT * FROM mz_internal.mz_cluster_workload_classes
 ----
-id  workload_class
+id workload_class
 s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
 s5  NULL
 u1  NULL
-u3  NULL
+u4  NULL
 
 statement error WORKLOAD CLASS not supported for non-system users
 ALTER CLUSTER c1 RESET (WORKLOAD CLASS)
@@ -993,14 +994,14 @@ COMPLETE 0
 query TT colnames
 SELECT * FROM mz_internal.mz_cluster_workload_classes
 ----
-id  workload_class
+id workload_class
 s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
 s5  NULL
 u1  NULL
-u3  NULL
+u4  NULL
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER c1 SET (WORKLOAD CLASS 'qa')
@@ -1010,14 +1011,14 @@ COMPLETE 0
 query TT colnames
 SELECT * FROM mz_internal.mz_cluster_workload_classes
 ----
-id  workload_class
+id workload_class
 s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
 s5  NULL
 u1  NULL
-u3  qa
+u4  qa
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER c1 SET (WORKLOAD CLASS NULL)
@@ -1027,14 +1028,14 @@ COMPLETE 0
 query TT colnames
 SELECT * FROM mz_internal.mz_cluster_workload_classes
 ----
-id  workload_class
+id workload_class
 s1  NULL
 s2  NULL
 s3  NULL
 s4  NULL
 s5  NULL
 u1  NULL
-u3  NULL
+u4  NULL
 
 statement ok
 DROP CLUSTER c1

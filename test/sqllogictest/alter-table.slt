@@ -19,7 +19,7 @@ CREATE TABLE t2 (a int);
 
 # TODO(alter_table): Manually specifying a VERSION when referencing an item (maybe?) shouldn't be allowed.
 statement ok
-CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 0];
+CREATE VIEW v1 AS SELECT * FROM [u2 AS "materialize"."public"."t2" VERSION 0];
 
 statement ok
 CREATE VIEW v2 AS SELECT * FROM t2;
@@ -57,7 +57,7 @@ statement ok
 ALTER TABLE t1 ADD COLUMN IF NOT EXISTS a int;
 
 query error db error: ERROR: invalid version "1000" for "t2"
-CREATE VIEW v1 AS SELECT * FROM [u1 AS "materialize"."public"."t2" VERSION 1000];
+CREATE VIEW v1 AS SELECT * FROM [u2 AS "materialize"."public"."t2" VERSION 1000];
 
 query TTTT
 SHOW COLUMNS FROM t1;
@@ -413,15 +413,15 @@ DROP TABLE t1 CASCADE;
 query TT
 SELECT id, name FROM mz_tables WHERE id LIKE 'u%';
 ----
-u1 t2
+u2 t2
 
 statement ok
 COMMENT ON COLUMN t2.a IS 'this column existed originally';
 
 query TTIT
-SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u2';
 ----
-u1  table  1  this␠column␠existed␠originally
+u2  table  1  this␠column␠existed␠originally
 
 statement ok
 ALTER TABLE t2 ADD COLUMN c timestamp;
@@ -430,14 +430,14 @@ statement ok
 COMMENT ON COLUMN t2.c IS 'added later';
 
 query TTIT rowsort
-SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u2';
 ----
-u1  table  3  added␠later
-u1  table  1  this␠column␠existed␠originally
+u2  table  3  added␠later
+u2  table  1  this␠column␠existed␠originally
 
 statement ok
 DROP TABLE t2 CASCADE;
 
 query TTIT
-SELECT * FROM mz_internal.mz_comments WHERE id = 'u1';
+SELECT * FROM mz_internal.mz_comments WHERE id = 'u2';
 ----

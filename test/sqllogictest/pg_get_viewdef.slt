@@ -33,7 +33,7 @@ NULL
 query T
 SELECT pg_get_viewdef('t_view')
 ----
-SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+SELECT "t"."a", "b" FROM [u2 AS "materialize"."public"."t"];
 
 # Test pg_get_viewdef(view_oid)
 
@@ -45,7 +45,7 @@ NULL
 query T
 SELECT pg_get_viewdef('t_view'::regclass::oid)
 ----
-SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+SELECT "t"."a", "b" FROM [u2 AS "materialize"."public"."t"];
 
 # Test pg_get_viewdef(view_name, pretty)
 
@@ -62,12 +62,12 @@ NULL
 query T
 SELECT pg_get_viewdef('t_view', true)
 ----
-SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+SELECT "t"."a", "b" FROM [u2 AS "materialize"."public"."t"];
 
 query T
 SELECT pg_get_viewdef('t_view', false)
 ----
-SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+SELECT "t"."a", "b" FROM [u2 AS "materialize"."public"."t"];
 
 # Test pg_get_viewdef(view_oid, pretty)
 
@@ -84,12 +84,12 @@ NULL
 query T
 SELECT pg_get_viewdef('t_view'::regclass::oid, true)
 ----
-SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+SELECT "t"."a", "b" FROM [u2 AS "materialize"."public"."t"];
 
 query T
 SELECT pg_get_viewdef('t_view'::regclass::oid, false)
 ----
-SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+SELECT "t"."a", "b" FROM [u2 AS "materialize"."public"."t"];
 
 # Test pg_get_viewdef(view_oid, wrap_column)
 
@@ -101,7 +101,7 @@ NULL
 query T
 SELECT pg_get_viewdef('t_view'::regclass::oid, 80)
 ----
-SELECT "t"."a", "b" FROM [u1 AS "materialize"."public"."t"];
+SELECT "t"."a", "b" FROM [u2 AS "materialize"."public"."t"];
 
 # Test retrieving view definition after table rename
 
@@ -111,4 +111,4 @@ ALTER TABLE t RENAME TO t2
 query T
 SELECT pg_get_viewdef('t_view'::regclass::oid)
 ----
-SELECT "t2"."a", "b" FROM [u1 AS "materialize"."public"."t2"];
+SELECT "t2"."a", "b" FROM [u2 AS "materialize"."public"."t2"];

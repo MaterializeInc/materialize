@@ -78,7 +78,7 @@ SHOW CREATE TYPE tx;
 simple conn=mz_system,user=mz_system
 SHOW CREATE TYPE map[text=>int]
 ----
-db error: ERROR: map[[s46 AS pg_catalog.text]=>[s20 AS pg_catalog.int4]] is not a named type
+db error: ERROR: map[[s54 AS pg_catalog.text]=>[s28 AS pg_catalog.int4]] is not a named type
 
 # For builtin types
 

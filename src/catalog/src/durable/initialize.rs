@@ -602,7 +602,7 @@ pub(crate) async fn initialize(
     // We created a network policy with a prefined ID user(1) and OID. We need
     // to increment the id alloc key. It should be safe to assume that there's
     // no user(1), as a sanity check, we'll assert this is the case.
-    let id = tx.get_and_increment_id(USER_NETWORK_POLICY_ID_ALLOC_KEY.to_string())?;
+    let id = tx.get_and_increment_id(&[USER_NETWORK_POLICY_ID_ALLOC_KEY])?;
     assert!(DEFAULT_USER_NETWORK_POLICY_ID == NetworkPolicyId::User(id));
 
     audit_events.extend([(
@@ -720,7 +720,7 @@ pub(crate) async fn initialize(
     // Allocate an ID for each audit log event.
     let mut audit_events_with_id = Vec::with_capacity(audit_events.len());
     for (ty, obj, details) in audit_events {
-        let id = tx.get_and_increment_id(AUDIT_LOG_ID_ALLOC_KEY.to_string())?;
+        let id = tx.get_and_increment_id(&[AUDIT_LOG_ID_ALLOC_KEY])?;
         audit_events_with_id.push((id, ty, obj, details));
     }
 

@@ -208,7 +208,7 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SHOW COL
 ----
 Explained Query (fast path):
   Project (#1{name}..=#3{type}, #5{comment})
-    ReadIndex on=mz_internal.mz_show_columns mz_show_columns_ind=[lookup value=("u1")]
+    ReadIndex on=mz_internal.mz_show_columns mz_show_columns_ind=[lookup value=("u2")]
 
 Used Indexes:
   - mz_internal.mz_show_columns_ind (lookup)

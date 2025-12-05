@@ -21,7 +21,7 @@ CREATE TABLE t (i INT)
 query T multiline
 SELECT redacted_create_sql FROM mz_tables WHERE name = 't'
 ----
-CREATE TABLE materialize.public.t (i [s20 AS pg_catalog.int4])
+CREATE TABLE materialize.public.t (i [s28 AS pg_catalog.int4])
 EOF
 
 query T multiline
@@ -68,7 +68,7 @@ CREATE TABLE redactable_t (a int) WITH (RETAIN HISTORY = FOR '2s', REDACTED = 'p
 query T multiline
 SELECT redacted_create_sql FROM mz_tables WHERE name = 'redactable_t'
 ----
-CREATE TABLE materialize.public.redactable_t (a [s20 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>')
+CREATE TABLE materialize.public.redactable_t (a [s28 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>')
 EOF
 
 query T multiline
@@ -80,7 +80,7 @@ EOF
 query T multiline
 SELECT pretty_sql(redacted_create_sql) FROM mz_tables WHERE name = 'redactable_t'
 ----
-CREATE TABLE materialize.public.redactable_t (a [s20 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>');
+CREATE TABLE materialize.public.redactable_t (a [s28 AS pg_catalog.int4]) WITH (RETAIN HISTORY = FOR '2s', REDACTED = '<REDACTED>');
 EOF
 
 query T multiline
@@ -95,7 +95,7 @@ CREATE INDEX t_idx_i ON t (i)
 query T multiline
 SELECT redacted_create_sql FROM mz_indexes WHERE name = 't_idx_i'
 ----
-CREATE INDEX t_idx_i IN CLUSTER [u1] ON [u1 AS materialize.public.t] (i)
+CREATE INDEX t_idx_i IN CLUSTER [u1] ON [u2 AS materialize.public.t] (i)
 EOF
 
 query T multiline
@@ -165,7 +165,7 @@ CREATE TYPE ty AS LIST (ELEMENT TYPE=bool)
 query T multiline
 SELECT redacted_create_sql FROM mz_types WHERE name = 'ty'
 ----
-CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s6 AS pg_catalog.bool])
+CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s14 AS pg_catalog.bool])
 EOF
 
 statement ok
@@ -175,7 +175,7 @@ SELECT i+i+5 FROM t;
 query T multiline
 SELECT regexp_replace(redacted_create_sql, 'AS OF [0-9]+', 'AS OF xxxxxxx', 'g') FROM mz_materialized_views WHERE name = 'mv1'
 ----
-CREATE MATERIALIZED VIEW materialize.public.mv1 IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t] AS OF xxxxxxx
+CREATE MATERIALIZED VIEW materialize.public.mv1 IN CLUSTER [u1] WITH (REFRESH = ON COMMIT) AS SELECT i + i + '<REDACTED>' FROM [u2 AS materialize.public.t] AS OF xxxxxxx
 EOF
 
 query T multiline
@@ -193,7 +193,7 @@ SELECT pretty_sql(redacted_create_sql) FROM mz_materialized_views WHERE name = '
 CREATE MATERIALIZED VIEW materialize.public.mv1
     IN CLUSTER [u1]
     WITH (REFRESH = ON COMMIT)
-    AS SELECT i + i + '<REDACTED>' FROM [u1 AS materialize.public.t];
+    AS SELECT i + i + '<REDACTED>' FROM [u2 AS materialize.public.t];
 EOF
 
 query T multiline

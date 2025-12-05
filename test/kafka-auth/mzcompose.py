@@ -240,7 +240,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """
     )
     public_key = c.sql_query(
-        "select public_key_1 from mz_ssh_tunnel_connections where id = 'u1';"
+        """
+        SELECT
+            public_key_1
+        FROM
+            mz_connections JOIN
+            mz_ssh_tunnel_connections USING(id)
+        WHERE
+            mz_connections.name = 'ssh';
+        """
     )[0][0]
     c.exec(
         "ssh-bastion-host",
@@ -261,7 +269,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     """
     )
     public_key = c.sql_query(
-        "select public_key_1 from mz_ssh_tunnel_connections where id = 'u2';"
+        """
+        SELECT
+            public_key_1
+        FROM
+            mz_connections JOIN
+            mz_ssh_tunnel_connections USING(id)
+        WHERE
+            mz_connections.name = 'ssh_backup';
+        """
     )[0][0]
     c.exec(
         "ssh-bastion-host",
