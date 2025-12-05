@@ -113,7 +113,7 @@ impl Coordinator {
                                 nopassword: false,
                                 vars: role.vars.clone(),
                             };
-                            if let Err(e) = self.catalog_transact_with_context(Some(&conn_id), None, vec![op]).await {
+                            if let Err(e) = self.catalog_transact_with_context(Some(conn_id), None, vec![op]).await {
                                 tracing::warn!("failed to sync superuser attribute from external metadata: {:?}", e);
                             }
                         }
@@ -716,15 +716,12 @@ impl Coordinator {
             // connecting to an internal port. Therefore it's ok to always create a new role for the
             // user.
 
-            let attributes = if user
-                .external_metadata
-                .as_ref()
-                .map_or(false, |meta| meta.admin)
-            {
-                RoleAttributesRaw::new().with_superuser()
-            } else {
-                RoleAttributesRaw::new()
-            };
+            let mut attributes = RoleAttributesRaw::new();
+
+            if let Some(admin) = user.external_metadata.as_ref().map(|meta| meta.admin) {
+                attributes = attributes.with_superuser(admin);
+            }
+
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,

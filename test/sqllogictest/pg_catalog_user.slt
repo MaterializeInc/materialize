@@ -27,7 +27,7 @@ CREATE ROLE "materialize@foocorp.io"
 query TIBBBBTTT rowsort
 SELECT usename, usesysid, usecreatedb, usesuper, userepl, usebypassrls, passwd, valuntil, useconfig FROM pg_user;
 ----
-materialize@foocorp.io  20196  false  NULL  false  false  NULL  NULL  NULL
+materialize@foocorp.io  20196  false  false  false  false  NULL  NULL  NULL
 mz_system  16661  true  true  false  false  NULL  NULL  NULL
 
 statement ok
