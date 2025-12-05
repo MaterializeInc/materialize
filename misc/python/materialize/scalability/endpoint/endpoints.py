@@ -83,12 +83,6 @@ class MaterializeNonRemote(Endpoint):
     def internal_host(self) -> str:
         return "localhost"
 
-    def user(self) -> str:
-        return "materialize"
-
-    def password(self) -> str:
-        return "materialize"
-
     def internal_port(self) -> int:
         raise NotImplementedError
 
@@ -115,6 +109,12 @@ class MaterializeLocal(MaterializeNonRemote):
     def internal_port(self) -> int:
         return 6877
 
+    def user(self) -> str:
+        return "materialize"
+
+    def password(self) -> str:
+        return "materialize"
+
     def up(self) -> None:
         self.lift_limits()
 
@@ -138,6 +138,8 @@ class MaterializeContainer(MaterializeNonRemote):
             alternative_image if image != alternative_image else None
         )
         self._port: int | None = None
+        self._port_password: int | None = None
+        self._port_sasl: int | None = None
         self._resolved_target = resolved_target
         self.use_balancerd = use_balancerd
         super().__init__(specified_target)
@@ -145,9 +147,23 @@ class MaterializeContainer(MaterializeNonRemote):
     def resolved_target(self) -> str | None:
         return self._resolved_target
 
+    def user(self) -> str:
+        return "user1"
+
+    def password(self) -> str:
+        return "password"
+
     def port(self) -> int:
         assert self._port is not None
         return self._port
+
+    def port_password(self) -> int:
+        assert self._port_password is not None
+        return self._port_password
+
+    def port_sasl(self) -> int:
+        assert self._port_sasl is not None
+        return self._port_sasl
 
     def internal_port(self) -> int:
         return self.composition.port("materialized", 6877)
@@ -186,12 +202,21 @@ class MaterializeContainer(MaterializeNonRemote):
         ):
             self.composition.up("materialized")
             self.composition.verify_build_profile()
+            self.composition.sql(
+                "create role \"user1\" with login password 'password';"
+            )
+            self.composition.sql("grant materialize to user1;")
 
             if self.use_balancerd:
                 self.composition.up("balancerd")
                 self._port = self.composition.default_port("balancerd")
+                # TODO: Also make it work through balancerd
+                self._port_password = self.composition.port("materialized", 6880)
+                self._port_sasl = self.composition.port("materialized", 6881)
             else:
                 self._port = self.composition.default_port("materialized")
+                self._port_password = self.composition.port("materialized", 6880)
+                self._port_sasl = self.composition.port("materialized", 6881)
 
     def __str__(self) -> str:
         return f"MaterializeContainer ({self.image} specified as {self.specified_target()})"
