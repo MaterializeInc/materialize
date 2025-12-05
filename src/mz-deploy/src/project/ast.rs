@@ -98,7 +98,7 @@ impl DatabaseIdent {
 ///
 /// This struct provides type safety for cluster references and allows for
 /// future extensibility (e.g., tracking cluster size, replicas, etc.).
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Cluster {
     pub name: String,
 }
@@ -169,7 +169,7 @@ impl std::fmt::Display for Statement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
+    use std::collections::BTreeSet;
 
     #[test]
     fn test_cluster_creation() {
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_cluster_in_hashset() {
-        let mut clusters = HashSet::new();
+        let mut clusters = BTreeSet::new();
 
         assert!(clusters.insert(Cluster::new("quickstart".to_string())));
         assert!(!clusters.insert(Cluster::new("quickstart".to_string()))); // duplicate

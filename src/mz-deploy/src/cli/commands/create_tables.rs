@@ -5,7 +5,7 @@ use crate::client::Profile;
 use crate::project::ast::Statement;
 use crate::utils::git;
 use crate::{project, verbose};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Create tables that don't exist in the database.
@@ -75,7 +75,7 @@ pub async fn run(
     }
 
     // Filter to only table objects (CreateTable and CreateTableFromSource)
-    let table_object_ids: HashSet<project::object_id::ObjectId> = planned_project
+    let table_object_ids: BTreeSet<project::object_id::ObjectId> = planned_project
         .iter_objects()
         .filter(|obj| {
             matches!(
@@ -130,7 +130,7 @@ pub async fn run(
     println!("\nCreating {} new table(s)...", tables_to_create.len());
 
     // Collect all schemas that contain tables to create
-    let mut table_schemas = HashSet::new();
+    let mut table_schemas = BTreeSet::new();
     for (object_id, _) in &tables_to_create {
         table_schemas.insert((object_id.database.clone(), object_id.schema.clone()));
     }

@@ -4,7 +4,7 @@ use super::super::ast::Cluster;
 use super::super::typed;
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A database object with its dependencies.
 #[derive(Debug)]
@@ -14,7 +14,7 @@ pub struct DatabaseObject {
     /// The validated typed statement
     pub typed_object: typed::DatabaseObject,
     /// Set of objects this object depends on
-    pub dependencies: HashSet<ObjectId>,
+    pub dependencies: BTreeSet<ObjectId>,
 }
 
 /// A module-level statement with context about where it should be executed.
@@ -83,11 +83,11 @@ pub struct Database {
 pub struct Project {
     pub databases: Vec<Database>,
     /// Global dependency graph: object_id -> set of dependencies
-    pub dependency_graph: HashMap<ObjectId, HashSet<ObjectId>>,
+    pub dependency_graph: BTreeMap<ObjectId, BTreeSet<ObjectId>>,
     /// External dependencies: objects referenced but not defined in this project
-    pub external_dependencies: HashSet<ObjectId>,
+    pub external_dependencies: BTreeSet<ObjectId>,
     /// Cluster dependencies: clusters referenced by indexes and materialized views
-    pub cluster_dependencies: HashSet<Cluster>,
+    pub cluster_dependencies: BTreeSet<Cluster>,
     /// Unit tests defined in the project, organized by the object they test
     pub tests: Vec<(ObjectId, crate::unit_test::UnitTest)>,
 }

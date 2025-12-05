@@ -11,7 +11,7 @@ use crate::project::{self, normalize::NormalizingVisitor};
 use crate::utils::{git, progress};
 use crate::verbose;
 use mz_sql_parser::ast::Ident;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Instant;
 
@@ -148,7 +148,7 @@ pub async fn run(
     }
 
     // Validate remaining objects don't depend on missing tables
-    let object_ids: HashSet<_> = objects.iter().map(|(id, _)| id.clone()).collect();
+    let object_ids: BTreeSet<_> = objects.iter().map(|(id, _)| id.clone()).collect();
     client
         .validate_table_dependencies(&planned_project, &object_ids)
         .await?;
@@ -163,8 +163,8 @@ pub async fn run(
     );
 
     // Collect schemas and clusters from objects that are actually being deployed
-    let mut schema_set = HashSet::new();
-    let mut cluster_set = HashSet::new();
+    let mut schema_set = BTreeSet::new();
+    let mut cluster_set = BTreeSet::new();
 
     for (object_id, typed_obj) in &objects {
         schema_set.insert((object_id.database.clone(), object_id.schema.clone()));
@@ -264,8 +264,8 @@ async fn create_resources_with_rollback<'a>(
     client: &crate::client::Client,
     stage_name: &str,
     staging_suffix: &str,
-    schema_set: &HashSet<(String, String)>,
-    cluster_set: &HashSet<String>,
+    schema_set: &BTreeSet<(String, String)>,
+    cluster_set: &BTreeSet<String>,
     planned_project: &'a project::planned::Project,
     objects: &'a [(ObjectId, &'a project::typed::DatabaseObject)],
     no_rollback: bool,
@@ -403,7 +403,7 @@ async fn create_resources_with_rollback<'a>(
         let deploy_start = Instant::now();
 
         // Collect ObjectIds from objects being deployed for the staging transformer
-        let objects_to_deploy_set: HashSet<_> =
+        let objects_to_deploy_set: BTreeSet<_> =
             objects.iter().map(|(oid, _)| oid.clone()).collect();
 
         // Deploy external indexes

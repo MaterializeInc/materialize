@@ -9,7 +9,7 @@ use crossterm::{
     terminal::{Clear, ClearType},
 };
 use owo_colors::OwoColorize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
@@ -153,6 +153,7 @@ fn print_cluster_status(ctx: &ClusterStatusContext, allowed_lag_secs: i64) {
             );
         }
         ClusterDeploymentStatus::Hydrating { hydrated, total } => {
+            #[allow(clippy::as_conversions)]
             let pct = if *total > 0 {
                 (*hydrated as f64 / *total as f64 * 100.0) as u8
             } else {
@@ -176,6 +177,7 @@ fn print_cluster_status(ctx: &ClusterStatusContext, allowed_lag_secs: i64) {
 }
 
 /// Render a Unicode progress bar.
+#[allow(clippy::as_conversions)]
 fn render_progress_bar(current: i64, total: i64, width: usize) -> String {
     if total == 0 {
         return format!("[{}]", "░".repeat(width).dimmed());
@@ -277,7 +279,7 @@ async fn monitor_hydration_live(
     let num_clusters = initial_statuses.len();
 
     // Build initial state map
-    let mut cluster_states: HashMap<String, ClusterStatusContext> = initial_statuses
+    let mut cluster_states: BTreeMap<String, ClusterStatusContext> = initial_statuses
         .into_iter()
         .map(|ctx| (ctx.cluster_name.clone(), ctx))
         .collect();
@@ -363,12 +365,14 @@ async fn monitor_hydration_live(
 
         if updated {
             // Move cursor up and clear, then re-render
-            execute!(stdout, MoveUp(lines_per_render as u16), MoveToColumn(0)).ok();
+            #[allow(clippy::as_conversions)]
+            let lines = lines_per_render as u16;
+            execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
             for _ in 0..lines_per_render {
                 execute!(stdout, Clear(ClearType::CurrentLine)).ok();
                 println!();
             }
-            execute!(stdout, MoveUp(lines_per_render as u16), MoveToColumn(0)).ok();
+            execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
 
             render_dashboard(
                 &mut stdout,
@@ -430,7 +434,7 @@ fn parse_status(
 fn render_dashboard(
     stdout: &mut io::Stdout,
     deploy_id: &str,
-    cluster_states: &HashMap<String, ClusterStatusContext>,
+    cluster_states: &BTreeMap<String, ClusterStatusContext>,
     start_time: Instant,
     _is_update: bool,
     allowed_lag_secs: i64,

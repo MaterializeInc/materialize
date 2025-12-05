@@ -5,7 +5,7 @@ use super::super::typed;
 use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Determine the schema type based on the objects it contains.
 ///
@@ -33,10 +33,10 @@ fn determine_schema_type(objects: &[DatabaseObject]) -> SchemaType {
 
 impl From<typed::Project> for Project {
     fn from(typed_project: typed::Project) -> Self {
-        let mut dependency_graph = HashMap::new();
+        let mut dependency_graph = BTreeMap::new();
         let mut databases = Vec::new();
-        let mut defined_objects = HashSet::new();
-        let mut cluster_dependencies = HashSet::new();
+        let mut defined_objects = BTreeSet::new();
+        let mut cluster_dependencies = BTreeSet::new();
         let mut tests = Vec::new();
 
         // First pass: collect all objects defined in the project
@@ -54,7 +54,7 @@ impl From<typed::Project> for Project {
         }
 
         // Second pass: build dependency graph and track external dependencies and clusters
-        let mut external_dependencies = HashSet::new();
+        let mut external_dependencies = BTreeSet::new();
 
         for typed_db in typed_project.databases {
             let mut schemas = Vec::new();
@@ -173,9 +173,9 @@ pub fn extract_dependencies(
     stmt: &Statement,
     default_database: &str,
     default_schema: &str,
-) -> (HashSet<ObjectId>, HashSet<Cluster>) {
-    let mut deps = HashSet::new();
-    let mut clusters = HashSet::new();
+) -> (BTreeSet<ObjectId>, BTreeSet<Cluster>) {
+    let mut deps = BTreeSet::new();
+    let mut clusters = BTreeSet::new();
 
     match stmt {
         Statement::CreateView(s) => {
@@ -221,14 +221,14 @@ fn extract_query_dependencies(
     query: &Query<Raw>,
     default_database: &str,
     default_schema: &str,
-    deps: &mut HashSet<ObjectId>,
+    deps: &mut BTreeSet<ObjectId>,
 ) {
     extract_query_dependencies_with_ctes(
         query,
         default_database,
         default_schema,
         deps,
-        &HashSet::new(),
+        &BTreeSet::new(),
     );
 }
 
@@ -237,20 +237,20 @@ fn extract_query_dependencies_with_ctes(
     query: &Query<Raw>,
     default_database: &str,
     default_schema: &str,
-    deps: &mut HashSet<ObjectId>,
-    parent_cte_names: &HashSet<String>,
+    deps: &mut BTreeSet<ObjectId>,
+    parent_cte_names: &BTreeSet<String>,
 ) {
     // Collect CTE names from this query level
     let local_cte_names = match &query.ctes {
         CteBlock::Simple(ctes) => ctes
             .iter()
             .map(|cte| cte.alias.name.to_string())
-            .collect::<HashSet<String>>(),
+            .collect::<BTreeSet<String>>(),
         CteBlock::MutuallyRecursive(mut_rec_block) => mut_rec_block
             .ctes
             .iter()
             .map(|cte| cte.name.to_string())
-            .collect::<HashSet<String>>(),
+            .collect::<BTreeSet<String>>(),
     };
 
     // Merge parent and local CTE names for the combined scope
@@ -305,8 +305,8 @@ fn extract_set_expr_dependencies_with_ctes(
     set_expr: &SetExpr<Raw>,
     default_database: &str,
     default_schema: &str,
-    deps: &mut HashSet<ObjectId>,
-    cte_names: &HashSet<String>,
+    deps: &mut BTreeSet<ObjectId>,
+    cte_names: &BTreeSet<String>,
 ) {
     match set_expr {
         SetExpr::Select(select) => {
@@ -354,8 +354,8 @@ fn extract_select_dependencies_with_ctes(
     select: &Select<Raw>,
     default_database: &str,
     default_schema: &str,
-    deps: &mut HashSet<ObjectId>,
-    cte_names: &HashSet<String>,
+    deps: &mut BTreeSet<ObjectId>,
+    cte_names: &BTreeSet<String>,
 ) {
     // Extract from FROM clause
     for table_with_joins in &select.from {
@@ -409,8 +409,8 @@ fn extract_table_factor_dependencies_with_ctes(
     table_factor: &TableFactor<Raw>,
     default_database: &str,
     default_schema: &str,
-    deps: &mut HashSet<ObjectId>,
-    cte_names: &HashSet<String>,
+    deps: &mut BTreeSet<ObjectId>,
+    cte_names: &BTreeSet<String>,
 ) {
     match table_factor {
         TableFactor::Table { name, .. } => {
@@ -471,8 +471,8 @@ fn extract_expr_dependencies_with_ctes(
     expr: &Expr<Raw>,
     default_database: &str,
     default_schema: &str,
-    deps: &mut HashSet<ObjectId>,
-    cte_names: &HashSet<String>,
+    deps: &mut BTreeSet<ObjectId>,
+    cte_names: &BTreeSet<String>,
 ) {
     match expr {
         Expr::Subquery(query) | Expr::Exists(query) => {

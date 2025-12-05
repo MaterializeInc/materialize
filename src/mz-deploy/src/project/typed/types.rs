@@ -9,7 +9,7 @@ use super::super::object_id::ObjectId;
 use crate::project::error::ValidationError;
 use crate::project::error::ValidationErrorKind;
 use mz_sql_parser::ast::*;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// Fully qualified name parsed from file path structure.
@@ -296,8 +296,8 @@ pub struct DatabaseObject {
 }
 
 impl DatabaseObject {
-    pub fn clusters(&self) -> HashSet<String> {
-        let mut cluster_set = HashSet::new();
+    pub fn clusters(&self) -> BTreeSet<String> {
+        let mut cluster_set = BTreeSet::new();
         if let Statement::CreateMaterializedView(mv) = &self.stmt {
             if let Some(RawClusterName::Unresolved(cluster_name)) = &mv.in_cluster {
                 cluster_set.insert(cluster_name.to_string());

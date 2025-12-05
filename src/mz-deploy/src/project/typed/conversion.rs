@@ -209,7 +209,7 @@ impl TryFrom<super::super::raw::DatabaseObject> for DatabaseObject {
 
         validate_index_references(&fqn, &indexes, &main_ident, &mut errors);
         validate_grant_references(&fqn, &grants, &main_ident, obj_type, &mut errors);
-        validate_comment_references(&fqn, &mut comments, &main_ident, &obj_type, &mut errors);
+        validate_comment_references(&fqn, &comments, &main_ident, &obj_type, &mut errors);
 
         if !errors.is_empty() {
             return Err(ValidationErrors::new(errors));

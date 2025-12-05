@@ -45,7 +45,7 @@ use super::ast::Cluster;
 use super::deployment_snapshot::DeploymentSnapshot;
 use super::planned::{self, Project};
 use crate::project::object_id::ObjectId;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
 /// Represents the set of changes between two project states.
@@ -54,16 +54,16 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone)]
 pub struct ChangeSet {
     /// Objects that exist in changed files
-    pub changed_objects: HashSet<ObjectId>,
+    pub changed_objects: BTreeSet<ObjectId>,
 
     /// Schemas where ANY file changed (entire schema is dirty)
-    pub dirty_schemas: HashSet<(String, String)>,
+    pub dirty_schemas: BTreeSet<(String, String)>,
 
     /// Clusters used by objects in dirty schemas
-    pub dirty_clusters: HashSet<Cluster>,
+    pub dirty_clusters: BTreeSet<Cluster>,
 
     /// All objects that need redeployment (includes transitive dependencies)
-    pub objects_to_deploy: HashSet<ObjectId>,
+    pub objects_to_deploy: BTreeSet<ObjectId>,
 }
 
 impl ChangeSet {
@@ -177,8 +177,8 @@ struct BaseFacts {
 fn find_changed_objects(
     old_snapshot: &DeploymentSnapshot,
     new_snapshot: &DeploymentSnapshot,
-) -> HashSet<ObjectId> {
-    let mut changed = HashSet::new();
+) -> BTreeSet<ObjectId> {
+    let mut changed = BTreeSet::new();
 
     // Objects with different hashes or newly added
     for (object_id, new_hash) in &new_snapshot.objects {
@@ -259,12 +259,12 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
 
 /// Compute dirty objects, clusters, and schemas
 fn compute_dirty_datalog(
-    changed_stmts: &HashSet<ObjectId>,
+    changed_stmts: &BTreeSet<ObjectId>,
     base_facts: &BaseFacts,
 ) -> (
-    HashSet<ObjectId>,
-    HashSet<Cluster>,
-    HashSet<(String, String)>,
+    BTreeSet<ObjectId>,
+    BTreeSet<Cluster>,
+    BTreeSet<(String, String)>,
 ) {
     // Build indexes for efficient lookup
     let stmt_cluster_index = build_stmt_cluster_index(&base_facts.stmt_uses_cluster);
@@ -276,9 +276,9 @@ fn compute_dirty_datalog(
     // but NOT for marking objects dirty
 
     // Initialize result sets
-    let mut dirty_stmts: HashSet<ObjectId> = changed_stmts.clone();
-    let mut dirty_clusters: HashSet<String> = HashSet::new();
-    let mut dirty_schemas: HashSet<(String, String)> = HashSet::new();
+    let mut dirty_stmts: BTreeSet<ObjectId> = changed_stmts.clone();
+    let mut dirty_clusters: BTreeSet<String> = BTreeSet::new();
+    let mut dirty_schemas: BTreeSet<(String, String)> = BTreeSet::new();
 
     // Fixed-point iteration
     loop {
@@ -357,8 +357,8 @@ fn compute_dirty_datalog(
     (dirty_stmts, dirty_cluster_structs, dirty_schemas)
 }
 
-fn build_stmt_cluster_index(facts: &[(ObjectId, String)]) -> HashMap<ObjectId, Vec<String>> {
-    let mut index: HashMap<ObjectId, Vec<String>> = HashMap::new();
+fn build_stmt_cluster_index(facts: &[(ObjectId, String)]) -> BTreeMap<ObjectId, Vec<String>> {
+    let mut index: BTreeMap<ObjectId, Vec<String>> = BTreeMap::new();
     for (obj, cluster) in facts {
         index.entry(obj.clone()).or_default().push(cluster.clone());
     }
@@ -367,16 +367,16 @@ fn build_stmt_cluster_index(facts: &[(ObjectId, String)]) -> HashMap<ObjectId, V
 
 fn build_index_cluster_index(
     facts: &[(ObjectId, String, String)],
-) -> HashMap<ObjectId, Vec<String>> {
-    let mut index: HashMap<ObjectId, Vec<String>> = HashMap::new();
+) -> BTreeMap<ObjectId, Vec<String>> {
+    let mut index: BTreeMap<ObjectId, Vec<String>> = BTreeMap::new();
     for (obj, _index_name, cluster) in facts {
         index.entry(obj.clone()).or_default().push(cluster.clone());
     }
     index
 }
 
-fn build_reverse_deps(facts: &[(ObjectId, ObjectId)]) -> HashMap<ObjectId, Vec<ObjectId>> {
-    let mut index: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
+fn build_reverse_deps(facts: &[(ObjectId, ObjectId)]) -> BTreeMap<ObjectId, Vec<ObjectId>> {
+    let mut index: BTreeMap<ObjectId, Vec<ObjectId>> = BTreeMap::new();
     for (child, parent) in facts {
         index.entry(parent.clone()).or_default().push(child.clone());
     }
@@ -385,7 +385,7 @@ fn build_reverse_deps(facts: &[(ObjectId, ObjectId)]) -> HashMap<ObjectId, Vec<O
 
 fn build_object_schema_map(
     facts: &[(ObjectId, String, String)],
-) -> HashMap<ObjectId, (String, String)> {
+) -> BTreeMap<ObjectId, (String, String)> {
     facts
         .iter()
         .map(|(obj, db, sch)| (obj.clone(), (db.clone(), sch.clone())))
@@ -460,7 +460,7 @@ mod tests {
         };
 
         // Only obj1 is changed
-        let mut changed_stmts = HashSet::new();
+        let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(obj1.clone());
 
         // Run Datalog computation
@@ -536,7 +536,7 @@ mod tests {
         };
 
         // Only other_obj is changed
-        let mut changed_stmts = HashSet::new();
+        let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(other.clone());
 
         // Run Datalog computation
@@ -606,7 +606,7 @@ mod tests {
             )],
         };
 
-        let mut changed_stmts = HashSet::new();
+        let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(other.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
@@ -693,7 +693,7 @@ mod tests {
             ],
         };
 
-        let mut changed_stmts = HashSet::new();
+        let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(flippers.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
@@ -792,7 +792,7 @@ mod tests {
             ],
         };
 
-        let mut changed_stmts = HashSet::new();
+        let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(winning_bids.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =
@@ -906,7 +906,7 @@ mod tests {
             ],
         };
 
-        let mut changed_stmts = HashSet::new();
+        let mut changed_stmts = BTreeSet::new();
         changed_stmts.insert(foo_b.clone());
 
         let (dirty_stmts, dirty_clusters, dirty_schemas) =

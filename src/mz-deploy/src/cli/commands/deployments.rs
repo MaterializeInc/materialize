@@ -85,6 +85,7 @@ pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliErro
             Ok(hydration_status) if !hydration_status.is_empty() => {
                 use crate::client::ClusterDeploymentStatus;
                 let mut ready_count = 0i64;
+                #[allow(clippy::as_conversions)]
                 let total_clusters = hydration_status.len() as i64;
 
                 for ctx in &hydration_status {

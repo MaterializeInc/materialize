@@ -5,7 +5,7 @@ use super::super::error::DependencyError;
 use super::super::typed;
 use super::types::{DatabaseObject, ModStatement, Project};
 use crate::project::object_id::ObjectId;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 impl Project {
     /// Get topologically sorted objects for deployment.
@@ -14,8 +14,8 @@ impl Project {
     /// External dependencies are excluded from the sort as they are not deployable.
     pub fn topological_sort(&self) -> Result<Vec<ObjectId>, DependencyError> {
         let mut sorted = Vec::new();
-        let mut visited = HashSet::new();
-        let mut in_progress = HashSet::new();
+        let mut visited = BTreeSet::new();
+        let mut in_progress = BTreeSet::new();
 
         for object_id in self.dependency_graph.keys() {
             // Skip external dependencies - we don't deploy them
@@ -48,8 +48,8 @@ impl Project {
     fn visit(
         &self,
         object_id: &ObjectId,
-        visited: &mut HashSet<ObjectId>,
-        in_progress: &mut HashSet<ObjectId>,
+        visited: &mut BTreeSet<ObjectId>,
+        in_progress: &mut BTreeSet<ObjectId>,
         sorted: &mut Vec<ObjectId>,
     ) -> Result<(), DependencyError> {
         if self.external_dependencies.contains(object_id) {
@@ -180,8 +180,8 @@ impl Project {
     ///
     /// # Returns
     /// HashMap where key is an ObjectId and value is the set of objects that depend on it
-    pub fn build_reverse_dependency_graph(&self) -> HashMap<ObjectId, HashSet<ObjectId>> {
-        let mut reverse: HashMap<ObjectId, HashSet<ObjectId>> = HashMap::new();
+    pub fn build_reverse_dependency_graph(&self) -> BTreeMap<ObjectId, BTreeSet<ObjectId>> {
+        let mut reverse: BTreeMap<ObjectId, BTreeSet<ObjectId>> = BTreeMap::new();
 
         for (obj_id, deps) in &self.dependency_graph {
             for dep in deps {
@@ -207,7 +207,7 @@ impl Project {
     /// Vector of (ObjectId, typed DatabaseObject) tuples in deployment order
     pub fn get_sorted_objects_filtered(
         &self,
-        filter: &HashSet<ObjectId>,
+        filter: &BTreeSet<ObjectId>,
     ) -> Result<Vec<(ObjectId, &typed::DatabaseObject)>, DependencyError> {
         let sorted_ids = self.topological_sort()?;
 
@@ -285,10 +285,10 @@ impl Project {
     /// ```
     pub fn validate_cluster_isolation(
         &self,
-        sources_by_cluster: &HashMap<String, Vec<String>>,
+        sources_by_cluster: &BTreeMap<String, Vec<String>>,
     ) -> Result<(), (String, Vec<String>, Vec<String>)> {
         // Build a map of cluster -> compute objects (indexes, MVs)
-        let mut cluster_compute_objects: HashMap<String, Vec<String>> = HashMap::new();
+        let mut cluster_compute_objects: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
         for db in &self.databases {
             for schema in &db.schemas {
@@ -322,7 +322,7 @@ impl Project {
         }
 
         // Build a map of cluster -> sinks
-        let mut cluster_sinks: HashMap<String, Vec<String>> = HashMap::new();
+        let mut cluster_sinks: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
         for db in &self.databases {
             for schema in &db.schemas {
@@ -340,7 +340,7 @@ impl Project {
         }
 
         // Get all clusters that have compute objects or sinks
-        let mut all_clusters: HashSet<String> = HashSet::new();
+        let mut all_clusters: BTreeSet<String> = BTreeSet::new();
         all_clusters.extend(cluster_compute_objects.keys().cloned());
         all_clusters.extend(cluster_sinks.keys().cloned());
 

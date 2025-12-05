@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -55,7 +55,7 @@ fn default_port() -> u16 {
 
 #[derive(Debug)]
 pub struct ProfilesConfig {
-    profiles: HashMap<String, Profile>,
+    profiles: BTreeMap<String, Profile>,
     source_path: PathBuf,
 }
 
@@ -96,14 +96,14 @@ impl ProfilesConfig {
             });
         };
 
-        let profiles_data: HashMap<String, ProfileData> =
+        let profiles_data: BTreeMap<String, ProfileData> =
             toml::from_str(&content).map_err(|source| ConfigError::ParseError {
                 path: path.display().to_string(),
                 source,
             })?;
 
         // Convert ProfileData to Profile by adding the name field
-        let mut profiles = HashMap::new();
+        let mut profiles = BTreeMap::new();
         for (name, data) in profiles_data {
             profiles.insert(
                 name.clone(),
