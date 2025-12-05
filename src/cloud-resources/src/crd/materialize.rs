@@ -491,15 +491,13 @@ pub mod v1alpha1 {
             }
 
             if active_version.major == 0 {
-                // Self managed 25.2 to 26.0
                 if next_version.major != active_version.major {
                     if next_version.major == 26 {
-                        // We require customers to upgrade to 0.147.20 or higher before upgrading to 26.0.0
-                        let is_v_147_20_or_higher = (active_version.minor == 147
-                            && active_version.patch >= 20)
-                            || active_version.minor >= 164;
+                        // We require customers to upgrade from 0.147.20 (Self Managed 25.2) or v0.164.X (Cloud)
+                        // before upgrading to 26.0.0
 
-                        return is_v_147_20_or_higher;
+                        return (active_version.minor == 147 && active_version.patch >= 20)
+                            || active_version.minor >= 164;
                     } else {
                         return false;
                     }

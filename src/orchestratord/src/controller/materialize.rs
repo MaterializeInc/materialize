@@ -657,7 +657,7 @@ impl k8s_controller::Context for Context {
                                 status: "False".into(),
                                 last_transition_time: Time(chrono::offset::Utc::now()),
                                 message: format!(
-                        "Refusing to upgrade from {} to {}. More than one major version from last successful rollout.",
+                        "Refusing to upgrade from {} to {}. More than one major version from last successful rollout. If coming from Self Managed 25.2, upgrade to materialize/environmentd:v0.147.20 first.",
                         last_completed_rollout_environmentd_image_ref.expect("should be set if upgrade window check fails"),
                         &mz.spec.environmentd_image_ref,
                     ),
