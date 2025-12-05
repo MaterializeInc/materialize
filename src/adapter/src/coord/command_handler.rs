@@ -683,7 +683,16 @@ impl Coordinator {
             // This includes preventing any user, except a pre-defined set of system users, from
             // connecting to an internal port. Therefore it's ok to always create a new role for the
             // user.
-            let attributes = RoleAttributesRaw::new();
+
+            let attributes = if user
+                .external_metadata
+                .as_ref()
+                .map_or(false, |meta| meta.admin)
+            {
+                RoleAttributesRaw::new().with_superuser()
+            } else {
+                RoleAttributesRaw::new()
+            };
             let plan = CreateRolePlan {
                 name: user.name.to_string(),
                 attributes,

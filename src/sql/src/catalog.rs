@@ -560,6 +560,12 @@ impl RoleAttributesRaw {
         self.login = Some(true);
         self
     }
+
+    /// Sets the superuser attribute to true.
+    pub const fn with_superuser(mut self) -> RoleAttributesRaw {
+        self.superuser = Some(true);
+        self
+    }
 }
 
 impl RoleAttributes {
