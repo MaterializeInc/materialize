@@ -77,14 +77,14 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 0,
     minor: 154,
     patch: 0,
-    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    pre: Prerelease::new("").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 pub const V161: Version = Version::new(0, 161, 0);
 
-static V26_0_0_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
-    major: 0,
-    minor: 165,
+static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 1,
     patch: 0,
     pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
@@ -1243,7 +1243,7 @@ fn create_environmentd_statefulset_object(
     // Add system_param configmap
     // This feature was enabled in 0.163 but did not have testing until after 0.164.
     // 0.165 should work with anything greater than 0.164 including v26 and v25.
-    if mz.meets_minimum_version(&V26_0_0_DEV0) {
+    if mz.meets_minimum_version(&V26_1_0) {
         if let Some(ref name) = mz.spec.system_parameter_configmap_name {
             volumes.push(Volume {
                 name: "system-params".to_string(),

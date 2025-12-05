@@ -845,16 +845,19 @@ class SystemParamConfigMap(Modification):
             configmap_name = "system-params-test"
 
             # First create the configmap in the cluster
-            configmap_yaml = f"""
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {configmap_name}
-  namespace: materialize-environment
-data:
-  system-params.json: |
-    {json.dumps(self.value)}
-"""
+            configmap_yaml = yaml.safe_dump(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {
+                        "name": configmap_name,
+                        "namespace": "materialize-environment",
+                    },
+                    "data": {
+                        "system-params.json": json.dumps(self.value),
+                    },
+                }
+            )
             # Apply the configmap (will be done in init/run)
             definition["system_params_configmap"] = configmap_yaml
             # Set the configmap name in the Materialize spec
