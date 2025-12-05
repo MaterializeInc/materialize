@@ -11,15 +11,10 @@ use std::sync::LazyLock;
 const BUILD_INFO: BuildInfo = build_info!();
 static VERSION: LazyLock<String> = LazyLock::new(|| BUILD_INFO.human_version(None));
 
-/// Materialize deployment tool for managing database schemas and objects
+/// Materialize deployment tool
 #[derive(Parser, Debug)]
 #[command(name = "mz-deploy", version = VERSION.as_str())]
-#[command(about = "Manage Materialize database deployments with blue/green staging workflows")]
-#[command(
-    long_about = "mz-deploy helps you manage Materialize database schemas and objects with \
-    git-like workflows. Deploy to staging environments for testing, then promote to production \
-    with atomic schema swaps for zero-downtime deployments."
-)]
+#[command(about = "Safe, testable deployments for Materialize")]
 struct Args {
     /// Path to the project root directory containing database schemas
     #[arg(short, long, default_value = ".", global = true)]
@@ -42,8 +37,8 @@ enum Command {
     /// Compile and validate SQL without connecting to database
     ///
     /// Parses all SQL files, validates dependencies, and optionally type-checks SQL
-    /// against a local Materialize Docker container. This is useful for CI/CD pipelines
-    /// to catch errors before deployment.
+    /// against a local Materialize Docker container. This is useful for local development
+    /// and CI/CD pipelines to catch errors before deployment.
     #[command(visible_alias = "build")]
     Compile {
         /// Skip SQL type checking (faster but less thorough validation)
@@ -58,18 +53,18 @@ enum Command {
     /// Create tables that don't exist in the database
     ///
     /// Queries the database first and only creates tables that don't already exist.
-    /// Tracks the deployment under an environment name (default: random 7-char hex).
+    /// Tracks the deployment under a deploy ID (default: random 7-char hex).
     /// Only tables that are actually created are recorded in deployment metadata.
     ///
     /// Example:
-    ///   mz-deploy create-tables              # Use random name
-    ///   mz-deploy create-tables --name v1    # Use custom name
+    ///   mz-deploy create-tables                 # Use random deploy ID
+    ///   mz-deploy create-tables --name abc123   # Use custom deploy ID
     CreateTables {
-        /// Name for this deployment (default: random 7-char hex)
+        /// Deploy ID for this table deployment (default: random 7-char hex)
         ///
-        /// The name will be used to track this table deployment separately.
+        /// The deploy ID will be used to track this table deployment separately.
         /// Must contain only alphanumeric characters, hyphens, and underscores.
-        #[arg(long, value_name = "NAME")]
+        #[arg(long, value_name = "DEPLOY_ID")]
         name: Option<String>,
 
         /// Allow deployment with uncommitted git changes
@@ -77,46 +72,70 @@ enum Command {
         allow_dirty: bool,
     },
 
-    /// Promote a staging environment to production
+    /// Promote a staging deployment to production
+    ///
+    /// Performs an atomic schema swap between staging and production. Before promoting,
+    /// verifies that all staging clusters are fully hydrated and caught up (unless
+    /// --skip-ready is specified). This ensures zero-downtime deployments.
+    ///
+    /// The promotion will fail if:
+    /// - Any cluster is still hydrating (objects not yet materialized)
+    /// - Any cluster has lag exceeding --allowed-lag threshold
+    /// - Any cluster has no replicas or all replicas are OOM-looping
+    /// - Production schemas were modified after staging was created (unless --force)
+    ///
+    /// Example:
+    ///   mz-deploy apply abc123                    # Promote staging deployment
+    ///   mz-deploy apply abc123 --skip-ready       # Skip hydration check
+    ///   mz-deploy apply abc123 --allowed-lag 600  # Allow up to 10 min lag
     Apply {
-        /// Staging deployment to promote to production
+        /// Staging deployment ID to promote to production
         ///
-        /// Specifies which staging deployment to swap with production. The staging
-        /// schemas will become production and vice versa in an atomic operation.
+        /// The deployment ID was assigned when running 'mz-deploy stage'. You can
+        /// find active deployments with 'mz-deploy deployments'.
         #[arg(value_name = "DEPLOY_ID")]
         deploy_id: String,
 
-        /// Skip conflict detection when promoting staging deployments
+        /// Skip conflict detection when promoting
         ///
-        /// When promoting staging, apply normally checks if production schemas were
-        /// modified after staging was created. This flag bypasses that check.
+        /// Normally, apply checks if production schemas were modified after the
+        /// staging deployment was created. This flag bypasses that safety check,
+        /// which may overwrite recent production changes.
         #[arg(long)]
         force: bool,
 
-        /// Skip cluster hydration when promoting staging deployments
+        /// Skip the readiness check before promoting
+        ///
+        /// By default, apply verifies all staging clusters are hydrated and caught
+        /// up before promoting. Use this flag to skip that check and promote
+        /// immediately, which may result in stale data being served briefly.
         #[arg(long)]
         skip_ready: bool,
 
-        /// Maximum allowed lag in seconds before marking cluster as "lagging" (default: 300)
+        /// Maximum lag threshold in seconds for readiness check
+        ///
+        /// During the readiness check, clusters with wallclock lag exceeding this
+        /// threshold are marked as "lagging" and will block promotion. Lag measures
+        /// how far behind real-time the materialized data is. Default: 300 (5 min).
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
     },
 
     /// Create a staging deployment for testing changes
     ///
-    /// Deploys schemas and objects to a staging environment with suffixed names
-    /// (e.g., 'public_abc123'). This allows testing changes in isolation before
-    /// promoting to production. Staging deployments can be listed with 'deployments'
-    /// command and promoted with 'apply' command.
+    /// Deploys schemas and objects to staging with suffixed names (e.g., 'public_abc123').
+    /// This allows testing changes in isolation before promoting to production.
+    /// Staging deployments can be listed with 'deployments' and promoted with 'apply'.
     ///
     /// Example:
-    ///   mz-deploy stage --name my-feature
+    ///   mz-deploy stage                    # Use random deploy ID
+    ///   mz-deploy stage --name abc123      # Use custom deploy ID
     Stage {
-        /// Name for this staging environment (default: random 7-char hex)
+        /// Deploy ID for this staging deployment (default: random 7-char hex)
         ///
-        /// The name will be used as a suffix for schemas and clusters. Must contain
-        /// only alphanumeric characters, hyphens, and underscores.
-        #[arg(long, value_name = "NAME")]
+        /// The deploy ID will be used as a suffix for schemas and clusters.
+        /// Must contain only alphanumeric characters, hyphens, and underscores.
+        #[arg(long, value_name = "DEPLOY_ID")]
         name: Option<String>,
 
         /// Allow staging with uncommitted git changes
@@ -152,25 +171,36 @@ enum Command {
     /// Clean up a staging deployment by dropping all resources
     ///
     /// Removes staging schemas, clusters, and deployment tracking records for
-    /// the specified environment. This is the equivalent of 'git branch -D' for
+    /// the specified deploy ID. This is the equivalent of 'git branch -D' for
     /// staging deployments.
     ///
     /// Example:
-    ///   mz-deploy abort my-staging-env
+    ///   mz-deploy abort abc123
     Abort {
-        /// Name of the staging environment to remove
-        #[arg(value_name = "ENV")]
-        name: String,
+        /// Staging deploy ID to remove
+        #[arg(value_name = "DEPLOY_ID")]
+        deploy_id: String,
     },
 
     /// List all active staging deployments
     ///
     /// Shows staging environments that have been deployed but not yet promoted,
-    /// similar to 'git branch'. Displays environment names, schemas, who deployed
-    /// them, and when.
+    /// similar to 'git branch'. For each deployment, displays:
+    /// - Deployment ID and who created it
+    /// - Git commit (if available)
+    /// - Cluster readiness status (ready, hydrating, lagging, or failing)
+    /// - Schemas included in the deployment
+    ///
+    /// Example:
+    ///   mz-deploy deployments                  # List with default lag threshold
+    ///   mz-deploy deployments --allowed-lag 60 # Stricter lag threshold
     #[command(visible_alias = "branches")]
     Deployments {
-        /// Maximum allowed lag in seconds before marking cluster as "lagging" (default: 300)
+        /// Maximum lag threshold in seconds for cluster status
+        ///
+        /// Clusters with wallclock lag exceeding this threshold are shown as
+        /// "lagging" instead of "ready". Lag measures how far behind real-time
+        /// the materialized data is. Default: 300 (5 min).
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
     },
@@ -178,7 +208,7 @@ enum Command {
     /// Show history of promoted deployments
     ///
     /// Displays a chronological log of deployments that have been promoted to
-    /// production, similar to 'git log'. Each entry shows the environment name,
+    /// production, similar to 'git log'. Each entry shows the deploy ID,
     /// who promoted it, when, and which schemas were included.
     ///
     /// Example:
@@ -192,33 +222,47 @@ enum Command {
 
     /// Wait for staging deployment clusters to be hydrated and ready
     ///
-    /// Monitors cluster hydration status and displays progress. By default, continuously
-    /// tracks hydration using Materialize's SUBSCRIBE feature with live progress bars
-    /// for each cluster. Use --snapshot to check current status once without waiting.
+    /// Monitors cluster hydration status with a live dashboard showing progress for
+    /// each cluster. A cluster is considered "ready" when:
+    /// - All objects are fully hydrated (materialized)
+    /// - Wallclock lag is within the --allowed-lag threshold
+    /// - At least one healthy replica exists (not OOM-looping)
+    ///
+    /// Status indicators:
+    /// - ready: Fully hydrated and caught up
+    /// - hydrating: Objects still being materialized
+    /// - lagging: Hydrated but lag exceeds threshold
+    /// - failing: No replicas or all replicas OOM-looping
     ///
     /// Examples:
-    ///   # Wait with live progress tracking
-    ///   mz-deploy ready my-staging-env
-    ///
-    ///   # Check status once
-    ///   mz-deploy ready my-staging-env --snapshot
-    ///
-    ///   # With timeout
-    ///   mz-deploy ready my-staging-env --timeout 300
+    ///   mz-deploy ready abc123                    # Wait with live tracking
+    ///   mz-deploy ready abc123 --snapshot         # Check once and exit
+    ///   mz-deploy ready abc123 --timeout 300      # Wait up to 5 minutes
+    ///   mz-deploy ready abc123 --allowed-lag 60   # Require lag under 1 min
     Ready {
-        /// Name of the staging environment to check
-        #[arg(value_name = "ENV")]
+        /// Staging deployment ID to monitor
+        #[arg(value_name = "DEPLOY_ID")]
         name: String,
 
-        /// Check current status once without continuous tracking
+        /// Check status once and exit instead of continuous monitoring
+        ///
+        /// Takes a point-in-time snapshot of cluster status and exits immediately.
+        /// Returns success (exit 0) only if all clusters are ready.
         #[arg(long)]
         snapshot: bool,
 
-        /// Maximum time to wait in seconds (default: no timeout)
+        /// Maximum time to wait in seconds before timing out
+        ///
+        /// If clusters don't become ready within this duration, the command exits
+        /// with an error. By default, waits indefinitely.
         #[arg(long, value_name = "SECONDS")]
         timeout: Option<u64>,
 
-        /// Maximum allowed lag in seconds before marking cluster as "lagging" (default: 300)
+        /// Maximum lag threshold in seconds for "ready" status
+        ///
+        /// Clusters with wallclock lag exceeding this threshold are marked as
+        /// "lagging" and not considered ready. Lag measures how far behind
+        /// real-time the materialized data is. Default: 300 (5 min).
         #[arg(long, value_name = "SECONDS", default_value = "300")]
         allowed_lag: i64,
     },
@@ -308,11 +352,11 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::gen_data_contracts::run(&profile, &args.directory).await
         }
         Some(Command::Test) => cli::commands::test::run(&args.directory).await,
-        Some(Command::Abort { name }) => {
+        Some(Command::Abort { deploy_id }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
-            cli::commands::abort::run(&profile, &name).await
+            cli::commands::abort::run(&profile, &deploy_id).await
         }
         Some(Command::Deployments { allowed_lag }) => {
             let profile =
