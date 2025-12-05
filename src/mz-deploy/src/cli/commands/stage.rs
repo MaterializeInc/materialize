@@ -11,10 +11,9 @@ use crate::project::{self, normalize::NormalizingVisitor};
 use crate::utils::{git, progress};
 use crate::verbose;
 use mz_sql_parser::ast::Ident;
-use owo_colors::OwoColorize;
 use std::collections::HashSet;
 use std::path::Path;
-use std::time::SystemTime;
+use std::time::Instant;
 
 /// Deploy project to staging environment with renamed schemas and clusters.
 ///
@@ -53,7 +52,7 @@ pub async fn run(
     allow_dirty: bool,
     no_rollback: bool,
 ) -> Result<(), CliError> {
-    let start_time = SystemTime::now();
+    let start_time = Instant::now();
 
     // Check for uncommitted changes before proceeding
     if !allow_dirty && git::is_dirty(directory) {
@@ -81,7 +80,7 @@ pub async fn run(
 
     // Stage 1: Analyze project changes
     progress::stage_start("Analyzing project changes");
-    let analyze_start = SystemTime::now();
+    let analyze_start = Instant::now();
 
     // Initialize deployment tracking infrastructure
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
@@ -154,7 +153,7 @@ pub async fn run(
         .validate_table_dependencies(&planned_project, &object_ids)
         .await?;
 
-    let analyze_duration = analyze_start.elapsed().unwrap();
+    let analyze_duration = analyze_start.elapsed();
     progress::stage_success(
         &format!(
             "Ready to deploy {} view(s)/materialized view(s)",
@@ -187,17 +186,17 @@ pub async fn run(
     // Stage 2: Validate project before writing any metadata or creating resources
     // This ensures databases, schemas, clusters, and external dependencies exist
     progress::stage_start("Validating project");
-    let validate_start = SystemTime::now();
+    let validate_start = Instant::now();
     client.validate_project(&planned_project, directory).await?;
     client.validate_cluster_isolation(&planned_project).await?;
     client.validate_privileges(&planned_project).await?;
-    let validate_duration = validate_start.elapsed().unwrap();
+    let validate_duration = validate_start.elapsed();
     progress::stage_success("All validations passed", validate_duration);
 
     // Stage 3: Collect deployment metadata and write to database BEFORE creating resources
     // This allows abort logic to clean up even if resource creation fails
     progress::stage_start("Recording deployment metadata");
-    let metadata_start = SystemTime::now();
+    let metadata_start = Instant::now();
     let metadata = helpers::collect_deployment_metadata(&client, directory).await;
 
     // Build a snapshot containing all objects that will be deployed
@@ -224,7 +223,7 @@ pub async fn run(
     )
     .await?;
 
-    let metadata_duration = metadata_start.elapsed().unwrap();
+    let metadata_duration = metadata_start.elapsed();
     progress::stage_success("Deployment metadata recorded", metadata_duration);
 
     // Perform resource creation with automatic rollback on failure
@@ -242,7 +241,7 @@ pub async fn run(
 
     match result {
         Ok(success_count) => {
-            let total_duration = start_time.elapsed().unwrap();
+            let total_duration = start_time.elapsed();
             progress::summary(
                 &format!(
                     "Successfully deployed to '{}' staging environment",
@@ -275,13 +274,13 @@ async fn create_resources_with_rollback<'a>(
     let create_result = async {
         // Stage 4: Create staging schemas
         progress::stage_start("Creating staging schemas");
-        let schema_start = SystemTime::now();
+        let schema_start = Instant::now();
         for (database, schema) in schema_set {
             let staging_schema = format!("{}{}", schema, staging_suffix);
             client.create_schema(database, &staging_schema).await?;
             verbose!("  Created schema {}.{}", database, staging_schema);
         }
-        let schema_duration = schema_start.elapsed().unwrap();
+        let schema_duration = schema_start.elapsed();
         progress::stage_success(
             &format!("Created {} staging schema(s)", schema_set.len()),
             schema_duration,
@@ -296,7 +295,7 @@ async fn create_resources_with_rollback<'a>(
 
         // Execute schema mod_statements for staging schemas
         progress::stage_start("Applying schema setup statements");
-        let mod_start = SystemTime::now();
+        let mod_start = Instant::now();
         for mod_stmt in planned_project.iter_mod_statements() {
             match mod_stmt {
                 project::ModStatement::Database {
@@ -340,7 +339,7 @@ async fn create_resources_with_rollback<'a>(
                 }
             }
         }
-        let mod_duration = mod_start.elapsed().unwrap();
+        let mod_duration = mod_start.elapsed();
         progress::stage_success("Schema setup statements applied", mod_duration);
 
         // Write cluster mappings to deploy.clusters table BEFORE creating clusters
@@ -353,7 +352,7 @@ async fn create_resources_with_rollback<'a>(
 
         // Stage 5: Create staging clusters (by cloning production cluster configs)
         progress::stage_start("Creating staging clusters");
-        let cluster_start = SystemTime::now();
+        let cluster_start = Instant::now();
         let mut created_clusters = 0;
         for prod_cluster in cluster_set {
             let staging_cluster = format!("{}{}", prod_cluster, staging_suffix);
@@ -383,7 +382,7 @@ async fn create_resources_with_rollback<'a>(
 
             // Create staging cluster
             client
-                .create_cluster(&staging_cluster, options.clone())
+                .create_cluster(&staging_cluster, &options)
                 .await?;
             created_clusters += 1;
             verbose!(
@@ -395,7 +394,7 @@ async fn create_resources_with_rollback<'a>(
             );
         }
 
-        let cluster_duration = cluster_start.elapsed().unwrap();
+        let cluster_duration = cluster_start.elapsed();
         progress::stage_success(
             &format!("Created {} cluster(s)", created_clusters),
             cluster_duration,
@@ -403,7 +402,7 @@ async fn create_resources_with_rollback<'a>(
 
         // Stage 6: Deploy objects using staging transformer
         progress::stage_start("Deploying objects to staging");
-        let deploy_start = SystemTime::now();
+        let deploy_start = Instant::now();
 
         // Collect ObjectIds from objects being deployed for the staging transformer
         let objects_to_deploy_set: HashSet<_> =
@@ -417,11 +416,11 @@ async fn create_resources_with_rollback<'a>(
             .filter_map(|(cluster, index)| cluster_set.contains(&cluster.name).then_some(index))
             .collect();
 
-        let fqn = FullyQualifiedName::null();
-        let empty = HashSet::new();
-        let external_index_visitor =
-            NormalizingVisitor::staging(&fqn, staging_suffix.to_string(), &empty, None);
-        external_index_visitor.normalize_index_clusters(external_indexes.as_mut_slice());
+        // Transform cluster names in external indexes for staging
+        crate::project::normalize::transform_cluster_names_for_staging(
+            &mut external_indexes,
+            staging_suffix,
+        );
         for index in external_indexes {
             verbose!("Creating external index {}", index);
             client.execute(&index.to_string(), &[]).await?;
@@ -517,7 +516,7 @@ async fn create_resources_with_rollback<'a>(
             success_count += 1;
         }
 
-        let deploy_duration = deploy_start.elapsed().unwrap();
+        let deploy_duration = deploy_start.elapsed();
         progress::stage_success(
             &format!("Deployed {} view(s)/materialized view(s)", success_count),
             deploy_duration,

@@ -5,7 +5,7 @@ use crate::project::object_id::ObjectId;
 use crate::utils::progress;
 use crate::{project, verbose};
 use std::path::Path;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant};
 
 /// Arguments for the compile command
 #[derive(Debug, Clone)]
@@ -46,15 +46,15 @@ pub async fn run(
     directory: &Path,
     args: CompileArgs,
 ) -> Result<project::planned::Project, CliError> {
-    let start_time = SystemTime::now();
+    let start_time = Instant::now();
 
     println!("Loading project from: {}", directory.display());
 
     // Stage 1: Parse and validate SQL files
     progress::stage_start("Parsing SQL files");
-    let parse_start = SystemTime::now();
+    let parse_start = Instant::now();
     let planned_project = project::plan(directory)?;
-    let parse_duration = parse_start.elapsed().unwrap();
+    let parse_duration = parse_start.elapsed();
 
     // Count objects and schemas
     let object_count: usize = planned_project
@@ -76,11 +76,11 @@ pub async fn run(
 
     // Stage 2: Validate project structure
     progress::stage_start("Validating project structure");
-    let validate_start = SystemTime::now();
+    let validate_start = Instant::now();
 
     // Topological sort validates the project (detects cycles)
     let sorted = planned_project.topological_sort()?;
-    let validate_duration = validate_start.elapsed().unwrap();
+    let validate_duration = validate_start.elapsed();
 
     progress::stage_success(
         &format!("All {} objects validated", sorted.len()),
@@ -89,7 +89,7 @@ pub async fn run(
 
     // Stage 3: Build dependency graph
     progress::stage_start("Building dependency graph");
-    let deps_start = SystemTime::now();
+    let deps_start = Instant::now();
 
     // Count internal dependencies (excluding external)
     let internal_dep_count: usize = planned_project
@@ -102,7 +102,7 @@ pub async fn run(
         })
         .sum();
 
-    let deps_duration = deps_start.elapsed().unwrap();
+    let deps_duration = deps_start.elapsed();
     progress::stage_success(
         &format!("Resolved {} dependencies", internal_dep_count),
         deps_duration,
@@ -139,7 +139,7 @@ pub async fn run(
     }
 
     // Final summary
-    let total_duration = start_time.elapsed().unwrap();
+    let total_duration = start_time.elapsed();
     progress::summary("Project successfully compiled", total_duration);
 
     Ok(planned_project)
@@ -156,7 +156,7 @@ async fn typecheck_with_docker(
     use crate::utils::docker_runtime::DockerRuntime;
 
     progress::stage_start("Type checking with Docker");
-    let typecheck_start = SystemTime::now();
+    let typecheck_start = Instant::now();
 
     // Load types.lock if it exists
     let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
@@ -191,7 +191,7 @@ async fn typecheck_with_docker(
     // Run type checking
     match typecheck_with_client(&mut client, planned_project, directory).await {
         Ok(()) => {
-            let duration = typecheck_start.elapsed().unwrap();
+            let duration = typecheck_start.elapsed();
             Ok(Some(duration))
         }
         Err(e) => {

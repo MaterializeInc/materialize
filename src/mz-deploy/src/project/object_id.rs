@@ -12,12 +12,31 @@ pub struct ObjectId {
 }
 
 impl ObjectId {
+    /// Create a new ObjectId with the given database, schema, and object names.
     pub fn new(database: String, schema: String, object: String) -> Self {
         Self {
             database,
             schema,
             object,
         }
+    }
+
+    /// Get the database name.
+    #[inline]
+    pub fn database(&self) -> &str {
+        &self.database
+    }
+
+    /// Get the schema name.
+    #[inline]
+    pub fn schema(&self) -> &str {
+        &self.schema
+    }
+
+    /// Get the object name.
+    #[inline]
+    pub fn object(&self) -> &str {
+        &self.object
     }
 
     /// Create from an UnresolvedItemName with default database and schema
@@ -68,6 +87,7 @@ impl ObjectId {
     ///
     /// # Errors
     /// Returns error if the FQN format is invalid
+    #[must_use = "this returns the parsed ObjectId, which should be used"]
     pub fn from_fqn(fqn: &str) -> Result<Self, String> {
         let parts: Vec<&str> = fqn.split('.').collect();
         if parts.len() != 3 {

@@ -115,11 +115,16 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
         };
 
         // Convert planned::ObjectId to typed::FullyQualifiedName for unit test processing
+        // Note: Ident::new() only fails for invalid SQL identifiers, but ObjectIds
+        // are created from successfully parsed SQL files, so identifiers are always valid.
         let typed_fqn =
             typed::FullyQualifiedName::from(mz_sql_parser::ast::UnresolvedItemName(vec![
-                Ident::new(&object_id.database).unwrap(),
-                Ident::new(&object_id.schema).unwrap(),
-                Ident::new(&object_id.object).unwrap(),
+                Ident::new(&object_id.database)
+                    .expect("database name from parsed SQL should be valid identifier"),
+                Ident::new(&object_id.schema)
+                    .expect("schema name from parsed SQL should be valid identifier"),
+                Ident::new(&object_id.object)
+                    .expect("object name from parsed SQL should be valid identifier"),
             ]));
 
         // Desugar the test

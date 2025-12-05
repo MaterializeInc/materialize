@@ -160,3 +160,149 @@ pub struct ConflictRecord {
     /// When the schema was last promoted to production
     pub promoted_at: std::time::SystemTime,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deployment_kind_display() {
+        assert_eq!(DeploymentKind::Tables.to_string(), "tables");
+        assert_eq!(DeploymentKind::Objects.to_string(), "objects");
+    }
+
+    #[test]
+    fn test_deployment_kind_from_str_valid() {
+        assert_eq!(
+            "tables".parse::<DeploymentKind>().unwrap(),
+            DeploymentKind::Tables
+        );
+        assert_eq!(
+            "objects".parse::<DeploymentKind>().unwrap(),
+            DeploymentKind::Objects
+        );
+    }
+
+    #[test]
+    fn test_deployment_kind_from_str_invalid() {
+        let result = "invalid".parse::<DeploymentKind>();
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid deployment kind: invalid");
+    }
+
+    #[test]
+    fn test_deployment_kind_roundtrip() {
+        // Verify that Display and FromStr are consistent
+        for kind in [DeploymentKind::Tables, DeploymentKind::Objects] {
+            let s = kind.to_string();
+            let parsed: DeploymentKind = s.parse().unwrap();
+            assert_eq!(kind, parsed);
+        }
+    }
+
+    #[test]
+    fn test_cluster_options_from_cluster_success() {
+        let cluster = Cluster {
+            id: "u1".to_string(),
+            name: "quickstart".to_string(),
+            size: Some("25cc".to_string()),
+            replication_factor: Some(2),
+        };
+
+        let options = ClusterOptions::from_cluster(&cluster).unwrap();
+        assert_eq!(options.size, "25cc");
+        assert_eq!(options.replication_factor, 2);
+    }
+
+    #[test]
+    fn test_cluster_options_from_cluster_default_replication() {
+        let cluster = Cluster {
+            id: "u1".to_string(),
+            name: "quickstart".to_string(),
+            size: Some("25cc".to_string()),
+            replication_factor: None, // Should default to 1
+        };
+
+        let options = ClusterOptions::from_cluster(&cluster).unwrap();
+        assert_eq!(options.size, "25cc");
+        assert_eq!(options.replication_factor, 1);
+    }
+
+    #[test]
+    fn test_cluster_options_from_cluster_no_size() {
+        let cluster = Cluster {
+            id: "u1".to_string(),
+            name: "unmanaged".to_string(),
+            size: None, // Unmanaged cluster
+            replication_factor: Some(1),
+        };
+
+        let result = ClusterOptions::from_cluster(&cluster);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err();
+        assert!(err_msg.contains("unmanaged"));
+        assert!(err_msg.contains("has no size"));
+    }
+
+    #[test]
+    fn test_cluster_options_from_cluster_negative_replication() {
+        let cluster = Cluster {
+            id: "u1".to_string(),
+            name: "test".to_string(),
+            size: Some("25cc".to_string()),
+            replication_factor: Some(-1), // Invalid negative value
+        };
+
+        let result = ClusterOptions::from_cluster(&cluster);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid replication_factor"));
+    }
+
+    #[test]
+    fn test_cluster_equality() {
+        let cluster1 = Cluster {
+            id: "u1".to_string(),
+            name: "test".to_string(),
+            size: Some("25cc".to_string()),
+            replication_factor: Some(1),
+        };
+
+        let cluster2 = Cluster {
+            id: "u1".to_string(),
+            name: "test".to_string(),
+            size: Some("25cc".to_string()),
+            replication_factor: Some(1),
+        };
+
+        let cluster3 = Cluster {
+            id: "u2".to_string(), // Different ID
+            name: "test".to_string(),
+            size: Some("25cc".to_string()),
+            replication_factor: Some(1),
+        };
+
+        assert_eq!(cluster1, cluster2);
+        assert_ne!(cluster1, cluster3);
+    }
+
+    #[test]
+    fn test_cluster_options_equality() {
+        let opts1 = ClusterOptions {
+            size: "25cc".to_string(),
+            replication_factor: 2,
+        };
+
+        let opts2 = ClusterOptions {
+            size: "25cc".to_string(),
+            replication_factor: 2,
+        };
+
+        let opts3 = ClusterOptions {
+            size: "50cc".to_string(),
+            replication_factor: 2,
+        };
+
+        assert_eq!(opts1, opts2);
+        assert_ne!(opts1, opts3);
+    }
+}
