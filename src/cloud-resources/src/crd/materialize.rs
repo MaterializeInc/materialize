@@ -497,7 +497,7 @@ pub mod v1alpha1 {
                         // We require customers to upgrade to 0.147.20 or higher before upgrading to 26.0.0
                         let is_v_147_20_or_higher = (active_version.minor == 147
                             && active_version.patch >= 20)
-                            || active_version.minor > 147;
+                            || active_version.minor >= 164;
 
                         return is_v_147_20_or_higher;
                     } else {
@@ -787,6 +787,8 @@ mod tests {
             (Version::new(0, 130, 0), Version::new(26, 1, 0)),
             // Disallow anything before 0.147.20 to upgrade
             (Version::new(0, 147, 1), Version::new(26, 0, 0)),
+            // Disallow anything between 0.148.0 and 0.164.0 to upgrade
+            (Version::new(0, 148, 0), Version::new(26, 0, 0)),
         ];
         for (active_version, next_version) in failure_tests {
             assert!(
