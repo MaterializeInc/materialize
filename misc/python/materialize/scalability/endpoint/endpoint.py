@@ -7,9 +7,16 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
+from enum import Enum, auto
 from typing import Any
 
 import psycopg
+
+
+class ConnectionKind(Enum):
+    Plain = auto()
+    Password = auto()
+    Sasl = auto()
 
 
 class Endpoint:
@@ -20,19 +27,26 @@ class Endpoint:
         self._specified_target = specified_target
 
     def sql_connection(
-        self, quiet: bool = False
+        self, quiet: bool = False, kind: ConnectionKind = ConnectionKind.Plain
     ) -> psycopg.connection.Connection[tuple[Any, ...]]:
         if not quiet:
             print(f"Connecting to URL: {self.url()}")
 
-        conn = psycopg.connect(self.url())
+        conn = psycopg.connect(self.url(kind))
         conn.autocommit = True
         return conn
 
-    def url(self) -> str:
-        return (
-            f"postgresql://{self.user()}:{self.password()}@{self.host()}:{self.port()}"
+    def url(self, kind: ConnectionKind = ConnectionKind.Plain) -> str:
+        port = (
+            self.port()
+            if kind == ConnectionKind.Plain
+            else (
+                self.port_password()
+                if kind == ConnectionKind.Password
+                else self.port_sasl()
+            )
         )
+        return f"postgresql://{self.user()}:{self.password()}@{self.host()}:{port}/{self.database()}"
 
     def specified_target(self) -> str:
         return self._specified_target
@@ -49,7 +63,16 @@ class Endpoint:
     def password(self) -> str:
         raise NotImplementedError
 
+    def database(self) -> str:
+        raise NotImplementedError
+
     def port(self) -> int:
+        raise NotImplementedError
+
+    def port_password(self) -> int:
+        raise NotImplementedError
+
+    def port_sasl(self) -> int:
         raise NotImplementedError
 
     def up(self) -> None:

@@ -101,7 +101,7 @@ INCLUDE_ZERO_IN_Y_AXIS = True
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--target",
-        help="Target for the benchmark: 'HEAD', 'local', 'remote', 'common-ancestor', 'Postgres', or a DockerHub tag",
+        help="Target for the benchmark: 'HEAD', 'local', 'remote', 'common-ancestor', 'postgres', or a DockerHub tag",
         action="append",
         default=[],
     )
