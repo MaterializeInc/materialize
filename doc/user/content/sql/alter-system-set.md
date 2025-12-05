@@ -7,18 +7,20 @@ menu:
 
 ---
 
-`ALTER SYSTEM SET` globally modifies the value of a configuration parameter.
+Use `ALTER SYSTEM SET` to globally modify the value of a configuration parameter.
 
 To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
-{{< diagram "alter-system-set-stmt.svg" >}}
+```mzsql
+ALTER SYSTEM SET <config> [TO|=] <value|DEFAULT>
+```
 
-Field                   | Use
-------------------------|-----
-_name_                  | The name of the configuration parameter to modify.
-_value_                 | The value to assign to the configuration parameter.
+Syntax element | Description
+---------------|------------
+`<config>`              | The name of the configuration parameter to modify.
+`<value>`               | The value to assign to the configuration parameter.
 **DEFAULT**             | Reset the configuration parameter's default value. Equivalent to [`ALTER SYSTEM RESET`](../alter-system-reset).
 
 {{% configuration-parameters %}}

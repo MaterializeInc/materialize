@@ -861,7 +861,7 @@ impl crate::coord::Coordinator {
         // If a dataflow was created, drop it once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
             self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
-            self.drop_indexes(vec![(compute_instance, index_id)]);
+            self.drop_compute_collections(vec![(compute_instance, index_id)]);
         }
 
         let persist_client = self.persist_client.clone();
@@ -989,7 +989,7 @@ impl crate::coord::Coordinator {
                         // aesthetic reasons.
                         let result = tx.send(response.inline_rows).await;
                         if result.is_err() {
-                            tracing::error!("receiver went away");
+                            tracing::debug!("receiver went away");
                         }
 
                         let mut current_batch = Vec::new();
@@ -1027,7 +1027,7 @@ impl crate::coord::Coordinator {
                                         ))
                                         .await;
                                     if result.is_err() {
-                                        tracing::error!("receiver went away");
+                                        tracing::debug!("receiver went away");
                                         // Don't return but break so we fall out to the
                                         // batch delete logic below.
                                         break 'outer;
@@ -1041,7 +1041,7 @@ impl crate::coord::Coordinator {
                         if current_batch.len() > 0 {
                             let result = tx.send(RowCollection::new(current_batch, &[])).await;
                             if result.is_err() {
-                                tracing::error!("receiver went away");
+                                tracing::debug!("receiver went away");
                             }
                         }
 

@@ -863,8 +863,10 @@ impl Coordinator {
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
                         transitive_storage_deps.extend(entry.global_ids());
                     }
+                    // Each catalog item is computed by at most one compute collection at a time,
+                    // which is also the most recent one.
                     CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
-                        transitive_compute_deps.extend(entry.global_ids());
+                        transitive_compute_deps.insert(entry.latest_global_id());
                     }
                     _ => {}
                 }

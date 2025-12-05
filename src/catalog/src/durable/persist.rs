@@ -1599,6 +1599,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             .epoch
     }
 
+    fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn expire(self: Box<Self>) {
         self.expire().await

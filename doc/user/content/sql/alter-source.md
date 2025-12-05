@@ -6,40 +6,64 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER SOURCE` changes certain characteristics of a source.
+Use `ALTER SOURCE` to:
+
+- Add a subsource to a source.
+- Rename a source.
+- Change owner of a source.
+- Change retain history configuration for the source.
 
 ## Syntax
 
-{{< diagram "alter-source.svg" >}}
+{{< tabs >}}
+{{< tab "Add subsource" >}}
 
-#### alter_source_add_clause
+### Add subsource
 
-{{< diagram "alter-source-add-clause.svg" >}}
+To add the specified upstream table(s) to the specified PostgreSQL/MySQL/SQL Server source:
 
-#### alter_source_set_retain_history_clause
+{{% include-syntax file="examples/alter_source" example="syntax-add-subsource" %}}
 
-{{< diagram "alter-source-set-retain-history-clause.svg" >}}
-
-#### alter_source_reset_retain_history_clause
-
-{{< diagram "alter-source-reset-retain-history-clause.svg" >}}
-
-#### with_options
-
-{{< diagram "with-options.svg" >}}
-
-Field   | Use
---------|-----
-_name_  | The identifier of the source you want to alter.
-**ADD SUBSOURCE** ... | Add the identified tables from the upstream database (`table_name`) to the named PostgreSQL/MySQL/SQL Server source, with the option of choosing the name for the subsource in Materialize (`subsrc_name`). Supports [additional options](#add-subsource-with_options). <br><br>{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+{{< note >}}
+{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
 >}}
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+{{< /note >}}
 
-### **ADD SUBSOURCE** `with_options`
+{{< /tab >}}
 
-Field                                | Value           | Description
--------------------------------------|-----------------|-------------------------------------
-`TEXT COLUMNS`                       | A list of names | Decode data as `text` for specific columns that contain PostgreSQL types that are unsupported in Materialize.
+{{< tab "Rename" >}}
+
+### Rename
+
+To rename a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-rename" %}}
+
+{{< /tab >}}
+{{< tab "Change owner" >}}
+
+### Change owner
+
+To change the owner of a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-change-owner" %}}
+
+{{< /tab >}}
+{{< tab "(Re)Set retain history config" >}}
+
+### (Re)Set retain history config
+
+To set the retention history for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-set-retain-history" %}}
+
+To reset the retention history to the default for a source:
+
+{{% include-syntax file="examples/alter_source" example="syntax-reset-retain-history" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
+
 
 ## Context
 

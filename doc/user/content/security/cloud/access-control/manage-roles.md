@@ -638,7 +638,7 @@ object and is automatically  granted all [applicable
 privileges](/security/appendix/appendix-privileges/) for the object. To
 transfer ownership (and privileges) to another role (another user role/service
 account role/functional role), you can use the [ALTER ... OWNER
-TO](/sql/alter-owner/) command:
+TO](/sql/#rbac) commands:
 
 {{< annotation type="Privilege(s) required to run the command" >}}
 

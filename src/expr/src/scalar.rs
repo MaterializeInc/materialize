@@ -782,11 +782,25 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(column_types).scalar_type,
                             );
-                        } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
+                        } else if let BinaryFunc::IsLikeMatchCaseInsensitive(_) = func {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(pattern, *case_insensitive) {
+                                *e = match like_pattern::compile(pattern, true) {
+                                    Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
+                                        func::IsLikeMatch(matcher),
+                                    )),
+                                    Err(err) => MirScalarExpr::literal(
+                                        Err(err),
+                                        e.typ(column_types).scalar_type,
+                                    ),
+                                };
+                            }
+                        } else if let BinaryFunc::IsLikeMatchCaseSensitive(_) = func {
+                            if expr2.is_literal() {
+                                // We can at least precompile the regex.
+                                let pattern = expr2.as_literal_str().unwrap();
+                                *e = match like_pattern::compile(pattern, false) {
                                     Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
                                         func::IsLikeMatch(matcher),
                                     )),

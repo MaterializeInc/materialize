@@ -2224,6 +2224,12 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: false,
     },
+    {
+        name: enable_replacement_materialized_views,
+        desc: "Whether to enable replacement materialized views.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

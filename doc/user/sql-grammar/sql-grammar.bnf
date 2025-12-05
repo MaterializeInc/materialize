@@ -1,20 +1,4 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
-alter_connection ::=
-  'ALTER' 'CONNECTION' 'IF EXISTS'? name
-    (
-      (
-        'SET' '(' option '=' value ')'
-        | ('DROP' | 'RESET') '(' option ')'
-      )
-      ( ','
-        (
-          'SET' '(' option '=' value ')'
-          | ('DROP' | 'RESET') '(' option ')'
-        )
-      ) *
-      | 'ROTATE' 'KEYS'
-    )
-    ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 alter_default_privileges ::=
   'ALTER' 'DEFAULT' 'PRIVILEGES' 'FOR' (( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'ALL' 'ROLES' ) ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
 alter_network_policy::='ALTER' 'NETWORK POLICY' name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
@@ -22,50 +6,10 @@ abbreviated_grant ::=
   'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
 abbreviated_revoke ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'FROM' 'GROUP'? revokee (',' revokee)*
-alter_owner ::=
-  'ALTER' ('CLUSTER' | 'CLUSTER REPLICA' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'TYPE' | 'SECRET' ) name 'OWNER TO' new_owner
-alter_rename ::=
-  'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
-alter_swap ::=
-  'ALTER' ('CLUSTER' | 'SCHEMA') name 'SWAP' 'WITH' target_name
-alter_sink ::=
-  'ALTER' 'SINK' name 'SET' 'FROM' item_name
-alter_table_set ::=
-  'ALTER' 'TABLE' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_table_reset ::=
-  'ALTER' 'TABLE' name 'RESET' '(' 'RETAIN HISTORY' ')'
-alter_index_set ::=
-  'ALTER' 'INDEX' name 'SET' ('ENABLED' | ('(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'))
-alter_index_reset ::=
-  'ALTER' 'INDEX' name 'RESET' '(' 'RETAIN HISTORY' ')'
-alter_materialized_view_set ::=
-  'ALTER' 'MATERIALIZED VIEW' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_materialized_view_reset ::=
-  'ALTER' 'MATERIALIZED VIEW' name 'RESET' '(' 'RETAIN HISTORY' ')'
-alter_secret ::=
-  'ALTER' 'SECRET' 'IF EXISTS'? name AS value
-alter_source ::=
-  'ALTER' 'SOURCE' 'IF EXISTS'? name (
-    alter_source_add_clause
-    | alter_source_set_retain_history_clause
-    | alter_source_reset_retain_history_clause
-  )
-alter_source_add_clause ::=
-  'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
-alter_source_set_retain_history_clause ::=
-  'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_source_reset_retain_history_clause ::=
-  'RESET' '(' 'RETAIN HISTORY' ')'
-alter_system_set_stmt ::=
-  'ALTER' 'SYSTEM' 'SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' )
-alter_system_reset_stmt ::=
-  'ALTER' 'SYSTEM' 'RESET' name
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
   'AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression
-close ::=
-  'CLOSE' cursor_name
 col_option ::=
   'NOT' 'NULL' |
   'DEFAULT' expr

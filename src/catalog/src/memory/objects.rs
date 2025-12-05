@@ -753,6 +753,10 @@ impl mz_sql::catalog::CatalogItem for CatalogCollectionEntry {
         self.entry.writable_table_details()
     }
 
+    fn replacement_target(&self) -> Option<CatalogItemId> {
+        self.entry.replacement_target()
+    }
+
     fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>> {
         self.entry.type_details()
     }
@@ -1390,6 +1394,8 @@ pub struct MaterializedView {
     pub resolved_ids: ResolvedIds,
     /// All of the catalog objects that are referenced by this view.
     pub dependencies: DependencyIds,
+    /// ID of the materialized view this materialized view is intended to replace.
+    pub replacement_target: Option<CatalogItemId>,
     /// Cluster that this materialized view runs on.
     pub cluster_id: ClusterId,
     /// Column indexes that we assert are not `NULL`.
@@ -1444,6 +1450,67 @@ impl MaterializedView {
             .expect("GlobalId to exist");
         self.desc
             .at_version(RelationVersionSelector::Specific(*version))
+    }
+
+    /// Apply the given replacement materialized view to this [`MaterializedView`].
+    pub fn apply_replacement(&mut self, replacement: Self) {
+        let target_id = replacement
+            .replacement_target
+            .expect("replacement has target");
+
+        fn parse(create_sql: &str) -> mz_sql::ast::CreateMaterializedViewStatement<Raw> {
+            let res = mz_sql::parse::parse(create_sql).unwrap_or_else(|e| {
+                panic!("invalid create_sql persisted in catalog: {e}\n{create_sql}");
+            });
+            if let Statement::CreateMaterializedView(cmvs) = res.into_element().ast {
+                cmvs
+            } else {
+                panic!("invalid MV create_sql persisted in catalog\n{create_sql}");
+            }
+        }
+
+        let old_stmt = parse(&self.create_sql);
+        let rpl_stmt = parse(&replacement.create_sql);
+        let new_stmt = mz_sql::ast::CreateMaterializedViewStatement {
+            if_exists: old_stmt.if_exists,
+            name: old_stmt.name,
+            columns: rpl_stmt.columns,
+            replacing: None,
+            in_cluster: rpl_stmt.in_cluster,
+            query: rpl_stmt.query,
+            as_of: rpl_stmt.as_of,
+            with_options: rpl_stmt.with_options,
+        };
+        let create_sql = new_stmt.to_ast_string_stable();
+
+        let mut collections = std::mem::take(&mut self.collections);
+        // Note: We can't use `self.desc.latest_version` here because a replacement doesn't
+        // necessary evolve the relation schema, so that version might be lower than the actual
+        // latest version.
+        let latest_version = collections.keys().max().expect("at least one version");
+        let new_version = latest_version.bump();
+        collections.insert(new_version, replacement.global_id_writes());
+
+        let mut resolved_ids = replacement.resolved_ids;
+        resolved_ids.remove_item(&target_id);
+        let mut dependencies = replacement.dependencies;
+        dependencies.0.remove(&target_id);
+
+        *self = Self {
+            create_sql,
+            collections,
+            raw_expr: replacement.raw_expr,
+            optimized_expr: replacement.optimized_expr,
+            desc: replacement.desc,
+            resolved_ids,
+            dependencies,
+            replacement_target: None,
+            cluster_id: replacement.cluster_id,
+            non_null_assertions: replacement.non_null_assertions,
+            custom_logical_compaction_window: replacement.custom_logical_compaction_window,
+            refresh_schedule: replacement.refresh_schedule,
+            initial_as_of: replacement.initial_as_of,
+        };
     }
 }
 
@@ -3394,6 +3461,14 @@ impl mz_sql::catalog::CatalogItem for CatalogEntry {
         }) = self.item()
         {
             Some(defaults.as_slice())
+        } else {
+            None
+        }
+    }
+
+    fn replacement_target(&self) -> Option<CatalogItemId> {
+        if let CatalogItem::MaterializedView(mv) = self.item() {
+            mv.replacement_target
         } else {
             None
         }

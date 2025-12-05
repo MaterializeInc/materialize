@@ -4490,7 +4490,12 @@ fn plan_like(
             expr_func::LikeEscape,
         );
     }
-    let like = haystack.call_binary(pattern, BinaryFunc::IsLikeMatch { case_insensitive });
+    let func: BinaryFunc = if case_insensitive {
+        expr_func::IsLikeMatchCaseInsensitive.into()
+    } else {
+        expr_func::IsLikeMatchCaseSensitive.into()
+    };
+    let like = haystack.call_binary(pattern, func);
     if not {
         Ok(like.call_unary(UnaryFunc::Not(expr_func::Not)))
     } else {

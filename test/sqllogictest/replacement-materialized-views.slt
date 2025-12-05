@@ -1,0 +1,188 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+# Setup
+
+statement ok
+CREATE TABLE t (a int, b int)
+
+statement ok
+INSERT INTO t VALUES (1, 2), (3, 4), (5, 6)
+
+statement ok
+CREATE CLUSTER other REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=2,workers=2'))
+
+
+# Test: basic replacement workflow
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t
+
+query II
+SELECT * FROM mv
+----
+1 2
+3 4
+5 6
+
+statement ok
+CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT a + b as a, b FROM t
+
+query II
+SELECT * FROM mv
+----
+1 2
+3 4
+5 6
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster    comment
+mv   quickstart (empty)
+rp   quickstart (empty)
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster    comment
+mv   quickstart (empty)
+
+query II
+SELECT * FROM mv
+----
+3  2
+7  4
+11 6
+
+
+# Test: aborted replacement workflow
+
+statement ok
+CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT -a as a, b FROM t
+
+query II
+SELECT * FROM mv
+----
+3  2
+7  4
+11 6
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster    comment
+mv   quickstart (empty)
+rp   quickstart (empty)
+
+statement ok
+DROP MATERIALIZED VIEW rp
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster    comment
+mv   quickstart (empty)
+
+query II
+SELECT * FROM mv
+----
+3  2
+7  4
+11 6
+
+
+# Test: replacement can be created in another cluster
+
+statement ok
+CREATE MATERIALIZED VIEW rp REPLACING mv IN CLUSTER other AS SELECT a, b FROM t;
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster    comment
+mv   quickstart (empty)
+rp   other      (empty)
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster comment
+mv   other   (empty)
+
+
+# Test: replacement can have the same query
+
+statement ok
+CREATE MATERIALIZED VIEW rp REPLACING mv IN CLUSTER other AS SELECT a, b FROM t;
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster comment
+mv   other   (empty)
+rp   other   (empty)
+
+statement ok
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+query TTT colnames,rowsort
+SHOW MATERIALIZED VIEWS
+----
+name cluster comment
+mv   other   (empty)
+
+
+# Test: usage errors
+
+statement error db error: ERROR: incompatible schemas
+CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT a, b, 1 FROM t
+
+statement error db error: ERROR: cannot replace table t with materialized view rp
+CREATE MATERIALIZED VIEW rp REPLACING t AS SELECT a, b FROM t
+
+statement error db error: ERROR: t is a table not a materialized view
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT t
+
+statement ok
+CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv
+
+statement ok
+CREATE MATERIALIZED VIEW rp REPLACING mv2 AS SELECT a, b FROM t
+
+statement error cannot replace materialized view mv with materialized view rp
+ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
+
+statement ok
+DROP MATERIALIZED VIEW mv2 CASCADE
+
+
+# Test: replacement depends on target materialized view
+
+statement ok
+CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT a, b FROM t
+
+statement error db error: ERROR: cannot drop materialized view "mv": still depended upon by materialized view "rp"
+DROP MATERIALIZED VIEW mv;
+
+statement ok
+DROP MATERIALIZED VIEW mv CASCADE;
+
+# TODO(alter-mv): Test: replacement cannot be selected from
+# TODO(alter-mv): Test: not more than one replacement allowed per MV
+# TODO(alter-mv): Test: cannot create an object depending on a replacement
+# TODO(alter-mv): Test: audit log

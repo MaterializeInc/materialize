@@ -1,6 +1,41 @@
-- name: "syntax"
+- name: "syntax-set-from"
   code: |
-    ALTER SINK <sink_name> SET FROM <relation_name>;
+    ALTER SINK <name> SET FROM <relation_name>;
+  syntax_elements:
+    - name: |
+        `<name>`
+      description: |
+        The name of the sink you want to change.
+    - name: |
+        `<relation_name>`
+      description: |
+        The name of the relation you want to sink from.
+- name: "syntax-rename"
+  code: |
+    ALTER SINK <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the sink.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the sink.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER SINK <name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The name of the sink you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the sink.
+  addenda: |
+    To change the owner, you must be a current owner as well as have membership
+    in the `<new_owner_role>`.
 
 - name: "alter-sink-create-original-sink"
   description: |

@@ -305,6 +305,12 @@ pub enum PlanError {
     },
     /// AS OF or UP TO should be an expression that is castable and simplifiable to a non-null mz_timestamp value.
     InvalidAsOfUpTo,
+    InvalidReplacement {
+        item_type: CatalogItemType,
+        item_name: PartialItemName,
+        replacement_type: CatalogItemType,
+        replacement_name: PartialItemName,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -845,7 +851,10 @@ impl fmt::Display for PlanError {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
             Self::CopyFromTargetTableDropped { target_name: name } => write!(f, "COPY FROM's target table {} was dropped", name.quoted()),
-            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value")
+            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value"),
+            Self::InvalidReplacement { item_type, item_name, replacement_type, replacement_name } => {
+                write!(f, "cannot replace {item_type} {item_name} with {replacement_type} {replacement_name}")
+            }
         }
     }
 }

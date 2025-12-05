@@ -561,6 +561,7 @@ impl Coordinator {
                             mut create_sql,
                             expr: raw_expr,
                             dependencies,
+                            replacement_target,
                             cluster_id,
                             non_null_assertions,
                             compaction_window,
@@ -577,6 +578,23 @@ impl Coordinator {
             global_lir_plan,
             ..
         } = stage;
+
+        // Validate the replacement target, if one is given.
+        // TODO(alter-mv): Could we do this already in planning?
+        if let Some(target_id) = replacement_target {
+            let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
+                return Err(AdapterError::internal(
+                    "create materialized view",
+                    "replacement target not a materialized view",
+                ));
+            };
+
+            // For now, we don't support schema evolution for materialized views.
+            if &target.desc.latest() != global_lir_plan.desc() {
+                return Err(AdapterError::Unstructured(anyhow!("incompatible schemas")));
+            }
+        }
+
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
@@ -593,8 +611,12 @@ impl Coordinator {
             &read_holds_owned
         };
 
-        let (dataflow_as_of, storage_as_of, until) =
-            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
+        let (dataflow_as_of, storage_as_of, until) = self.select_timestamps(
+            id_bundle,
+            refresh_schedule.as_ref(),
+            read_holds,
+            replacement_target,
+        )?;
 
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -647,6 +669,7 @@ impl Coordinator {
                     collections,
                     resolved_ids,
                     dependencies,
+                    replacement_target,
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
@@ -687,6 +710,18 @@ impl Coordinator {
 
                     let storage_metadata = coord.catalog.state().storage_metadata();
 
+                    let mut collection_desc =
+                        CollectionDescription::for_other(output_desc, Some(storage_as_of));
+                    let mut allow_writes = true;
+
+                    // If this MV is intended to replace another one, we need to start it in
+                    // read-only mode, targeting the shard of the replacement target.
+                    if let Some(target_id) = replacement_target {
+                        let target_gid = coord.catalog.get_entry(&target_id).latest_global_id();
+                        collection_desc.primary = Some(target_gid);
+                        allow_writes = false;
+                    }
+
                     // Announce the creation of the materialized view source.
                     coord
                         .controller
@@ -694,10 +729,7 @@ impl Coordinator {
                         .create_collections(
                             storage_metadata,
                             None,
-                            vec![(
-                                global_id,
-                                CollectionDescription::for_other(output_desc, Some(storage_as_of)),
-                            )],
+                            vec![(global_id, collection_desc)],
                         )
                         .await
                         .unwrap_or_terminate("cannot fail to append");
@@ -716,7 +748,10 @@ impl Coordinator {
                             notice_builtin_updates_fut,
                         )
                         .await;
-                    coord.allow_writes(cluster_id, global_id);
+
+                    if allow_writes {
+                        coord.allow_writes(cluster_id, global_id);
+                    }
                 })
             })
             .await;
@@ -746,6 +781,7 @@ impl Coordinator {
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
         read_holds: &ReadHolds<mz_repr::Timestamp>,
+        replacement_target: Option<CatalogItemId>,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,
@@ -808,6 +844,24 @@ impl Coordinator {
             .and_then(|s| s.last_refresh())
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
+
+        // If this is a replacement MV, ensure that `storage_as_of` > the `since` of the target
+        // storage collection. The storage controller requires the `since` of a storage collection
+        // to always be greater than the `since`s of the collections it depends on.
+        if let Some(target_id) = replacement_target {
+            let target_gid = self.catalog().get_entry(&target_id).latest_global_id();
+            let frontiers = self
+                .controller
+                .storage_collections
+                .collection_frontiers(target_gid)
+                .expect("replacement target exists");
+            let lower_bound = frontiers
+                .read_capabilities
+                .iter()
+                .map(|t| t.step_forward())
+                .collect();
+            storage_as_of.join_assign(&lower_bound);
+        }
 
         Ok((dataflow_as_of, storage_as_of, until))
     }

@@ -13,7 +13,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::pin::Pin;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use fail::fail_point;
 use maplit::{btreemap, btreeset};
@@ -67,8 +67,15 @@ impl Coordinator {
         session: Option<&Session>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
-        self.catalog_transact_with_context(session.map(|session| session.conn_id()), None, ops)
-            .await
+        let start = Instant::now();
+        let result = self
+            .catalog_transact_with_context(session.map(|session| session.conn_id()), None, ops)
+            .await;
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact"])
+            .observe(start.elapsed().as_secs_f64());
+        result
     }
 
     /// Same as [`Self::catalog_transact_with_context`] but takes a [`Session`]
@@ -93,6 +100,8 @@ impl Coordinator {
             ) -> Pin<Box<dyn Future<Output = ()> + 'a>>
             + 'static,
     {
+        let start = Instant::now();
+
         let (table_updates, catalog_updates) = self
             .catalog_transact_inner(ctx.as_ref().map(|ctx| ctx.session().conn_id()), ops)
             .await?;
@@ -129,6 +138,11 @@ impl Coordinator {
         )
         .await;
 
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_side_effects"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(())
     }
 
@@ -146,6 +160,8 @@ impl Coordinator {
         ctx: Option<&mut ExecuteContext>,
         ops: Vec<catalog::Op>,
     ) -> Result<(), AdapterError> {
+        let start = Instant::now();
+
         let conn_id = conn_id.or_else(|| ctx.as_ref().map(|ctx| ctx.session().conn_id()));
 
         let (table_updates, catalog_updates) = self.catalog_transact_inner(conn_id, ops).await?;
@@ -176,6 +192,11 @@ impl Coordinator {
             "coordinator inconsistency detected"
         );
 
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_context"])
+            .observe(start.elapsed().as_secs_f64());
+
         Ok(())
     }
 
@@ -197,6 +218,8 @@ impl Coordinator {
             + Sync
             + 'static,
     {
+        let start = Instant::now();
+
         let Some(Transaction {
             ops:
                 TransactionOps::DDL {
@@ -208,13 +231,22 @@ impl Coordinator {
             ..
         }) = ctx.session().transaction().inner()
         else {
-            return self
+            let result = self
                 .catalog_transact_with_side_effects(Some(ctx), ops, side_effect)
                 .await;
+            self.metrics
+                .catalog_transact_seconds
+                .with_label_values(&["catalog_transact_with_ddl_transaction"])
+                .observe(start.elapsed().as_secs_f64());
+            return result;
         };
 
         // Make sure our Catalog hasn't changed since openning the transaction.
         if self.catalog().transient_revision() != *txn_revision {
+            self.metrics
+                .catalog_transact_seconds
+                .with_label_values(&["catalog_transact_with_ddl_transaction"])
+                .observe(start.elapsed().as_secs_f64());
             return Err(AdapterError::DDLTransactionRace);
         }
 
@@ -227,7 +259,7 @@ impl Coordinator {
         // Run our Catalog transaction, but abort before committing.
         let result = self.catalog_transact(Some(ctx.session()), all_ops).await;
 
-        match result {
+        let result = match result {
             // We purposefully fail with this error to prevent committing the transaction.
             Err(AdapterError::TransactionDryRun { new_ops, new_state }) => {
                 // Sets these ops to our transaction, bailing if the Catalog has changed since we
@@ -244,7 +276,14 @@ impl Coordinator {
             }
             Ok(_) => unreachable!("unexpected success!"),
             Err(e) => Err(e),
-        }
+        };
+
+        self.metrics
+            .catalog_transact_seconds
+            .with_label_values(&["catalog_transact_with_ddl_transaction"])
+            .observe(start.elapsed().as_secs_f64());
+
+        result
     }
 
     /// Perform a catalog transaction. [`Coordinator::ship_dataflow`] must be
@@ -739,9 +778,9 @@ impl Coordinator {
             .unwrap_or_terminate("cannot fail to drop sinks");
     }
 
-    pub(crate) fn drop_indexes(&mut self, indexes: Vec<(ClusterId, GlobalId)>) {
+    pub(crate) fn drop_compute_collections(&mut self, collections: Vec<(ClusterId, GlobalId)>) {
         let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        for (cluster_id, gid) in indexes {
+        for (cluster_id, gid) in collections {
             by_cluster.entry(cluster_id).or_default().push(gid);
         }
         for (cluster_id, gids) in by_cluster {
@@ -753,58 +792,6 @@ impl Coordinator {
                     .unwrap_or_terminate("cannot fail to drop collections");
             }
         }
-    }
-
-    /// A convenience method for dropping materialized views.
-    pub(crate) fn drop_materialized_views(&mut self, mviews: Vec<(ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut mv_gids = Vec::new();
-        for (cluster_id, gid) in mviews {
-            by_cluster.entry(cluster_id).or_default().push(gid);
-            mv_gids.push(gid);
-        }
-
-        // Drop compute sinks.
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-
-        // Drop storage resources.
-        let storage_metadata = self.catalog.state().storage_metadata();
-        self.controller
-            .storage
-            .drop_sources(storage_metadata, mv_gids)
-            .unwrap_or_terminate("cannot fail to drop sources");
-    }
-
-    /// A convenience method for dropping continual tasks.
-    pub(crate) fn drop_continual_tasks(&mut self, cts: Vec<(CatalogItemId, ClusterId, GlobalId)>) {
-        let mut by_cluster: BTreeMap<_, Vec<_>> = BTreeMap::new();
-        let mut source_ids = Vec::new();
-        for (item_id, cluster_id, gid) in cts {
-            by_cluster.entry(cluster_id).or_default().push(gid);
-            source_ids.push((item_id, gid));
-        }
-
-        // Drop compute sinks.
-        for (cluster_id, ids) in by_cluster {
-            let compute = &mut self.controller.compute;
-            // A cluster could have been dropped, so verify it exists.
-            if compute.instance_exists(cluster_id) {
-                compute
-                    .drop_collections(cluster_id, ids)
-                    .unwrap_or_terminate("cannot fail to drop collections");
-            }
-        }
-
-        // Drop storage sources.
-        self.drop_sources(source_ids)
     }
 
     pub(crate) fn drop_vpc_endpoints_in_background(&self, vpc_endpoints: Vec<CatalogItemId>) {
@@ -1262,6 +1249,7 @@ impl Coordinator {
                 | Op::AlterRetainHistory { .. }
                 | Op::AlterNetworkPolicy { .. }
                 | Op::AlterAddColumn { .. }
+                | Op::AlterMaterializedViewApplyReplacement { .. }
                 | Op::UpdatePrivilege { .. }
                 | Op::UpdateDefaultPrivilege { .. }
                 | Op::GrantRole { .. }

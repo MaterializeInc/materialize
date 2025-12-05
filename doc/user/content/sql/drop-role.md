@@ -36,6 +36,6 @@ The privileges required to execute this statement are:
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`GRANT PRIVILEGE`](../grant-privilege)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)

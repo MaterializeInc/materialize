@@ -1,0 +1,65 @@
+- name: "syntax-set-configuration"
+  code: |
+    ALTER CLUSTER <cluster_name>
+    SET (
+        SIZE = <text>,
+        REPLICATION FACTOR = <int>,
+        MANAGED = <bool>,
+        SCHEDULE = { MANUAL | ON REFRESH (...) }
+    )
+    [WITH ({ WAIT UNTIL READY({TIMEOUT | ON TIMEOUT {COMMIT|ROLLBACK}}) | WAIT FOR <duration> })]
+    ;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The name of the cluster you want to alter.
+
+- name: "syntax-reset-to-default"
+  code: |
+    ALTER CLUSTER <cluster_name>
+    RESET (
+        REPLICATION FACTOR,
+        MANAGED,
+        SCHEDULE
+    )
+    ;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The name of the cluster you want to alter.
+
+- name: "syntax-rename"
+  code: |
+    ALTER CLUSTER <cluster_name> RENAME TO <new_cluster_name>;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The current name of the cluster.
+    - name: "`<new_cluster_name>`"
+      description: |
+        The new name of the cluster.
+
+- name: "syntax-change-owner"
+  code: |
+    ALTER CLUSTER <cluster_name> OWNER TO <new_owner_role>;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The name of the cluster you want to change ownership of.
+    - name: "`<new_owner_role>`"
+      description: |
+        The new owner of the cluster.
+  addenda: |
+    To change the owner, you must have ownership of the cluster and membership in
+    the `<new_owner_role>`. See also [Required privileges](#required-privileges).
+
+- name: "syntax-swap-with"
+  code: |
+    ALTER CLUSTER <cluster1> SWAP WITH <cluster2>;
+  syntax_elements:
+    - name: "`<cluster1>`"
+      description: |
+        The name of the first cluster.
+    - name: "`<cluster2>`"
+      description: |
+        The name of the second cluster.

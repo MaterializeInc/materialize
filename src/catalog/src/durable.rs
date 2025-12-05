@@ -12,7 +12,7 @@
 use std::fmt::Debug;
 use std::num::NonZeroI64;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use itertools::Itertools;
@@ -211,6 +211,9 @@ pub trait ReadOnlyDurableCatalogState: Debug + Send + Sync {
     /// NB: We may remove this in later iterations of Pv2.
     fn epoch(&self) -> Epoch;
 
+    /// Returns the metrics for this catalog state.
+    fn metrics(&self) -> &Metrics;
+
     /// Politely releases all external resources that can only be released in an async context.
     async fn expire(self: Box<Self>);
 
@@ -323,12 +326,16 @@ pub trait DurableCatalogState: ReadOnlyDurableCatalogState {
         amount: u64,
         commit_ts: Timestamp,
     ) -> Result<Vec<u64>, CatalogError> {
+        let start = Instant::now();
         if amount == 0 {
             return Ok(Vec::new());
         }
         let mut txn = self.transaction().await?;
         let ids = txn.get_and_increment_id_by(id_type.to_string(), amount)?;
         txn.commit_internal(commit_ts).await?;
+        self.metrics()
+            .allocate_id_seconds
+            .observe(start.elapsed().as_secs_f64());
         Ok(ids)
     }
 

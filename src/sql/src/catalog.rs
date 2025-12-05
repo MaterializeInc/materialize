@@ -836,6 +836,9 @@ pub trait CatalogItem {
     /// catalog item is a table that accepts writes.
     fn writable_table_details(&self) -> Option<&[Expr<Aug>]>;
 
+    /// The item this catalog item replaces, if any.
+    fn replacement_target(&self) -> Option<CatalogItemId>;
+
     /// Returns the type information associated with the catalog item, if the
     /// catalog item is a type.
     fn type_details(&self) -> Option<&CatalogTypeDetails<IdReference>>;

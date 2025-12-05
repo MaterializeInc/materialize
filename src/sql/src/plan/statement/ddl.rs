@@ -45,42 +45,42 @@ use mz_repr::{
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
-    AlterNetworkPolicyStatement, AlterObjectRenameStatement, AlterObjectSwapStatement,
-    AlterRetainHistoryStatement, AlterRoleOption, AlterRoleStatement, AlterSecretStatement,
-    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    AlterTableAddColumnStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName,
-    ClusterAlterOption, ClusterAlterOptionName, ClusterAlterOptionValue,
-    ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName, ClusterFeature,
-    ClusterFeatureName, ClusterOption, ClusterOptionName, ClusterScheduleOptionValue, ColumnDef,
-    ColumnOption, CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
-    ContinualTaskOption, ContinualTaskOptionName, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateConnectionStatement, CreateConnectionType, CreateContinualTaskStatement,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
-    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
-    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, FormatSpecifier, IcebergSinkConfigOption, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
-    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
-    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
-    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    AlterMaterializedViewApplyReplacementStatement, AlterNetworkPolicyStatement,
+    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
+    AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
+    ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
+    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
+    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
+    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
+    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -130,7 +130,7 @@ use crate::catalog::{
 use crate::iceberg::IcebergSinkConfigOptionExtracted;
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
-    Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
+    Aug, CommentObjectId, DatabaseId, DependencyIds, ObjectId, PartialItemName, QualifiedItemName,
     ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedItemName, ResolvedNetworkPolicyName, SchemaSpecifier, SystemObjectId,
 };
@@ -148,21 +148,21 @@ use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
-    AlterNetworkPolicyPlan, AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan,
-    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
-    AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
-    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
-    PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
-    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
-    transform_ast,
+    AlterMaterializedViewApplyReplacementPlan, AlterNetworkPolicyPlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
+    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
+    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
+    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
+    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -2733,6 +2733,30 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
+    // Validate the replacement target, if one is given.
+    let replacement_target = if let Some(target_name) = &stmt.replacing {
+        scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
+
+        let target = scx.get_item_by_resolved_name(target_name)?;
+        if target.item_type() != CatalogItemType::MaterializedView {
+            return Err(PlanError::InvalidReplacement {
+                item_type: target.item_type(),
+                item_name: scx.catalog.minimal_qualification(target.name()),
+                replacement_type: CatalogItemType::MaterializedView,
+                replacement_name: partial_name,
+            });
+        }
+        if target.id().is_system() {
+            sql_bail!(
+                "cannot replace {} because it is required by the database system",
+                scx.catalog.minimal_qualification(target.name()),
+            );
+        }
+        Some(target.id())
+    } else {
+        None
+    };
+
     let query::PlannedRootQuery {
         expr,
         mut desc,
@@ -2962,11 +2986,15 @@ pub fn plan_create_materialized_view(
                 .collect()
         })
         .unwrap_or_default();
-    let dependencies = expr
+    let mut dependencies: BTreeSet<_> = expr
         .depends_on()
         .into_iter()
         .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
+
+    if let Some(id) = replacement_target {
+        dependencies.insert(id);
+    }
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2987,8 +3015,9 @@ pub fn plan_create_materialized_view(
         materialized_view: MaterializedView {
             create_sql,
             expr,
-            dependencies,
+            dependencies: DependencyIds(dependencies),
             column_names,
+            replacement_target,
             cluster_id,
             non_null_assertions,
             compaction_window,
@@ -3238,6 +3267,7 @@ pub fn plan_create_continual_task(
             expr,
             dependencies,
             column_names,
+            replacement_target: None,
             cluster_id,
             non_null_assertions: Vec::new(),
             compaction_window: None,
@@ -7325,6 +7355,54 @@ pub fn plan_alter_table_add_column(
         column_type,
         raw_sql_type,
     }))
+}
+
+pub fn describe_alter_materialized_view_apply_replacement(
+    _: &StatementContext,
+    _: AlterMaterializedViewApplyReplacementStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_materialized_view_apply_replacement(
+    scx: &StatementContext,
+    stmt: AlterMaterializedViewApplyReplacementStatement,
+) -> Result<Plan, PlanError> {
+    let AlterMaterializedViewApplyReplacementStatement {
+        if_exists,
+        name,
+        replacement_name,
+    } = stmt;
+
+    scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
+
+    let object_type = ObjectType::MaterializedView;
+    let Some(mv) = resolve_item_or_type(scx, object_type, name.clone(), if_exists)? else {
+        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+            name: name.to_ast_string_simple(),
+            object_type,
+        });
+        return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+    };
+
+    let replacement = resolve_item_or_type(scx, object_type, replacement_name, false)?
+        .expect("if_exists not set");
+
+    if replacement.replacement_target() != Some(mv.id()) {
+        return Err(PlanError::InvalidReplacement {
+            item_type: mv.item_type(),
+            item_name: scx.catalog.minimal_qualification(mv.name()),
+            replacement_type: replacement.item_type(),
+            replacement_name: scx.catalog.minimal_qualification(replacement.name()),
+        });
+    }
+
+    Ok(Plan::AlterMaterializedViewApplyReplacement(
+        AlterMaterializedViewApplyReplacementPlan {
+            id: mv.id(),
+            replacement_id: replacement.id(),
+        },
+    ))
 }
 
 pub fn describe_comment(

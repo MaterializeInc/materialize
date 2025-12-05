@@ -20,20 +20,24 @@ used:
 
 {{% yaml-table data="self_managed/authentication_setting" %}}
 
+{{< include-md file="shared-content/auth-kind-warning.md" >}}
+
+
+
 ## Configuring password authentication
 
 {{< public-preview >}}This feature{{</ public-preview >}}
 
 Password authentication requires users to log in with a password.
 
-To configure Self-Managed Materialize for password authentication:
+To configure Self-Managed Materialize for password authentication, update the following fields in the Materialize CR. For all Materialize CR settings, see [here](/installation/appendix-materialize-crd-field-descriptions/).
 
  Configuration | Description
 ---------------| ------------
 `spec.authenticatorKind` | Set to `Password` to enable password authentication.
-`external_login_password_mz_system` | To the Kubernetes Secret referenced by `spec.backendSecretName`, add the secret key `external_login_password_mz_system`. This is the password for the `mz_system` user [^1], who is the only user initially available when password authentication is enabled.
+`external_login_password_mz_system` | Set to the Kubernetes Secret referenced by `spec.backendSecretName`, add the secret key `external_login_password_mz_system`. This is the password for the `mz_system` user [^1], who is the only user initially available when password authentication is enabled.
 
-For example, if using Kind, in the `sample-materialize.yaml` file:
+An example Materialize CR YAML file:
 
 ```hc {hl_lines="14 24"}
 apiVersion: v1
@@ -92,14 +96,14 @@ SASL/SCRAM-SHA-256 authentication is a challenge-response authentication mechani
 that provides security for **PostgreSQL wire protocol connections**. It is
 compatible with PostgreSQL clients that support SCRAM-SHA-256.
 
-To configure Self-Managed Materialize for SASL/SCRAM authentication:
+To configure Self-Managed Materialize for SASL/SCRAM authentication, update the following fields in the Materialize CR. For all Materialize CR settings, see [here](/installation/appendix-materialize-crd-field-descriptions/).
 
 | Configuration | Description
 |---------------| ------------
 |`spec.authenticatorKind` | Set to `Sasl` to enable SASL/SCRAM-SHA-256 authentication for PostgreSQL connections.
-|`external_login_password_mz_system` | To the Kubernetes Secret referenced by `spec.backendSecretName`, add the secret key `external_login_password_mz_system`. This is the password for the `mz_system` user [^1], who is the only user initially available when SASL authentication is enabled.
+|`external_login_password_mz_system` | Set to the Kubernetes Secret referenced by `spec.backendSecretName`, add the secret key `external_login_password_mz_system`. This is the password for the `mz_system` user [^1], who is the only user initially available when SASL authentication is enabled.
 
-For example, if using Kind, in the `sample-materialize.yaml` file:
+An example Materialize CR YAML file:
 
 ```hc {hl_lines="14 24"}
 apiVersion: v1
@@ -147,6 +151,20 @@ When SASL authentication is enabled:
 
 This hybrid approach provides maximum security for SQL connections while maintaining
 compatibility with web-based tools.
+
+## Deploying authentication
+
+Using the configured Materialize CR YAML file, we recommend rolling out the changes by adding the following fields:
+```yaml
+spec:
+  ...
+  requestRollout: <SOME_NEW_UUID> # Generate new UUID for rollout
+  forceRollout: <SOME_NEW_UUID> # Rollout without requiring a version change
+```
+
+For more information on rollout configuration, view our [installation overview](/installation/#rollout-configuration).
+
+{{< include-md file="shared-content/auth-kind-warning.md" >}}
 
 ## Enabling RBAC
 

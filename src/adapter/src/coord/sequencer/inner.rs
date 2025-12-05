@@ -57,7 +57,10 @@ use mz_sql::names::{
     Aug, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds, ResolvedItemName,
     SchemaSpecifier, SystemObjectId,
 };
-use mz_sql::plan::{ConnectionDetails, NetworkPolicyRule, StatementContext};
+use mz_sql::plan::{
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
+    StatementContext,
+};
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::GenericSourceConnection;
@@ -4695,6 +4698,23 @@ impl Coordinator {
             .await?;
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Table))
+    }
+
+    #[instrument]
+    pub(super) async fn sequence_alter_materialized_view_apply_replacement(
+        &mut self,
+        ctx: &mut ExecuteContext,
+        plan: AlterMaterializedViewApplyReplacementPlan,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan;
+
+        // TODO(alter-mv): Wait until there is overlap between the old MV's write frontier and the
+        // new MV's as-of, to ensure no times are skipped.
+
+        let ops = vec![catalog::Op::AlterMaterializedViewApplyReplacement { id, replacement_id }];
+        self.catalog_transact(Some(ctx.session()), ops).await?;
+
+        Ok(ExecuteResponse::AlteredObject(ObjectType::MaterializedView))
     }
 
     pub(super) async fn statistics_oracle(
