@@ -39,6 +39,7 @@ use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::refresh_schedule::RefreshSchedule;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
+use mz_storage_types::errors::CollectionMissingOrUnreadable;
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
 use serde::Serialize;
@@ -52,7 +53,8 @@ use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
+    CollectionLookupError, CollectionMissing, CollectionUnreadableOrLookupError,
+    ERROR_TARGET_REPLICA_FAILED, HydrationCheckBadTarget,
 };
 use crate::controller::replica::{ReplicaClient, ReplicaConfig};
 use crate::controller::{
@@ -264,7 +266,7 @@ where
     pub async fn acquire_read_holds_and_collection_write_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionLookupError> {
+    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionUnreadableOrLookupError> {
         self.call_sync(move |i| {
             let mut result = Vec::new();
             for id in ids.into_iter() {
@@ -2452,7 +2454,10 @@ where
     ///
     /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
     /// but executes on the instance task itself.
-    fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+    fn acquire_read_hold(
+        &self,
+        id: GlobalId,
+    ) -> Result<ReadHold<T>, CollectionMissingOrUnreadable> {
         // Similarly to InstanceState::acquire_read_hold and StorageCollections::acquire_read_holds,
         // we acquire read holds at the earliest possible time rather than returning a copy
         // of the implied read hold. This is so that dependents can acquire read holds on
@@ -2461,9 +2466,12 @@ where
         let collection = self.collection(id)?;
         let since = collection.shared.lock_read_capabilities(|caps| {
             let since = caps.frontier().to_owned();
+            if since.is_empty() {
+                return Err(CollectionMissingOrUnreadable::CollectionUnreadable(id));
+            }
             caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
-            since
-        });
+            Ok(since)
+        })?;
         let hold = ReadHold::new(id, since, Arc::clone(&self.read_hold_tx));
         Ok(hold)
     }

@@ -386,7 +386,7 @@ impl crate::coord::Coordinator {
             .controller
             .storage_collections
             .acquire_read_holds(desired_storage_holds)
-            .expect("missing storage collections");
+            .expect("missing storage collections or collection unreadable");
         read_holds.storage_holds = storage_read_holds
             .into_iter()
             .map(|hold| (hold.id(), hold))
@@ -398,7 +398,7 @@ impl crate::coord::Coordinator {
                     .controller
                     .compute
                     .acquire_read_hold(instance_id, id)
-                    .expect("missing compute collection");
+                    .expect("missing compute collection or collection unreadable");
 
                 let prev = read_holds.compute_holds.insert((instance_id, id), hold);
                 assert!(
