@@ -788,34 +788,11 @@ impl Coordinator {
             owner_id: *ctx.session().current_role_id(),
         }];
 
+        // VPC endpoint creation for AWS PrivateLink connections is now handled
+        // in apply_catalog_implications.
+        let conn_id = ctx.session().conn_id().clone();
         let transact_result = self
-            .catalog_transact_with_side_effects(Some(ctx), ops, move |coord, _ctx| {
-                Box::pin(async move {
-                    match plan.connection.details {
-                        ConnectionDetails::AwsPrivatelink(ref privatelink) => {
-                            let spec = VpcEndpointConfig {
-                                aws_service_name: privatelink.service_name.to_owned(),
-                                availability_zone_ids: privatelink.availability_zones.to_owned(),
-                            };
-                            let cloud_resource_controller =
-                                match coord.cloud_resource_controller.as_ref().cloned() {
-                                    Some(controller) => controller,
-                                    None => {
-                                        tracing::warn!("AWS PrivateLink connections unsupported");
-                                        return;
-                                    }
-                                };
-                            if let Err(err) = cloud_resource_controller
-                                .ensure_vpc_endpoint(connection_id, spec)
-                                .await
-                            {
-                                tracing::warn!(?err, "failed to ensure vpc endpoint!");
-                            }
-                        }
-                        _ => {}
-                    }
-                })
-            })
+            .catalog_transact_with_context(Some(&conn_id), Some(ctx), ops)
             .await;
 
         match transact_result {
