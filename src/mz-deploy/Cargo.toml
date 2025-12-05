@@ -15,6 +15,7 @@ mz-build-info = { path = "../build-info" }
 mz-sql-parser = { path = "../sql-parser", default-features = false }
 thiserror = "2.0"
 clap = { version = "4.5.23", features = ["derive", "env"] }
+crossterm = "0.28"
 owo-colors = "4.0"
 tokio = { version = "1", features = ["full"] }
 tokio-postgres = "0.7"

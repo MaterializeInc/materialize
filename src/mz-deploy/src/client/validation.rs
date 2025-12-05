@@ -10,8 +10,8 @@ use crate::project::planned;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::path::PathBuf;
-use tokio_postgres::types::ToSql;
 use tokio_postgres::Client as PgClient;
+use tokio_postgres::types::ToSql;
 
 /// Internal helper to query which sources exist on the given clusters using IN clause.
 pub(crate) async fn query_sources_by_cluster(

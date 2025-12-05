@@ -28,7 +28,7 @@ pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError
     // Connect to database
     let client = helpers::connect_to_database(profile).await?;
 
-    // Get deployment history (promoted only, grouped by deployment)
+    client.create_deployments().await?;
     let history = client.list_deployment_history(limit).await?;
 
     if history.is_empty() {

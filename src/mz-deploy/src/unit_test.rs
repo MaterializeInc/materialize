@@ -52,7 +52,6 @@ impl UnitTest {
     /// Convert an ExecuteUnitTestStatement from the AST into a UnitTest.
     pub fn from_execute_statement(
         stmt: &mz_sql_parser::ast::ExecuteUnitTestStatement<mz_sql_parser::ast::Raw>,
-        _object_id: &crate::project::object_id::ObjectId,
     ) -> Self {
         use mz_sql_parser::ast::display::{AstDisplay, FormatMode};
 

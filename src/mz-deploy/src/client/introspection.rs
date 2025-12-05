@@ -8,8 +8,8 @@ use crate::client::models::Cluster;
 use crate::project::object_id::ObjectId;
 use crate::utils::sql_utils::quote_identifier;
 use std::collections::HashSet;
-use tokio_postgres::types::ToSql;
 use tokio_postgres::Client as PgClient;
+use tokio_postgres::types::ToSql;
 
 /// Check if a schema exists in the specified database.
 pub async fn schema_exists(

@@ -244,8 +244,8 @@ pub async fn run(
             let total_duration = start_time.elapsed();
             progress::summary(
                 &format!(
-                    "Successfully deployed to '{}' staging environment",
-                    stage_name
+                    "Successfully deployed to {} objects to '{}' staging environment",
+                    success_count, stage_name
                 ),
                 total_duration,
             );
@@ -381,9 +381,7 @@ async fn create_resources_with_rollback<'a>(
             let options = ClusterOptions::from_cluster(&prod_config)?;
 
             // Create staging cluster
-            client
-                .create_cluster(&staging_cluster, &options)
-                .await?;
+            client.create_cluster(&staging_cluster, &options).await?;
             created_clusters += 1;
             verbose!(
                 "  Created cluster '{}' (size: {}, replication_factor: {}, cloned from '{}')",

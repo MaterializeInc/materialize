@@ -1,8 +1,8 @@
 //! Tests for the typed representation module.
 
-use super::types::{Database, DatabaseObject, Schema};
 use super::super::parser::parse_statements;
 use super::super::raw;
+use super::types::{Database, DatabaseObject, Schema};
 use mz_sql_parser::ast::*;
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -1044,7 +1044,8 @@ fn test_invalid_database_mod_alter_default_privileges_with_schema() {
     use std::collections::HashMap;
 
     // Invalid: IN SCHEMA not allowed in database mod
-    let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA public GRANT SELECT ON TABLES TO user2;";
+    let sql =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA public GRANT SELECT ON TABLES TO user2;";
     let statements = parse_statements(vec![sql]).unwrap();
 
     let raw_db = raw::Database {
@@ -1072,7 +1073,8 @@ fn test_valid_schema_mod_alter_default_privileges_unqualified() {
     use std::collections::HashMap;
 
     // Valid ALTER DEFAULT PRIVILEGES with unqualified schema
-    let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA public GRANT SELECT ON TABLES TO user2;";
+    let sql =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA public GRANT SELECT ON TABLES TO user2;";
     let statements = parse_statements(vec![sql]).unwrap();
 
     let raw_schema = raw::Schema {
@@ -1339,7 +1341,8 @@ fn test_schema_mod_alter_default_privileges_normalization() {
     use std::collections::HashMap;
 
     // Test that unqualified schema name gets normalized to qualified
-    let sql = "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA public GRANT SELECT ON TABLES TO user2;";
+    let sql =
+        "ALTER DEFAULT PRIVILEGES FOR ROLE user1 IN SCHEMA public GRANT SELECT ON TABLES TO user2;";
     let statements = parse_statements(vec![sql]).unwrap();
 
     let raw_schema = raw::Schema {
@@ -1540,7 +1543,8 @@ fn test_schema_with_sinks_and_views_fails() {
 #[test]
 fn test_schema_with_sinks_and_materialized_views_fails() {
     let sink_sql = "CREATE SINK order_sink IN CLUSTER quickstart FROM orders INTO KAFKA CONNECTION kafka_conn (TOPIC 'orders');";
-    let mv_sql = "CREATE MATERIALIZED VIEW order_mv IN CLUSTER quickstart AS SELECT COUNT(*) FROM orders;";
+    let mv_sql =
+        "CREATE MATERIALIZED VIEW order_mv IN CLUSTER quickstart AS SELECT COUNT(*) FROM orders;";
 
     let sink_stmts = parse_statements(vec![sink_sql]).unwrap();
     let mv_stmts = parse_statements(vec![mv_sql]).unwrap();
@@ -1869,7 +1873,9 @@ fn test_materialized_view_missing_cluster_fails() {
     if let Err(crate::project::error::ValidationErrors { errors }) = result {
         assert_eq!(errors.len(), 1);
         match &errors[0].kind {
-            crate::project::error::ValidationErrorKind::MaterializedViewMissingCluster { view_name } => {
+            crate::project::error::ValidationErrorKind::MaterializedViewMissingCluster {
+                view_name,
+            } => {
                 // Name is fully qualified after normalization
                 assert_eq!(view_name, "materialize.views.user_summary");
             }
@@ -1930,7 +1936,7 @@ fn test_index_missing_cluster_fails() {
 // ============================================================================
 
 mod identifier_validation {
-    use super::super::validation::{validate_identifier_format, IdentifierKind};
+    use super::super::validation::{IdentifierKind, validate_identifier_format};
 
     #[test]
     fn test_valid_lowercase_identifier() {
@@ -1962,7 +1968,11 @@ mod identifier_validation {
             "Error should mention uppercase: {}",
             err
         );
-        assert!(err.contains("position 1"), "Error should mention position 1: {}", err);
+        assert!(
+            err.contains("position 1"),
+            "Error should mention position 1: {}",
+            err
+        );
     }
 
     #[test]
@@ -1975,7 +1985,11 @@ mod identifier_validation {
             "Error should mention uppercase: {}",
             err
         );
-        assert!(err.contains("'T'"), "Error should mention the character: {}", err);
+        assert!(
+            err.contains("'T'"),
+            "Error should mention the character: {}",
+            err
+        );
     }
 
     #[test]
@@ -2043,16 +2057,34 @@ mod identifier_validation {
     fn test_all_identifier_kinds() {
         // Test that error messages correctly use the identifier kind
         let db_err = validate_identifier_format("MyDB", IdentifierKind::Database).unwrap_err();
-        assert!(db_err.contains("database name"), "Should mention database: {}", db_err);
+        assert!(
+            db_err.contains("database name"),
+            "Should mention database: {}",
+            db_err
+        );
 
-        let schema_err = validate_identifier_format("MySchema", IdentifierKind::Schema).unwrap_err();
-        assert!(schema_err.contains("schema name"), "Should mention schema: {}", schema_err);
+        let schema_err =
+            validate_identifier_format("MySchema", IdentifierKind::Schema).unwrap_err();
+        assert!(
+            schema_err.contains("schema name"),
+            "Should mention schema: {}",
+            schema_err
+        );
 
         let obj_err = validate_identifier_format("MyObject", IdentifierKind::Object).unwrap_err();
-        assert!(obj_err.contains("object name"), "Should mention object: {}", obj_err);
+        assert!(
+            obj_err.contains("object name"),
+            "Should mention object: {}",
+            obj_err
+        );
 
-        let cluster_err = validate_identifier_format("MyCluster", IdentifierKind::Cluster).unwrap_err();
-        assert!(cluster_err.contains("cluster name"), "Should mention cluster: {}", cluster_err);
+        let cluster_err =
+            validate_identifier_format("MyCluster", IdentifierKind::Cluster).unwrap_err();
+        assert!(
+            cluster_err.contains("cluster name"),
+            "Should mention cluster: {}",
+            cluster_err
+        );
     }
 
     #[test]

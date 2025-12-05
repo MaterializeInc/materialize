@@ -10,7 +10,7 @@
 //! - `validation` - Project validation against the database
 
 use crate::client::config::{Profile, ProfilesConfig};
-use crate::client::deployment_ops;
+use crate::client::deployment_ops::{self, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS};
 use crate::client::errors::{ConnectionError, DatabaseValidationError};
 use crate::client::introspection;
 use crate::client::models::{
@@ -346,45 +346,137 @@ impl Client {
         deployment_ops::validate_deployment_clusters(&self.client, deploy_id).await
     }
 
-    /// Get hydration status for clusters in a staging deployment.
+    /// Get detailed hydration and health status for clusters in a staging deployment.
+    ///
+    /// Uses the default allowed lag threshold of 5 minutes.
     pub async fn get_deployment_hydration_status(
         &self,
         deploy_id: &str,
-    ) -> Result<HashMap<String, (i64, i64)>, ConnectionError> {
-        deployment_ops::get_deployment_hydration_status(&self.client, deploy_id).await
+    ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
+        deployment_ops::get_deployment_hydration_status(
+            &self.client,
+            deploy_id,
+            DEFAULT_ALLOWED_LAG_SECS,
+        )
+        .await
+    }
+
+    /// Get detailed hydration and health status with custom lag threshold.
+    ///
+    /// # Arguments
+    /// * `deploy_id` - Staging deployment ID
+    /// * `allowed_lag_secs` - Maximum allowed lag in seconds before marking as "lagging"
+    pub async fn get_deployment_hydration_status_with_lag(
+        &self,
+        deploy_id: &str,
+        allowed_lag_secs: i64,
+    ) -> Result<Vec<ClusterStatusContext>, ConnectionError> {
+        deployment_ops::get_deployment_hydration_status(&self.client, deploy_id, allowed_lag_secs)
+            .await
     }
 
     /// Subscribe to hydration status changes for a staging deployment.
     ///
     /// Returns a transaction that has a cursor set up for subscribing to hydration updates.
+    /// The subscription includes hydration progress, wallclock lag, and replica health.
     pub async fn subscribe_deployment_hydration(
         &mut self,
         deploy_id: &str,
+        allowed_lag_secs: i64,
     ) -> Result<tokio_postgres::Transaction<'_>, ConnectionError> {
         let txn = self.client.transaction().await?;
+        let pattern = format!("%_{}", deploy_id);
 
-        let subscribe_sql = r#"
+        let subscribe_sql = format!(
+            r#"
             DECLARE c CURSOR FOR SUBSCRIBE (
-                WITH replica_hydration AS (
-                    SELECT
-                        c.name,
-                        r.id,
-                        COUNT(*) FILTER (WHERE hydrated) AS hydrated,
-                        COUNT(*) AS total
-                    FROM mz_clusters AS c
-                    JOIN mz_cluster_replicas AS r ON c.id = r.cluster_id
-                    JOIN deploy.clusters AS dc ON c.id = dc.cluster_id
-                    JOIN mz_internal.mz_hydration_statuses AS mhs ON mhs.replica_id = r.id
-                    WHERE dc.deploy_id = $1
-                    GROUP BY 1, 2
-                )
-                SELECT name, MAX(hydrated) AS hydrated, MAX(total) AS total
-                FROM replica_hydration
-                GROUP BY 1
-            )
-        "#;
+                WITH
+                -- Detect problematic replicas: 3+ OOM kills in 24h (subscribe-friendly)
+                problematic_replicas AS (
+                    SELECT replica_id
+                    FROM mz_internal.mz_cluster_replica_status_history
+                    WHERE occurred_at + INTERVAL '24 hours' > mz_now()
+                      AND reason = 'oom-killed'
+                    GROUP BY replica_id
+                    HAVING COUNT(*) >= 3
+                ),
 
-        txn.execute(subscribe_sql, &[&deploy_id]).await?;
+                -- Cluster health: count total vs problematic replicas
+                cluster_health AS (
+                    SELECT
+                        c.name AS cluster_name,
+                        c.id AS cluster_id,
+                        COUNT(r.id) AS total_replicas,
+                        COUNT(pr.replica_id) AS problematic_replicas
+                    FROM mz_clusters c
+                    LEFT JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                    LEFT JOIN problematic_replicas pr ON r.id = pr.replica_id
+                    WHERE c.name LIKE $1
+                    GROUP BY c.name, c.id
+                ),
+
+                -- Hydration counts per cluster (best replica)
+                hydration_counts AS (
+                    SELECT
+                        c.name AS cluster_name,
+                        r.id AS replica_id,
+                        COUNT(*) FILTER (WHERE mhs.hydrated) AS hydrated,
+                        COUNT(*) AS total
+                    FROM mz_clusters c
+                    JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                    LEFT JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+                    WHERE c.name LIKE $1
+                    GROUP BY c.name, r.id
+                ),
+
+                hydration_best AS (
+                    SELECT cluster_name, MAX(hydrated) AS hydrated, MAX(total) AS total
+                    FROM hydration_counts
+                    GROUP BY cluster_name
+                ),
+
+                -- Max lag per cluster using mz_wallclock_global_lag
+                cluster_lag AS (
+                    SELECT
+                        c.name AS cluster_name,
+                        MAX(EXTRACT(EPOCH FROM wgl.lag)) AS max_lag_secs
+                    FROM mz_clusters c
+                    JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                    JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+                    JOIN mz_internal.mz_wallclock_global_lag wgl ON wgl.object_id = mhs.object_id
+                    WHERE c.name LIKE $1
+                    GROUP BY c.name
+                )
+
+                SELECT
+                    ch.cluster_name,
+                    ch.cluster_id,
+                    CASE
+                        WHEN ch.total_replicas = 0 THEN 'failing'
+                        WHEN ch.total_replicas = ch.problematic_replicas THEN 'failing'
+                        WHEN COALESCE(hb.hydrated, 0) < COALESCE(hb.total, 0) THEN 'hydrating'
+                        WHEN COALESCE(cl.max_lag_secs, 0) > {allowed_lag_secs} THEN 'lagging'
+                        ELSE 'ready'
+                    END AS status,
+                    CASE
+                        WHEN ch.total_replicas = 0 THEN 'no_replicas'
+                        WHEN ch.total_replicas = ch.problematic_replicas THEN 'all_replicas_problematic'
+                        ELSE NULL
+                    END AS failure_reason,
+                    COALESCE(hb.hydrated, 0) AS hydrated_count,
+                    COALESCE(hb.total, 0) AS total_count,
+                    COALESCE(cl.max_lag_secs, 0)::bigint AS max_lag_secs,
+                    ch.total_replicas,
+                    ch.problematic_replicas
+                FROM cluster_health ch
+                LEFT JOIN hydration_best hb ON ch.cluster_name = hb.cluster_name
+                LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
+            )
+        "#,
+            allowed_lag_secs = allowed_lag_secs
+        );
+
+        txn.execute(&subscribe_sql, &[&pattern]).await?;
 
         Ok(txn)
     }
@@ -594,6 +686,11 @@ impl Client {
         planned_project: &planned::Project,
         objects_to_deploy: &HashSet<ObjectId>,
     ) -> Result<(), DatabaseValidationError> {
-        validation::validate_table_dependencies_impl(&self.client, planned_project, objects_to_deploy).await
+        validation::validate_table_dependencies_impl(
+            &self.client,
+            planned_project,
+            objects_to_deploy,
+        )
+        .await
     }
 }
