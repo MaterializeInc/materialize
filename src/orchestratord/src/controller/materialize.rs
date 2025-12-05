@@ -9,14 +9,10 @@
 
 use std::{
     collections::BTreeSet,
-    fmt::Display,
-    future::ready,
-    str::FromStr,
     sync::{Arc, Mutex},
 };
 
 use anyhow::Context as _;
-use futures::StreamExt;
 use http::HeaderValue;
 use k8s_openapi::{
     api::core::v1::{Affinity, ResourceRequirements, Secret, Toleration},
@@ -25,16 +21,18 @@ use k8s_openapi::{
 use kube::{
     Api, Client, Resource, ResourceExt,
     api::PostParams,
-    runtime::{controller::Action, reflector, watcher},
+    runtime::{controller::Action, reflector},
 };
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 use uuid::Uuid;
 
-use crate::{controller::materialize::environmentd::V161, metrics::Metrics};
+use crate::{
+    Error, controller::materialize::environmentd::V161, k8s::make_reflector,
+    matching_image_from_environmentd_image_ref, metrics::Metrics, tls::DefaultCertificateSpecs,
+};
 use mz_cloud_provider::CloudProvider;
 use mz_cloud_resources::crd::materialize::v1alpha1::{
-    Materialize, MaterializeCertSpec, MaterializeRolloutStrategy, MaterializeStatus,
+    Materialize, MaterializeRolloutStrategy, MaterializeStatus,
 };
 use mz_license_keys::validate;
 use mz_orchestrator_kubernetes::KubernetesImagePullPolicy;
@@ -44,256 +42,113 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 pub mod balancer;
 pub mod console;
 pub mod environmentd;
-pub mod tls;
 
-#[derive(clap::Parser)]
-pub struct MaterializeControllerArgs {
-    #[clap(long)]
-    cloud_provider: CloudProvider,
-    #[clap(long)]
-    region: String,
-    #[clap(long)]
-    create_balancers: bool,
-    #[clap(long)]
-    create_console: bool,
-    #[clap(long)]
-    helm_chart_version: Option<String>,
-    #[clap(long, default_value = "kubernetes")]
-    secrets_controller: String,
-    #[clap(long)]
-    collect_pod_metrics: bool,
-    #[clap(long)]
-    enable_prometheus_scrape_annotations: bool,
-    #[clap(long)]
-    disable_authentication: bool,
+pub struct Config {
+    pub cloud_provider: CloudProvider,
+    pub region: String,
+    pub create_balancers: bool,
+    pub create_console: bool,
+    pub helm_chart_version: Option<String>,
+    pub secrets_controller: String,
+    pub collect_pod_metrics: bool,
+    pub enable_prometheus_scrape_annotations: bool,
 
-    #[clap(long)]
-    segment_api_key: Option<String>,
-    #[clap(long)]
-    segment_client_side: bool,
+    pub segment_api_key: Option<String>,
+    pub segment_client_side: bool,
 
-    #[clap(long)]
-    console_image_tag_default: String,
-    #[clap(long)]
-    console_image_tag_map: Vec<KeyValueArg<String, String>>,
+    pub console_image_tag_default: String,
+    pub console_image_tag_map: Vec<KeyValueArg<String, String>>,
 
-    #[clap(flatten)]
-    aws_info: AwsInfo,
+    pub aws_account_id: Option<String>,
+    pub environmentd_iam_role_arn: Option<String>,
+    pub environmentd_connection_role_arn: Option<String>,
+    pub aws_secrets_controller_tags: Vec<String>,
+    pub environmentd_availability_zones: Option<Vec<String>>,
 
-    #[clap(long)]
-    ephemeral_volume_class: Option<String>,
-    #[clap(long)]
-    scheduler_name: Option<String>,
-    #[clap(long)]
-    enable_security_context: bool,
-    #[clap(long)]
-    enable_internal_statement_logging: bool,
-    #[clap(long, default_value = "false")]
-    disable_statement_logging: bool,
+    pub ephemeral_volume_class: Option<String>,
+    pub scheduler_name: Option<String>,
+    pub enable_security_context: bool,
+    pub enable_internal_statement_logging: bool,
+    pub disable_statement_logging: bool,
 
-    #[clap(long)]
-    orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
-    #[clap(long)]
-    environmentd_node_selector: Vec<KeyValueArg<String, String>>,
-    #[clap(long, value_parser = parse_affinity)]
-    environmentd_affinity: Option<Affinity>,
-    #[clap(long = "environmentd-toleration", value_parser = parse_tolerations)]
-    environmentd_tolerations: Option<Vec<Toleration>>,
-    #[clap(long, value_parser = parse_resources)]
-    environmentd_default_resources: Option<ResourceRequirements>,
-    #[clap(long)]
-    clusterd_node_selector: Vec<KeyValueArg<String, String>>,
-    #[clap(long, value_parser = parse_affinity)]
-    clusterd_affinity: Option<Affinity>,
-    #[clap(long = "clusterd-toleration", value_parser = parse_tolerations)]
-    clusterd_tolerations: Option<Vec<Toleration>>,
-    #[clap(long)]
-    balancerd_node_selector: Vec<KeyValueArg<String, String>>,
-    #[clap(long, value_parser = parse_affinity)]
-    balancerd_affinity: Option<Affinity>,
-    #[clap(long = "balancerd-toleration", value_parser = parse_tolerations)]
-    balancerd_tolerations: Option<Vec<Toleration>>,
-    #[clap(long, value_parser = parse_resources)]
-    balancerd_default_resources: Option<ResourceRequirements>,
-    #[clap(long)]
-    console_node_selector: Vec<KeyValueArg<String, String>>,
-    #[clap(long, value_parser = parse_affinity)]
-    console_affinity: Option<Affinity>,
-    #[clap(long = "console-toleration", value_parser = parse_tolerations)]
-    console_tolerations: Option<Vec<Toleration>>,
-    #[clap(long, value_parser = parse_resources)]
-    console_default_resources: Option<ResourceRequirements>,
-    #[clap(long, default_value = "always", value_enum)]
-    image_pull_policy: KubernetesImagePullPolicy,
-    #[clap(flatten)]
-    network_policies: NetworkPolicyConfig,
+    pub orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
+    pub environmentd_node_selector: Vec<KeyValueArg<String, String>>,
+    pub environmentd_affinity: Option<Affinity>,
+    pub environmentd_tolerations: Option<Vec<Toleration>>,
+    pub environmentd_default_resources: Option<ResourceRequirements>,
+    pub clusterd_node_selector: Vec<KeyValueArg<String, String>>,
+    pub clusterd_affinity: Option<Affinity>,
+    pub clusterd_tolerations: Option<Vec<Toleration>>,
+    pub balancerd_node_selector: Vec<KeyValueArg<String, String>>,
+    pub balancerd_affinity: Option<Affinity>,
+    pub balancerd_tolerations: Option<Vec<Toleration>>,
+    pub balancerd_default_resources: Option<ResourceRequirements>,
+    pub console_node_selector: Vec<KeyValueArg<String, String>>,
+    pub console_affinity: Option<Affinity>,
+    pub console_tolerations: Option<Vec<Toleration>>,
+    pub console_default_resources: Option<ResourceRequirements>,
+    pub image_pull_policy: KubernetesImagePullPolicy,
+    pub network_policies_internal_enabled: bool,
+    pub network_policies_ingress_enabled: bool,
+    pub network_policies_ingress_cidrs: Vec<String>,
+    pub network_policies_egress_enabled: bool,
+    pub network_policies_egress_cidrs: Vec<String>,
 
-    #[clap(long)]
-    environmentd_cluster_replica_sizes: Option<String>,
-    #[clap(long)]
-    bootstrap_default_cluster_replica_size: Option<String>,
-    #[clap(long)]
-    bootstrap_builtin_system_cluster_replica_size: Option<String>,
-    #[clap(long)]
-    bootstrap_builtin_probe_cluster_replica_size: Option<String>,
-    #[clap(long)]
-    bootstrap_builtin_support_cluster_replica_size: Option<String>,
-    #[clap(long)]
-    bootstrap_builtin_catalog_server_cluster_replica_size: Option<String>,
-    #[clap(long)]
-    bootstrap_builtin_analytics_cluster_replica_size: Option<String>,
-    #[clap(long)]
-    bootstrap_builtin_system_cluster_replication_factor: Option<u32>,
-    #[clap(long)]
-    bootstrap_builtin_probe_cluster_replication_factor: Option<u32>,
-    #[clap(long)]
-    bootstrap_builtin_support_cluster_replication_factor: Option<u32>,
-    #[clap(long)]
-    bootstrap_builtin_analytics_cluster_replication_factor: Option<u32>,
+    pub environmentd_cluster_replica_sizes: Option<String>,
+    pub bootstrap_default_cluster_replica_size: Option<String>,
+    pub bootstrap_builtin_system_cluster_replica_size: Option<String>,
+    pub bootstrap_builtin_probe_cluster_replica_size: Option<String>,
+    pub bootstrap_builtin_support_cluster_replica_size: Option<String>,
+    pub bootstrap_builtin_catalog_server_cluster_replica_size: Option<String>,
+    pub bootstrap_builtin_analytics_cluster_replica_size: Option<String>,
+    pub bootstrap_builtin_system_cluster_replication_factor: Option<u32>,
+    pub bootstrap_builtin_probe_cluster_replication_factor: Option<u32>,
+    pub bootstrap_builtin_support_cluster_replication_factor: Option<u32>,
+    pub bootstrap_builtin_analytics_cluster_replication_factor: Option<u32>,
 
-    #[clap(
-        long,
-        default_values = &["http://local.dev.materialize.com:3000", "http://local.mtrlz.com:3000", "http://localhost:3000", "https://staging.console.materialize.com"],
-    )]
-    environmentd_allowed_origins: Vec<HeaderValue>,
-    #[clap(long, default_value = "https://console.materialize.com")]
-    internal_console_proxy_url: String,
+    pub environmentd_allowed_origins: Vec<HeaderValue>,
+    pub internal_console_proxy_url: String,
 
-    #[clap(long, default_value = "6875")]
-    environmentd_sql_port: u16,
-    #[clap(long, default_value = "6876")]
-    environmentd_http_port: u16,
-    #[clap(long, default_value = "6877")]
-    environmentd_internal_sql_port: u16,
-    #[clap(long, default_value = "6878")]
-    environmentd_internal_http_port: u16,
-    #[clap(long, default_value = "6879")]
-    environmentd_internal_persist_pubsub_port: u16,
+    pub environmentd_sql_port: u16,
+    pub environmentd_http_port: u16,
+    pub environmentd_internal_sql_port: u16,
+    pub environmentd_internal_http_port: u16,
+    pub environmentd_internal_persist_pubsub_port: u16,
 
-    #[clap(long, default_value = "6875")]
-    balancerd_sql_port: u16,
-    #[clap(long, default_value = "6876")]
-    balancerd_http_port: u16,
-    #[clap(long, default_value = "8080")]
-    balancerd_internal_http_port: u16,
+    pub balancerd_sql_port: u16,
+    pub balancerd_http_port: u16,
+    pub balancerd_internal_http_port: u16,
 
-    #[clap(long, default_value = "8080")]
-    console_http_port: u16,
+    pub console_http_port: u16,
 
-    #[clap(long, default_value = "{}")]
-    default_certificate_specs: DefaultCertificateSpecs,
+    pub default_certificate_specs: DefaultCertificateSpecs,
 
-    #[clap(long, hide = true)]
-    disable_license_key_checks: bool,
-}
+    pub disable_license_key_checks: bool,
 
-fn parse_affinity(s: &str) -> anyhow::Result<Affinity> {
-    Ok(serde_json::from_str(s)?)
-}
-
-fn parse_tolerations(s: &str) -> anyhow::Result<Toleration> {
-    Ok(serde_json::from_str(s)?)
-}
-
-fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
-    Ok(serde_json::from_str(s)?)
-}
-
-#[derive(Clone, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct DefaultCertificateSpecs {
-    balancerd_external: Option<MaterializeCertSpec>,
-    console_external: Option<MaterializeCertSpec>,
-    internal: Option<MaterializeCertSpec>,
-}
-
-impl FromStr for DefaultCertificateSpecs {
-    type Err = serde_json::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(s)
-    }
-}
-
-#[derive(clap::Parser)]
-pub struct AwsInfo {
-    #[clap(long)]
-    aws_account_id: Option<String>,
-    #[clap(long)]
-    environmentd_iam_role_arn: Option<String>,
-    #[clap(long)]
-    environmentd_connection_role_arn: Option<String>,
-    #[clap(long)]
-    aws_secrets_controller_tags: Vec<String>,
-    #[clap(long)]
-    environmentd_availability_zones: Option<Vec<String>>,
-}
-
-#[derive(clap::Parser)]
-pub struct NetworkPolicyConfig {
-    #[clap(long = "network-policies-internal-enabled")]
-    internal_enabled: bool,
-
-    #[clap(long = "network-policies-ingress-enabled")]
-    ingress_enabled: bool,
-
-    #[clap(long = "network-policies-ingress-cidrs")]
-    ingress_cidrs: Vec<String>,
-
-    #[clap(long = "network-policies-egress-enabled")]
-    egress_enabled: bool,
-
-    #[clap(long = "network-policies-egress-cidrs")]
-    egress_cidrs: Vec<String>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    Anyhow(#[from] anyhow::Error),
-    Kube(#[from] kube::Error),
-    Reqwest(#[from] reqwest::Error),
-}
-
-impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Anyhow(e) => write!(f, "{e}"),
-            Self::Kube(e) => write!(f, "{e}"),
-            Self::Reqwest(e) => write!(f, "{e}"),
-        }
-    }
+    pub tracing: TracingCliArgs,
+    pub orchestratord_namespace: String,
 }
 
 pub struct Context {
-    config: MaterializeControllerArgs,
-    tracing: TracingCliArgs,
-    orchestratord_namespace: String,
+    config: Config,
     metrics: Arc<Metrics>,
     materializes: reflector::Store<Materialize>,
     needs_update: Arc<Mutex<BTreeSet<String>>>,
 }
 
 impl Context {
-    pub async fn new(
-        config: MaterializeControllerArgs,
-        tracing: TracingCliArgs,
-        orchestratord_namespace: String,
-        metrics: Arc<Metrics>,
-        client: kube::Client,
-    ) -> Self {
+    pub async fn new(config: Config, metrics: Arc<Metrics>, client: kube::Client) -> Self {
         if config.cloud_provider == CloudProvider::Aws {
             assert!(
-                config.aws_info.aws_account_id.is_some(),
+                config.aws_account_id.is_some(),
                 "--aws-account-id is required when using --cloud-provider=aws"
             );
         }
 
         Self {
             config,
-            tracing,
-            orchestratord_namespace,
             metrics,
-            materializes: Self::make_reflector(client.clone()).await,
+            materializes: make_reflector(client.clone()).await,
             needs_update: Default::default(),
         }
     }
@@ -408,40 +263,6 @@ impl Context {
 
         Ok(())
     }
-
-    async fn make_reflector<K>(client: Client) -> reflector::Store<K>
-    where
-        K: kube::Resource<DynamicType = ()>
-            + Clone
-            + Send
-            + Sync
-            + DeserializeOwned
-            + Serialize
-            + std::fmt::Debug
-            + 'static,
-    {
-        let api = kube::Api::all(client);
-        let (store, writer) = reflector::store();
-        let reflector =
-            reflector::reflector(writer, watcher(api, watcher::Config::default().timeout(29)));
-        mz_ore::task::spawn(
-            || format!("{} reflector", K::kind(&Default::default())),
-            async {
-                reflector
-                    .for_each(|res| {
-                        if let Err(e) = res {
-                            warn!("error in {} reflector: {}", K::kind(&Default::default()), e);
-                        }
-                        ready(())
-                    })
-                    .await
-            },
-        );
-        // the only way this can return an error is if we drop the writer,
-        // which we do not ever do, so unwrap is fine
-        store.wait_until_ready().await.unwrap();
-        store
-    }
 }
 
 #[async_trait::async_trait]
@@ -449,7 +270,8 @@ impl k8s_controller::Context for Context {
     type Resource = Materialize;
     type Error = Error;
 
-    const FINALIZER_NAME: &'static str = "orchestratord.materialize.cloud/materialize";
+    const FINALIZER_NAME: Option<&'static str> =
+        Some("orchestratord.materialize.cloud/materialize");
 
     #[instrument(fields(organization_name=mz.name_unchecked()))]
     async fn apply(
@@ -549,13 +371,8 @@ impl k8s_controller::Context for Context {
         // have been applied earlier, but we don't want to use these
         // environment resources because when we apply them, we want to apply
         // them with data that uses the new generation
-        let active_resources = environmentd::Resources::new(
-            &self.config,
-            &self.tracing,
-            &self.orchestratord_namespace,
-            mz,
-            status.active_generation,
-        );
+        let active_resources =
+            environmentd::Resources::new(&self.config, mz, status.active_generation);
         let has_current_changes = status.resources_hash != active_resources.generate_hash();
         let active_generation = status.active_generation;
         let next_generation = active_generation + 1;
@@ -567,13 +384,7 @@ impl k8s_controller::Context for Context {
 
         // here we regenerate the environment resources using the
         // same inputs except with an updated generation
-        let resources = environmentd::Resources::new(
-            &self.config,
-            &self.tracing,
-            &self.orchestratord_namespace,
-            mz,
-            desired_generation,
-        );
+        let resources = environmentd::Resources::new(&self.config, mz, desired_generation);
         let resources_hash = resources.generate_hash();
 
         let mut result = match (
@@ -918,22 +729,4 @@ impl k8s_controller::Context for Context {
 
         Ok(None)
     }
-}
-
-fn matching_image_from_environmentd_image_ref(
-    environmentd_image_ref: &str,
-    image_name: &str,
-    image_tag: Option<&str>,
-) -> String {
-    let namespace = environmentd_image_ref
-        .rsplit_once('/')
-        .unwrap_or(("materialize", ""))
-        .0;
-    let tag = image_tag.unwrap_or_else(|| {
-        environmentd_image_ref
-            .rsplit_once(':')
-            .unwrap_or(("", "unstable"))
-            .1
-    });
-    format!("{namespace}/{image_name}:{tag}")
 }

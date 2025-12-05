@@ -30,10 +30,11 @@ use serde::Serialize;
 use tracing::trace;
 
 use crate::{
-    controller::materialize::tls::{create_certificate, issuer_ref_defined},
     k8s::{apply_resource, delete_resource},
+    tls::{create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
+    ManagedResource,
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
     materialize::v1alpha1::Materialize,
 };
@@ -47,11 +48,7 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(
-        config: &super::MaterializeControllerArgs,
-        mz: &Materialize,
-        console_image_ref: &str,
-    ) -> Self {
+    pub fn new(config: &super::Config, mz: &Materialize, console_image_ref: &str) -> Self {
         let network_policies = create_network_policies(config, mz);
         let console_configmap =
             Box::new(create_console_app_configmap_object(mz, console_image_ref));
@@ -139,12 +136,9 @@ impl Resources {
     }
 }
 
-fn create_network_policies(
-    config: &super::MaterializeControllerArgs,
-    mz: &Materialize,
-) -> Vec<NetworkPolicy> {
+fn create_network_policies(config: &super::Config, mz: &Materialize) -> Vec<NetworkPolicy> {
     let mut network_policies = Vec::new();
-    if config.network_policies.ingress_enabled {
+    if config.network_policies_ingress_enabled {
         let console_label_selector = LabelSelector {
             match_labels: Some(
                 mz.default_labels()
@@ -160,8 +154,7 @@ fn create_network_policies(
                 ingress: Some(vec![NetworkPolicyIngressRule {
                     from: Some(
                         config
-                            .network_policies
-                            .ingress_cidrs
+                            .network_policies_ingress_cidrs
                             .iter()
                             .map(|cidr| NetworkPolicyPeer {
                                 ip_block: Some(IPBlock {
@@ -189,7 +182,7 @@ fn create_network_policies(
 }
 
 fn create_console_external_certificate(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
 ) -> Option<Certificate> {
     create_certificate(
@@ -239,7 +232,7 @@ fn create_console_app_configmap_object(mz: &Materialize, console_image_ref: &str
 }
 
 fn create_console_deployment_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     console_image_ref: &str,
 ) -> Deployment {
@@ -444,10 +437,7 @@ ssl_certificate_key /nginx/tls/tls.key;",
     }
 }
 
-fn create_console_service_object(
-    config: &super::MaterializeControllerArgs,
-    mz: &Materialize,
-) -> Service {
+fn create_console_service_object(config: &super::Config, mz: &Materialize) -> Service {
     let selector = btreemap! {"materialize.cloud/name".to_string() => mz.console_deployment_name()};
 
     let ports = vec![ServicePort {

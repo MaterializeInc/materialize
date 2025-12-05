@@ -46,14 +46,14 @@ use tracing::{error, trace, warn};
 
 use super::Error;
 use super::matching_image_from_environmentd_image_ref;
-use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
+use crate::tls::{create_certificate, issuer_ref_defined};
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::generated::cert_manager::certificates::{
-    Certificate, CertificatePrivateKeyAlgorithm,
-};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
-use mz_orchestrator_tracing::TracingCliArgs;
+use mz_cloud_resources::crd::{
+    ManagedResource,
+    generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
+};
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
@@ -134,15 +134,8 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(
-        config: &super::MaterializeControllerArgs,
-        tracing: &TracingCliArgs,
-        orchestratord_namespace: &str,
-        mz: &Materialize,
-        generation: u64,
-    ) -> Self {
-        let environmentd_network_policies =
-            create_environmentd_network_policies(config, mz, orchestratord_namespace);
+    pub fn new(config: &super::Config, mz: &Materialize, generation: u64) -> Self {
+        let environmentd_network_policies = create_environmentd_network_policies(config, mz);
 
         let service_account = Box::new(create_service_account_object(config, mz));
         let role = Box::new(create_role_object(mz));
@@ -153,7 +146,7 @@ impl Resources {
             Box::new(create_persist_pubsub_service(config, mz, generation));
         let environmentd_certificate = Box::new(create_environmentd_certificate(config, mz));
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
-            config, tracing, mz, generation,
+            config, mz, generation,
         ));
         let connection_info = Box::new(create_connection_info(config, mz, generation));
 
@@ -471,12 +464,11 @@ impl Resources {
 }
 
 fn create_environmentd_network_policies(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
-    orchestratord_namespace: &str,
 ) -> Vec<NetworkPolicy> {
     let mut network_policies = Vec::new();
-    if config.network_policies.internal_enabled {
+    if config.network_policies_internal_enabled {
         let environmentd_label_selector = LabelSelector {
             match_labels: Some(
                 mz.default_labels()
@@ -542,7 +534,7 @@ fn create_environmentd_network_policies(
                             namespace_selector: Some(LabelSelector {
                                 match_labels: Some(btreemap! {
                                     "kubernetes.io/metadata.name".into()
-                                        => orchestratord_namespace.into(),
+                                        => config.orchestratord_namespace.clone(),
                                 }),
                                 ..Default::default()
                             }),
@@ -572,7 +564,7 @@ fn create_environmentd_network_policies(
             },
         ]);
     }
-    if config.network_policies.ingress_enabled {
+    if config.network_policies_ingress_enabled {
         let mut ingress_label_selector = mz.default_labels();
         ingress_label_selector.insert("materialize.cloud/app".to_owned(), mz.balancerd_app_name());
         network_policies.extend([NetworkPolicy {
@@ -581,8 +573,7 @@ fn create_environmentd_network_policies(
                 ingress: Some(vec![NetworkPolicyIngressRule {
                     from: Some(
                         config
-                            .network_policies
-                            .ingress_cidrs
+                            .network_policies_ingress_cidrs
                             .iter()
                             .map(|cidr| NetworkPolicyPeer {
                                 ip_block: Some(IPBlock {
@@ -616,15 +607,14 @@ fn create_environmentd_network_policies(
             }),
         }]);
     }
-    if config.network_policies.egress_enabled {
+    if config.network_policies_egress_enabled {
         network_policies.extend([NetworkPolicy {
             metadata: mz.managed_resource_meta(mz.name_prefixed("sources-and-sinks-egress")),
             spec: Some(NetworkPolicySpec {
                 egress: Some(vec![NetworkPolicyEgressRule {
                     to: Some(
                         config
-                            .network_policies
-                            .egress_cidrs
+                            .network_policies_egress_cidrs
                             .iter()
                             .map(|cidr| NetworkPolicyPeer {
                                 ip_block: Some(IPBlock {
@@ -650,7 +640,7 @@ fn create_environmentd_network_policies(
 }
 
 fn create_service_account_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
 ) -> Option<ServiceAccount> {
     if mz.create_service_account() {
@@ -664,7 +654,7 @@ fn create_service_account_object(
             mz.spec
                 .environmentd_iam_role_arn
                 .as_deref()
-                .or(config.aws_info.environmentd_iam_role_arn.as_deref()),
+                .or(config.environmentd_iam_role_arn.as_deref()),
         ) {
             warn!(
                 "Use of Materialize.spec.environmentd_iam_role_arn is deprecated. Please set \"eks.amazonaws.com/role-arn\" in Materialize.spec.service_account_annotations instead."
@@ -785,7 +775,7 @@ fn create_role_binding_object(mz: &Materialize) -> RoleBinding {
 }
 
 fn create_public_service_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -793,7 +783,7 @@ fn create_public_service_object(
 }
 
 fn create_generation_service_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -806,7 +796,7 @@ fn create_generation_service_object(
 }
 
 fn create_base_service_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
     service_name: &str,
@@ -856,7 +846,7 @@ fn create_base_service_object(
 }
 
 fn create_persist_pubsub_service(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -881,7 +871,7 @@ fn create_persist_pubsub_service(
 }
 
 fn create_environmentd_certificate(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
 ) -> Option<Certificate> {
     create_certificate(
@@ -900,8 +890,7 @@ fn create_environmentd_certificate(
 }
 
 fn create_environmentd_statefulset_object(
-    config: &super::MaterializeControllerArgs,
-    tracing: &TracingCliArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> StatefulSet {
@@ -1072,7 +1061,7 @@ fn create_environmentd_statefulset_object(
 
     // Add AWS arguments.
     if config.cloud_provider == CloudProvider::Aws {
-        if let Some(azs) = config.aws_info.environmentd_availability_zones.as_ref() {
+        if let Some(azs) = config.environmentd_availability_zones.as_ref() {
             for az in azs {
                 args.push(format!("--availability-zone={az}"));
             }
@@ -1082,14 +1071,14 @@ fn create_environmentd_statefulset_object(
             .spec
             .environmentd_connection_role_arn
             .as_deref()
-            .or(config.aws_info.environmentd_connection_role_arn.as_deref())
+            .or(config.environmentd_connection_role_arn.as_deref())
         {
             args.push(format!(
                 "--aws-connection-role-arn={}",
                 environmentd_connection_role_arn
             ));
         }
-        if let Some(account_id) = &config.aws_info.aws_account_id {
+        if let Some(account_id) = &config.aws_account_id {
             args.push(format!("--aws-account-id={account_id}"));
         }
 
@@ -1097,7 +1086,7 @@ fn create_environmentd_statefulset_object(
             "--aws-secrets-controller-tags=Environment={}",
             mz.name_unchecked()
         )]);
-        args.extend_from_slice(&config.aws_info.aws_secrets_controller_tags);
+        args.extend_from_slice(&config.aws_secrets_controller_tags);
     }
 
     // Add Kubernetes arguments.
@@ -1171,7 +1160,7 @@ fn create_environmentd_statefulset_object(
 
     // Add logging and tracing arguments.
     args.extend(["--log-format=json".into()]);
-    if let Some(endpoint) = &tracing.opentelemetry_endpoint {
+    if let Some(endpoint) = &config.tracing.opentelemetry_endpoint {
         args.push(format!("--opentelemetry-endpoint={}", endpoint));
     }
     // --opentelemetry-resource also configures sentry tags
@@ -1233,9 +1222,9 @@ fn create_environmentd_statefulset_object(
     args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
 
     // Add Sentry arguments.
-    if let Some(sentry_dsn) = &tracing.sentry_dsn {
+    if let Some(sentry_dsn) = &config.tracing.sentry_dsn {
         args.push(format!("--sentry-dsn={}", sentry_dsn));
-        if let Some(sentry_environment) = &tracing.sentry_environment {
+        if let Some(sentry_environment) = &config.tracing.sentry_environment {
             args.push(format!("--sentry-environment={}", sentry_environment));
         }
         args.push(format!("--sentry-tag=region={}", config.region));
@@ -1618,7 +1607,7 @@ fn create_environmentd_statefulset_object(
 }
 
 fn create_connection_info(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> ConnectionInfo {

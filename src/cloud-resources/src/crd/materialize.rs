@@ -13,51 +13,24 @@ use k8s_openapi::{
     api::core::v1::{EnvVar, ResourceRequirements},
     apimachinery::pkg::{
         api::resource::Quantity,
-        apis::meta::v1::{Condition, OwnerReference, Time},
+        apis::meta::v1::{Condition, Time},
     },
 };
-use kube::{CustomResource, Resource, ResourceExt, api::ObjectMeta};
-use rand::Rng;
-use rand::distr::Uniform;
+use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::crd::{ManagedResource, MaterializeCertSpec, new_resource_id};
 use mz_server_core::listeners::AuthenticatorKind;
-
-use crate::crd::generated::cert_manager::certificates::{
-    CertificateIssuerRef, CertificateSecretTemplate,
-};
 
 pub const LAST_KNOWN_ACTIVE_GENERATION_ANNOTATION: &str =
     "materialize.cloud/last-known-active-generation";
 
 pub mod v1alpha1 {
-
     use super::*;
 
-    // This is intentionally a subset of the fields of a Certificate.
-    // We do not want customers to configure options that may conflict with
-    // things we override or expand in our code.
-    #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
-    #[serde(rename_all = "camelCase")]
-    pub struct MaterializeCertSpec {
-        /// Additional DNS names the certificate will be valid for.
-        pub dns_names: Option<Vec<String>>,
-        /// Duration the certificate will be requested for.
-        /// Value must be in units accepted by Go
-        /// [`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).
-        pub duration: Option<String>,
-        /// Duration before expiration the certificate will be renewed.
-        /// Value must be in units accepted by Go
-        /// [`time.ParseDuration`](https://golang.org/pkg/time/#ParseDuration).
-        pub renew_before: Option<String>,
-        /// Reference to an `Issuer` or `ClusterIssuer` that will generate the certificate.
-        pub issuer_ref: Option<CertificateIssuerRef>,
-        /// Additional annotations and labels to include in the Certificate object.
-        pub secret_template: Option<CertificateSecretTemplate>,
-    }
     #[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize, JsonSchema)]
     pub enum MaterializeRolloutStrategy {
         /// Create a new generation of pods, leaving the old generation around until the
@@ -368,23 +341,6 @@ pub mod v1alpha1 {
                 })
         }
 
-        pub fn default_labels(&self) -> BTreeMap<String, String> {
-            BTreeMap::from_iter([
-                (
-                    "materialize.cloud/organization-name".to_owned(),
-                    self.name_unchecked(),
-                ),
-                (
-                    "materialize.cloud/organization-namespace".to_owned(),
-                    self.namespace(),
-                ),
-                (
-                    "materialize.cloud/mz-resource-id".to_owned(),
-                    self.resource_id().to_owned(),
-                ),
-            ])
-        }
-
         pub fn environment_id(&self, cloud_provider: &str, region: &str) -> String {
             format!(
                 "{}-{}-{}-0",
@@ -544,29 +500,11 @@ pub mod v1alpha1 {
             }
         }
 
-        pub fn managed_resource_meta(&self, name: String) -> ObjectMeta {
-            ObjectMeta {
-                namespace: Some(self.namespace()),
-                name: Some(name),
-                labels: Some(self.default_labels()),
-                owner_references: Some(vec![owner_reference(self)]),
-                ..Default::default()
-            }
-        }
-
         pub fn status(&self) -> MaterializeStatus {
             self.status.clone().unwrap_or_else(|| {
                 let mut status = MaterializeStatus::default();
-                // DNS-1035 names are supposed to be case insensitive,
-                // so we define our own character set, rather than use the
-                // built-in Alphanumeric distribution from rand, which
-                // includes both upper and lowercase letters.
-                const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-                status.resource_id = rand::rng()
-                    .sample_iter(Uniform::new(0, CHARSET.len()).expect("valid range"))
-                    .take(10)
-                    .map(|i| char::from(CHARSET[i]))
-                    .collect();
+
+                status.resource_id = new_resource_id();
 
                 // If we're creating the initial status on an un-soft-deleted
                 // Environment we need to ensure that the last active generation
@@ -626,6 +564,25 @@ pub mod v1alpha1 {
             a != b
         }
     }
+
+    impl ManagedResource for Materialize {
+        fn default_labels(&self) -> BTreeMap<String, String> {
+            BTreeMap::from_iter([
+                (
+                    "materialize.cloud/organization-name".to_owned(),
+                    self.name_unchecked(),
+                ),
+                (
+                    "materialize.cloud/organization-namespace".to_owned(),
+                    self.namespace(),
+                ),
+                (
+                    "materialize.cloud/mz-resource-id".to_owned(),
+                    self.resource_id().to_owned(),
+                ),
+            ])
+        }
+    }
 }
 
 fn parse_image_ref(image_ref: &str) -> Option<Version> {
@@ -640,17 +597,6 @@ fn parse_image_ref(image_ref: &str) -> Option<Version> {
             let tag = tag.replace("--", "+");
             Version::parse(&tag).ok()
         })
-}
-
-fn owner_reference<T: Resource<DynamicType = ()>>(t: &T) -> OwnerReference {
-    OwnerReference {
-        api_version: T::api_version(&()).to_string(),
-        kind: T::kind(&()).to_string(),
-        name: t.name_unchecked(),
-        uid: t.uid().unwrap(),
-        block_owner_deletion: Some(true),
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]
