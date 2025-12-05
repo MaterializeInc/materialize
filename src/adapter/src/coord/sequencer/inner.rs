@@ -890,7 +890,12 @@ impl Coordinator {
         conn_id: Option<&ConnectionId>,
         plan::CreateRolePlan { name, attributes }: plan::CreateRolePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
+        println!(
+            "creating role {:?} with attributes {:?}",
+            &name, &attributes
+        );
         let op = catalog::Op::CreateRole { name, attributes };
+
         self.catalog_transact_with_context(conn_id, None, vec![op])
             .await
             .map(|_| ExecuteResponse::CreatedRole)
