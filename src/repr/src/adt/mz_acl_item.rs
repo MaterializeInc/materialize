@@ -246,10 +246,6 @@ impl RustType<ProtoAclMode> for AclMode {
     }
 }
 
-impl Columnation for AclMode {
-    type InnerRegion = CopyRegion<AclMode>;
-}
-
 impl Arbitrary for AclMode {
     type Parameters = ();
     type Strategy = BoxedStrategy<AclMode>;
@@ -385,10 +381,6 @@ impl RustType<ProtoMzAclItem> for MzAclItem {
             (_, _, None) => Err(TryFromProtoError::missing_field("ProtoMzAclItem::acl_mode")),
         }
     }
-}
-
-impl Columnation for MzAclItem {
-    type InnerRegion = CopyRegion<MzAclItem>;
 }
 
 /// An encoded packed variant of [`MzAclItem`].
