@@ -996,9 +996,7 @@ impl crate::coord::Coordinator {
                         let mut current_batch_size: usize = 0;
 
                         'outer: while let Some(rows) = row_cursor.next().await {
-                            for ((key, _val), _ts, diff) in rows {
-                                let source_data = key.expect("decoding error");
-
+                            for ((source_data, _val), _ts, diff) in rows {
                                 let row = source_data
                                     .0
                                     .expect("we are not sending errors on this code path");

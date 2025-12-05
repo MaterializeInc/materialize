@@ -394,11 +394,7 @@ impl StateUpdateKindJson {
 }
 
 /// Version of [`StateUpdateKind`] that is stored directly in persist.
-type PersistStateUpdate = (
-    (Result<SourceData, String>, Result<(), String>),
-    Timestamp,
-    StorageDiff,
-);
+type PersistStateUpdate = ((SourceData, ()), Timestamp, StorageDiff);
 
 impl TryFrom<&StateUpdate<StateUpdateKind>> for Option<memory::objects::StateUpdate> {
     type Error = DurableCatalogError;
@@ -1017,11 +1013,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
 /// diff)` tuple/update we store in persist.
 impl From<PersistStateUpdate> for StateUpdate<StateUpdateKindJson> {
     fn from(kvtd: PersistStateUpdate) -> Self {
-        let ((key, val), ts, diff) = kvtd;
-        let (key, ()) = (
-            key.expect("persist decoding error"),
-            val.expect("persist decoding error"),
-        );
+        let ((key, ()), ts, diff) = kvtd;
         StateUpdate {
             kind: StateUpdateKindJson::from(key),
             ts,

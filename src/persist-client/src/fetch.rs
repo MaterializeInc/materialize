@@ -805,7 +805,7 @@ pub struct FetchedPart<K: Codec, V: Codec, T, D> {
     diffs: Int64Array,
     migration: PartMigration<K, V>,
     filter_pushdown_audit: Option<LazyPartStats>,
-    peek_stash: Option<((Result<K, String>, Result<V, String>), T, D)>,
+    peek_stash: Option<((K, V), T, D)>,
     part_cursor: usize,
     key_storage: Option<K::Storage>,
     val_storage: Option<V::Storage>,
@@ -996,7 +996,7 @@ where
         &mut self,
         key: &mut Option<K>,
         val: &mut Option<V>,
-    ) -> Option<((Result<K, String>, Result<V, String>), T, D)> {
+    ) -> Option<((K, V), T, D)> {
         let mut consolidated = self.peek_stash.take();
         loop {
             // Fetch and decode the next tuple in the sequence. (Or break if there is none.)
@@ -1041,18 +1041,13 @@ where
         Some((kv, t, d))
     }
 
-    fn decode_kv(
-        &mut self,
-        index: usize,
-        key: &mut Option<K>,
-        val: &mut Option<V>,
-    ) -> (Result<K, String>, Result<V, String>) {
+    fn decode_kv(&mut self, index: usize, key: &mut Option<K>, val: &mut Option<V>) -> (K, V) {
         let decoded = self
             .part
             .as_ref()
             .map_left(|codec| {
                 let ((ck, cv), _, _) = codec.get(index).expect("valid index");
-                Self::decode_codec(
+                let (k, v) = Self::decode_codec(
                     &*self.metrics,
                     self.migration.codec_read(),
                     ck,
@@ -1061,7 +1056,8 @@ where
                     val,
                     &mut self.key_storage,
                     &mut self.val_storage,
-                )
+                );
+                (k.expect("valid legacy key"), v.expect("valid legacy value"))
             })
             .map_right(|(structured_key, structured_val)| {
                 self.decode_structured(index, structured_key, structured_val, key, val)
@@ -1135,14 +1131,14 @@ where
         vals: &<V::Schema as Schema<V>>::Decoder,
         key: &mut Option<K>,
         val: &mut Option<V>,
-    ) -> (Result<K, String>, Result<V, String>) {
+    ) -> (K, V) {
         let mut key = key.take().unwrap_or_default();
         keys.decode(idx, &mut key);
 
         let mut val = val.take().unwrap_or_default();
         vals.decode(idx, &mut val);
 
-        (Ok(key), Ok(val))
+        (key, val)
     }
 }
 
@@ -1153,7 +1149,7 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Monoid + Codec64 + Send + Sync,
 {
-    type Item = ((Result<K, String>, Result<V, String>), T, D);
+    type Item = ((K, V), T, D);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_with_storage(&mut None, &mut None)

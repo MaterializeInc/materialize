@@ -40,17 +40,8 @@ use tokio::sync::watch;
 
 /// A handle to a persist shard that stores remap bindings
 pub struct PersistHandle<FromTime: SourceTimestamp, IntoTime: Timestamp + Lattice + Codec64> {
-    events: LocalBoxStream<
-        'static,
-        ListenEvent<
-            IntoTime,
-            (
-                (Result<SourceData, String>, Result<(), String>),
-                IntoTime,
-                StorageDiff,
-            ),
-        >,
-    >,
+    events:
+        LocalBoxStream<'static, ListenEvent<IntoTime, ((SourceData, ()), IntoTime, StorageDiff)>>,
     write_handle: WriteHandle<SourceData, (), IntoTime, StorageDiff>,
     /// Whether or not this handle is in read-only mode.
     read_only_rx: watch::Receiver<bool>,
@@ -223,9 +214,7 @@ where
                 }
                 ListenEvent::Updates(msgs) => {
                     for ((update, _), into_ts, diff) in msgs {
-                        let from_ts = FromTime::decode_row(
-                            &update.expect("invalid row").0.expect("invalid row"),
-                        );
+                        let from_ts = FromTime::decode_row(&update.0.expect("invalid row"));
                         self.pending_batch.push((from_ts, into_ts, diff.into()));
                     }
                 }

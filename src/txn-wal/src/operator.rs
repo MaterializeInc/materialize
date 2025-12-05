@@ -548,10 +548,7 @@ impl DataSubscribe {
             let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
                 let part = part.parse();
-                part.part.map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                part.part.map(|((k, ()), t, d)| (k, t, d))
             });
             let data_stream = data_stream.probe_with(&data);
             let (data_stream, mut txns_progress_token) =

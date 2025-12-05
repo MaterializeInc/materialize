@@ -363,17 +363,9 @@ pub struct SnapshotCursor<T: Codec64 + TimelyTimestamp + Lattice> {
 impl<T: Codec64 + TimelyTimestamp + Lattice + Sync> SnapshotCursor<T> {
     pub async fn next(
         &mut self,
-    ) -> Option<
-        impl Iterator<
-            Item = (
-                (Result<SourceData, String>, Result<(), String>),
-                T,
-                StorageDiff,
-            ),
-        > + Sized
-        + '_,
-    > {
-        self.cursor.next().await
+    ) -> Option<impl Iterator<Item = (SourceData, T, StorageDiff)> + Sized + '_> {
+        let iter = self.cursor.next().await?;
+        Some(iter.map(|((k, ()), t, d)| (k, t, d)))
     }
 }
 
@@ -1132,8 +1124,8 @@ where
                     let mut snapshot = Vec::with_capacity(contents.len());
                     for ((data, _), _, diff) in contents {
                         // TODO(petrosagg): We should accumulate the errors too and let the user
-                        // interprret the result
-                        let row = data.expect("invalid protobuf data").0?;
+                        // interpret the result
+                        let row = data.0?;
                         snapshot.push((row, diff));
                     }
                     Ok(snapshot)
@@ -1188,14 +1180,7 @@ where
             };
 
             // Map our stream, unwrapping Persist internal errors.
-            let stream = stream
-                .map(|((k, _v), t, d)| {
-                    // TODO(parkmycar): We should accumulate the errors and pass them on to the
-                    // caller.
-                    let data = k.expect("error while streaming from Persist");
-                    (data, t, d)
-                })
-                .boxed();
+            let stream = stream.map(|((data, _v), t, d)| (data, t, d)).boxed();
             Ok(stream)
         }
         .boxed()
