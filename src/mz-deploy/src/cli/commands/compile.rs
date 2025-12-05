@@ -160,8 +160,8 @@ async fn typecheck_with_docker(
 
     // Load types.lock if it exists
     let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
-        verbose!("No types.lock found, assuming no external dependencies");
-        verbose!("See gen-data-contracts for more information");
+        println!("No types.lock found, assuming no external dependencies");
+        println!("See gen-data-contracts for more information");
         crate::types::Types {
             version: 1,
             objects: std::collections::BTreeMap::new(),
@@ -175,7 +175,7 @@ async fn typecheck_with_docker(
     }
 
     // Get connected client with staged dependencies
-    let mut client = match runtime.get_client(planned_project, &types).await {
+    let mut client = match runtime.get_client(&types).await {
         Ok(client) => client,
         Err(TypeCheckError::ContainerStartFailed(e)) => {
             // Docker not available, warn but don't fail

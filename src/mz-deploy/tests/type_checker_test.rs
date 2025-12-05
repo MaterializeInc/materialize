@@ -94,7 +94,7 @@ GROUP BY u.id, u.name;
 
         // Create Docker runtime and get client
         let runtime = DockerRuntime::new();
-        let mut client = match runtime.get_client(&mir_project, &types).await {
+        let mut client = match runtime.get_client(&types).await {
             Ok(client) => client,
             Err(e) => {
                 println!(

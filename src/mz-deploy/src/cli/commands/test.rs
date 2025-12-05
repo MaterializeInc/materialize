@@ -2,7 +2,7 @@
 
 use crate::cli::CliError;
 use crate::project::{self, typed};
-use crate::types::TypeCheckError;
+use crate::types::{TypeCheckError, Types};
 use crate::unit_test;
 use crate::utils::docker_runtime::DockerRuntime;
 use mz_sql_parser::ast::Ident;
@@ -55,14 +55,8 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
     // Load the project (tests are loaded during compilation)
     let planned_project = project::plan(directory)?;
 
-    // Load types.lock if it exists
-    let types = crate::types::load_types_lock(directory).unwrap_or_else(|_| {
-        println!("No types.lock found, assuming no external dependencies");
-        crate::types::Types {
-            version: 1,
-            objects: std::collections::BTreeMap::new(),
-        }
-    });
+    // Tests use their own mocks, so don't pre-create tables from types.lock
+    let types = Types::default();
 
     // Create Docker runtime and get connected client
     let runtime = DockerRuntime::new();
@@ -81,7 +75,7 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
 
     // Run each test from the compiled project
     for (object_id, test) in &planned_project.tests {
-        let client = match runtime.get_client(&planned_project, &types).await {
+        let client = match runtime.get_client(&types).await {
             Ok(client) => client,
             Err(TypeCheckError::ContainerStartFailed(e)) => {
                 return Err(CliError::Message(format!(

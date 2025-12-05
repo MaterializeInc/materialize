@@ -4,7 +4,6 @@
 //! with external dependencies already staged as temporary tables.
 
 use crate::client::{Client, Profile};
-use crate::project::planned::Project;
 use crate::types::{TypeCheckError, Types};
 use crate::verbose;
 use tokio::process::Command;
@@ -45,16 +44,11 @@ impl DockerRuntime {
     /// 4. Returns the connected client ready for use
     ///
     /// # Arguments
-    /// * `project` - The project containing external dependencies
-    /// * `types` - The types.lock data containing external dependency schemas
+    /// * `types` - The types.lock data containing table schemas for type checking
     ///
     /// # Returns
-    /// A connected Client with external dependencies already staged
-    pub async fn get_client(
-        &self,
-        project: &Project,
-        types: &Types,
-    ) -> Result<Client, TypeCheckError> {
+    /// A connected Client with tables from types.lock already staged
+    pub async fn get_client(&self, types: &Types) -> Result<Client, TypeCheckError> {
         // Ensure the persistent container is running and healthy
         self.ensure_container().await?;
 
@@ -70,14 +64,13 @@ impl DockerRuntime {
         verbose!("Connecting to Materialize...");
         let client = Client::connect_with_profile(profile).await?;
 
-        // Create external dependencies
-        if !project.external_dependencies.is_empty() {
+        // Create temporary tables from types.lock (includes external deps and project tables)
+        if !types.objects.is_empty() {
             verbose!(
-                "Creating {} external dependency tables",
-                project.external_dependencies.len()
+                "Creating {} temporary tables from types.lock",
+                types.objects.len()
             );
-            self.create_external_dependencies(&client, project, types)
-                .await?;
+            self.create_tables_from_types_lock(&client, types).await?;
         }
 
         Ok(client)
@@ -267,23 +260,13 @@ impl DockerRuntime {
         Ok(())
     }
 
-    /// Create temporary tables for external dependencies
-    async fn create_external_dependencies(
+    /// Create temporary tables from types.lock for type checking
+    async fn create_tables_from_types_lock(
         &self,
         client: &Client,
-        project: &Project,
         types: &Types,
     ) -> Result<(), TypeCheckError> {
-        for ext_dep in &project.external_dependencies {
-            // Get column definitions from types.lock
-            let fqn = ext_dep.to_string();
-            let columns = types.objects.get(&fqn).ok_or_else(|| {
-                TypeCheckError::ExternalDependencyFailed {
-                    object: ext_dep.clone(),
-                    source: format!("external dependency '{}' not found in types.lock", fqn).into(),
-                }
-            })?;
-
+        for (fqn, columns) in &types.objects {
             let mut col_defs = Vec::new();
             for (col_name, col_type) in columns {
                 let nullable = if col_type.nullable { "" } else { " NOT NULL" };
@@ -291,19 +274,17 @@ impl DockerRuntime {
             }
 
             let create_sql = format!(
-                "CREATE TEMPORARY TABLE {}_{}_{} ({})",
-                ext_dep.database,
-                ext_dep.schema,
-                ext_dep.object,
+                "CREATE TEMPORARY TABLE \"{}\" ({})",
+                fqn,
                 col_defs.join(", ")
             );
 
-            verbose!("Creating external dependency table: {}", ext_dep);
+            verbose!("Creating temporary table: {}", fqn);
             client.execute(&create_sql, &[]).await.map_err(|e| {
-                TypeCheckError::ExternalDependencyFailed {
-                    object: ext_dep.clone(),
-                    source: Box::new(e),
-                }
+                TypeCheckError::DatabaseSetupError(format!(
+                    "failed to create temporary table for '{}': {}",
+                    fqn, e
+                ))
             })?;
         }
 

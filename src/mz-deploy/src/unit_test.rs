@@ -174,15 +174,15 @@ pub fn desugar_unit_test(
     statements
 }
 
-/// Flatten a fully qualified name by replacing dots with underscores.
+/// Quote a fully qualified name as a single identifier with dots.
 ///
 /// # Example
 ///
 /// ```ignore
-/// assert_eq!(flatten_fqn("materialize.public.flippers"), "materialize_public_flippers");
+/// assert_eq!(flatten_fqn("materialize.public.flippers"), "\"materialize.public.flippers\"");
 /// ```
 fn flatten_fqn(fqn: &str) -> String {
-    fqn.replace('.', "_")
+    format!("\"{}\"", fqn)
 }
 
 /// Qualify a mock name with the target's FQN context if it's not already qualified.
