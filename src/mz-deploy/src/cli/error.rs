@@ -120,6 +120,10 @@ pub enum CliError {
     #[error("some clusters are still hydrating")]
     ClustersHydrating,
 
+    /// Deployment is failing due to cluster health issues
+    #[error("deployment '{name}' is failing due to cluster health issues")]
+    DeploymentFailing { name: String },
+
     /// Generic error message
     #[error("{0}")]
     Message(String),
@@ -254,10 +258,17 @@ impl CliError {
             Self::ReadyTimeout { .. } => Some(
                 "deployment is taking longer than expected to hydrate. You can:\n  \
                  - Increase timeout with --timeout flag\n  \
-                 - Check cluster replica status with: mz-deploy ready <env> --snapshot"
+                 - Check cluster replica status with: mz-deploy ready <env>"
                     .to_string(),
             ),
             Self::ClustersHydrating => Some("check cluster replica status with: mz-deploy ready <env>".to_string()),
+            Self::DeploymentFailing { .. } => Some(
+                "one or more clusters are not ready. Check for:\n  \
+                 - Missing replicas (cluster has no replicas configured)\n  \
+                 - OOM-looping replicas (3+ OOM kills in 24 hours)\n\n\
+                 Use 'mz-deploy ready <env>' for details"
+                    .to_string(),
+            ),
             Self::Validation(_) | Self::Types(_) | Self::DeploymentSnapshot(_) | Self::Dependency(_) => {
                 // These errors provide their own context via transparent wrapping
                 None

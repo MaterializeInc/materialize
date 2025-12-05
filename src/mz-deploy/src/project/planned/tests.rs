@@ -1,9 +1,9 @@
 //! Tests for the planned representation module.
 
-use super::dependency::extract_dependencies;
-use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use super::super::ast::{Cluster, Statement};
 use super::super::typed;
+use super::dependency::extract_dependencies;
+use super::types::{Database, DatabaseObject, Project, Schema, SchemaType};
 use crate::project::object_id::ObjectId;
 use mz_sql_parser::ast::Ident;
 use std::collections::{HashMap, HashSet};

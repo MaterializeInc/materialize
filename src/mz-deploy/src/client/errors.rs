@@ -441,10 +441,8 @@ mod tests {
 
     #[test]
     fn test_missing_databases_error_display() {
-        let error = DatabaseValidationError::MissingDatabases(vec![
-            "db1".to_string(),
-            "db2".to_string(),
-        ]);
+        let error =
+            DatabaseValidationError::MissingDatabases(vec!["db1".to_string(), "db2".to_string()]);
         let error_string = format!("{}", error);
         assert!(error_string.contains("Missing databases"));
         assert!(error_string.contains("db1"));
@@ -518,13 +516,11 @@ mod tests {
 
     #[test]
     fn test_missing_sources_error_display() {
-        let error = DatabaseValidationError::MissingSources(vec![
-            ObjectId::new(
-                "materialize".to_string(),
-                "public".to_string(),
-                "kafka_source".to_string(),
-            ),
-        ]);
+        let error = DatabaseValidationError::MissingSources(vec![ObjectId::new(
+            "materialize".to_string(),
+            "public".to_string(),
+            "kafka_source".to_string(),
+        )]);
         let error_string = format!("{}", error);
         assert!(error_string.contains("sources are referenced but do not exist"));
         assert!(error_string.contains("materialize.public.kafka_source"));

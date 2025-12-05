@@ -15,17 +15,18 @@ use owo_colors::OwoColorize;
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
+/// * `allowed_lag_secs` - Maximum allowed lag in seconds before marking as "lagging"
 ///
 /// # Returns
 /// Ok(()) if listing succeeds
 ///
 /// # Errors
 /// Returns `CliError::Connection` for database errors
-pub async fn run(profile: &Profile) -> Result<(), CliError> {
+pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliError> {
     // Connect to database
     let client = helpers::connect_to_database(profile).await?;
 
-    // List staging deployments
+    client.create_deployments().await?;
     let deployments = client.list_staging_deployments().await?;
 
     if deployments.is_empty() {
@@ -77,25 +78,25 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
         }
 
         // Get hydration status for this deployment
-        match client.get_deployment_hydration_status(env_name).await {
+        match client
+            .get_deployment_hydration_status_with_lag(env_name, allowed_lag_secs)
+            .await
+        {
             Ok(hydration_status) if !hydration_status.is_empty() => {
-                let mut total_hydrated = 0i64;
-                let mut total_clusters = 0i64;
+                use crate::client::ClusterDeploymentStatus;
+                let mut ready_count = 0i64;
+                let total_clusters = hydration_status.len() as i64;
 
-                for (_cluster_name, (hydrated, total)) in &hydration_status {
-                    if hydrated == total {
-                        total_hydrated += 1;
+                for ctx in &hydration_status {
+                    if matches!(ctx.status, ClusterDeploymentStatus::Ready) {
+                        ready_count += 1;
                     }
-                    total_clusters += 1;
                 }
 
-                let text = if total_hydrated == total_clusters {
-                    "clusters: all hydrated".to_string()
+                let text = if ready_count == total_clusters {
+                    "clusters: all ready".to_string()
                 } else {
-                    format!(
-                        "clusters: {} of {} hydrated",
-                        total_hydrated, total_clusters
-                    )
+                    format!("clusters: {} of {} ready", ready_count, total_clusters)
                 };
                 println!("    {}\n", text.blue());
             }

@@ -8,7 +8,10 @@ mod validation;
 
 pub use config::Profile;
 pub use connection::Client;
-pub use errors::{format_relative_path, ConnectionError, DatabaseValidationError};
+pub use deployment_ops::{
+    ClusterDeploymentStatus, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS, FailureReason,
+};
+pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
 pub use models::{
     Cluster, ClusterOptions, ConflictRecord, DeploymentKind, DeploymentMetadata,
     DeploymentObjectRecord, SchemaDeploymentRecord,

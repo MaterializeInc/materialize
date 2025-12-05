@@ -131,10 +131,7 @@ pub fn validate_identifier_format(name: &str, kind: IdentifierKind) -> Result<()
 /// * `fqn` - The fully qualified name to validate
 /// * `path` - The file path (for error reporting)
 /// * `errors` - Vector to collect validation errors
-pub fn validate_fqn_identifiers(
-    fqn: &FullyQualifiedName,
-    errors: &mut Vec<ValidationError>,
-) {
+pub fn validate_fqn_identifiers(fqn: &FullyQualifiedName, errors: &mut Vec<ValidationError>) {
     // Validate database name
     if let Err(reason) = validate_identifier_format(fqn.database(), IdentifierKind::Database) {
         errors.push(ValidationError::with_file(
@@ -180,10 +177,7 @@ pub fn validate_fqn_identifiers(
 ///
 /// * `Ok(())` if valid
 /// * `Err(ValidationError)` if invalid
-pub fn validate_cluster_name(
-    cluster_name: &str,
-    path: &PathBuf,
-) -> Result<(), ValidationError> {
+pub fn validate_cluster_name(cluster_name: &str, path: &PathBuf) -> Result<(), ValidationError> {
     validate_identifier_format(cluster_name, IdentifierKind::Cluster).map_err(|reason| {
         ValidationError::with_file(
             ValidationErrorKind::InvalidIdentifier {

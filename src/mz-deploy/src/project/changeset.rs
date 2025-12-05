@@ -352,10 +352,7 @@ fn compute_dirty_datalog(
     }
 
     // Convert cluster names to Cluster structs
-    let dirty_cluster_structs = dirty_clusters
-        .into_iter()
-        .map(Cluster::new)
-        .collect();
+    let dirty_cluster_structs = dirty_clusters.into_iter().map(Cluster::new).collect();
 
     (dirty_stmts, dirty_cluster_structs, dirty_schemas)
 }
@@ -363,10 +360,7 @@ fn compute_dirty_datalog(
 fn build_stmt_cluster_index(facts: &[(ObjectId, String)]) -> HashMap<ObjectId, Vec<String>> {
     let mut index: HashMap<ObjectId, Vec<String>> = HashMap::new();
     for (obj, cluster) in facts {
-        index
-            .entry(obj.clone())
-            .or_default()
-            .push(cluster.clone());
+        index.entry(obj.clone()).or_default().push(cluster.clone());
     }
     index
 }
@@ -376,10 +370,7 @@ fn build_index_cluster_index(
 ) -> HashMap<ObjectId, Vec<String>> {
     let mut index: HashMap<ObjectId, Vec<String>> = HashMap::new();
     for (obj, _index_name, cluster) in facts {
-        index
-            .entry(obj.clone())
-            .or_default()
-            .push(cluster.clone());
+        index.entry(obj.clone()).or_default().push(cluster.clone());
     }
     index
 }
@@ -387,10 +378,7 @@ fn build_index_cluster_index(
 fn build_reverse_deps(facts: &[(ObjectId, ObjectId)]) -> HashMap<ObjectId, Vec<ObjectId>> {
     let mut index: HashMap<ObjectId, Vec<ObjectId>> = HashMap::new();
     for (child, parent) in facts {
-        index
-            .entry(parent.clone())
-            .or_default()
-            .push(child.clone());
+        index.entry(parent.clone()).or_default().push(child.clone());
     }
     index
 }

@@ -201,7 +201,6 @@ impl<'a> StagingTransformer<'a> {
 
         false
     }
-
 }
 
 impl<'a> NameTransformer for StagingTransformer<'a> {

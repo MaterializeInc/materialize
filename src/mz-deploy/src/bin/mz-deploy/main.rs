@@ -96,6 +96,10 @@ enum Command {
         /// Skip cluster hydration when promoting staging deployments
         #[arg(long)]
         skip_ready: bool,
+
+        /// Maximum allowed lag in seconds before marking cluster as "lagging" (default: 300)
+        #[arg(long, value_name = "SECONDS", default_value = "300")]
+        allowed_lag: i64,
     },
 
     /// Create a staging deployment for testing changes
@@ -165,7 +169,11 @@ enum Command {
     /// similar to 'git branch'. Displays environment names, schemas, who deployed
     /// them, and when.
     #[command(visible_alias = "branches")]
-    Deployments,
+    Deployments {
+        /// Maximum allowed lag in seconds before marking cluster as "lagging" (default: 300)
+        #[arg(long, value_name = "SECONDS", default_value = "300")]
+        allowed_lag: i64,
+    },
 
     /// Show history of promoted deployments
     ///
@@ -209,6 +217,10 @@ enum Command {
         /// Maximum time to wait in seconds (default: no timeout)
         #[arg(long, value_name = "SECONDS")]
         timeout: Option<u64>,
+
+        /// Maximum allowed lag in seconds before marking cluster as "lagging" (default: 300)
+        #[arg(long, value_name = "SECONDS", default_value = "300")]
+        allowed_lag: i64,
     },
 }
 
@@ -254,12 +266,13 @@ async fn run(args: Args) -> Result<(), CliError> {
             deploy_id,
             force,
             skip_ready,
+            allowed_lag,
         }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             if !skip_ready {
-                cli::commands::ready::run(&profile, &deploy_id, true, None).await?;
+                cli::commands::ready::run(&profile, &deploy_id, true, None, allowed_lag).await?;
             }
             cli::commands::apply::run(&profile, &deploy_id, force).await
         }
@@ -301,11 +314,11 @@ async fn run(args: Args) -> Result<(), CliError> {
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
             cli::commands::abort::run(&profile, &name).await
         }
-        Some(Command::Deployments) => {
+        Some(Command::Deployments { allowed_lag }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
-            cli::commands::deployments::run(&profile).await
+            cli::commands::deployments::run(&profile, allowed_lag).await
         }
         Some(Command::History { limit }) => {
             let profile =
@@ -317,12 +330,13 @@ async fn run(args: Args) -> Result<(), CliError> {
             name,
             snapshot,
             timeout,
+            allowed_lag,
         }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
 
-            cli::commands::ready::run(&profile, &name, snapshot, timeout).await
+            cli::commands::ready::run(&profile, &name, snapshot, timeout, allowed_lag).await
         }
         None => {
             // No command provided, do nothing

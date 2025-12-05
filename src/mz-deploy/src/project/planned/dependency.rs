@@ -89,9 +89,8 @@ impl From<typed::Project> for Project {
 
                     // Collect tests for this object
                     for test_stmt in &typed_obj.tests {
-                        let unit_test = crate::unit_test::UnitTest::from_execute_statement(
-                            test_stmt, &object_id,
-                        );
+                        let unit_test =
+                            crate::unit_test::UnitTest::from_execute_statement(test_stmt);
                         tests.push((object_id.clone(), unit_test));
                     }
 
@@ -146,8 +145,7 @@ pub fn extract_external_indexes(
                 .indexes
                 .iter()
                 .filter_map(|index| {
-                    let index_cluster =
-                        Cluster::new(index.in_cluster.clone().unwrap().to_string());
+                    let index_cluster = Cluster::new(index.in_cluster.clone().unwrap().to_string());
 
                     (mv_cluster != index_cluster).then(|| (index_cluster, index.clone()))
                 })
