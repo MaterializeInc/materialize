@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "SwapSchema":
+        # PR#29673 (adapter: derive implications from catalog changes) increases latency
+        min_ancestor_mz_version_per_commit[
+            "9a4ee6174553d4f14402e90927a05aa8cba37112"
+        ] = MzVersion.parse_mz("v26.2.0")
+
     if scenario_class_name in ("DifferentialJoin", "Retraction", "FinishOrderByLimit"):
         # PR#33979 (Enable active dataflow cancellation) increases latency
         min_ancestor_mz_version_per_commit[
