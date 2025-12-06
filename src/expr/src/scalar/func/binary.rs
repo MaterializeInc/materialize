@@ -290,7 +290,8 @@ mod derive {
         JsonbGetStringStringify,
         Left,
         LikeEscape,
-        // ListContainsList
+        ListContainsList,
+        ListContainsListRev,
         ListElementConcat,
         // ListLengthMax
         ListListConcat,
@@ -818,19 +819,6 @@ mod test {
         check(
             func::RangeContainsRangeRev,
             BF::RangeContainsRange { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
-
-        check(
-            func::ListContainsList,
-            BF::ListContainsList { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ListContainsListRev,
-            BF::ListContainsList { rev: true },
             &i32_ty,
             &i32_ty,
         );

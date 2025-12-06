@@ -1989,6 +1989,42 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
     }
 }
 
+/// A wrapper type that excludes `NULL` values, even if `B` allows them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExcludeNull<B>(B);
+
+impl<B: AsColumnType> AsColumnType for ExcludeNull<B> {
+    fn as_column_type() -> SqlColumnType {
+        B::as_column_type().nullable(false)
+    }
+}
+
+impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for ExcludeNull<B> {
+    fn nullable() -> bool {
+        false
+    }
+    fn fallible() -> bool {
+        B::fallible()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Null) => Err(Ok(Datum::Null)),
+            _ => B::try_from_result(res).map(ExcludeNull),
+        }
+    }
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        self.0.into_result(temp_storage)
+    }
+}
+
+impl<B> std::ops::Deref for ExcludeNull<B> {
+    type Target = B;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// Macro to derive DatumType for all Datum variants that are simple Copy types
 macro_rules! impl_datum_type_copy {
     ($lt:lifetime, $native:ty, $variant:ident) => {

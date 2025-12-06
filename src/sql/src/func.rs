@@ -4819,7 +4819,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArray)))
             }) => Bool, 2751;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: false }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ListContainsList)))
             }) => Bool, oid::OP_CONTAINS_LIST_LIST_OID;
         },
         "<@" => Scalar {
@@ -4853,7 +4853,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArrayRev)))
             }) => Bool, 2752;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BF::ListContainsList { rev: true }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ListContainsListRev)))
             }) => Bool, oid::OP_IS_CONTAINED_LIST_LIST_OID;
         },
         "?" => Scalar {
