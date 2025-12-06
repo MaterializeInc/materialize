@@ -1002,3 +1002,956 @@ fn test_wmr_with_operators_and_having() {
         panic!("Expected CreateView statement");
     }
 }
+
+// ============================================================================
+// Tests for FlatteningTransformer
+// ============================================================================
+
+#[test]
+fn test_flattening_unqualified_name() {
+    // Test that unqualified names get flattened to "database.schema.object"
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::flattening(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM sales
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Flattened SQL:\n{}", normalized_sql);
+
+        // Should be flattened to quoted identifier with dots
+        assert!(
+            normalized_sql.contains("\"materialize.public.sales\""),
+            "Expected flattened name '\"materialize.public.sales\"', got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_flattening_schema_qualified_name() {
+    // Test that schema-qualified names get flattened
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::flattening(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM internal.orders
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Flattened SQL:\n{}", normalized_sql);
+
+        // Should be flattened with the schema from the reference
+        assert!(
+            normalized_sql.contains("\"materialize.internal.orders\""),
+            "Expected flattened name '\"materialize.internal.orders\"', got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_flattening_fully_qualified_name() {
+    // Test that fully qualified names get flattened
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::flattening(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM other_db.other_schema.products
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Flattened SQL:\n{}", normalized_sql);
+
+        // Should preserve the original database/schema in flattened form
+        assert!(
+            normalized_sql.contains("\"other_db.other_schema.products\""),
+            "Expected flattened name '\"other_db.other_schema.products\"', got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_flattening_with_join() {
+    // Test flattening with multiple tables in a join
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::flattening(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT a.id, b.name
+        FROM table1 a
+        JOIN table2 b ON a.id = b.id
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Flattened SQL:\n{}", normalized_sql);
+
+        // Both tables should be flattened
+        assert!(
+            normalized_sql.contains("\"materialize.public.table1\""),
+            "Expected table1 to be flattened"
+        );
+        assert!(
+            normalized_sql.contains("\"materialize.public.table2\""),
+            "Expected table2 to be flattened"
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_flattening_cte_not_flattened() {
+    // Test that CTEs are not flattened (they remain unqualified)
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::flattening(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        WITH cte AS (
+            SELECT * FROM base_table
+        )
+        SELECT * FROM cte
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Flattened SQL:\n{}", normalized_sql);
+
+        // CTE reference should NOT be flattened
+        assert!(
+            !normalized_sql.contains("\"materialize.public.cte\""),
+            "CTE should not be flattened, got: {}",
+            normalized_sql
+        );
+        // External table should be flattened
+        assert!(
+            normalized_sql.contains("\"materialize.public.base_table\""),
+            "External table should be flattened"
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+// ============================================================================
+// Tests for StagingTransformer
+// ============================================================================
+
+use crate::project::object_id::ObjectId;
+use std::collections::BTreeSet;
+
+/// Helper to create a test FQN for staging tests
+fn staging_test_fqn() -> FullyQualifiedName {
+    let database = Ident::new("materialize").expect("valid database");
+    let schema = Ident::new("public").expect("valid schema");
+    let object = Ident::new("my_view").expect("valid object");
+    let item_name = UnresolvedItemName(vec![database, schema, object]);
+    FullyQualifiedName::from(item_name)
+}
+
+#[test]
+fn test_staging_unqualified_name() {
+    // Test that unqualified names get staging suffix on schema
+    let fqn = staging_test_fqn();
+    let external_deps = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(&fqn, "_deploy123".to_string(), &external_deps, None);
+
+    let sql = r#"
+        CREATE VIEW my_view AS
+        SELECT * FROM sales
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Staging SQL:\n{}", normalized_sql);
+
+        // Schema should have staging suffix
+        assert!(
+            normalized_sql.contains("materialize.public_deploy123.sales"),
+            "Expected staging suffix on schema, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_staging_schema_qualified_name() {
+    // Test that schema-qualified names get staging suffix
+    let fqn = staging_test_fqn();
+    let external_deps = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(&fqn, "_deploy123".to_string(), &external_deps, None);
+
+    let sql = r#"
+        CREATE VIEW my_view AS
+        SELECT * FROM internal.orders
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Staging SQL:\n{}", normalized_sql);
+
+        // Schema should have staging suffix
+        assert!(
+            normalized_sql.contains("materialize.internal_deploy123.orders"),
+            "Expected staging suffix on schema, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_staging_external_dependency_not_transformed() {
+    // Test that external dependencies are NOT transformed
+    let fqn = staging_test_fqn();
+    let mut external_deps = BTreeSet::new();
+    external_deps.insert(ObjectId {
+        database: "materialize".to_string(),
+        schema: "sources".to_string(),
+        object: "kafka_events".to_string(),
+    });
+
+    let visitor = NormalizingVisitor::staging(&fqn, "_deploy123".to_string(), &external_deps, None);
+
+    let sql = r#"
+        CREATE VIEW my_view AS
+        SELECT * FROM sources.kafka_events
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Staging SQL:\n{}", normalized_sql);
+
+        // External dependency should NOT have staging suffix
+        assert!(
+            !normalized_sql.contains("sources_deploy123"),
+            "External dependency should not be transformed, got: {}",
+            normalized_sql
+        );
+        // It should remain as-is (schema-qualified)
+        assert!(
+            normalized_sql.contains("sources.kafka_events"),
+            "External dependency should be preserved, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_staging_mixed_internal_and_external() {
+    // Test query with both internal (should be transformed) and external (should not) dependencies
+    let fqn = staging_test_fqn();
+    let mut external_deps = BTreeSet::new();
+    external_deps.insert(ObjectId {
+        database: "materialize".to_string(),
+        schema: "sources".to_string(),
+        object: "raw_events".to_string(),
+    });
+
+    let visitor = NormalizingVisitor::staging(&fqn, "_staging".to_string(), &external_deps, None);
+
+    let sql = r#"
+        CREATE VIEW my_view AS
+        SELECT e.*, p.name
+        FROM sources.raw_events e
+        JOIN products p ON e.product_id = p.id
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Staging SQL:\n{}", normalized_sql);
+
+        // External dependency (raw_events) should NOT be transformed
+        assert!(
+            normalized_sql.contains("sources.raw_events"),
+            "External dependency should not have staging suffix, got: {}",
+            normalized_sql
+        );
+        // Internal dependency (products) SHOULD be transformed
+        assert!(
+            normalized_sql.contains("public_staging.products"),
+            "Internal dependency should have staging suffix, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_staging_objects_to_deploy_filter() {
+    // Test that objects not in objects_to_deploy are treated as external
+    let fqn = staging_test_fqn();
+    let external_deps = BTreeSet::new();
+    let mut objects_to_deploy = BTreeSet::new();
+    objects_to_deploy.insert(ObjectId {
+        database: "materialize".to_string(),
+        schema: "public".to_string(),
+        object: "sales".to_string(),
+    });
+    // Note: "inventory" is NOT in objects_to_deploy
+
+    let visitor = NormalizingVisitor::staging(
+        &fqn,
+        "_staging".to_string(),
+        &external_deps,
+        Some(&objects_to_deploy),
+    );
+
+    let sql = r#"
+        CREATE VIEW my_view AS
+        SELECT s.*, i.stock
+        FROM sales s
+        JOIN inventory i ON s.product_id = i.product_id
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Staging SQL:\n{}", normalized_sql);
+
+        // sales IS in objects_to_deploy, so should be transformed
+        assert!(
+            normalized_sql.contains("public_staging.sales"),
+            "Object in deploy set should have staging suffix, got: {}",
+            normalized_sql
+        );
+        // inventory is NOT in objects_to_deploy, so should NOT be transformed
+        assert!(
+            !normalized_sql.contains("public_staging.inventory"),
+            "Object not in deploy set should not have staging suffix, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_staging_cte_not_transformed() {
+    // Test that CTEs are not transformed (they're local to the query)
+    let fqn = staging_test_fqn();
+    let external_deps = BTreeSet::new();
+    let visitor = NormalizingVisitor::staging(&fqn, "_staging".to_string(), &external_deps, None);
+
+    let sql = r#"
+        CREATE VIEW my_view AS
+        WITH enriched AS (
+            SELECT * FROM sales
+        )
+        SELECT * FROM enriched
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+        println!("Staging SQL:\n{}", normalized_sql);
+
+        // CTE should not have staging suffix
+        assert!(
+            !normalized_sql.contains("enriched_staging"),
+            "CTE should not be transformed, got: {}",
+            normalized_sql
+        );
+        // External table reference SHOULD be transformed
+        assert!(
+            normalized_sql.contains("public_staging.sales"),
+            "Table in CTE body should be transformed, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+// ============================================================================
+// Nested CTE Tests
+// ============================================================================
+
+#[test]
+fn test_nested_cte_in_derived_table() {
+    // Test CTE defined inside a derived table (subquery in FROM)
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM (
+            WITH inner_cte AS (
+                SELECT id, name FROM users
+            )
+            SELECT * FROM inner_cte JOIN orders ON inner_cte.id = orders.user_id
+        ) subquery
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Inner CTE should remain unqualified
+        assert!(
+            normalized_sql.contains("inner_cte AS"),
+            "Inner CTE definition should remain, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM inner_cte"),
+            "Inner CTE reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.users"),
+            "External table 'users' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.orders"),
+            "External table 'orders' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_nested_cte_in_scalar_subquery() {
+    // Test CTE defined inside a scalar subquery (in SELECT list)
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT
+            id,
+            (WITH totals AS (SELECT SUM(amount) as total FROM transactions WHERE transactions.user_id = users.id)
+             SELECT total FROM totals) as user_total
+        FROM users
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Inner CTE should remain unqualified
+        assert!(
+            normalized_sql.contains("totals AS"),
+            "Inner CTE definition should remain, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM totals"),
+            "Inner CTE reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.transactions"),
+            "External table 'transactions' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.users"),
+            "External table 'users' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_nested_cte_in_where_subquery() {
+    // Test CTE defined inside a subquery in WHERE clause
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM products
+        WHERE category_id IN (
+            WITH active_categories AS (
+                SELECT id FROM categories WHERE status = 'active'
+            )
+            SELECT id FROM active_categories
+        )
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Inner CTE should remain unqualified
+        assert!(
+            normalized_sql.contains("active_categories AS"),
+            "Inner CTE definition should remain, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM active_categories"),
+            "Inner CTE reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.products"),
+            "External table 'products' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.categories"),
+            "External table 'categories' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_triple_nested_ctes() {
+    // Test three levels of nested CTEs
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        WITH outer_cte AS (
+            SELECT * FROM (
+                WITH middle_cte AS (
+                    SELECT * FROM (
+                        WITH inner_cte AS (
+                            SELECT id FROM base_table
+                        )
+                        SELECT * FROM inner_cte
+                    ) innermost
+                )
+                SELECT * FROM middle_cte
+            ) middle_result
+        )
+        SELECT * FROM outer_cte
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // All CTE references should remain unqualified
+        assert!(
+            normalized_sql.contains("FROM outer_cte"),
+            "outer_cte reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM middle_cte"),
+            "middle_cte reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM inner_cte"),
+            "inner_cte reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External table should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.base_table"),
+            "External table 'base_table' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_cte_name_shadowing_in_nested_scope() {
+    // Test that a CTE in inner scope shadows a CTE with same name in outer scope
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        WITH data AS (
+            SELECT id, 'outer' as source FROM outer_table
+        )
+        SELECT * FROM data
+        UNION ALL
+        SELECT * FROM (
+            WITH data AS (
+                SELECT id, 'inner' as source FROM inner_table
+            )
+            SELECT * FROM data
+        ) inner_result
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Both 'data' CTEs should exist and remain unqualified
+        // There should be two "FROM data" references (one outer, one inner)
+        let data_count = normalized_sql.matches("FROM data").count();
+        assert!(
+            data_count >= 2,
+            "Expected at least 2 'FROM data' references (outer and inner scope), found {}, got: {}",
+            data_count,
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.outer_table"),
+            "External table 'outer_table' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.inner_table"),
+            "External table 'inner_table' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_nested_cte_in_lateral_join() {
+    // Test CTE defined inside a LATERAL join subquery
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT u.id, stats.total
+        FROM users u,
+        LATERAL (
+            WITH user_orders AS (
+                SELECT amount FROM orders WHERE orders.user_id = u.id
+            )
+            SELECT SUM(amount) as total FROM user_orders
+        ) stats
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Inner CTE should remain unqualified
+        assert!(
+            normalized_sql.contains("user_orders AS"),
+            "Inner CTE definition should remain, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM user_orders"),
+            "Inner CTE reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.users"),
+            "External table 'users' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.orders"),
+            "External table 'orders' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_parallel_nested_ctes_in_union() {
+    // Test multiple independent CTEs in different branches of a UNION
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM (
+            WITH left_cte AS (SELECT id FROM left_table)
+            SELECT * FROM left_cte
+        ) left_branch
+        UNION ALL
+        SELECT * FROM (
+            WITH right_cte AS (SELECT id FROM right_table)
+            SELECT * FROM right_cte
+        ) right_branch
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Both CTEs should remain unqualified
+        assert!(
+            normalized_sql.contains("FROM left_cte"),
+            "left_cte reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM right_cte"),
+            "right_cte reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.left_table"),
+            "External table 'left_table' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.right_table"),
+            "External table 'right_table' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_outer_cte_visible_in_nested_subquery() {
+    // Test that outer CTE is visible in nested subqueries (without redefining)
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        WITH main_data AS (
+            SELECT id, value FROM source_table
+        )
+        SELECT * FROM (
+            SELECT * FROM (
+                SELECT * FROM main_data WHERE value > 10
+            ) inner_sub
+        ) outer_sub
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // The CTE reference in deeply nested subquery should remain unqualified
+        assert!(
+            normalized_sql.contains("FROM main_data"),
+            "main_data reference in nested subquery should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External table should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.source_table"),
+            "External table 'source_table' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_nested_cte_with_join_to_outer_cte() {
+    // Test nested CTE that joins with outer CTE
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        WITH outer_data AS (
+            SELECT id, category FROM categories
+        )
+        SELECT * FROM (
+            WITH inner_data AS (
+                SELECT product_id, price FROM products
+            )
+            SELECT i.product_id, i.price, o.category
+            FROM inner_data i
+            JOIN outer_data o ON i.product_id = o.id
+        ) result
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Both CTE references should remain unqualified
+        assert!(
+            normalized_sql.contains("FROM inner_data"),
+            "inner_data reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("outer_data o") || normalized_sql.contains("outer_data AS o"),
+            "outer_data reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.categories"),
+            "External table 'categories' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.products"),
+            "External table 'products' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_nested_cte_in_exists_subquery() {
+    // Test CTE defined inside an EXISTS subquery
+    let fqn = test_fqn();
+    let visitor = NormalizingVisitor::fully_qualifying(&fqn);
+
+    let sql = r#"
+        CREATE VIEW test_view AS
+        SELECT * FROM main_table m
+        WHERE EXISTS (
+            WITH related AS (
+                SELECT id FROM related_table WHERE status = 'active'
+            )
+            SELECT 1 FROM related WHERE related.id = m.related_id
+        )
+    "#;
+
+    let statements = parse_statements(vec![sql]).unwrap();
+    if let Statement::CreateView(view) = &statements[0] {
+        let mut query = view.definition.query.clone();
+        visitor.normalize_query(&mut query);
+
+        let normalized_sql = query.to_ast_string(FormatMode::Simple);
+
+        // Inner CTE should remain unqualified
+        assert!(
+            normalized_sql.contains("related AS"),
+            "Inner CTE definition should remain, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("FROM related"),
+            "Inner CTE reference should remain unqualified, got: {}",
+            normalized_sql
+        );
+
+        // External tables should be qualified
+        assert!(
+            normalized_sql.contains("materialize.public.main_table"),
+            "External table 'main_table' should be qualified, got: {}",
+            normalized_sql
+        );
+        assert!(
+            normalized_sql.contains("materialize.public.related_table"),
+            "External table 'related_table' should be qualified, got: {}",
+            normalized_sql
+        );
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
