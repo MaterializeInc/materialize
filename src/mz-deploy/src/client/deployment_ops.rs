@@ -582,6 +582,75 @@ pub async fn get_deployment_metadata(
     }))
 }
 
+/// Get detailed information about a specific deployment.
+///
+/// Returns a tuple of (deployed_at, promoted_at, deployed_by, commit, kind, schemas)
+/// if the deployment exists, or None if not found.
+#[allow(clippy::type_complexity)]
+pub async fn get_deployment_details(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<
+    Option<(
+        SystemTime,
+        Option<SystemTime>,
+        String,
+        Option<String>,
+        String,
+        Vec<(String, String)>,
+    )>,
+    ConnectionError,
+> {
+    let query = r#"
+        SELECT deploy_id,
+               CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
+               CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+               deployed_by,
+               commit,
+               kind,
+               database,
+               schema
+        FROM deploy.deployments
+        WHERE deploy_id = $1
+        ORDER BY database, schema
+    "#;
+
+    let rows = client
+        .query(query, &[&deploy_id])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    if rows.is_empty() {
+        return Ok(None);
+    }
+
+    let first_row = &rows[0];
+    let deployed_at_epoch: f64 = first_row.get("deployed_at_epoch");
+    let promoted_at_epoch: Option<f64> = first_row.get("promoted_at_epoch");
+    let deployed_by: String = first_row.get("deployed_by");
+    let commit: Option<String> = first_row.get("commit");
+    let kind: String = first_row.get("kind");
+
+    let deployed_at = UNIX_EPOCH + Duration::from_secs_f64(deployed_at_epoch);
+    let promoted_at = promoted_at_epoch.map(|epoch| UNIX_EPOCH + Duration::from_secs_f64(epoch));
+
+    let mut schemas = Vec::new();
+    for row in rows {
+        let database: String = row.get("database");
+        let schema: String = row.get("schema");
+        schemas.push((database, schema));
+    }
+
+    Ok(Some((
+        deployed_at,
+        promoted_at,
+        deployed_by,
+        commit,
+        kind,
+        schemas,
+    )))
+}
+
 /// List all staging deployments (promoted_at IS NULL), grouped by deploy_id.
 ///
 /// Returns a map from deploy_id to list of (database, schema) tuples and deployment metadata.

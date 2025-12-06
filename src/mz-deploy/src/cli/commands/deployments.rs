@@ -1,7 +1,7 @@
 //! Deployments command - list active staging deployments.
 
-use crate::cli::{CliError, helpers};
-use crate::client::Profile;
+use crate::cli::CliError;
+use crate::client::{Client, Profile};
 use owo_colors::OwoColorize;
 
 /// List all active staging deployments.
@@ -23,8 +23,9 @@ use owo_colors::OwoColorize;
 /// # Errors
 /// Returns `CliError::Connection` for database errors
 pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliError> {
-    // Connect to database
-    let client = helpers::connect_to_database(profile).await?;
+    let client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
 
     client.create_deployments().await?;
     let deployments = client.list_staging_deployments().await?;

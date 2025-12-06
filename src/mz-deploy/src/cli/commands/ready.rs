@@ -1,7 +1,7 @@
 //! Ready command - wait for staging deployment cluster hydration.
 
-use crate::cli::{CliError, helpers};
-use crate::client::{ClusterDeploymentStatus, ClusterStatusContext, FailureReason, Profile};
+use crate::cli::CliError;
+use crate::client::{Client, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, Profile};
 use crossterm::{
     cursor::{Hide, MoveToColumn, MoveUp, Show},
     execute,
@@ -43,8 +43,9 @@ pub async fn run(
     allowed_lag_secs: i64,
 ) -> Result<(), CliError> {
     // Connect to database
-    let mut client = helpers::connect_to_database(profile).await?;
-
+    let mut client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
     // Validate staging deployment exists and is not promoted
     let metadata = client.get_deployment_metadata(deploy_id).await?;
     match metadata {

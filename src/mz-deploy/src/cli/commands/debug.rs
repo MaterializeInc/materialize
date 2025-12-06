@@ -1,7 +1,7 @@
 //! Debug command - test database connection.
 
-use crate::cli::{CliError, helpers};
-use crate::client::Profile;
+use crate::cli::CliError;
+use crate::client::{Client, Profile};
 
 /// Test database connection with the specified profile.
 ///
@@ -17,7 +17,14 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
     let profile_display = profile.name.as_str();
     println!("Testing connection with profile: {}", profile_display);
 
-    let _client = helpers::connect_to_database(profile).await?;
+    let client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
+
+    client
+        .log_connection_info()
+        .await
+        .map_err(CliError::Connection)?;
 
     println!("Connection test successful!");
 

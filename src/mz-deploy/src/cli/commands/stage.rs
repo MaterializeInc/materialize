@@ -1,7 +1,7 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
 use crate::cli::{CliError, helpers};
-use crate::client::{ClusterOptions, Profile};
+use crate::client::{Client, ClusterOptions, Profile};
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
 use crate::project::object_id::ObjectId;
@@ -76,7 +76,9 @@ pub async fn run(
     let staging_suffix = format!("_{}", stage_name);
 
     // Connect to the database
-    let mut client = helpers::connect_to_database(profile).await?;
+    let mut client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
 
     // Stage 1: Analyze project changes
     progress::stage_start("Analyzing project changes");

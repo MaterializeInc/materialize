@@ -104,6 +104,8 @@ impl Client {
 
     /// Execute the connection info query and log the results.
     pub async fn log_connection_info(&self) -> Result<(), ConnectionError> {
+        use owo_colors::OwoColorize;
+
         let query = "SELECT mz_version() AS version, mz_environment_id() AS environment_id, current_role() as role";
 
         let row = self.client.query_one(query, &[]).await?;
@@ -112,11 +114,19 @@ impl Client {
         let environment_id: String = row.get("environment_id");
         let role: String = row.get("role");
 
-        println!("Connected to Materialize:");
-        println!("  Host: {}:{}", self.profile.host, self.profile.port);
-        println!("  Version: {}", version);
-        println!("  Environment ID: {}", environment_id);
-        println!("  Role: {}", role);
+        println!(
+            "{} {}:{}",
+            "Connected to".green(),
+            self.profile.host.cyan(),
+            self.profile.port.to_string().cyan()
+        );
+        println!(
+            "  {}: {}",
+            "Environment".dimmed(),
+            environment_id
+        );
+        println!("  {}: {}", "Version".dimmed(), version);
+        println!("  {}: {}", "Role".dimmed(), role.yellow());
 
         Ok(())
     }
@@ -523,6 +533,25 @@ impl Client {
         deploy_id: &str,
     ) -> Result<Option<DeploymentMetadata>, ConnectionError> {
         deployment_ops::get_deployment_metadata(&self.client, deploy_id).await
+    }
+
+    /// Get detailed information about a specific deployment.
+    #[allow(clippy::type_complexity)]
+    pub async fn get_deployment_details(
+        &self,
+        deploy_id: &str,
+    ) -> Result<
+        Option<(
+            std::time::SystemTime,
+            Option<std::time::SystemTime>,
+            String,
+            Option<String>,
+            String,
+            Vec<(String, String)>,
+        )>,
+        ConnectionError,
+    > {
+        deployment_ops::get_deployment_details(&self.client, deploy_id).await
     }
 
     /// List all staging deployments (promoted_at IS NULL), grouped by deploy_id.

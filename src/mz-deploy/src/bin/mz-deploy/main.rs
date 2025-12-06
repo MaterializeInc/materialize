@@ -65,7 +65,7 @@ enum Command {
         /// The deploy ID will be used to track this table deployment separately.
         /// Must contain only alphanumeric characters, hyphens, and underscores.
         #[arg(long, value_name = "DEPLOY_ID")]
-        name: Option<String>,
+        deploy_id: Option<String>,
 
         /// Allow deployment with uncommitted git changes
         #[arg(long)]
@@ -136,7 +136,7 @@ enum Command {
         /// The deploy ID will be used as a suffix for schemas and clusters.
         /// Must contain only alphanumeric characters, hyphens, and underscores.
         #[arg(long, value_name = "DEPLOY_ID")]
-        name: Option<String>,
+        deploy_id: Option<String>,
 
         /// Allow staging with uncommitted git changes
         #[arg(long)]
@@ -153,6 +153,21 @@ enum Command {
     /// environment ID, and current role. Useful for verifying connectivity and
     /// configuration before running deployments.
     Debug,
+
+    /// Show detailed information about a specific deployment
+    ///
+    /// Displays comprehensive information about a deployment including metadata
+    /// (who deployed, when, git commit) and all objects with their hashes.
+    /// Use `mz-deploy history` to find deployment IDs.
+    ///
+    /// Example:
+    ///   mz-deploy describe abc123
+    #[command(visible_alias = "show")]
+    Describe {
+        /// Deployment ID to describe
+        #[arg(value_name = "DEPLOY_ID")]
+        deploy_id: String,
+    },
 
     /// Generate types.lock file with external dependency schemas
     ///
@@ -292,7 +307,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                 .await
                 .map(|_| ())
         }
-        Some(Command::CreateTables { name, allow_dirty }) => {
+        Some(Command::CreateTables { deploy_id, allow_dirty }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
@@ -300,7 +315,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::create_tables::run(
                 &profile,
                 &args.directory,
-                name.as_deref(),
+                deploy_id.as_deref(),
                 allow_dirty,
             )
             .await?;
@@ -321,7 +336,7 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::apply::run(&profile, &deploy_id, force).await
         }
         Some(Command::Stage {
-            name,
+                 deploy_id,
             allow_dirty,
             no_rollback,
         }) => {
@@ -331,7 +346,7 @@ async fn run(args: Args) -> Result<(), CliError> {
 
             cli::commands::stage::run(
                 &profile,
-                name.as_deref(),
+                deploy_id.as_deref(),
                 &args.directory,
                 allow_dirty,
                 no_rollback,
@@ -344,6 +359,13 @@ async fn run(args: Args) -> Result<(), CliError> {
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
 
             cli::commands::debug::run(&profile).await
+        }
+        Some(Command::Describe { deploy_id }) => {
+            let profile =
+                ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
+                    .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
+
+            cli::commands::describe::run(&profile, &deploy_id).await
         }
         Some(Command::GenDataContracts) => {
             let profile =

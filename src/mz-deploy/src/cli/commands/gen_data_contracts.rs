@@ -1,7 +1,7 @@
 //! Generate data contracts command - creates types.lock for external dependencies.
 
-use crate::cli::{CliError, helpers};
-use crate::client::Profile;
+use crate::cli::CliError;
+use crate::client::{Client, Profile};
 use crate::project;
 use std::path::Path;
 
@@ -32,7 +32,9 @@ pub async fn run(profile: &Profile, directory: &Path) -> Result<(), CliError> {
     println!("Generating data contracts for external dependencies...");
 
     // Connect to the database
-    let mut client = helpers::connect_to_database(profile).await?;
+    let mut client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
 
     // Load and plan the project
     let planned_project = project::plan(directory)?;

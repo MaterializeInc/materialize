@@ -1,7 +1,7 @@
 //! Abort command - cleanup a staged deployment.
 
-use crate::cli::{CliError, helpers};
-use crate::client::Profile;
+use crate::cli::CliError;
+use crate::client::{Client, Profile};
 use crate::verbose;
 
 /// Abort a staged deployment by dropping schemas, clusters, and deployment records.
@@ -26,10 +26,10 @@ use crate::verbose;
 pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
     println!("Aborting staged deployment: {}", deploy_id);
 
-    // Connect to database
-    let client = helpers::connect_to_database(profile).await?;
+    let client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
 
-    // Validate deployment exists and is not promoted
     let metadata = client.get_deployment_metadata(deploy_id).await?;
 
     match metadata {
