@@ -205,7 +205,7 @@ struct ConsoleAppConfig {
 
 #[derive(Serialize)]
 struct ConsoleAppConfigAuth {
-    mode: AuthenticatorKind,
+    self_managed_password_auth_enabled: bool,
 }
 
 fn create_console_app_configmap_object(mz: &Materialize, console_image_ref: &str) -> ConfigMap {
@@ -217,7 +217,10 @@ fn create_console_app_configmap_object(mz: &Materialize, console_image_ref: &str
     let app_config_json = serde_json::to_string(&ConsoleAppConfig {
         version,
         auth: ConsoleAppConfigAuth {
-            mode: mz.spec.authenticator_kind,
+            self_managed_password_auth_enabled: mz
+                .spec
+                .authenticator_kind
+                .password_style_self_managed_auth(),
         },
     })
     .expect("known valid");

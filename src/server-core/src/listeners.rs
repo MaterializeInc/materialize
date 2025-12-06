@@ -27,6 +27,13 @@ pub enum AuthenticatorKind {
     None,
 }
 
+impl AuthenticatorKind {
+    /// Whether this authenticator kind supports password-style self-managed authentication.
+    pub fn password_style_self_managed_auth(&self) -> bool {
+        matches!(self, AuthenticatorKind::Password | AuthenticatorKind::Sasl)
+    }
+}
+
 /// Whether to allow internal users (ie: mz_system) and/or normal users.
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq)]
 pub enum AllowedRoles {
