@@ -968,9 +968,18 @@ where
                 // We don't care about the dependency since when the write
                 // frontier is empty. In that case, no-one can write down any
                 // more updates.
+                //
+                // In read-only mode (or potentially other situations, when we
+                // allow concurrently running coordinator-like processes) it can
+                // happen that a collection is dropped and hence it's since is
+                // advanced to `[]` while we are trying to "create" that
+                // collection. For now, we allow that state in this here assert.
+                // In the future, we might have to relax this even furhter and
+                // not restrict the relaxation to read-only mode.
                 mz_ore::soft_assert_or_log!(
                     write_frontier.elements() == &[T::minimum()]
                         || write_frontier.is_empty()
+                        || (dependency_since.is_empty() && self.read_only)
                         || PartialOrder::less_than(&dependency_since, write_frontier),
                     "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
@@ -3304,6 +3313,19 @@ where
                 Err(StorageError::IdentifierInvalid(id))?
             }
         };
+
+        let ingestion_state = match &collection.extra_state {
+            CollectionStateExtra::Ingestion(ingestion_state) => ingestion_state,
+            CollectionStateExtra::None => {
+                tracing::warn!("missing ingestion state for ingestion {}", id);
+                Err(StorageError::IdentifierInvalid(id))?
+            }
+        };
+
+        if ingestion_state.read_capabilities.frontier().is_empty() {
+            tracing::info!("not running ingestion {id} because its since is empty");
+            return Ok(());
+        }
 
         // Enrich all of the exports with their metadata
         let mut source_exports = BTreeMap::new();
