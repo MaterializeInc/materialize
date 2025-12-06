@@ -9,6 +9,7 @@ pub mod compile;
 pub mod create_tables;
 pub mod debug;
 pub mod deployments;
+pub mod describe;
 pub mod gen_data_contracts;
 pub mod history;
 pub mod ready;

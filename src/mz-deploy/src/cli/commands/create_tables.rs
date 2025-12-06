@@ -1,7 +1,7 @@
 //! Create tables command - create tables that don't exist in the database.
 
 use crate::cli::{CliError, helpers};
-use crate::client::Profile;
+use crate::client::{Client, Profile};
 use crate::project::ast::Statement;
 use crate::utils::git;
 use crate::{project, verbose};
@@ -57,7 +57,9 @@ pub async fn run(
     let planned_project = super::compile::run(directory, compile_args).await?;
 
     // Connect to the database
-    let mut client = helpers::connect_to_database(profile).await?;
+    let mut client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
 
     (client).validate_privileges(&planned_project).await?;
     client.validate_cluster_isolation(&planned_project).await?;
@@ -185,7 +187,6 @@ pub async fn run(
     }
 
     // Execute table statements (only for tables that don't exist)
-    let executor = helpers::DeploymentExecutor::new(&client);
     let mut success_count = 0;
 
     for (idx, (object_id, typed_obj)) in tables_to_create.iter().enumerate() {
@@ -196,8 +197,51 @@ pub async fn run(
             object_id
         );
 
-        // Execute the table statement along with indexes, grants, and comments
-        executor.execute_object(typed_obj).await?;
+        // Execute main statement
+        let sql = typed_obj.stmt.to_string();
+        client
+            .execute(&sql, &[])
+            .await
+            .map_err(|source| CliError::SqlExecutionFailed {
+                statement: sql,
+                source,
+            })?;
+
+        // Execute indexes
+        for index in &typed_obj.indexes {
+            let sql = index.to_string();
+            client
+                .execute(&sql, &[])
+                .await
+                .map_err(|source| CliError::SqlExecutionFailed {
+                    statement: sql,
+                    source,
+                })?;
+        }
+
+        // Execute grants
+        for grant in &typed_obj.grants {
+            let sql = grant.to_string();
+            client
+                .execute(&sql, &[])
+                .await
+                .map_err(|source| CliError::SqlExecutionFailed {
+                    statement: sql,
+                    source,
+                })?;
+        }
+
+        // Execute comments
+        for comment in &typed_obj.comments {
+            let sql = comment.to_string();
+            client
+                .execute(&sql, &[])
+                .await
+                .map_err(|source| CliError::SqlExecutionFailed {
+                    statement: sql,
+                    source,
+                })?;
+        }
 
         println!(
             "  ✓ {}.{}.{}",

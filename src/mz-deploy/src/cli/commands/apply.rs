@@ -1,7 +1,7 @@
 //! Apply command - promote staging deployment to production via ALTER SWAP.
 
-use crate::cli::{CliError, helpers};
-use crate::client::Profile;
+use crate::cli::CliError;
+use crate::client::{Client, Profile};
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
@@ -34,8 +34,9 @@ use std::time::SystemTime;
 pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), CliError> {
     println!("Deploying '{}' to production", stage_id);
 
-    // Connect to the database
-    let client = helpers::connect_to_database(profile).await?;
+    let client = Client::connect_with_profile(profile.clone())
+        .await
+        .map_err(CliError::Connection)?;
 
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
