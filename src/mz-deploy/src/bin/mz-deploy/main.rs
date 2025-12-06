@@ -70,6 +70,14 @@ enum Command {
         /// Allow deployment with uncommitted git changes
         #[arg(long)]
         allow_dirty: bool,
+
+        /// Print SQL statements without executing them
+        ///
+        /// Runs the full compilation and validation pipeline but prints the SQL
+        /// that would be executed instead of actually running it. Useful for
+        /// reviewing changes before deployment.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Promote a staging deployment to production
@@ -145,6 +153,14 @@ enum Command {
         /// Skip automatic rollback on failure (leaves resources for debugging)
         #[arg(long)]
         no_rollback: bool,
+
+        /// Print SQL statements without executing them
+        ///
+        /// Runs the full compilation and validation pipeline but prints the SQL
+        /// that would be executed instead of actually running it. Useful for
+        /// reviewing changes before deployment.
+        #[arg(long)]
+        dry_run: bool,
     },
 
     /// Test database connection and display environment information
@@ -307,7 +323,11 @@ async fn run(args: Args) -> Result<(), CliError> {
                 .await
                 .map(|_| ())
         }
-        Some(Command::CreateTables { deploy_id, allow_dirty }) => {
+        Some(Command::CreateTables {
+            deploy_id,
+            allow_dirty,
+            dry_run,
+        }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
                     .map_err(|e| CliError::Connection(ConnectionError::Config(e)))?;
@@ -317,9 +337,14 @@ async fn run(args: Args) -> Result<(), CliError> {
                 &args.directory,
                 deploy_id.as_deref(),
                 allow_dirty,
+                dry_run,
             )
             .await?;
-            cli::commands::gen_data_contracts::run(&profile, &args.directory).await
+            if !dry_run {
+                cli::commands::gen_data_contracts::run(&profile, &args.directory).await
+            } else {
+                Ok(())
+            }
         }
         Some(Command::Apply {
             deploy_id,
@@ -336,9 +361,10 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::apply::run(&profile, &deploy_id, force).await
         }
         Some(Command::Stage {
-                 deploy_id,
+            deploy_id,
             allow_dirty,
             no_rollback,
+            dry_run,
         }) => {
             let profile =
                 ProfilesConfig::load_profile(Some(&args.directory), args.profile.as_deref())
@@ -350,6 +376,7 @@ async fn run(args: Args) -> Result<(), CliError> {
                 &args.directory,
                 allow_dirty,
                 no_rollback,
+                dry_run,
             )
             .await
         }

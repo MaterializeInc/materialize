@@ -102,35 +102,6 @@ impl Client {
         Ok(Client { client, profile })
     }
 
-    /// Execute the connection info query and log the results.
-    pub async fn log_connection_info(&self) -> Result<(), ConnectionError> {
-        use owo_colors::OwoColorize;
-
-        let query = "SELECT mz_version() AS version, mz_environment_id() AS environment_id, current_role() as role";
-
-        let row = self.client.query_one(query, &[]).await?;
-
-        let version: String = row.get("version");
-        let environment_id: String = row.get("environment_id");
-        let role: String = row.get("role");
-
-        println!(
-            "{} {}:{}",
-            "Connected to".green(),
-            self.profile.host.cyan(),
-            self.profile.port.to_string().cyan()
-        );
-        println!(
-            "  {}: {}",
-            "Environment".dimmed(),
-            environment_id
-        );
-        println!("  {}: {}", "Version".dimmed(), version);
-        println!("  {}: {}", "Role".dimmed(), role.yellow());
-
-        Ok(())
-    }
-
     /// Get the profile used for this connection.
     pub fn profile(&self) -> &Profile {
         &self.profile
@@ -156,6 +127,21 @@ impl Client {
     {
         self.client
             .execute(statement, params)
+            .await
+            .map_err(ConnectionError::Query)
+    }
+
+    /// Execute a SQL query and return the resulting rows.
+    pub async fn query_one<T>(
+        &self,
+        statement: &T,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Row, ConnectionError>
+    where
+        T: ?Sized + ToStatement,
+    {
+        self.client
+            .query_one(statement, params)
             .await
             .map_err(ConnectionError::Query)
     }

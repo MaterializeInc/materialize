@@ -24,6 +24,7 @@ use std::path::Path;
 /// * `directory` - Project root directory
 /// * `deploy_id` - Optional deploy ID (defaults to random 7-char hex)
 /// * `allow_dirty` - Allow deploying with uncommitted changes
+/// * `dry_run` - If true, print SQL instead of executing
 ///
 /// # Returns
 /// Ok(()) if deployment succeeds
@@ -35,6 +36,7 @@ pub async fn run(
     directory: &Path,
     deploy_id: Option<&str>,
     allow_dirty: bool,
+    dry_run: bool,
 ) -> Result<(), CliError> {
     // Check for uncommitted changes before proceeding
     if !allow_dirty && git::is_dirty(directory) {
@@ -47,7 +49,11 @@ pub async fn run(
         None => helpers::generate_random_env_name(),
     };
 
-    println!("Creating tables in deployment: {}", deploy_id);
+    if dry_run {
+        println!("-- DRY RUN: The following SQL would be executed --\n");
+    } else {
+        println!("Creating tables in deployment: {}", deploy_id);
+    }
 
     // Compile the project first (skip type checking since we're deploying)
     let compile_args = super::compile::CompileArgs {
@@ -137,13 +143,24 @@ pub async fn run(
         table_schemas.insert((object_id.database.clone(), object_id.schema.clone()));
     }
 
+    // Create executor with dry-run mode
+    let executor = helpers::DeploymentExecutor::with_dry_run(&client, dry_run);
+
     // Create schemas and execute their mod statements
     if !table_schemas.is_empty() {
-        println!("Preparing schemas...");
+        if !dry_run {
+            println!("Preparing schemas...");
+        } else {
+            println!("-- Create schemas --");
+        }
 
         for (database, schema) in &table_schemas {
             verbose!("Creating schema {}.{} if not exists", database, schema);
-            client.create_schema(database, schema).await?;
+            let create_schema_sql = format!(
+                "CREATE SCHEMA IF NOT EXISTS {}.{}",
+                database, schema
+            );
+            executor.execute_sql(&create_schema_sql).await?;
         }
 
         // Execute schema mod statements for schemas that contain tables
@@ -157,13 +174,7 @@ pub async fn run(
                     let has_tables = table_schemas.iter().any(|(db, _)| db == database);
                     if has_tables {
                         verbose!("Applying database setup for: {}", database);
-                        client
-                            .execute(&statement.to_string(), &[])
-                            .await
-                            .map_err(|e| CliError::SqlExecutionFailed {
-                                statement: statement.to_string(),
-                                source: e,
-                            })?;
+                        executor.execute_sql(statement).await?;
                     }
                 }
                 project::ModStatement::Schema {
@@ -173,17 +184,15 @@ pub async fn run(
                 } => {
                     if table_schemas.contains(&(database.to_string(), schema.to_string())) {
                         verbose!("Applying schema setup for: {}.{}", database, schema);
-                        client
-                            .execute(&statement.to_string(), &[])
-                            .await
-                            .map_err(|e| CliError::SqlExecutionFailed {
-                                statement: statement.to_string(),
-                                source: e,
-                            })?;
+                        executor.execute_sql(statement).await?;
                     }
                 }
             }
         }
+    }
+
+    if dry_run {
+        println!("-- Create tables --");
     }
 
     // Execute table statements (only for tables that don't exist)
@@ -197,92 +206,56 @@ pub async fn run(
             object_id
         );
 
-        // Execute main statement
-        let sql = typed_obj.stmt.to_string();
-        client
-            .execute(&sql, &[])
-            .await
-            .map_err(|source| CliError::SqlExecutionFailed {
-                statement: sql,
-                source,
-            })?;
+        // Execute the table statement along with indexes, grants, and comments
+        executor.execute_object(typed_obj).await?;
 
-        // Execute indexes
-        for index in &typed_obj.indexes {
-            let sql = index.to_string();
-            client
-                .execute(&sql, &[])
-                .await
-                .map_err(|source| CliError::SqlExecutionFailed {
-                    statement: sql,
-                    source,
-                })?;
+        if !dry_run {
+            println!(
+                "  ✓ {}.{}.{}",
+                object_id.database, object_id.schema, object_id.object
+            );
         }
-
-        // Execute grants
-        for grant in &typed_obj.grants {
-            let sql = grant.to_string();
-            client
-                .execute(&sql, &[])
-                .await
-                .map_err(|source| CliError::SqlExecutionFailed {
-                    statement: sql,
-                    source,
-                })?;
-        }
-
-        // Execute comments
-        for comment in &typed_obj.comments {
-            let sql = comment.to_string();
-            client
-                .execute(&sql, &[])
-                .await
-                .map_err(|source| CliError::SqlExecutionFailed {
-                    statement: sql,
-                    source,
-                })?;
-        }
-
-        println!(
-            "  ✓ {}.{}.{}",
-            object_id.database, object_id.schema, object_id.object
-        );
         success_count += 1;
     }
 
-    // Build snapshot for deployment tracking - only include tables that were created
-    let mut snapshot_objects = BTreeMap::new();
-    for (object_id, typed_obj) in &tables_to_create {
-        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-        snapshot_objects.insert(object_id.clone(), hash);
-    }
+    // Skip deployment tracking in dry-run mode
+    if !dry_run {
+        // Build snapshot for deployment tracking - only include tables that were created
+        let mut snapshot_objects = BTreeMap::new();
+        for (object_id, typed_obj) in &tables_to_create {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            snapshot_objects.insert(object_id.clone(), hash);
+        }
 
-    let new_snapshot = project::deployment_snapshot::DeploymentSnapshot {
-        objects: snapshot_objects,
-        schemas: table_schemas.clone(), // Already contains only schemas with tables
-    };
+        let new_snapshot = project::deployment_snapshot::DeploymentSnapshot {
+            objects: snapshot_objects,
+            schemas: table_schemas.clone(), // Already contains only schemas with tables
+        };
 
-    // Collect deployment metadata
-    let metadata = helpers::collect_deployment_metadata(&client, directory).await;
+        // Collect deployment metadata
+        let metadata = helpers::collect_deployment_metadata(&client, directory).await;
 
-    // Write deployment state to database (promoted deployment)
-    let now = std::time::SystemTime::now();
-    project::deployment_snapshot::write_to_database(
-        &client,
-        &new_snapshot,
-        &deploy_id,
-        &metadata,
-        Some(now),
-        crate::client::DeploymentKind::Tables,
-    )
-    .await?;
+        // Write deployment state to database (promoted deployment)
+        let now = std::time::SystemTime::now();
+        project::deployment_snapshot::write_to_database(
+            &client,
+            &new_snapshot,
+            &deploy_id,
+            &metadata,
+            Some(now),
+            crate::client::DeploymentKind::Tables,
+        )
+        .await?;
 
-    println!("\n✓ Successfully created {} new table(s)", success_count);
-    if !existing_tables.is_empty() {
-        println!(
-            "  Skipped {} table(s) that already existed",
-            existing_tables.len()
-        );
+        println!("\n✓ Successfully created {} new table(s)", success_count);
+        if !existing_tables.is_empty() {
+            println!(
+                "  Skipped {} table(s) that already existed",
+                existing_tables.len()
+            );
+        }
+    } else {
+        println!("-- End of dry run ({} statement(s)) --", success_count);
     }
 
     Ok(())

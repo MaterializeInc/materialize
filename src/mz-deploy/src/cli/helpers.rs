@@ -3,8 +3,9 @@
 //! This module contains common functionality used across multiple commands
 //! to reduce code duplication and ensure consistent behavior.
 
+use crate::cli::CliError;
 use crate::client::Client;
-use crate::project;
+use crate::project::{self, typed};
 use crate::utils::git::get_git_commit;
 use std::path::Path;
 
@@ -62,4 +63,95 @@ pub fn generate_random_env_name() -> String {
         "{:07x}",
         u32::from_le_bytes([hash[0], hash[1], hash[2], hash[3]]) & 0xFFFFFFF
     )
+}
+
+/// Helper for executing database object deployments.
+///
+/// This struct consolidates the pattern of executing a database object's
+/// SQL statements (main statement + indexes + grants + comments) with
+/// consistent error handling. Supports dry-run mode where SQL is printed
+/// instead of executed.
+pub struct DeploymentExecutor<'a> {
+    client: &'a Client,
+    dry_run: bool,
+}
+
+impl<'a> DeploymentExecutor<'a> {
+    /// Create a new deployment executor that executes SQL.
+    pub fn new(client: &'a Client) -> Self {
+        Self {
+            client,
+            dry_run: false,
+        }
+    }
+
+    /// Create a deployment executor with configurable dry-run mode.
+    pub fn with_dry_run(client: &'a Client, dry_run: bool) -> Self {
+        Self { client, dry_run }
+    }
+
+    /// Returns true if this executor is in dry-run mode.
+    pub fn is_dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    /// Execute all SQL statements for a database object.
+    ///
+    /// This executes the main CREATE statement, followed by any indexes,
+    /// grants, and comments associated with the object.
+    ///
+    /// # Arguments
+    /// * `typed_obj` - The typed database object to deploy
+    ///
+    /// # Returns
+    /// Ok(()) if all statements execute successfully
+    ///
+    /// # Errors
+    /// Returns `CliError::SqlExecutionFailed` if any statement fails
+    pub async fn execute_object(&self, typed_obj: &typed::DatabaseObject) -> Result<(), CliError> {
+        // Execute main statement
+        self.execute_sql(&typed_obj.stmt).await?;
+
+        // Execute indexes
+        for index in &typed_obj.indexes {
+            self.execute_sql(index).await?;
+        }
+
+        // Execute grants
+        for grant in &typed_obj.grants {
+            self.execute_sql(grant).await?;
+        }
+
+        // Execute comments
+        for comment in &typed_obj.comments {
+            self.execute_sql(comment).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Execute (or print in dry-run mode) a single SQL statement.
+    ///
+    /// # Arguments
+    /// * `stmt` - Any type that can be converted to SQL string (via ToString)
+    ///
+    /// # Errors
+    /// Returns `CliError::SqlExecutionFailed` with statement context (only in non-dry-run mode)
+    pub async fn execute_sql(&self, stmt: &impl ToString) -> Result<(), CliError> {
+        let sql = stmt.to_string();
+
+        if self.dry_run {
+            println!("{};", sql);
+            println!();
+        } else {
+            self.client
+                .execute(&sql, &[])
+                .await
+                .map_err(|source| CliError::SqlExecutionFailed {
+                    statement: sql,
+                    source,
+                })?;
+        }
+        Ok(())
+    }
 }
