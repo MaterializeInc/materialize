@@ -1,7 +1,9 @@
 //! Ready command - wait for staging deployment cluster hydration.
 
 use crate::cli::CliError;
-use crate::client::{Client, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, Profile};
+use crate::client::{
+    Client, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, Profile,
+};
 use crossterm::{
     cursor::{Hide, MoveToColumn, MoveUp, Show},
     execute,

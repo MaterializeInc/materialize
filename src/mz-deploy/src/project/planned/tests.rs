@@ -1369,7 +1369,12 @@ fn test_dependencies_with_self_join() {
         let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
 
         // Should have only one dependency (employees) even though it's used twice
-        assert_eq!(deps.len(), 1, "Expected 1 dependency (self-join), found: {:?}", deps);
+        assert_eq!(
+            deps.len(),
+            1,
+            "Expected 1 dependency (self-join), found: {:?}",
+            deps
+        );
         assert!(deps.contains(&ObjectId::new(
             "db".to_string(),
             "public".to_string(),
@@ -1403,7 +1408,12 @@ fn test_dependencies_nested_derived_tables() {
         let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
 
         // Should extract dependency from deeply nested subquery
-        assert_eq!(deps.len(), 1, "Expected 1 dependency from nested subquery, found: {:?}", deps);
+        assert_eq!(
+            deps.len(),
+            1,
+            "Expected 1 dependency from nested subquery, found: {:?}",
+            deps
+        );
         assert!(deps.contains(&ObjectId::new(
             "db".to_string(),
             "public".to_string(),

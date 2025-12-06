@@ -2049,7 +2049,6 @@ dependencies = [
  "encode_unicode",
  "libc",
  "once_cell",
- "unicode-width 0.2.2",
  "windows-sys 0.59.0",
 ]
 
@@ -4379,19 +4378,6 @@ dependencies = [
 
 [[package]]
 name = "indicatif"
-version = "0.17.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "183b3088984b400f4cfac3620d5e076c84da5364016b4f49473de574b2586235"
-dependencies = [
- "console 0.15.11",
- "number_prefix",
- "portable-atomic",
- "unicode-width 0.2.2",
- "web-time",
-]
-
-[[package]]
-name = "indicatif"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9375e112e4b463ec1b1c6c011953545c65a30164fbab5b581df32b3abf0dcb88"
@@ -5365,7 +5351,7 @@ dependencies = [
  "csv",
  "dirs 6.0.0",
  "hyper 1.8.1",
- "indicatif 0.18.3",
+ "indicatif",
  "maplit",
  "mz-build-info",
  "mz-cloud-api",
@@ -6183,8 +6169,8 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs 5.0.1",
- "indicatif 0.17.11",
  "mz-build-info",
+ "mz-ore",
  "mz-sql-parser",
  "owo-colors",
  "serde",
@@ -7635,7 +7621,7 @@ dependencies = [
  "bytefmt",
  "clap",
  "futures",
- "indicatif 0.18.3",
+ "indicatif",
  "mz-aws-util",
  "mz-ore",
  "tokio",
@@ -8761,12 +8747,6 @@ name = "numa_maps"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "919af26e03f635d91244e3e3e5a63f0377a78044b39e09a69fdad36514dc919f"
-
-[[package]]
-name = "number_prefix"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "oauth2"

@@ -37,6 +37,7 @@ use std::time::Instant;
 /// * `directory` - Project root directory
 /// * `allow_dirty` - Allow deploying with uncommitted changes
 /// * `no_rollback` - Skip automatic rollback on failure (for debugging)
+/// * `dry_run` - If true, print SQL instead of executing
 ///
 /// # Returns
 /// Ok(()) if staging deployment succeeds
@@ -51,6 +52,7 @@ pub async fn run(
     directory: &Path,
     allow_dirty: bool,
     no_rollback: bool,
+    dry_run: bool,
 ) -> Result<(), CliError> {
     let start_time = Instant::now();
 
@@ -64,7 +66,11 @@ pub async fn run(
         None => helpers::generate_random_env_name(),
     };
 
-    println!("Deploying to staging environment: {}", stage_name);
+    if dry_run {
+        println!("-- DRY RUN: The following SQL would be executed --\n");
+    } else {
+        println!("Deploying to staging environment: {}", stage_name);
+    }
 
     // Run compile to validate and get the project (skip type checking for staging deployment)
     let compile_args = super::compile::CompileArgs {
@@ -195,38 +201,41 @@ pub async fn run(
     let validate_duration = validate_start.elapsed();
     progress::stage_success("All validations passed", validate_duration);
 
-    // Stage 3: Collect deployment metadata and write to database BEFORE creating resources
-    // This allows abort logic to clean up even if resource creation fails
-    progress::stage_start("Recording deployment metadata");
-    let metadata_start = Instant::now();
-    let metadata = helpers::collect_deployment_metadata(&client, directory).await;
+    // Skip metadata recording in dry-run mode
+    if !dry_run {
+        // Stage 3: Collect deployment metadata and write to database BEFORE creating resources
+        // This allows abort logic to clean up even if resource creation fails
+        progress::stage_start("Recording deployment metadata");
+        let metadata_start = Instant::now();
+        let metadata = helpers::collect_deployment_metadata(&client, directory).await;
 
-    // Build a snapshot containing all objects that will be deployed
-    let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
-    for (object_id, typed_obj) in &objects {
-        let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
-        staging_snapshot.objects.insert(object_id.clone(), hash);
+        // Build a snapshot containing all objects that will be deployed
+        let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
+        for (object_id, typed_obj) in &objects {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            staging_snapshot.objects.insert(object_id.clone(), hash);
 
-        // Track which schema this object belongs to
-        staging_snapshot
-            .schemas
-            .insert((object_id.database.clone(), object_id.schema.clone()));
+            // Track which schema this object belongs to
+            staging_snapshot
+                .schemas
+                .insert((object_id.database.clone(), object_id.schema.clone()));
+        }
+
+        // Write deployment state to database BEFORE creating resources
+        // (environment=stage_name for staging, promoted_at=None)
+        project::deployment_snapshot::write_to_database(
+            &client,
+            &staging_snapshot,
+            &stage_name,
+            &metadata,
+            None,
+            crate::client::DeploymentKind::Objects,
+        )
+        .await?;
+
+        let metadata_duration = metadata_start.elapsed();
+        progress::stage_success("Deployment metadata recorded", metadata_duration);
     }
-
-    // Write deployment state to database BEFORE creating resources
-    // (environment=stage_name for staging, promoted_at=None)
-    project::deployment_snapshot::write_to_database(
-        &client,
-        &staging_snapshot,
-        &stage_name,
-        &metadata,
-        None,
-        crate::client::DeploymentKind::Objects,
-    )
-    .await?;
-
-    let metadata_duration = metadata_start.elapsed();
-    progress::stage_success("Deployment metadata recorded", metadata_duration);
 
     // Perform resource creation with automatic rollback on failure
     let result = create_resources_with_rollback(
@@ -238,19 +247,24 @@ pub async fn run(
         &planned_project,
         &objects,
         no_rollback,
+        dry_run,
     )
     .await;
 
     match result {
         Ok(success_count) => {
-            let total_duration = start_time.elapsed();
-            progress::summary(
-                &format!(
-                    "Successfully deployed to {} objects to '{}' staging environment",
-                    success_count, stage_name
-                ),
-                total_duration,
-            );
+            if dry_run {
+                println!("-- End of dry run ({} object(s)) --", success_count);
+            } else {
+                let total_duration = start_time.elapsed();
+                progress::summary(
+                    &format!(
+                        "Successfully deployed to {} objects to '{}' staging environment",
+                        success_count, stage_name
+                    ),
+                    total_duration,
+                );
+            }
             Ok(())
         }
         Err(e) => Err(e),
@@ -271,32 +285,50 @@ async fn create_resources_with_rollback<'a>(
     planned_project: &'a project::planned::Project,
     objects: &'a [(ObjectId, &'a project::typed::DatabaseObject)],
     no_rollback: bool,
+    dry_run: bool,
 ) -> Result<usize, CliError> {
+    // Create executor with dry-run mode
+    let executor = helpers::DeploymentExecutor::with_dry_run(client, dry_run);
+
     // Wrap resource creation in a closure that we can call and handle errors from
     let create_result = async {
         // Stage 4: Create staging schemas
-        progress::stage_start("Creating staging schemas");
+        if !dry_run {
+            progress::stage_start("Creating staging schemas");
+        } else {
+            println!("-- Create staging schemas --");
+        }
         let schema_start = Instant::now();
         for (database, schema) in schema_set {
             let staging_schema = format!("{}{}", schema, staging_suffix);
-            client.create_schema(database, &staging_schema).await?;
+            let create_schema_sql = format!(
+                "CREATE SCHEMA IF NOT EXISTS {}.{}",
+                database, staging_schema
+            );
+            executor.execute_sql(&create_schema_sql).await?;
             verbose!("  Created schema {}.{}", database, staging_schema);
         }
-        let schema_duration = schema_start.elapsed();
-        progress::stage_success(
-            &format!("Created {} staging schema(s)", schema_set.len()),
-            schema_duration,
-        );
+        if !dry_run {
+            let schema_duration = schema_start.elapsed();
+            progress::stage_success(
+                &format!("Created {} staging schema(s)", schema_set.len()),
+                schema_duration,
+            );
 
-        // Create production schemas if they don't exist (needed for swap)
-        progress::info("Creating production schemas if not exists");
-        for (database, schema) in schema_set {
-            client.create_schema(database, schema).await?;
-            verbose!("  Ensured schema {}.{} exists", database, schema);
+            // Create production schemas if they don't exist (needed for swap)
+            progress::info("Creating production schemas if not exists");
+            for (database, schema) in schema_set {
+                client.create_schema(database, schema).await?;
+                verbose!("  Ensured schema {}.{} exists", database, schema);
+            }
         }
 
         // Execute schema mod_statements for staging schemas
-        progress::stage_start("Applying schema setup statements");
+        if !dry_run {
+            progress::stage_start("Applying schema setup statements");
+        } else {
+            println!("-- Apply schema setup statements --");
+        }
         let mod_start = Instant::now();
         for mod_stmt in planned_project.iter_mod_statements() {
             match mod_stmt {
@@ -308,13 +340,7 @@ async fn create_resources_with_rollback<'a>(
                     let has_schema = schema_set.iter().any(|(db, _)| db == database);
                     if has_schema {
                         verbose!("Applying database setup for: {}", database);
-                        client
-                            .execute(&statement.to_string(), &[])
-                            .await
-                            .map_err(|e| CliError::SqlExecutionFailed {
-                                statement: statement.to_string(),
-                                source: e,
-                            })?;
+                        executor.execute_sql(statement).await?;
                     }
                 }
                 project::ModStatement::Schema {
@@ -331,33 +357,46 @@ async fn create_resources_with_rollback<'a>(
                         );
 
                         verbose!("Applying schema setup for: {}.{}", database, staging_schema);
-                        client.execute(&transformed_stmt, &[]).await.map_err(|e| {
-                            CliError::SqlExecutionFailed {
-                                statement: transformed_stmt.clone(),
-                                source: e,
-                            }
-                        })?;
+                        executor.execute_sql(&transformed_stmt).await?;
                     }
                 }
             }
         }
-        let mod_duration = mod_start.elapsed();
-        progress::stage_success("Schema setup statements applied", mod_duration);
+        if !dry_run {
+            let mod_duration = mod_start.elapsed();
+            progress::stage_success("Schema setup statements applied", mod_duration);
 
-        // Write cluster mappings to deploy.clusters table BEFORE creating clusters
-        // This allows abort logic to clean up even if cluster creation fails
-        let cluster_names: Vec<String> = cluster_set.iter().cloned().collect();
-        client
-            .insert_deployment_clusters(stage_name, &cluster_names)
-            .await?;
-        verbose!("Cluster mappings recorded");
+            // Write cluster mappings to deploy.clusters table BEFORE creating clusters
+            // This allows abort logic to clean up even if cluster creation fails
+            let cluster_names: Vec<String> = cluster_set.iter().cloned().collect();
+            client
+                .insert_deployment_clusters(stage_name, &cluster_names)
+                .await?;
+            verbose!("Cluster mappings recorded");
+        }
 
         // Stage 5: Create staging clusters (by cloning production cluster configs)
-        progress::stage_start("Creating staging clusters");
+        if !dry_run {
+            progress::stage_start("Creating staging clusters");
+        } else {
+            println!("-- Create staging clusters --");
+        }
         let cluster_start = Instant::now();
         let mut created_clusters = 0;
         for prod_cluster in cluster_set {
             let staging_cluster = format!("{}{}", prod_cluster, staging_suffix);
+
+            if dry_run {
+                // In dry-run mode, just print the CREATE CLUSTER statement
+                // We can't check if cluster exists or get prod config without side effects
+                let create_cluster_sql = format!(
+                    "CREATE CLUSTER {} (SIZE = '<from {}>')",
+                    staging_cluster, prod_cluster
+                );
+                executor.execute_sql(&create_cluster_sql).await?;
+                created_clusters += 1;
+                continue;
+            }
 
             // Check if staging cluster already exists
             let cluster_exists = client.cluster_exists(&staging_cluster).await?;
@@ -394,14 +433,20 @@ async fn create_resources_with_rollback<'a>(
             );
         }
 
-        let cluster_duration = cluster_start.elapsed();
-        progress::stage_success(
-            &format!("Created {} cluster(s)", created_clusters),
-            cluster_duration,
-        );
+        if !dry_run {
+            let cluster_duration = cluster_start.elapsed();
+            progress::stage_success(
+                &format!("Created {} cluster(s)", created_clusters),
+                cluster_duration,
+            );
+        }
 
         // Stage 6: Deploy objects using staging transformer
-        progress::stage_start("Deploying objects to staging");
+        if !dry_run {
+            progress::stage_start("Deploying objects to staging");
+        } else {
+            println!("-- Deploy objects to staging --");
+        }
         let deploy_start = Instant::now();
 
         // Collect ObjectIds from objects being deployed for the staging transformer
@@ -423,7 +468,7 @@ async fn create_resources_with_rollback<'a>(
         );
         for index in external_indexes {
             verbose!("Creating external index {}", index);
-            client.execute(&index.to_string(), &[]).await?;
+            executor.execute_sql(&index).await?;
         }
 
         let mut success_count = 0;
@@ -464,13 +509,7 @@ async fn create_resources_with_rollback<'a>(
                 .normalize_dependencies_with(&visitor)
                 .normalize_cluster_with(&visitor);
 
-            client
-                .execute(&stmt.to_string(), &[])
-                .await
-                .map_err(|source| CliError::SqlExecutionFailed {
-                    statement: stmt.to_string(),
-                    source,
-                })?;
+            executor.execute_sql(&stmt).await?;
 
             // Deploy indexes, grants, and comments (normalize them with staging transformer)
             let mut indexes = typed_obj.indexes.clone();
@@ -484,55 +523,41 @@ async fn create_resources_with_rollback<'a>(
             visitor.normalize_comment_references(&mut comments);
 
             for index in &indexes {
-                client
-                    .execute(&index.to_string(), &[])
-                    .await
-                    .map_err(|source| CliError::SqlExecutionFailed {
-                        statement: index.to_string(),
-                        source,
-                    })?;
+                executor.execute_sql(index).await?;
             }
 
             for grant in &grants {
-                client
-                    .execute(&grant.to_string(), &[])
-                    .await
-                    .map_err(|source| CliError::SqlExecutionFailed {
-                        statement: grant.to_string(),
-                        source,
-                    })?;
+                executor.execute_sql(grant).await?;
             }
 
             for comment in &comments {
-                client
-                    .execute(&comment.to_string(), &[])
-                    .await
-                    .map_err(|source| CliError::SqlExecutionFailed {
-                        statement: comment.to_string(),
-                        source,
-                    })?;
+                executor.execute_sql(comment).await?;
             }
 
             success_count += 1;
         }
 
-        let deploy_duration = deploy_start.elapsed();
-        progress::stage_success(
-            &format!("Deployed {} view(s)/materialized view(s)", success_count),
-            deploy_duration,
-        );
+        if !dry_run {
+            let deploy_duration = deploy_start.elapsed();
+            progress::stage_success(
+                &format!("Deployed {} view(s)/materialized view(s)", success_count),
+                deploy_duration,
+            );
+        }
 
         // Return success count
         Ok::<usize, CliError>(success_count)
     }
     .await;
 
-    // Handle result with rollback on failure
+    // Handle result with rollback on failure (skip rollback in dry-run mode)
     match create_result {
         Ok(count) => Ok(count),
         Err(e) => {
-            if no_rollback {
-                progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
+            if dry_run || no_rollback {
+                if !dry_run {
+                    progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
+                }
                 return Err(e);
             }
 
