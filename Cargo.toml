@@ -337,10 +337,6 @@ launchdarkly-server-sdk = { git = "https://github.com/MaterializeInc/rust-server
 rdkafka = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git" }
 
-# Removes dependencies required for WASM support that create duplicated deps.
-reqwest-middleware = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
-reqwest-retry = { git = "https://github.com/MaterializeInc/reqwest-middleware.git" }
-
 # Need to upstream a few PRs related to test builders.
 #
 # Note: All changes in our fork of tiberius should be pushed to the `mz_changes` branch.

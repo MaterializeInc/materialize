@@ -98,10 +98,7 @@ skip = [
     { name = "rand_chacha", version = "0.3.0" },
     { name = "rand_core", version = "0.5.1" },
     { name = "rand_core", version = "0.6.2" },
-    { name = "reqwest", version = "0.11.24" },
     # Used by reqwest
-    { name = "system-configuration", version = "0.5.1" },
-    { name = "system-configuration-sys", version = "0.5.0" },
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
     { name = "twox-hash", version = "1.6.3" },
