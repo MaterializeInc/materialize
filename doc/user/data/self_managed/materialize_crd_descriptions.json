@@ -149,7 +149,7 @@
       {
         "name": "internalCertificateSpec",
         "type": "MaterializeCertSpec",
-        "description": "The cert-manager Issuer or ClusterIssuer to use for database internal communication.\nThe `issuerRef` field is required.\nThis currently is only used for environmentd, but will eventually support clusterd.",
+        "description": "The cert-manager Issuer or ClusterIssuer to use for database internal communication.\nThe `issuerRef` field is required.\nThis currently is only used for environmentd, but will eventually support clusterd.\nNot yet implemented.",
         "default": null,
         "required": false,
         "deprecated": false

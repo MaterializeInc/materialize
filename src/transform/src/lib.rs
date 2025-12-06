@@ -57,7 +57,6 @@ use crate::redundant_join::RedundantJoin;
 use crate::reprtypecheck::{SharedContext as ReprSharedContext, Typecheck as ReprTypecheck};
 use crate::semijoin_idempotence::SemijoinIdempotence;
 use crate::threshold_elision::ThresholdElision;
-use crate::typecheck::{SharedContext, Typecheck};
 use crate::union_cancel::UnionBranchCancellation;
 use crate::will_distinct::WillDistinct;
 
@@ -92,7 +91,6 @@ pub mod redundant_join;
 pub mod reprtypecheck;
 pub mod semijoin_idempotence;
 pub mod threshold_elision;
-pub mod typecheck;
 pub mod union_cancel;
 pub mod will_distinct;
 
@@ -122,8 +120,6 @@ pub struct TransformCtx<'a> {
     pub stats: &'a dyn StatisticsOracle,
     /// Features passed to the enclosing `Optimizer`.
     pub features: &'a OptimizerFeatures,
-    /// Typechecking context.
-    pub typecheck_ctx: &'a SharedContext,
     /// Representation typechecking context.
     pub repr_typecheck_ctx: &'a ReprSharedContext,
     /// Transforms can use this field to communicate information outside the result plans.
@@ -145,7 +141,6 @@ impl<'a> TransformCtx<'a> {
     /// [`MirRelationExpr`].
     pub fn local(
         features: &'a OptimizerFeatures,
-        typecheck_ctx: &'a SharedContext,
         repr_typecheck_ctx: &'a ReprSharedContext,
         df_meta: &'a mut DataflowMetainfo,
         metrics: Option<&'a mut OptimizerMetrics>,
@@ -156,7 +151,6 @@ impl<'a> TransformCtx<'a> {
             stats: &EmptyStatisticsOracle,
             global_id,
             features,
-            typecheck_ctx,
             repr_typecheck_ctx,
             df_meta,
             metrics,
@@ -172,7 +166,6 @@ impl<'a> TransformCtx<'a> {
         indexes: &'a dyn IndexOracle,
         stats: &'a dyn StatisticsOracle,
         features: &'a OptimizerFeatures,
-        typecheck_ctx: &'a SharedContext,
         repr_typecheck_ctx: &'a ReprSharedContext,
         df_meta: &'a mut DataflowMetainfo,
         metrics: Option<&'a mut OptimizerMetrics>,
@@ -183,15 +176,10 @@ impl<'a> TransformCtx<'a> {
             global_id: None,
             features,
             df_meta,
-            typecheck_ctx,
             repr_typecheck_ctx,
             metrics,
             last_hash: Default::default(),
         }
-    }
-
-    fn typecheck(&self) -> SharedContext {
-        Arc::clone(self.typecheck_ctx)
     }
 
     fn repr_typecheck(&self) -> ReprSharedContext {
@@ -745,8 +733,7 @@ impl Optimizer {
     #[deprecated = "Create an Optimize instance and call `optimize` instead."]
     pub fn logical_optimizer(ctx: &mut TransformCtx) -> Self {
         let transforms: Vec<Box<dyn Transform>> = transforms![
-            Box::new(Typecheck::new(ctx.typecheck()).strict_join_equivalences()),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
+            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences()),
             // 1. Structure-agnostic cleanup
             Box::new(normalize()),
             Box::new(NonNullRequirements::default()),
@@ -795,11 +782,10 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                Typecheck::new(ctx.typecheck())
+                ReprTypecheck::new(ctx.repr_typecheck())
                     .disallow_new_globals()
-                    .strict_join_equivalences(),
+                    .strict_join_equivalences()
             ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
         ];
         Self {
             name: "logical",
@@ -816,12 +802,7 @@ impl Optimizer {
     pub fn physical_optimizer(ctx: &mut TransformCtx) -> Self {
         // Implementation transformations
         let transforms: Vec<Box<dyn Transform>> = transforms![
-            Box::new(
-                Typecheck::new(ctx.typecheck())
-                    .disallow_new_globals()
-                    .strict_join_equivalences(),
-            ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
+            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()),
             // Considerations for the relationship between JoinImplementation and other transforms:
             // - there should be a run of LiteralConstraints before JoinImplementation lifts away
             //   the Filters from the Gets;
@@ -884,12 +865,7 @@ impl Optimizer {
             // - `CollectIndexRequests` needs a normalized plan.
             //   https://github.com/MaterializeInc/database-issues/issues/6371
             Box::new(fold_constants_fixpoint(true)),
-            Box::new(
-                Typecheck::new(ctx.typecheck())
-                    .disallow_new_globals()
-                    .disallow_dummy(),
-            ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
+            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().disallow_dummy().strict_join_equivalences()),
         ];
         Self {
             name: "physical",
@@ -904,18 +880,14 @@ impl Optimizer {
     /// The first instance of the typechecker in an optimizer pipeline should
     /// allow new globals (or it will crash when it encounters them).
     pub fn logical_cleanup_pass(ctx: &mut TransformCtx, allow_new_globals: bool) -> Self {
-        let mut typechecker = Typecheck::new(ctx.typecheck()).strict_join_equivalences();
-
         let mut repr_typechecker =
             ReprTypecheck::new(ctx.repr_typecheck()).strict_join_equivalences();
         if !allow_new_globals {
-            typechecker = typechecker.disallow_new_globals();
             repr_typechecker = repr_typechecker.disallow_new_globals();
         }
 
         let transforms: Vec<Box<dyn Transform>> = transforms![
-            Box::new(typechecker),
-            Box::new(repr_typechecker); if ctx.features.enable_repr_typecheck,
+            Box::new(repr_typechecker),
             // Delete unnecessary maps.
             Box::new(fusion::Fusion),
             Box::new(Fixpoint {
@@ -943,11 +915,10 @@ impl Optimizer {
                 ],
             }),
             Box::new(
-                Typecheck::new(ctx.typecheck())
+                ReprTypecheck::new(ctx.repr_typecheck())
                     .disallow_new_globals()
-                    .strict_join_equivalences(),
+                    .strict_join_equivalences()
             ),
-            Box::new(ReprTypecheck::new(ctx.repr_typecheck()).disallow_new_globals().strict_join_equivalences()); if ctx.features.enable_repr_typecheck,
         ];
         Self {
             name: "logical_cleanup",

@@ -25,13 +25,12 @@ use maplit::btreemap;
 use tracing::trace;
 
 use crate::{
-    controller::materialize::{
-        Error, matching_image_from_environmentd_image_ref,
-        tls::{create_certificate, issuer_ref_defined},
-    },
+    controller::materialize::{Error, matching_image_from_environmentd_image_ref},
     k8s::{apply_resource, delete_resource, get_resource},
+    tls::{create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
+    ManagedResource,
     generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
     materialize::v1alpha1::Materialize,
 };
@@ -44,7 +43,7 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(config: &super::MaterializeControllerArgs, mz: &Materialize) -> Self {
+    pub fn new(config: &super::Config, mz: &Materialize) -> Self {
         let balancerd_external_certificate =
             Box::new(create_balancerd_external_certificate(config, mz));
         let balancerd_deployment = Box::new(create_balancerd_deployment_object(config, mz));
@@ -118,7 +117,7 @@ impl Resources {
 }
 
 fn create_balancerd_external_certificate(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
 ) -> Option<Certificate> {
     create_certificate(
@@ -133,10 +132,7 @@ fn create_balancerd_external_certificate(
     )
 }
 
-fn create_balancerd_deployment_object(
-    config: &super::MaterializeControllerArgs,
-    mz: &Materialize,
-) -> Deployment {
+fn create_balancerd_deployment_object(config: &super::Config, mz: &Materialize) -> Deployment {
     let security_context = if config.enable_security_context {
         // Since we want to adhere to the most restrictive security context, all
         // of these fields have to be set how they are.
@@ -378,10 +374,7 @@ fn create_balancerd_deployment_object(
     }
 }
 
-fn create_balancerd_service_object(
-    config: &super::MaterializeControllerArgs,
-    mz: &Materialize,
-) -> Service {
+fn create_balancerd_service_object(config: &super::Config, mz: &Materialize) -> Service {
     let selector =
         btreemap! {"materialize.cloud/name".to_string() => mz.balancerd_deployment_name()};
 

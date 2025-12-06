@@ -4457,17 +4457,17 @@ dependencies = [
 
 [[package]]
 name = "k8s-controller"
-version = "0.6.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "797c7fe6c6426d508eaf7f84fd80859b46d9b5a9fa49d3c31c7455669c599a1f"
+checksum = "0b99ed10ec81d75006ca38992b59e254e980e619a24cf421c147f42868a0e804"
 dependencies = [
  "async-trait",
  "futures",
- "k8s-openapi",
  "kube",
  "kube-runtime",
  "rand 0.9.2",
  "serde",
+ "thiserror 2.0.17",
  "tracing",
 ]
 
@@ -5478,7 +5478,7 @@ dependencies = [
 
 [[package]]
 name = "mz-balancerd"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5619,7 +5619,7 @@ dependencies = [
 
 [[package]]
 name = "mz-catalog-debug"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5782,7 +5782,7 @@ dependencies = [
 
 [[package]]
 name = "mz-clusterd"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -6083,7 +6083,7 @@ dependencies = [
 
 [[package]]
 name = "mz-environmentd"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "anyhow",
  "askama",
@@ -6593,7 +6593,7 @@ dependencies = [
 
 [[package]]
 name = "mz-materialized"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "mz-clusterd",
  "mz-environmentd",
@@ -6790,7 +6790,7 @@ dependencies = [
 
 [[package]]
 name = "mz-orchestratord"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6977,7 +6977,7 @@ dependencies = [
 
 [[package]]
 name = "mz-persist-client"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "anyhow",
  "arrayvec 0.7.6",
@@ -8084,7 +8084,7 @@ dependencies = [
 
 [[package]]
 name = "mz-testdrive"
-version = "26.3.0-dev.0"
+version = "26.4.0-dev.0"
 dependencies = [
  "anyhow",
  "arrow",
