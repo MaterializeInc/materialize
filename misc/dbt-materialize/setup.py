@@ -49,11 +49,11 @@ setup(
         ]
     },
     install_requires=[
-        "dbt-common>=1.10,<3.0",
-        "dbt-adapters>=1.7,<2.0",
+        "dbt-common>=1.10",
+        "dbt-adapters>=1.7",
         # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
         "dbt-core>=1.8.0",
-        "dbt-postgres>=1.8,<1.10",
+        "dbt-postgres>=1.8",
     ],
     extras_require=extras_require,
 )

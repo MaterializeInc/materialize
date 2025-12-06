@@ -182,6 +182,12 @@ updates:
     default-days: 3
   open-pull-requests-limit: 50
   labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
 - package-ecosystem: bundler
   directory: /test/lang/ruby
   schedule:
