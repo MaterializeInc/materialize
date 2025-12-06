@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"->\", output_type = \"Option<mz_repr::adt::jsonb::Jsonb>\")]\nfn jsonb_get_string<'a>(a: Datum<'a>, k: &str) -> Datum<'a> {\n    match a {\n        Datum::Map(dict) => {\n            match dict.iter().find(|(k2, _v)| k == *k2) {\n                Some((_k, v)) => v,\n                None => Datum::Null,\n            }\n        }\n        _ => Datum::Null,\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"->\", is_infix_op = true)]\nfn jsonb_get_string<'a>(a: JsonbRef<'a>, k: &str) -> Option<JsonbRef<'a>> {\n    let dict = DatumMap::try_from_result(Ok::<_, ()>(a.into_datum())).ok()?;\n    let v = dict.iter().find(|(k2, _v)| k == *k2).map(|(_k, v)| v)?;\n    JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(sqlname = \"->\", output_type = \"Option<mz_repr::adt::js
 )]
 pub struct JsonbGetString;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetString {
-    type Input1 = Datum<'a>;
+    type Input1 = JsonbRef<'a>;
     type Input2 = &'a str;
-    type Output = Datum<'a>;
+    type Output = Option<JsonbRef<'a>>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetString {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Option<mz_repr::adt::jsonb::Jsonb>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,8 +46,8 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetString {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <Option<mz_repr::adt::jsonb::Jsonb> as ::mz_repr::DatumType<'_, ()>>::nullable()
+    fn is_infix_op(&self) -> bool {
+        true
     }
 }
 impl std::fmt::Display for JsonbGetString {
@@ -55,14 +55,8 @@ impl std::fmt::Display for JsonbGetString {
         f.write_str("->")
     }
 }
-fn jsonb_get_string<'a>(a: Datum<'a>, k: &str) -> Datum<'a> {
-    match a {
-        Datum::Map(dict) => {
-            match dict.iter().find(|(k2, _v)| k == *k2) {
-                Some((_k, v)) => v,
-                None => Datum::Null,
-            }
-        }
-        _ => Datum::Null,
-    }
+fn jsonb_get_string<'a>(a: JsonbRef<'a>, k: &str) -> Option<JsonbRef<'a>> {
+    let dict = DatumMap::try_from_result(Ok::<_, ()>(a.into_datum())).ok()?;
+    let v = dict.iter().find(|(k2, _v)| k == *k2).map(|(_k, v)| v)?;
+    JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()
 }

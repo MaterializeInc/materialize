@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    sqlname = \"#>\",\n    output_type = \"Option<mz_repr::adt::jsonb::Jsonb>\",\n    is_infix_op = true\n)]\nfn jsonb_get_path<'a>(a: Datum<'a>, b: Array<'a>) -> Datum<'a> {\n    let mut json = a;\n    let path = b.elements();\n    for key in path.iter() {\n        let key = match key {\n            Datum::String(s) => s,\n            Datum::Null => return Datum::Null,\n            _ => unreachable!(\"keys in jsonb_get_path known to be strings\"),\n        };\n        json = match json {\n            Datum::Map(map) => {\n                match map.iter().find(|(k, _)| key == *k) {\n                    Some((_k, v)) => v,\n                    None => return Datum::Null,\n                }\n            }\n            Datum::List(list) => {\n                match strconv::parse_int64(key) {\n                    Ok(i) => {\n                        let i = if i >= 0 {\n                            usize::cast_from(i.unsigned_abs())\n                        } else {\n                            let i = usize::cast_from(i.unsigned_abs());\n                            (list.iter().count()).wrapping_sub(i)\n                        };\n                        match list.iter().nth(i) {\n                            Some(e) => e,\n                            None => return Datum::Null,\n                        }\n                    }\n                    Err(_) => return Datum::Null,\n                }\n            }\n            _ => return Datum::Null,\n        };\n    }\n    json\n}\n"
+expression: "#[sqlfunc(sqlname = \"#>\", is_infix_op = true)]\nfn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'a>> {\n    let path = b.elements();\n    for key in path.iter() {\n        let key = match key {\n            Datum::String(s) => s,\n            Datum::Null => return None,\n            _ => unreachable!(\"keys in jsonb_get_path known to be strings\"),\n        };\n        let v = match json.into_datum() {\n            Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),\n            Datum::List(list) => {\n                let i = strconv::parse_int64(key).ok()?;\n                let i = if i >= 0 {\n                    usize::cast_from(i.unsigned_abs())\n                } else {\n                    let i = usize::cast_from(i.unsigned_abs());\n                    (list.iter().count()).wrapping_sub(i)\n                };\n                list.iter().nth(i)\n            }\n            _ => return None,\n        }?;\n        json = JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()?;\n    }\n    Some(json)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    sqlname = \"#>\",\n    output_type = \"Option<mz_re
 )]
 pub struct JsonbGetPath;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetPath {
-    type Input1 = Datum<'a>;
+    type Input1 = JsonbRef<'a>;
     type Input2 = Array<'a>;
-    type Output = Datum<'a>;
+    type Output = Option<JsonbRef<'a>>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetPath {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Option<mz_repr::adt::jsonb::Jsonb>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetPath {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <Option<mz_repr::adt::jsonb::Jsonb> as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn is_infix_op(&self) -> bool {
         true
     }
@@ -58,41 +55,29 @@ impl std::fmt::Display for JsonbGetPath {
         f.write_str("#>")
     }
 }
-fn jsonb_get_path<'a>(a: Datum<'a>, b: Array<'a>) -> Datum<'a> {
-    let mut json = a;
+fn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'a>> {
     let path = b.elements();
     for key in path.iter() {
         let key = match key {
             Datum::String(s) => s,
-            Datum::Null => return Datum::Null,
+            Datum::Null => return None,
             _ => unreachable!("keys in jsonb_get_path known to be strings"),
         };
-        json = match json {
-            Datum::Map(map) => {
-                match map.iter().find(|(k, _)| key == *k) {
-                    Some((_k, v)) => v,
-                    None => return Datum::Null,
-                }
-            }
+        let v = match json.into_datum() {
+            Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),
             Datum::List(list) => {
-                match strconv::parse_int64(key) {
-                    Ok(i) => {
-                        let i = if i >= 0 {
-                            usize::cast_from(i.unsigned_abs())
-                        } else {
-                            let i = usize::cast_from(i.unsigned_abs());
-                            (list.iter().count()).wrapping_sub(i)
-                        };
-                        match list.iter().nth(i) {
-                            Some(e) => e,
-                            None => return Datum::Null,
-                        }
-                    }
-                    Err(_) => return Datum::Null,
-                }
+                let i = strconv::parse_int64(key).ok()?;
+                let i = if i >= 0 {
+                    usize::cast_from(i.unsigned_abs())
+                } else {
+                    let i = usize::cast_from(i.unsigned_abs());
+                    (list.iter().count()).wrapping_sub(i)
+                };
+                list.iter().nth(i)
             }
-            _ => return Datum::Null,
-        };
+            _ => return None,
+        }?;
+        json = JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()?;
     }
-    json
+    Some(json)
 }

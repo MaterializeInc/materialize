@@ -1743,13 +1743,9 @@ fn to_char_timestamp_tz_format(
     fmt.render(&*ts)
 }
 
-#[sqlfunc(
-    sqlname = "->",
-    output_type = "Option<mz_repr::adt::jsonb::Jsonb>",
-    is_infix_op = true
-)]
-fn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {
-    match a {
+#[sqlfunc(sqlname = "->", is_infix_op = true)]
+fn jsonb_get_int64<'a>(a: JsonbRef<'a>, i: i64) -> Option<JsonbRef<'a>> {
+    match a.into_datum() {
         Datum::List(list) => {
             let i = if i >= 0 {
                 usize::cast_from(i.unsigned_abs())
@@ -1758,130 +1754,84 @@ fn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {
                 let i = usize::cast_from(i.unsigned_abs());
                 (list.iter().count()).wrapping_sub(i)
             };
-            match list.iter().nth(i) {
-                Some(d) => d,
-                None => Datum::Null,
-            }
+            let v = list.iter().nth(i)?;
+            // `v` should be valid jsonb because it came from a jsonb list, but we don't
+            // panic on mismatch to avoid bringing down the whole system on corrupt data.
+            // Instead, we'll return None.
+            JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()
         }
-        Datum::Map(_) => Datum::Null,
+        Datum::Map(_) => None,
         _ => {
-            if i == 0 || i == -1 {
-                // I have no idea why postgres does this, but we're stuck with it
-                a
-            } else {
-                Datum::Null
-            }
+            // I have no idea why postgres does this, but we're stuck with it
+            (i == 0 || i == -1).then_some(a)
         }
     }
 }
 
 #[sqlfunc(sqlname = "->>", is_infix_op = true)]
 fn jsonb_get_int64_stringify<'a>(
-    a: Datum<'a>,
+    a: JsonbRef<'a>,
     i: i64,
     temp_storage: &'a RowArena,
 ) -> Option<&'a str> {
-    match a {
-        Datum::List(list) => {
-            let i = if i >= 0 {
-                usize::cast_from(i.unsigned_abs())
-            } else {
-                // index backwards from the end
-                let i = usize::cast_from(i.unsigned_abs());
-                (list.iter().count()).wrapping_sub(i)
-            };
-            match list.iter().nth(i) {
-                Some(d) => jsonb_stringify(d, temp_storage),
-                None => None,
-            }
-        }
-        Datum::Map(_) => None,
-        _ => {
-            if i == 0 || i == -1 {
-                // I have no idea why postgres does this, but we're stuck with it
-                jsonb_stringify(a, temp_storage)
-            } else {
-                None
-            }
-        }
-    }
+    let json = jsonb_get_int64(a, i)?;
+    jsonb_stringify(json.into_datum(), temp_storage)
 }
 
-#[sqlfunc(sqlname = "->", output_type = "Option<mz_repr::adt::jsonb::Jsonb>")]
-fn jsonb_get_string<'a>(a: Datum<'a>, k: &str) -> Datum<'a> {
-    match a {
-        Datum::Map(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
-            Some((_k, v)) => v,
-            None => Datum::Null,
-        },
-        _ => Datum::Null,
-    }
+#[sqlfunc(sqlname = "->", is_infix_op = true)]
+fn jsonb_get_string<'a>(a: JsonbRef<'a>, k: &str) -> Option<JsonbRef<'a>> {
+    let dict = DatumMap::try_from_result(Ok::<_, ()>(a.into_datum())).ok()?;
+    let v = dict.iter().find(|(k2, _v)| k == *k2).map(|(_k, v)| v)?;
+    JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()
 }
 
 #[sqlfunc(sqlname = "->>", is_infix_op = true)]
 fn jsonb_get_string_stringify<'a>(
-    a: Datum<'a>,
+    a: JsonbRef<'a>,
     k: &str,
     temp_storage: &'a RowArena,
 ) -> Option<&'a str> {
-    match a {
-        Datum::Map(dict) => match dict.iter().find(|(k2, _v)| k == *k2) {
-            Some((_k, v)) => jsonb_stringify(v, temp_storage),
-            None => None,
-        },
-        _ => None,
-    }
+    let v = jsonb_get_string(a, k)?;
+    jsonb_stringify(v.into_datum(), temp_storage)
 }
 
-#[sqlfunc(
-    sqlname = "#>",
-    output_type = "Option<mz_repr::adt::jsonb::Jsonb>",
-    is_infix_op = true
-)]
-fn jsonb_get_path<'a>(a: Datum<'a>, b: Array<'a>) -> Datum<'a> {
-    let mut json = a;
+#[sqlfunc(sqlname = "#>", is_infix_op = true)]
+fn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'a>> {
     let path = b.elements();
     for key in path.iter() {
         let key = match key {
             Datum::String(s) => s,
-            Datum::Null => return Datum::Null,
+            Datum::Null => return None,
             _ => unreachable!("keys in jsonb_get_path known to be strings"),
         };
-        json = match json {
-            Datum::Map(map) => match map.iter().find(|(k, _)| key == *k) {
-                Some((_k, v)) => v,
-                None => return Datum::Null,
-            },
-            Datum::List(list) => match strconv::parse_int64(key) {
-                Ok(i) => {
-                    let i = if i >= 0 {
-                        usize::cast_from(i.unsigned_abs())
-                    } else {
-                        // index backwards from the end
-                        let i = usize::cast_from(i.unsigned_abs());
-                        (list.iter().count()).wrapping_sub(i)
-                    };
-                    match list.iter().nth(i) {
-                        Some(e) => e,
-                        None => return Datum::Null,
-                    }
-                }
-                Err(_) => return Datum::Null,
-            },
-            _ => return Datum::Null,
-        }
+        let v = match json.into_datum() {
+            Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),
+            Datum::List(list) => {
+                let i = strconv::parse_int64(key).ok()?;
+                let i = if i >= 0 {
+                    usize::cast_from(i.unsigned_abs())
+                } else {
+                    // index backwards from the end
+                    let i = usize::cast_from(i.unsigned_abs());
+                    (list.iter().count()).wrapping_sub(i)
+                };
+                list.iter().nth(i)
+            }
+            _ => return None,
+        }?;
+        json = JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()?;
     }
-    json
+    Some(json)
 }
 
 #[sqlfunc(sqlname = "#>>", is_infix_op = true)]
 fn jsonb_get_path_stringify<'a>(
-    a: Datum<'a>,
+    a: JsonbRef<'a>,
     b: Array<'a>,
     temp_storage: &'a RowArena,
 ) -> Option<&'a str> {
-    let json = jsonb_get_path(a, b);
-    jsonb_stringify(json, temp_storage)
+    let json = jsonb_get_path(a, b)?;
+    jsonb_stringify(json.into_datum(), temp_storage)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "?", propagates_nulls = true)]

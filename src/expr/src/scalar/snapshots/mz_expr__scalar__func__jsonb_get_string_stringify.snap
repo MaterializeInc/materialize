@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"->>\", is_infix_op = true)]\nfn jsonb_get_string_stringify<'a>(\n    a: Datum<'a>,\n    k: &str,\n    temp_storage: &'a RowArena,\n) -> Option<&'a str> {\n    match a {\n        Datum::Map(dict) => {\n            match dict.iter().find(|(k2, _v)| k == *k2) {\n                Some((_k, v)) => jsonb_stringify(v, temp_storage),\n                None => None,\n            }\n        }\n        _ => None,\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"->>\", is_infix_op = true)]\nfn jsonb_get_string_stringify<'a>(\n    a: JsonbRef<'a>,\n    k: &str,\n    temp_storage: &'a RowArena,\n) -> Option<&'a str> {\n    let v = jsonb_get_string(a, k)?;\n    jsonb_stringify(v.into_datum(), temp_storage)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(sqlname = \"->>\", is_infix_op = true)]\nfn jsonb_get_str
 )]
 pub struct JsonbGetStringStringify;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetStringStringify {
-    type Input1 = Datum<'a>;
+    type Input1 = JsonbRef<'a>;
     type Input2 = &'a str;
     type Output = Option<&'a str>;
     fn call(
@@ -56,17 +56,10 @@ impl std::fmt::Display for JsonbGetStringStringify {
     }
 }
 fn jsonb_get_string_stringify<'a>(
-    a: Datum<'a>,
+    a: JsonbRef<'a>,
     k: &str,
     temp_storage: &'a RowArena,
 ) -> Option<&'a str> {
-    match a {
-        Datum::Map(dict) => {
-            match dict.iter().find(|(k2, _v)| k == *k2) {
-                Some((_k, v)) => jsonb_stringify(v, temp_storage),
-                None => None,
-            }
-        }
-        _ => None,
-    }
+    let v = jsonb_get_string(a, k)?;
+    jsonb_stringify(v.into_datum(), temp_storage)
 }
