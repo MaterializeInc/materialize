@@ -92,6 +92,7 @@ ERROR_RE = re.compile(
     | SUMMARY:\ .*Sanitizer
     | primary\ source\ \w+\ seemingly\ dropped\ before\ subsource
     | :\ test\ timed\ out
+    | very\ slow\ coordinator\ message
     # Only notifying on unexpected failures. INT, TRAP, BUS, FPE, SEGV, PIPE
     | \ ANOM_ABEND\ .*\ sig=(2|5|7|8|11|13)
     # \s\S is any character including newlines, so this matches multiline strings
