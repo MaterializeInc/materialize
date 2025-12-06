@@ -237,6 +237,59 @@ impl Pretty {
         intersperse_line_nest(docs)
     }
 
+    pub(crate) fn doc_create_cluster<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateClusterStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = vec![nest_title("CREATE CLUSTER", self.doc_display_pass(&v.name))];
+        if !v.options.is_empty() {
+            docs.push(bracket(
+                "(",
+                comma_separate(|o| self.doc_display_pass(o), &v.options),
+                ")",
+            ));
+        }
+        if !v.features.is_empty() {
+            docs.push(bracket(
+                "FEATURES (",
+                comma_separate(|f| self.doc_display_pass(f), &v.features),
+                ")",
+            ));
+        }
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
+    pub(crate) fn doc_create_type<'a, T: AstInfo>(
+        &'a self,
+        v: &'a CreateTypeStatement<T>,
+    ) -> RcDoc<'a> {
+        let mut docs = vec![nest_title("CREATE TYPE", self.doc_display_pass(&v.name))];
+        match &v.as_type {
+            CreateTypeAs::List { options } => {
+                docs.push(bracket(
+                    "AS LIST (",
+                    comma_separate(|o| self.doc_display_pass(o), options),
+                    ")",
+                ));
+            }
+            CreateTypeAs::Map { options } => {
+                docs.push(bracket(
+                    "AS MAP (",
+                    comma_separate(|o| self.doc_display_pass(o), options),
+                    ")",
+                ));
+            }
+            CreateTypeAs::Record { column_defs } => {
+                docs.push(bracket(
+                    "AS (",
+                    comma_separate(|c| self.doc_display_pass(c), column_defs),
+                    ")",
+                ));
+            }
+        }
+        RcDoc::intersperse(docs, Doc::line()).group()
+    }
+
     pub(crate) fn doc_create_materialized_view<'a, T: AstInfo>(
         &'a self,
         v: &'a CreateMaterializedViewStatement<T>,

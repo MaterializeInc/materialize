@@ -88,10 +88,83 @@ impl Pretty {
             Statement::Insert(v) => self.doc_insert(v),
             Statement::CreateView(v) => self.doc_create_view(v),
             Statement::CreateMaterializedView(v) => self.doc_create_materialized_view(v),
+            Statement::CreateCluster(v) => self.doc_create_cluster(v),
+            Statement::CreateType(v) => self.doc_create_type(v),
             Statement::Copy(v) => self.doc_copy(v),
             Statement::Subscribe(v) => self.doc_subscribe(v),
             Statement::CreateSource(v) => self.doc_create_source(v),
             _ => self.doc_display(v, "statement"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_create_cluster() {
+        let input = "CREATE CLUSTER foo (SIZE = '1')";
+        let expected = "CREATE CLUSTER foo (SIZE = '1');";
+        let result = pretty_str_simple(input, 100).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_create_cluster_multiple_options() {
+        let input = "CREATE CLUSTER foo (SIZE = '1', REPLICATION FACTOR = 2)";
+        let expected = "CREATE CLUSTER foo (SIZE = '1', REPLICATION FACTOR = 2);";
+        let result = pretty_str_simple(input, 100).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_create_cluster_with_features() {
+        let input = "CREATE CLUSTER foo (SIZE = '1') FEATURES (ENABLE EAGER DELTA JOINS = true)";
+        let expected =
+            "CREATE CLUSTER foo (SIZE = '1') FEATURES (ENABLE EAGER DELTA JOINS = true);";
+        let result = pretty_str_simple(input, 100).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_create_cluster_wrapping() {
+        let input = "CREATE CLUSTER foo (SIZE = '1', REPLICATION FACTOR = 2)";
+        let expected = "CREATE CLUSTER foo\n(\n    SIZE = '1',\n    REPLICATION FACTOR = 2\n);";
+        let result = pretty_str_simple(input, 30).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_create_type_list() {
+        let input = "CREATE TYPE custom AS LIST (ELEMENT TYPE = text)";
+        let expected = "CREATE TYPE custom AS LIST (ELEMENT TYPE = text);";
+        let result = pretty_str_simple(input, 100).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_create_type_map() {
+        let input = "CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)";
+        let expected = "CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool);";
+        let result = pretty_str_simple(input, 100).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_create_type_record() {
+        let input = "CREATE TYPE custom AS (a int, b text)";
+        let expected = "CREATE TYPE custom AS (a int4, b text);";
+        let result = pretty_str_simple(input, 100).unwrap();
+        assert_eq!(result, expected);
+    }
+
+    #[mz_ore::test]
+    fn test_create_type_map_wrapping() {
+        let input = "CREATE TYPE custom AS MAP (KEY TYPE = text, VALUE TYPE = bool)";
+        let expected =
+            "CREATE TYPE custom\nAS MAP (\n    KEY TYPE = text,\n    VALUE TYPE = bool\n);";
+        let result = pretty_str_simple(input, 30).unwrap();
+        assert_eq!(result, expected);
     }
 }
