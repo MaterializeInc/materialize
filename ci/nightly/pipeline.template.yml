@@ -2412,7 +2412,8 @@ steps:
               run: upgrade-downtime
               ci-builder: stable
         agents:
-          queue: hetzner-aarch64-16cpu-32gb
+          # More stable results for recording benchmarks
+          queue: hetzner-x86-64-dedi-8cpu-32gb
 
       - id: orchestratord-default-properties
         label: "Orchestratord + defaults for properties"

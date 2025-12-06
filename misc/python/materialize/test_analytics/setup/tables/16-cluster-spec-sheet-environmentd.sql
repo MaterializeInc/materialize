@@ -8,7 +8,6 @@
 -- by the Apache License, Version 2.0.
 
 
--- result of individual product limits scenarios
 CREATE TABLE cluster_spec_sheet_environmentd_result (
    build_job_id TEXT NOT NULL,
    framework_version TEXT NOT NULL,

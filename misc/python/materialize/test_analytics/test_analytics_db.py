@@ -47,6 +47,9 @@ from materialize.test_analytics.data.product_limits.product_limits_result_storag
 from materialize.test_analytics.data.scalability_framework.scalability_framework_result_storage import (
     ScalabilityFrameworkResultStorage,
 )
+from materialize.test_analytics.data.upgrade_downtime.upgrade_downtime_result_storage import (
+    UpgradeDowntimeResultStorage,
+)
 
 TEST_ANALYTICS_DATA_VERSION: int = 21
 
@@ -82,6 +85,9 @@ class TestAnalyticsDb:
         )
         self.cluster_spec_sheet_environmentd_results = (
             ClusterSpecSheetEnvironmentdResultStorage(self.database_connector)
+        )
+        self.upgrade_downtime_results = UpgradeDowntimeResultStorage(
+            self.database_connector
         )
 
     def _create_database_connector(self, config: MzDbConfig) -> DatabaseConnector:
