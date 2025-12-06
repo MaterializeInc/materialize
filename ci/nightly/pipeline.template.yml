@@ -232,9 +232,9 @@ steps:
                 - --workload-group-marker
                 - "ConnectionWorkload"
                 - --exponent-base
-                - "2.5"
+                - "2"
                 - --max-concurrency
-                - "2048"
+                - "1024"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64
