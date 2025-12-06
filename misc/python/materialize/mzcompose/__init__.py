@@ -45,21 +45,21 @@ DEFAULT_MZ_VOLUMES = [
 
 # Parameters which disable systems that periodically/unpredictably impact performance
 ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
-    "enable_statement_lifecycle_logging": "false",
-    "persist_catalog_force_compaction_fuel": "0",
-    "statement_logging_default_sample_rate": "0",
-    "statement_logging_max_sample_rate": "0",
-    # Default of 128 MB increases memory usage by a lot for some small
-    # performance in benchmarks, see for example FastPathLimit scenario: 55%
-    # more memory, 5% faster
-    "persist_blob_cache_mem_limit_bytes": "1048576",
-    # This would increase the memory usage of many tests, making it harder to
-    # tell small memory increase regressions
-    "persist_blob_cache_scale_with_threads": "false",
-    # The peek response stash kicks in when results get larger, and it
-    # increases query latency. Which in turn makes benchmarking more
-    # unpredictable.
-    "enable_compute_peek_response_stash": "false",
+    # "enable_statement_lifecycle_logging": "false",
+    # "persist_catalog_force_compaction_fuel": "0",
+    # "statement_logging_default_sample_rate": "0",
+    # "statement_logging_max_sample_rate": "0",
+    # # Default of 128 MB increases memory usage by a lot for some small
+    # # performance in benchmarks, see for example FastPathLimit scenario: 55%
+    # # more memory, 5% faster
+    # "persist_blob_cache_mem_limit_bytes": "1048576",
+    # # This would increase the memory usage of many tests, making it harder to
+    # # tell small memory increase regressions
+    # "persist_blob_cache_scale_with_threads": "false",
+    # # The peek response stash kicks in when results get larger, and it
+    # # increases query latency. Which in turn makes benchmarking more
+    # # unpredictable.
+    # "enable_compute_peek_response_stash": "false",
 }
 
 
