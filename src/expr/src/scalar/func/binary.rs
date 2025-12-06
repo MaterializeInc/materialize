@@ -291,7 +291,7 @@ mod derive {
         LikeEscape,
         // ListContainsList
         ListElementConcat,
-        // ListLengthMax
+        ListLengthMax,
         ListListConcat,
         ListRemove,
         LogNumeric(LogBaseNumeric),

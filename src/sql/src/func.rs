@@ -3753,7 +3753,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             vec![ListAny, Plain(SqlScalarType::Int64)] => Operation::binary(|ecx, lhs, rhs| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
+                Ok(lhs.call_binary(rhs, BinaryFunc::from(func::ListLengthMax { max_layer })))
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
         },
         "list_prepend" => Scalar {
