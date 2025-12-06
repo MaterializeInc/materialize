@@ -56,6 +56,7 @@ pub mod lex;
 )]
 #[cfg(all(feature = "bytes", feature = "region", feature = "tracing"))]
 pub mod lgbytes;
+pub mod madvise;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "metrics")))]
 #[cfg(feature = "metrics")]
 pub mod metrics;

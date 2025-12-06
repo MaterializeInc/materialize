@@ -15,6 +15,7 @@
 
 //! Region-allocated data utilities.
 
+use crate::madvise::{AccessPattern, MAdvise};
 use std::fmt::{Debug, Formatter};
 use std::mem::ManuallyDrop;
 use std::ops::{Deref, DerefMut};
@@ -441,5 +442,19 @@ impl<T> Drop for MMapRegion<T> {
     fn drop(&mut self) {
         // Similar to dropping Region: Drop the allocation, don't drop the `inner` vector.
         lgalloc::deallocate(self.handle.take().unwrap());
+    }
+}
+
+impl<T> MAdvise for Region<T> {
+    fn madvise(&self, advice: AccessPattern) {
+        let slice: &[T] = self;
+        if slice.is_empty() {
+            return;
+        }
+        let ptr = slice.as_ptr() as *const u8;
+        let len = std::mem::size_of_val(slice);
+        // SAFETY: ptr is valid and points to initialized memory of length `len`.
+        // madvise is advisory - failures are acceptable and silently ignored.
+        let _ = unsafe { madvise::madvise(ptr, len, advice) };
     }
 }

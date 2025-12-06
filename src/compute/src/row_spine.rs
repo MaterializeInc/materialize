@@ -11,8 +11,8 @@ pub use self::container::DatumContainer;
 pub use self::container::DatumSeq;
 pub use self::offset_opt::OffsetOptimized;
 pub use self::spines::{
-    RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine, RowValBatcher,
-    RowValBuilder, RowValSpine,
+    AdviseBatch, RowBatcher, RowBuilder, RowRowBatcher, RowRowBuilder, RowRowSpine, RowSpine,
+    RowValBatcher, RowValBuilder, RowValSpine,
 };
 use differential_dataflow::trace::implementations::OffsetList;
 
@@ -27,6 +27,7 @@ mod spines {
     use differential_dataflow::trace::implementations::ord_neu::{OrdValBatch, OrdValBuilder};
     use differential_dataflow::trace::implementations::spine_fueled::Spine;
     use differential_dataflow::trace::rc_blanket_impls::RcBuilder;
+    use mz_ore::madvise::{AccessPattern, MAdvise};
     use mz_repr::Row;
 
     use crate::row_spine::{DatumContainer, OffsetOptimized};
@@ -92,6 +93,45 @@ mod spines {
         type DiffContainer = TimelyStack<U::Diff>;
         type OffsetContainer = OffsetOptimized;
     }
+
+    /// A trait for advising the kernel about memory access patterns on batch storage.
+    pub trait AdviseBatch {
+        /// Advise the kernel about the expected access pattern for this batch's storage.
+        fn madvise(&self, advice: AccessPattern);
+    }
+
+    impl<U: Update<Key = Row, Val = Row>> AdviseBatch for Rc<OrdValBatch<RowRowLayout<U>>>
+    where
+        U::Time: Columnation,
+        U::Diff: Columnation,
+    {
+        fn madvise(&self, advice: AccessPattern) {
+            self.storage.keys.madvise(advice);
+            self.storage.vals.vals.madvise(advice);
+        }
+    }
+
+    impl<U: Update<Key = Row>> AdviseBatch for Rc<OrdValBatch<RowValLayout<U>>>
+    where
+        U::Val: Columnation,
+        U::Time: Columnation,
+        U::Diff: Columnation,
+    {
+        fn madvise(&self, advice: AccessPattern) {
+            self.storage.keys.madvise(advice);
+            // vals uses TimelyStack which doesn't have our AdviseMemory impl
+        }
+    }
+
+    impl<U: Update<Key = Row, Val = ()>> AdviseBatch for Rc<OrdKeyBatch<RowLayout<U>>>
+    where
+        U::Time: Columnation,
+        U::Diff: Columnation,
+    {
+        fn madvise(&self, advice: AccessPattern) {
+            self.storage.keys.madvise(advice);
+        }
+    }
 }
 
 /// A `Row`-specialized container using dictionary compression.
@@ -100,6 +140,7 @@ mod container {
     use std::cmp::Ordering;
 
     use differential_dataflow::trace::implementations::BatchContainer;
+    use mz_ore::madvise::{AccessPattern, MAdvise};
     use timely::container::PushInto;
 
     use mz_repr::{Datum, Row, RowPacker, read_datum};
@@ -286,6 +327,12 @@ mod container {
         }
     }
 
+    impl MAdvise for DatumContainer {
+        fn madvise(&self, advice: AccessPattern) {
+            self.bytes.madvise(advice);
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use crate::row_spine::DatumContainer;
@@ -365,6 +412,7 @@ mod bytes_container {
     use differential_dataflow::trace::implementations::BatchContainer;
     use timely::container::PushInto;
 
+    use mz_ore::madvise::{AccessPattern, MAdvise};
     use mz_ore::region::Region;
 
     /// A slice container with four bytes overhead per slice.
@@ -527,6 +575,20 @@ mod bytes_container {
                 offsets,
                 storage: Region::new_auto(byte_cap.next_power_of_two()),
                 len: 0,
+            }
+        }
+    }
+
+    impl MAdvise for BytesBatch {
+        fn madvise(&self, advice: AccessPattern) {
+            self.storage.madvise(advice);
+        }
+    }
+
+    impl MAdvise for BytesContainer {
+        fn madvise(&self, advice: AccessPattern) {
+            for batch in &self.batches {
+                batch.madvise(advice);
             }
         }
     }

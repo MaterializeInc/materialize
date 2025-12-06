@@ -4954,6 +4954,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "madvise"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e1e75c3c34c2b34cec9f127418cb35240c7ebee5de36a51437e6b382c161b86"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "maplit"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6858,6 +6867,7 @@ dependencies = [
  "itertools 0.14.0",
  "lgalloc",
  "libc",
+ "madvise",
  "mz-ore",
  "mz-ore-proc",
  "native-tls",
