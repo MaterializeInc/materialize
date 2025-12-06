@@ -821,10 +821,6 @@ mod test {
             &i32_ty,
         );
 
-        // JsonbGet* have a `stringify` parameter that doesn't work with the sqlfunc macro.
-        // check(func::JsonbGetInt64, BF::JsonbGetInt64, &i32_ty, &i32_ty);
-        // check(func::JsonbGetString, BF::JsonbGetString, &i32_ty, &i32_ty);
-        // check(func::JsonbGetPath, BF::JsonbGetPath, &i32_ty, &i32_ty);
         check(
             func::ListContainsList,
             BF::ListContainsList { rev: false },
