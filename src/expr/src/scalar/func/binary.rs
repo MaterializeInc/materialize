@@ -293,7 +293,7 @@ mod derive {
         ListContainsList,
         ListContainsListRev,
         ListElementConcat,
-        // ListLengthMax
+        ListLengthMax,
         ListListConcat,
         ListRemove,
         LogNumeric(LogBaseNumeric),
