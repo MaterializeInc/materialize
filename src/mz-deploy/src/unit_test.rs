@@ -318,10 +318,10 @@ mod tests {
     fn test_flatten_fqn() {
         assert_eq!(
             flatten_fqn("materialize.public.flippers"),
-            "materialize_public_flippers"
+            "\"materialize.public.flippers\""
         );
-        assert_eq!(flatten_fqn("a.b.c"), "a_b_c");
-        assert_eq!(flatten_fqn("single"), "single");
+        assert_eq!(flatten_fqn("a.b.c"), "\"a.b.c\"");
+        assert_eq!(flatten_fqn("single"), "\"single\"");
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
 
         let sql = create_mock_view_sql(&mock);
 
-        assert!(sql.contains("CREATE TEMPORARY VIEW materialize_public_users"));
+        assert!(sql.contains("CREATE TEMPORARY VIEW \"materialize.public.users\""));
         assert!(sql.contains("WITH MUTUALLY RECURSIVE data(id BIGINT, name TEXT)"));
         assert!(sql.contains("SELECT * FROM VALUES ((1, 'alice'))"));
         assert!(sql.contains("SELECT * FROM data"));

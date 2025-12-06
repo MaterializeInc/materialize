@@ -1170,3 +1170,799 @@ fn test_validate_cluster_isolation_only_storage_objects() {
         "Should succeed when cluster only has storage objects (sources + sinks)"
     );
 }
+
+// ============================================================================
+// Edge case tests for external dependency extraction
+// ============================================================================
+
+#[test]
+fn test_dependencies_through_lateral_join() {
+    // Test that LATERAL join dependencies are extracted correctly
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT grp.category, sub.total
+        FROM (SELECT DISTINCT category FROM categories) grp,
+        LATERAL (
+            SELECT SUM(amount) as total
+            FROM sales
+            WHERE sales.category = grp.category
+        ) sub
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on both categories and sales
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "categories".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "sales".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_in_window_function() {
+    // Test that dependencies in window function PARTITION BY/ORDER BY are extracted
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT
+            id,
+            amount,
+            SUM(amount) OVER (PARTITION BY category ORDER BY created_at) as running_total,
+            RANK() OVER (PARTITION BY region ORDER BY amount DESC) as rank
+        FROM orders
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependency on orders
+        assert_eq!(deps.len(), 1, "Expected 1 dependency, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "orders".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_in_window_function_with_subquery() {
+    // Test window function with a scalar subquery in the frame
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT
+            id,
+            amount,
+            amount - (SELECT AVG(amount) FROM sales) as diff_from_avg
+        FROM orders
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on both orders and sales
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "orders".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "sales".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_in_union() {
+    // Test that UNION queries extract dependencies from all branches
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT id, name FROM customers
+        UNION
+        SELECT id, name FROM vendors
+        UNION ALL
+        SELECT id, name FROM partners
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on all three tables
+        assert_eq!(deps.len(), 3, "Expected 3 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "customers".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "vendors".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "partners".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_in_intersect_except() {
+    // Test that INTERSECT and EXCEPT queries extract dependencies
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT id FROM all_users
+        INTERSECT
+        SELECT id FROM active_users
+        EXCEPT
+        SELECT id FROM banned_users
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on all three tables
+        assert_eq!(deps.len(), 3, "Expected 3 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "all_users".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "active_users".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "banned_users".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_with_self_join() {
+    // Test self-join where the same table appears twice with different aliases
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT e.id, e.name, m.name as manager_name
+        FROM employees e
+        LEFT JOIN employees m ON e.manager_id = m.id
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have only one dependency (employees) even though it's used twice
+        assert_eq!(deps.len(), 1, "Expected 1 dependency (self-join), found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "employees".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_nested_derived_tables() {
+    // Test deeply nested derived tables (subqueries in FROM)
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT *
+        FROM (
+            SELECT *
+            FROM (
+                SELECT *
+                FROM (
+                    SELECT * FROM deep_table
+                ) level1
+            ) level2
+        ) level3
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should extract dependency from deeply nested subquery
+        assert_eq!(deps.len(), 1, "Expected 1 dependency from nested subquery, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "deep_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_cross_schema_reference() {
+    // Test that cross-schema references are extracted with correct schema
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT a.id, b.name
+        FROM public.table1 a
+        JOIN internal.table2 b ON a.id = b.id
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies in different schemas
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "table1".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "internal".to_string(),
+            "table2".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_cross_database_reference() {
+    // Test that cross-database references are extracted with correct database
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT a.id, b.name
+        FROM db1.schema1.table1 a
+        JOIN db2.schema2.table2 b ON a.id = b.id
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies in different databases
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db1".to_string(),
+            "schema1".to_string(),
+            "table1".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db2".to_string(),
+            "schema2".to_string(),
+            "table2".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_with_values_clause() {
+    // Test that VALUES clause doesn't create dependencies
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT * FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c')) AS t(id, name)
+        UNION ALL
+        SELECT id, name FROM real_table
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should only have dependency on real_table, not the VALUES clause
+        assert_eq!(deps.len(), 1, "Expected 1 dependency, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "real_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_complex_join_with_subqueries() {
+    // Test complex join with subqueries on both sides
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT l.id, r.total
+        FROM (
+            SELECT id, category FROM products WHERE active = true
+        ) l
+        JOIN (
+            SELECT category, SUM(amount) as total FROM sales GROUP BY category
+        ) r ON l.category = r.category
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on both products and sales
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "products".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "sales".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+// ============================================================================
+// Nested CTE Dependency Extraction Tests
+// ============================================================================
+
+#[test]
+fn test_dependencies_nested_cte_in_derived_table() {
+    // Test dependency extraction with CTE inside a derived table
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT * FROM (
+            WITH inner_cte AS (
+                SELECT id, name FROM users
+            )
+            SELECT * FROM inner_cte JOIN orders ON inner_cte.id = orders.user_id
+        ) subquery
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on users and orders, but NOT inner_cte
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "users".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "orders".to_string()
+        )));
+        // inner_cte should NOT be a dependency
+        assert!(!deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "inner_cte".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_nested_cte_in_scalar_subquery() {
+    // Test dependency extraction with CTE inside a scalar subquery
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT
+            id,
+            (WITH totals AS (SELECT SUM(amount) as total FROM transactions WHERE transactions.user_id = users.id)
+             SELECT total FROM totals) as user_total
+        FROM users
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on users and transactions, but NOT totals
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "users".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "transactions".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_triple_nested_ctes() {
+    // Test dependency extraction with three levels of nested CTEs
+    let sql = r#"
+        CREATE VIEW v AS
+        WITH outer_cte AS (
+            SELECT * FROM (
+                WITH middle_cte AS (
+                    SELECT * FROM (
+                        WITH inner_cte AS (
+                            SELECT id FROM base_table
+                        )
+                        SELECT * FROM inner_cte
+                    ) innermost
+                )
+                SELECT * FROM middle_cte
+            ) middle_result
+        )
+        SELECT * FROM outer_cte
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should only have dependency on base_table, not on any CTEs
+        assert_eq!(deps.len(), 1, "Expected 1 dependency, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "base_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_cte_shadowing_at_different_levels() {
+    // Test that CTE shadowing doesn't incorrectly add dependencies
+    let sql = r#"
+        CREATE VIEW v AS
+        WITH data AS (
+            SELECT id FROM outer_table
+        )
+        SELECT * FROM data
+        UNION ALL
+        SELECT * FROM (
+            WITH data AS (
+                SELECT id FROM inner_table
+            )
+            SELECT * FROM data
+        ) inner_result
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on outer_table and inner_table, but NOT 'data'
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "outer_table".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "inner_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_nested_cte_in_lateral_join() {
+    // Test dependency extraction with CTE inside a LATERAL join
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT u.id, stats.total
+        FROM users u,
+        LATERAL (
+            WITH user_orders AS (
+                SELECT amount FROM orders WHERE orders.user_id = u.id
+            )
+            SELECT SUM(amount) as total FROM user_orders
+        ) stats
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on users and orders, but NOT user_orders
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "users".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "orders".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_parallel_ctes_in_union_branches() {
+    // Test dependency extraction with independent CTEs in UNION branches
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT * FROM (
+            WITH left_cte AS (SELECT id FROM left_table)
+            SELECT * FROM left_cte
+        ) left_branch
+        UNION ALL
+        SELECT * FROM (
+            WITH right_cte AS (SELECT id FROM right_table)
+            SELECT * FROM right_cte
+        ) right_branch
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on left_table and right_table, but NOT on CTEs
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "left_table".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "right_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_outer_cte_visible_in_nested_subquery() {
+    // Test that outer CTE references in nested subqueries are not treated as dependencies
+    let sql = r#"
+        CREATE VIEW v AS
+        WITH main_data AS (
+            SELECT id, value FROM source_table
+        )
+        SELECT * FROM (
+            SELECT * FROM (
+                SELECT * FROM main_data WHERE value > 10
+            ) inner_sub
+        ) outer_sub
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should only have dependency on source_table, not main_data
+        assert_eq!(deps.len(), 1, "Expected 1 dependency, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "source_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_nested_cte_joining_outer_cte() {
+    // Test nested CTE that joins with outer CTE
+    let sql = r#"
+        CREATE VIEW v AS
+        WITH outer_data AS (
+            SELECT id, category FROM categories
+        )
+        SELECT * FROM (
+            WITH inner_data AS (
+                SELECT product_id, price FROM products
+            )
+            SELECT i.product_id, i.price, o.category
+            FROM inner_data i
+            JOIN outer_data o ON i.product_id = o.id
+        ) result
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on categories and products, but NOT on CTEs
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "categories".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "products".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_nested_cte_in_exists() {
+    // Test CTE inside EXISTS subquery
+    let sql = r#"
+        CREATE VIEW v AS
+        SELECT * FROM main_table m
+        WHERE EXISTS (
+            WITH related AS (
+                SELECT id FROM related_table WHERE status = 'active'
+            )
+            SELECT 1 FROM related WHERE related.id = m.related_id
+        )
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on main_table and related_table, but NOT 'related'
+        assert_eq!(deps.len(), 2, "Expected 2 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "main_table".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "related_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_nested_cte_with_multiple_tables_per_level() {
+    // Test nested CTEs where each level references multiple external tables
+    let sql = r#"
+        CREATE VIEW v AS
+        WITH outer_cte AS (
+            SELECT a.id, b.name FROM table_a a JOIN table_b b ON a.id = b.id
+        )
+        SELECT * FROM (
+            WITH inner_cte AS (
+                SELECT c.id, d.value FROM table_c c JOIN table_d d ON c.id = d.id
+            )
+            SELECT o.id, o.name, i.value
+            FROM outer_cte o
+            JOIN inner_cte i ON o.id = i.id
+        ) result
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should have dependencies on all four tables
+        assert_eq!(deps.len(), 4, "Expected 4 dependencies, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "table_a".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "table_b".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "table_c".to_string()
+        )));
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "table_d".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
+
+#[test]
+fn test_dependencies_mutually_recursive_with_nested_cte_in_subquery() {
+    // Test MUTUALLY RECURSIVE with a nested simple CTE inside a subquery
+    let sql = r#"
+        CREATE VIEW v AS
+        WITH MUTUALLY RECURSIVE
+          cte_a (id int) AS (
+            SELECT id FROM (
+                WITH nested AS (SELECT id FROM base_table)
+                SELECT * FROM nested
+            ) sub
+            WHERE id IN (SELECT id FROM cte_b)
+          ),
+          cte_b (id int) AS (
+            SELECT id FROM cte_a
+          )
+        SELECT * FROM cte_b
+    "#;
+    let parsed = mz_sql_parser::parser::parse_statements(sql).unwrap();
+
+    if let mz_sql_parser::ast::Statement::CreateView(view_stmt) = &parsed[0].ast {
+        let stmt = Statement::CreateView(view_stmt.clone());
+        let (deps, _clusters) = extract_dependencies(&stmt, "db", "public");
+
+        // Should only have dependency on base_table
+        assert_eq!(deps.len(), 1, "Expected 1 dependency, found: {:?}", deps);
+        assert!(deps.contains(&ObjectId::new(
+            "db".to_string(),
+            "public".to_string(),
+            "base_table".to_string()
+        )));
+    } else {
+        panic!("Expected CreateView statement");
+    }
+}
