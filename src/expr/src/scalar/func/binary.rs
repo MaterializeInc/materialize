@@ -289,7 +289,8 @@ mod derive {
         // JsonbGetStringStringify,
         Left,
         LikeEscape,
-        // ListContainsList
+        ListContainsList,
+        ListContainsListRev,
         ListElementConcat,
         // ListLengthMax
         ListListConcat,
@@ -825,19 +826,6 @@ mod test {
         // check(func::JsonbGetInt64, BF::JsonbGetInt64, &i32_ty, &i32_ty);
         // check(func::JsonbGetString, BF::JsonbGetString, &i32_ty, &i32_ty);
         // check(func::JsonbGetPath, BF::JsonbGetPath, &i32_ty, &i32_ty);
-        check(
-            func::ListContainsList,
-            BF::ListContainsList { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ListContainsListRev,
-            BF::ListContainsList { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
-
         // check(func::ListLength, BF::ListLength, &i32_ty, &i32_ty);
         check(
             func::ArrayContainsArray,
