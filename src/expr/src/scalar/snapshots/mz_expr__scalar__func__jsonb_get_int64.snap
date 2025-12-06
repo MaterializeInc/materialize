@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    sqlname = \"->\",\n    output_type = \"Option<mz_repr::adt::jsonb::Jsonb>\",\n    is_infix_op = true\n)]\nfn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {\n    match a {\n        Datum::List(list) => {\n            let i = if i >= 0 {\n                usize::cast_from(i.unsigned_abs())\n            } else {\n                let i = usize::cast_from(i.unsigned_abs());\n                (list.iter().count()).wrapping_sub(i)\n            };\n            match list.iter().nth(i) {\n                Some(d) => d,\n                None => Datum::Null,\n            }\n        }\n        Datum::Map(_) => Datum::Null,\n        _ => if i == 0 || i == -1 { a } else { Datum::Null }\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"->\", is_infix_op = true)]\nfn jsonb_get_int64<'a>(a: JsonbRef<'a>, i: i64) -> Option<JsonbRef<'a>> {\n    match a.into_datum() {\n        Datum::List(list) => {\n            let i = if i >= 0 {\n                usize::cast_from(i.unsigned_abs())\n            } else {\n                let i = usize::cast_from(i.unsigned_abs());\n                (list.iter().count()).wrapping_sub(i)\n            };\n            let v = list.iter().nth(i)?;\n            JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()\n        }\n        Datum::Map(_) => None,\n        _ => (i == 0 || i == -1).then_some(a),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    sqlname = \"->\",\n    output_type = \"Option<mz_re
 )]
 pub struct JsonbGetInt64;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetInt64 {
-    type Input1 = Datum<'a>;
+    type Input1 = JsonbRef<'a>;
     type Input2 = i64;
-    type Output = Datum<'a>;
+    type Output = Option<JsonbRef<'a>>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetInt64 {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Option<mz_repr::adt::jsonb::Jsonb>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,9 +46,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetInt64 {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <Option<mz_repr::adt::jsonb::Jsonb> as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn is_infix_op(&self) -> bool {
         true
     }
@@ -58,8 +55,8 @@ impl std::fmt::Display for JsonbGetInt64 {
         f.write_str("->")
     }
 }
-fn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {
-    match a {
+fn jsonb_get_int64<'a>(a: JsonbRef<'a>, i: i64) -> Option<JsonbRef<'a>> {
+    match a.into_datum() {
         Datum::List(list) => {
             let i = if i >= 0 {
                 usize::cast_from(i.unsigned_abs())
@@ -67,12 +64,10 @@ fn jsonb_get_int64<'a>(a: Datum<'a>, i: i64) -> Datum<'a> {
                 let i = usize::cast_from(i.unsigned_abs());
                 (list.iter().count()).wrapping_sub(i)
             };
-            match list.iter().nth(i) {
-                Some(d) => d,
-                None => Datum::Null,
-            }
+            let v = list.iter().nth(i)?;
+            JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()
         }
-        Datum::Map(_) => Datum::Null,
-        _ => if i == 0 || i == -1 { a } else { Datum::Null }
+        Datum::Map(_) => None,
+        _ => (i == 0 || i == -1).then_some(a),
     }
 }
