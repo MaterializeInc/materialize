@@ -1,0 +1,65 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(sqlname = \"->>\", is_infix_op = true)]\nfn jsonb_get_int64_stringify<'a>(\n    a: JsonbRef<'a>,\n    i: i64,\n    temp_storage: &'a RowArena,\n) -> Option<&'a str> {\n    let json = jsonb_get_int64(a, i)?;\n    jsonb_stringify(json.into_datum(), temp_storage)\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct JsonbGetInt64Stringify;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetInt64Stringify {
+    type Input1 = JsonbRef<'a>;
+    type Input2 = i64;
+    type Output = Option<&'a str>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        jsonb_get_int64_stringify(a, b, temp_storage)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for JsonbGetInt64Stringify {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("->>")
+    }
+}
+fn jsonb_get_int64_stringify<'a>(
+    a: JsonbRef<'a>,
+    i: i64,
+    temp_storage: &'a RowArena,
+) -> Option<&'a str> {
+    let json = jsonb_get_int64(a, i)?;
+    jsonb_stringify(json.into_datum(), temp_storage)
+}
