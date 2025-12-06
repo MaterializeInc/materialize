@@ -11,7 +11,6 @@
 //! client via some external Materialize API (ex: HTTP and psql).
 
 use base64::prelude::*;
-use differential_dataflow::lattice::Lattice;
 use mz_adapter_types::dyncfgs::ALLOW_USER_SESSIONS;
 use mz_auth::password::Password;
 use mz_repr::namespaces::MZ_INTERNAL_SCHEMA;

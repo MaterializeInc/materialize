@@ -153,7 +153,6 @@ use std::sync::Arc;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::difference::Semigroup;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::{Future, FutureExt, StreamExt};
 use mz_compute_types::dataflows::DataflowDescription;

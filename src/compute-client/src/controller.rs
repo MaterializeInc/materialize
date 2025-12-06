@@ -55,6 +55,7 @@ use mz_persist_types::PersistLocation;
 use mz_repr::{Datum, GlobalId, RelationDesc, Row, TimestampManipulation};
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
+use mz_storage_types::errors::CollectionMissingOrUnreadable;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
@@ -67,9 +68,10 @@ use tokio::time::{self, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::controller::error::{
-    CollectionLookupError, CollectionMissing, CollectionUpdateError, DataflowCreationError,
-    HydrationCheckBadTarget, InstanceExists, InstanceMissing, PeekError, ReadPolicyError,
-    ReplicaCreationError, ReplicaDropError,
+    CollectionLookupError, CollectionMissing, CollectionUpdateError,
+    CollectionUpdateOrUnreadableError, DataflowCreationError, HydrationCheckBadTarget,
+    InstanceExists, InstanceMissing, PeekError, ReadPolicyError, ReplicaCreationError,
+    ReplicaDropError,
 };
 use crate::controller::instance::{Instance, SharedCollectionState};
 use crate::controller::introspection::{IntrospectionUpdates, spawn_introspection_sink};
@@ -977,7 +979,7 @@ where
         &self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
-    ) -> Result<ReadHold<T>, CollectionUpdateError> {
+    ) -> Result<ReadHold<T>, CollectionUpdateOrUnreadableError> {
         let read_hold = self
             .instance(instance_id)?
             .acquire_read_hold(collection_id)?;
@@ -1123,7 +1125,10 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
-    pub fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+    pub fn acquire_read_hold(
+        &self,
+        id: GlobalId,
+    ) -> Result<ReadHold<T>, CollectionMissingOrUnreadable> {
         // We acquire read holds at the earliest possible time rather than returning a copy
         // of the implied read hold. This is so that in `create_dataflow` we can acquire read holds
         // on compute dependencies at frontiers that are held back by other read holds the caller
@@ -1136,9 +1141,12 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         let collection = self.collection(id)?;
         let since = collection.shared.lock_read_capabilities(|caps| {
             let since = caps.frontier().to_owned();
+            if since.is_empty() {
+                return Err(CollectionMissingOrUnreadable::CollectionUnreadable(id));
+            }
             caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
-            since
-        });
+            Ok(since)
+        })?;
 
         let hold = ReadHold::new(id, since, self.client.read_hold_tx());
         Ok(hold)

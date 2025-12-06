@@ -111,7 +111,6 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
-use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::trace::TraceReader;

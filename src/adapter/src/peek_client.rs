@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use differential_dataflow::consolidation::consolidate;
-use mz_compute_client::controller::error::{CollectionLookupError, InstanceMissing};
+use mz_compute_client::controller::error::{CollectionUnreadableOrLookupError, InstanceMissing};
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::row::RowCollection;
@@ -157,7 +157,8 @@ impl PeekClient {
     pub async fn acquire_read_holds_and_least_valid_write(
         &mut self,
         id_bundle: &CollectionIdBundle,
-    ) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionLookupError> {
+    ) -> Result<(ReadHolds<Timestamp>, Antichain<Timestamp>), CollectionUnreadableOrLookupError>
+    {
         let mut read_holds = ReadHolds::new();
         let mut upper = Antichain::new();
 

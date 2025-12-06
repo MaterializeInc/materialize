@@ -12,10 +12,13 @@ use std::num::TryFromIntError;
 use std::time::Duration;
 
 use dec::TryFromDecimalError;
+use differential_dataflow::lattice::Lattice;
+use mz_ore::soft_assert_or_log;
 use mz_proto::{RustType, TryFromProtoError};
 use mz_timely_util::temporal::BucketTimestamp;
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize, Serializer};
+use timely::progress::frontier::AntichainRef;
 
 use crate::adt::numeric::Numeric;
 use crate::refresh_schedule::RefreshSchedule;
@@ -65,6 +68,19 @@ impl RustType<ProtoTimestamp> for Timestamp {
 
     fn from_proto(proto: ProtoTimestamp) -> Result<Self, TryFromProtoError> {
         Ok(Timestamp::new(proto.internal))
+    }
+}
+
+impl Timestamp {
+    /// Same as `Lattice::advance_by`, but catches a sneaky bug where the frontier being empty makes
+    /// this a no-op.
+    #[inline]
+    pub fn advance_by(&mut self, frontier: AntichainRef<Self>) {
+        soft_assert_or_log!(
+            !frontier.is_empty(),
+            "frontier is empty; advance_by will be a no-op"
+        );
+        Lattice::advance_by(self, frontier)
     }
 }
 
