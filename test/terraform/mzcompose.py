@@ -362,7 +362,11 @@ class State:
         # self._kubectl_log_all_pods(namespace)
 
     def kubectl_setup(
-        self, tag: str, metadata_backend_url: str, persist_backend_url: str
+        self,
+        tag: str,
+        metadata_backend_url: str,
+        persist_backend_url: str,
+        skip_materialize_cr: bool = False,
     ) -> None:
         self.metadata_backend_url = metadata_backend_url
         self.persist_backend_url = persist_backend_url
@@ -394,60 +398,64 @@ class State:
         else:
             raise ValueError("Never completed")
 
-        spawn.runv(["kubectl", "create", "namespace", "materialize-environment"])
+        # Skip Materialize CR creation if Terraform already created it
+        if skip_materialize_cr:
+            print("--- Skipping Materialize CR creation (Terraform handles it)")
+        else:
+            spawn.runv(["kubectl", "create", "namespace", "materialize-environment"])
 
-        materialize_backend_secret = {
-            "apiVersion": "v1",
-            "kind": "Secret",
-            "metadata": {
-                "name": "materialize-backend",
-                "namespace": "materialize-environment",
-            },
-            "stringData": {
-                "metadata_backend_url": self.metadata_backend_url,
-                "persist_backend_url": self.persist_backend_url,
-                "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
-            },
-        }
-
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            cwd=self.path,
-            stdin=yaml.dump(materialize_backend_secret).encode(),
-        )
-
-        self.materialize_environment = {
-            "apiVersion": "materialize.cloud/v1alpha1",
-            "kind": "Materialize",
-            "metadata": {
-                "name": "12345678-1234-1234-1234-123456789012",
-                "namespace": "materialize-environment",
-            },
-            "spec": {
-                "environmentdImageRef": f"materialize/environmentd:{tag}",
-                "environmentdResourceRequirements": {
-                    "limits": {"memory": "4Gi"},
-                    "requests": {"cpu": "2", "memory": "4Gi"},
+            materialize_backend_secret = {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {
+                    "name": "materialize-backend",
+                    "namespace": "materialize-environment",
                 },
-                "balancerdResourceRequirements": {
-                    "limits": {"memory": "256Mi"},
-                    "requests": {"cpu": "100m", "memory": "256Mi"},
+                "stringData": {
+                    "metadata_backend_url": self.metadata_backend_url,
+                    "persist_backend_url": self.persist_backend_url,
+                    "license_key": os.getenv("MZ_CI_LICENSE_KEY"),
                 },
-                "backendSecretName": "materialize-backend",
-            },
-        }
+            }
 
-        # Only supported since self-managed v25.2
-        if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
-            "v0.147.0"
-        ):
-            self.materialize_environment["spec"]["authenticatorKind"] = "None"
+            spawn.runv(
+                ["kubectl", "apply", "-f", "-"],
+                cwd=self.path,
+                stdin=yaml.dump(materialize_backend_secret).encode(),
+            )
 
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            cwd=self.path,
-            stdin=yaml.dump(self.materialize_environment).encode(),
-        )
+            self.materialize_environment = {
+                "apiVersion": "materialize.cloud/v1alpha1",
+                "kind": "Materialize",
+                "metadata": {
+                    "name": "12345678-1234-1234-1234-123456789012",
+                    "namespace": "materialize-environment",
+                },
+                "spec": {
+                    "environmentdImageRef": f"materialize/environmentd:{tag}",
+                    "environmentdResourceRequirements": {
+                        "limits": {"memory": "4Gi"},
+                        "requests": {"cpu": "2", "memory": "4Gi"},
+                    },
+                    "balancerdResourceRequirements": {
+                        "limits": {"memory": "256Mi"},
+                        "requests": {"cpu": "100m", "memory": "256Mi"},
+                    },
+                    "backendSecretName": "materialize-backend",
+                },
+            }
+
+            # Only supported since self-managed v25.2
+            if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
+                "v0.147.0"
+            ):
+                self.materialize_environment["spec"]["authenticatorKind"] = "None"
+
+            spawn.runv(
+                ["kubectl", "apply", "-f", "-"],
+                cwd=self.path,
+                stdin=yaml.dump(self.materialize_environment).encode(),
+            )
         for i in range(60):
             try:
                 spawn.runv(
@@ -695,6 +703,18 @@ class AWS(State):
                 f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
             ]
 
+        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
+        if license_key:
+            vars += [
+                "-var",
+                f"license_key={license_key}",
+            ]
+
+        vars += [
+            "-var",
+            f"environmentd_version={tag}",
+        ]
+
         print("--- Setup")
         spawn.runv(
             ["helm", "package", "../../../misc/helm-charts/operator/"], cwd=self.path
@@ -727,7 +747,11 @@ class AWS(State):
         persist_backend_url = spawn.capture(
             ["terraform", "output", "-raw", "persist_backend_url"], cwd=self.path
         ).strip()
-        self.kubectl_setup(tag, metadata_backend_url, persist_backend_url)
+        # For aws-temporary, Terraform creates the Materialize instance
+        # We will implement this for the other providers as well next
+        self.kubectl_setup(
+            tag, metadata_backend_url, persist_backend_url, skip_materialize_cr=True
+        )
 
     def upgrade(self, tag: str) -> None:
         print(f"--- Upgrading to {tag}")
