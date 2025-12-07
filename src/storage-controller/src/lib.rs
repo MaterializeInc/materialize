@@ -521,7 +521,9 @@ where
     }
 
     fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
-        self.storage_collections.check_exists(id)
+        self.storage_collections
+            .check_exists(id)
+            .map_err(Into::into)
     }
 
     fn create_instance(&mut self, id: StorageInstanceId, workload_class: Option<String>) {

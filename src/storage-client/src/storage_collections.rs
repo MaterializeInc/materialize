@@ -143,7 +143,7 @@ pub trait StorageCollections: Debug + Sync {
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
     /// an error if the collection does not exist.
-    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>>;
+    fn check_exists(&self, id: GlobalId) -> Result<(), CollectionMissing>;
 
     /// Returns aggregate statistics about the contents of the local input named
     /// `id` at `as_of`.
@@ -1736,13 +1736,13 @@ where
         .boxed()
     }
 
-    fn check_exists(&self, id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
+    fn check_exists(&self, id: GlobalId) -> Result<(), CollectionMissing> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         if collections.contains_key(&id) {
             Ok(())
         } else {
-            Err(StorageError::IdentifierMissing(id))
+            Err(CollectionMissing(id))
         }
     }
 
