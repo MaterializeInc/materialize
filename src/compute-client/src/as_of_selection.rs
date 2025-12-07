@@ -959,7 +959,7 @@ mod tests {
             unimplemented!()
         }
 
-        fn check_exists(&self, _id: GlobalId) -> Result<(), StorageError<Self::Timestamp>> {
+        fn check_exists(&self, _id: GlobalId) -> Result<(), CollectionMissing> {
             unimplemented!()
         }
 

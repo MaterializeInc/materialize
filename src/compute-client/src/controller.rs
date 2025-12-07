@@ -790,14 +790,28 @@ where
 
         // Validation: input collections
         let storage_ids = dataflow.imported_source_ids().collect();
-        let mut import_read_holds = self.storage_collections.acquire_read_holds(storage_ids)?;
-        for id in dataflow.imported_index_ids() {
-            let read_hold = instance.acquire_read_hold(id)?;
-            import_read_holds.push(read_hold);
-        }
-        for hold in &import_read_holds {
-            if PartialOrder::less_than(as_of, hold.since()) {
-                return Err(SinceViolation(hold.id()));
+        let mut import_read_holds = Vec::new();
+        if !as_of.is_empty() {
+            import_read_holds.extend(self.storage_collections.acquire_read_holds(storage_ids)?);
+            for id in dataflow.imported_index_ids() {
+                let read_hold = instance.acquire_read_hold(id)?;
+                import_read_holds.push(read_hold);
+            }
+            for hold in &import_read_holds {
+                if PartialOrder::less_than(as_of, hold.since()) {
+                    return Err(SinceViolation(hold.id()));
+                }
+            }
+        } else {
+            // Don't try to acquire read holds if the as_of is [].
+            // - The dataflow won't read anything, so it doesn't need read holds.
+            // - The read hold acquisition would fail with `CollectionUnreadable`.
+            // But let's still verify that the input collections exist.
+            for id in storage_ids {
+                self.storage_collections.check_exists(id)?;
+            }
+            for id in dataflow.imported_index_ids() {
+                instance.collection(id)?;
             }
         }
 
