@@ -1743,8 +1743,12 @@ where
 
             // Drop the implied and warmup read holds to announce that clients are not
             // interested in the collection anymore.
-            collection.implied_read_hold.release();
-            collection.warmup_read_hold.release();
+            if let Some(ref mut hold) = collection.implied_read_hold {
+                hold.release();
+            }
+            if let Some(ref mut hold) = collection.warmup_read_hold {
+                hold.release();
+            }
 
             // If the collection is a subscribe, stop tracking it. This ensures that the controller
             // ceases to produce `SubscribeResponse`s for this subscribe.
@@ -1878,7 +1882,9 @@ where
         for (id, new_policy) in policies {
             let collection = self.expect_collection_mut(id);
             let new_since = new_policy.frontier(collection.write_frontier().borrow());
-            let _ = collection.implied_read_hold.try_downgrade(new_since);
+            if let Some(ref mut hold) = collection.implied_read_hold {
+                let _ = hold.try_downgrade(new_since);
+            }
             collection.read_policy = Some(new_policy);
         }
 
@@ -1931,7 +1937,9 @@ where
                 )
             }
         };
-        let _ = collection.implied_read_hold.try_downgrade(new_since);
+        if let Some(ref mut hold) = collection.implied_read_hold {
+            let _ = hold.try_downgrade(new_since);
+        }
 
         // Report the frontier advancement.
         self.deliver_response(ComputeControllerResponse::FrontierUpper {
@@ -2384,7 +2392,9 @@ where
 
         for (id, new_capability) in new_capabilities {
             let collection = self.expect_collection_mut(id);
-            let _ = collection.warmup_read_hold.try_downgrade(new_capability);
+            if let Some(ref mut hold) = collection.warmup_read_hold {
+                let _ = hold.try_downgrade(new_capability);
+            }
         }
     }
 
@@ -2439,14 +2449,18 @@ where
             }
 
             let new_capability = read_policy.frontier(dep_frontier.borrow());
-            if PartialOrder::less_than(collection.implied_read_hold.since(), &new_capability) {
-                new_capabilities.insert(*id, new_capability);
+            if let Some(ref hold) = collection.implied_read_hold {
+                if PartialOrder::less_than(hold.since(), &new_capability) {
+                    new_capabilities.insert(*id, new_capability);
+                }
             }
         }
 
         for (id, new_capability) in new_capabilities {
             let collection = self.expect_collection_mut(id);
-            let _ = collection.implied_read_hold.try_downgrade(new_capability);
+            if let Some(ref mut hold) = collection.implied_read_hold {
+                let _ = hold.try_downgrade(new_capability);
+            }
         }
     }
 
@@ -2528,7 +2542,10 @@ struct CollectionState<T: ComputeControllerTimestamp> {
     /// `read_policy`. It also ensures that read holds on the collection's dependencies are kept at
     /// some time not greater than the collection's `write_frontier`, guaranteeing that the
     /// collection's next outputs can always be computed without skipping times.
-    implied_read_hold: ReadHold<T>,
+    ///
+    /// `None` when the collection's `as_of` is the empty antichain, as such collections will never
+    /// compute anything and don't need read holds.
+    implied_read_hold: Option<ReadHold<T>>,
     /// A read hold held to enable dataflow warmup.
     ///
     /// Dataflow warmup is an optimization that allows dataflows to immediately start hydrating
@@ -2536,7 +2553,10 @@ struct CollectionState<T: ComputeControllerTimestamp> {
     /// By installing a read capability derived from the write frontiers of the collection's
     /// inputs, we ensure that the as-of of new dataflows installed for the collection is at a time
     /// that is immediately available, so hydration can begin immediately too.
-    warmup_read_hold: ReadHold<T>,
+    ///
+    /// `None` when the collection's `as_of` is the empty antichain, as such collections will never
+    /// compute anything and don't need read holds.
+    warmup_read_hold: Option<ReadHold<T>>,
     /// The policy to use to downgrade `self.implied_read_hold`.
     ///
     /// If `None`, the collection is a write-only collection (i.e. a sink). For write-only
@@ -2595,14 +2615,23 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
         // Initialize collection read holds.
         // Note that the implied read hold was already added to the `read_capabilities` when
         // `shared` was created, so we only need to add the warmup read hold here.
-        let implied_read_hold =
-            ReadHold::new(collection_id, since.clone(), Arc::clone(&read_hold_tx));
-        let warmup_read_hold = ReadHold::new(collection_id, since.clone(), read_hold_tx);
+        //
+        // If `since` is empty (the empty antichain), we don't create read holds because:
+        // - The collection will never compute anything
+        // - Creating a ReadHold with an empty since is not allowed
+        let (implied_read_hold, warmup_read_hold) = if since.is_empty() {
+            (None, None)
+        } else {
+            let implied = ReadHold::new(collection_id, since.clone(), Arc::clone(&read_hold_tx));
+            let warmup = ReadHold::new(collection_id, since.clone(), read_hold_tx);
 
-        let updates = warmup_read_hold.since().iter().map(|t| (t.clone(), 1));
-        shared.lock_read_capabilities(|c| {
-            c.update_iter(updates);
-        });
+            let updates = warmup.since().iter().map(|t| (t.clone(), 1));
+            shared.lock_read_capabilities(|c| {
+                c.update_iter(updates);
+            });
+
+            (Some(implied), Some(warmup))
+        };
 
         // In an effort to keep the produced wallclock lag introspection data small and
         // predictable, we disable wallclock lag tracking for transient collections, i.e. slow-path
