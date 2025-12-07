@@ -21,7 +21,7 @@ itertools = "0.14.0"
 mz-ore = { path = "../ore", features = ["metrics", "test"], default-features = false }
 mz-proto = { path = "../proto", default-features = false }
 parquet = { version = "55.2.0", default-features = false, features = ["arrow"] }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 serde = { version = "1.0.219", features = ["derive"] }
@@ -32,7 +32,7 @@ uuid = { version = "1.18.1", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 
 [build-dependencies]
 prost-build = "0.13.5"

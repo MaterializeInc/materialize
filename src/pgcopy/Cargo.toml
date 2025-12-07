@@ -16,7 +16,7 @@ itertools = "0.14.0"
 mz-ore = { path = "../ore", features = [] }
 mz-pgrepr = { path = "../pgrepr" }
 mz-repr = { path = "../repr" }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.219", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

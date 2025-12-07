@@ -53,7 +53,7 @@ mz-transform = { path = "../transform" }
 openssl = { version = "0.10.75", features = ["vendored"] }
 paste = "1.0.11"
 prometheus = { version = "0.14.0", default-features = false }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = "0.13.5"
 rand = "0.9.2"
