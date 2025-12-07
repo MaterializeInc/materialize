@@ -17,7 +17,7 @@ mz-sql-lexer = { path = "../../../../src/sql-lexer", default-features = false }
 mz-ore = { path = "../../../../src/ore", default-features = false, features = ["assert-no-tracing"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.105"
+wasm-bindgen = "0.2.106"
 lol_alloc = "0.4.1"
 
 [package.metadata.wasm-pack.profile.release]
