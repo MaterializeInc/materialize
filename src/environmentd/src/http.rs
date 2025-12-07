@@ -404,9 +404,12 @@ impl HttpServer {
             router = router.merge(metrics_router);
         }
 
-        // MCP (Model Context Protocol) endpoints - feature-flagged for safety
+        // MCP (Model Context Protocol) endpoints
+        // Requires both:
+        // 1. Compile-time: `mcp` feature flag
+        // 2. Runtime: `routes_enabled.mcp` configuration
         #[cfg(feature = "mcp")]
-        if routes_enabled.base {
+        if routes_enabled.mcp {
             use tracing::info;
             info!("Enabling MCP endpoints: /api/mcp/agents and /api/mcp/observatory");
 
@@ -418,7 +421,13 @@ impl HttpServer {
                 )
                 .layer(auth_middleware.clone())
                 .layer(Extension(adapter_client_rx.clone()))
-                .layer(Extension(active_connection_counter.clone()));
+                .layer(Extension(active_connection_counter.clone()))
+                .layer(
+                    CorsLayer::new()
+                        .allow_methods(Method::POST)
+                        .allow_origin(AllowOrigin::mirror_request())
+                        .allow_headers(Any),
+                );
             router = router.merge(mcp_router);
         }
 
