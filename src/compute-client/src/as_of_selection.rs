@@ -87,6 +87,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_repr::{GlobalId, TimestampManipulation};
 use mz_storage_client::storage_collections::StorageCollections;
+use mz_storage_types::errors::CollectionMissingOrUnreadable;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use timely::PartialOrder;
@@ -108,14 +109,27 @@ pub fn run<T: TimestampManipulation>(
     // Get read holds for the storage inputs of the dataflows.
     // This ensures that storage frontiers don't advance past the selected as-ofs.
     let mut storage_read_holds = BTreeMap::new();
+    // We can encounter an unreadable collection here if it has been dropped by the leader env
+    // concurrently.
+    let mut unreadable_storage_collections = BTreeSet::new();
     for dataflow in &*dataflows {
         for id in dataflow.source_imports.keys() {
             if !storage_read_holds.contains_key(id) {
-                let read_hold = storage_collections
-                    .acquire_read_holds(vec![*id])
-                    .expect("storage collection exists")
-                    .into_element();
-                storage_read_holds.insert(*id, read_hold);
+                match storage_collections.acquire_read_holds(vec![*id]) {
+                    Ok(read_holds) => {
+                        let read_hold = read_holds.into_element();
+                        storage_read_holds.insert(*id, read_hold);
+                    }
+                    Err(CollectionMissingOrUnreadable::CollectionUnreadable(collection)) => {
+                        unreadable_storage_collections.insert(collection);
+                    }
+                    Err(CollectionMissingOrUnreadable::CollectionMissing(collection)) => {
+                        panic!(
+                            "imported storage collection {} of {} is missing",
+                            collection, dataflow.debug_name
+                        );
+                    }
+                }
             }
         }
     }
@@ -136,7 +150,7 @@ pub fn run<T: TimestampManipulation>(
     }
 
     // Apply hard constraints from upstream and downstream storage collections.
-    ctx.apply_upstream_storage_constraints(&storage_read_holds);
+    ctx.apply_upstream_storage_constraints(&storage_read_holds, &unreadable_storage_collections);
     ctx.apply_downstream_storage_constraints();
 
     // At this point all collections have as-of bounds that reflect what is required for
@@ -428,15 +442,21 @@ impl<'a, T: TimestampManipulation> Context<'a, T> {
     fn apply_upstream_storage_constraints(
         &self,
         storage_read_holds: &BTreeMap<GlobalId, ReadHold<T>>,
+        unreadable_storage_collections: &BTreeSet<GlobalId>,
     ) {
         // Apply direct constraints from storage inputs.
         for (id, collection) in &self.collections {
             for input_id in &collection.storage_inputs {
-                let read_hold = &storage_read_holds[input_id];
+                let empty_frontier = Antichain::new();
+                let frontier = if unreadable_storage_collections.contains(input_id) {
+                    &empty_frontier
+                } else {
+                    storage_read_holds[input_id].since()
+                };
                 let constraint = Constraint {
                     type_: ConstraintType::Hard,
                     bound_type: BoundType::Lower,
-                    frontier: read_hold.since(),
+                    frontier,
                     reason: &format!("storage input {input_id} read frontier"),
                 };
                 self.apply_constraint(*id, constraint);
