@@ -1171,3 +1171,4 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17062  mz_replacements
 17063  pg_authid_core
 17064  pg_authid_core_ind
+17065  mz_mcp_data_products

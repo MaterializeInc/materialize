@@ -88,7 +88,6 @@ use crate::http::sql::SqlError;
 mod catalog;
 mod cluster;
 mod console;
-#[cfg(feature = "mcp")]
 mod mcp;
 mod memory;
 mod metrics;
@@ -405,10 +404,7 @@ impl HttpServer {
         }
 
         // MCP (Model Context Protocol) endpoints
-        // Requires both:
-        // 1. Compile-time: `mcp` feature flag
-        // 2. Runtime: `routes_enabled.mcp` configuration
-        #[cfg(feature = "mcp")]
+        // Enabled via runtime `routes_enabled.mcp` configuration
         if routes_enabled.mcp {
             use tracing::info;
             info!("Enabling MCP endpoints: /api/mcp/agents and /api/mcp/observatory");

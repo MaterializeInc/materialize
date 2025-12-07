@@ -555,8 +555,6 @@ pub struct SqlResponse {
 }
 
 impl SqlResponse {
-    // Used in mcp.rs when the mcp feature is enabled
-    #[allow(dead_code)]
     /// Creates a new empty SqlResponse for collecting results.
     pub(in crate::http) fn new() -> Self {
         Self {

@@ -179,10 +179,6 @@ default = ["tokio-console", "mz-alloc-default", "workspace-hack"]
 # access to the file system.
 dev-web = []
 jemalloc = ["mz-alloc/jemalloc"]
-# Enable Model Context Protocol (MCP) server endpoints.
-# This is experimental and should be enabled only for testing.
-# Uses manual JSON-RPC 2.0 implementation (no external SDK dependency).
-mcp = []
 test = [
     "postgres",
     "regex",
