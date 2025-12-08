@@ -321,6 +321,51 @@ fn validate_comment_target(
     }
 }
 
+/// Extract the target name and ObjectType from a CommentObjectType.
+///
+/// Returns Some((name, object_type)) for supported comment types, None for unsupported types.
+/// Column comments are handled separately since they reference the parent table.
+fn comment_object_to_target(
+    obj: &CommentObjectType<Raw>,
+) -> Option<(&RawItemName, ObjectType)> {
+    match obj {
+        CommentObjectType::Table { name } => Some((name, ObjectType::Table)),
+        CommentObjectType::View { name } => Some((name, ObjectType::View)),
+        CommentObjectType::MaterializedView { name } => Some((name, ObjectType::MaterializedView)),
+        CommentObjectType::Source { name } => Some((name, ObjectType::Source)),
+        CommentObjectType::Sink { name } => Some((name, ObjectType::Sink)),
+        CommentObjectType::Connection { name } => Some((name, ObjectType::Connection)),
+        CommentObjectType::Secret { name } => Some((name, ObjectType::Secret)),
+        // Column, Index, Func, Type, Role, Database, Schema, Cluster, etc. are not supported
+        // or handled separately
+        _ => None,
+    }
+}
+
+/// Get a human-readable name for a CommentObjectType variant.
+fn comment_object_type_name(obj: &CommentObjectType<Raw>) -> &'static str {
+    match obj {
+        CommentObjectType::Table { .. } => "TABLE",
+        CommentObjectType::View { .. } => "VIEW",
+        CommentObjectType::MaterializedView { .. } => "MATERIALIZED VIEW",
+        CommentObjectType::Source { .. } => "SOURCE",
+        CommentObjectType::Sink { .. } => "SINK",
+        CommentObjectType::Connection { .. } => "CONNECTION",
+        CommentObjectType::Secret { .. } => "SECRET",
+        CommentObjectType::Schema { .. } => "SCHEMA",
+        CommentObjectType::Database { .. } => "DATABASE",
+        CommentObjectType::Column { .. } => "COLUMN",
+        CommentObjectType::Index { .. } => "INDEX",
+        CommentObjectType::Func { .. } => "FUNCTION",
+        CommentObjectType::Type { .. } => "TYPE",
+        CommentObjectType::Role { .. } => "ROLE",
+        CommentObjectType::Cluster { .. } => "CLUSTER",
+        CommentObjectType::ClusterReplica { .. } => "CLUSTER REPLICA",
+        CommentObjectType::ContinualTask { .. } => "CONTINUAL TASK",
+        CommentObjectType::NetworkPolicy { .. } => "NETWORK POLICY",
+    }
+}
+
 /// Validates that all COMMENT statements in a file reference the main object.
 ///
 /// Processes all COMMENT statements and ensures they target either:
@@ -357,115 +402,42 @@ pub(super) fn validate_comment_references(
     for comment in comments.iter() {
         let comment_sql = format!("{};", comment);
 
-        match &comment.object {
-            CommentObjectType::Table { name } => {
-                validate_comment_target(
-                    name,
-                    main_ident,
-                    obj_type,
-                    ObjectType::Table,
-                    fqn,
-                    &comment_sql,
-                    errors,
-                );
-            }
-            CommentObjectType::View { name } => {
-                validate_comment_target(
-                    name,
-                    main_ident,
-                    obj_type,
-                    ObjectType::View,
-                    fqn,
-                    &comment_sql,
-                    errors,
-                );
-            }
-            CommentObjectType::Column { name } => {
-                // For columns, extract the table/view name (it's the parent)
-                let column_parent: DatabaseIdent = name.relation.name().clone().into();
-                if !column_parent.matches(main_ident) {
-                    errors.push(ValidationError::with_file_and_sql(
-                        ValidationErrorKind::ColumnCommentReferenceMismatch {
-                            referenced: column_parent.object,
-                            expected: main_ident.object.clone(),
-                        },
-                        fqn.path.clone(),
-                        comment_sql,
-                    ));
-                }
-            }
-            CommentObjectType::MaterializedView { name } => {
-                validate_comment_target(
-                    name,
-                    main_ident,
-                    obj_type,
-                    ObjectType::MaterializedView,
-                    fqn,
-                    &comment_sql,
-                    errors,
-                );
-            }
-            CommentObjectType::Source { name } => {
-                validate_comment_target(
-                    name,
-                    main_ident,
-                    obj_type,
-                    ObjectType::Source,
-                    fqn,
-                    &comment_sql,
-                    errors,
-                );
-            }
-            CommentObjectType::Sink { name } => {
-                validate_comment_target(
-                    name,
-                    main_ident,
-                    obj_type,
-                    ObjectType::Sink,
-                    fqn,
-                    &comment_sql,
-                    errors,
-                );
-            }
-            CommentObjectType::Connection { name } => {
-                validate_comment_target(
-                    name,
-                    main_ident,
-                    obj_type,
-                    ObjectType::Connection,
-                    fqn,
-                    &comment_sql,
-                    errors,
-                );
-            }
-            CommentObjectType::Secret { name } => {
-                validate_comment_target(
-                    name,
-                    main_ident,
-                    obj_type,
-                    ObjectType::Secret,
-                    fqn,
-                    &comment_sql,
-                    errors,
-                );
-            }
-            CommentObjectType::Index { .. }
-            | CommentObjectType::Func { .. }
-            | CommentObjectType::Type { .. }
-            | CommentObjectType::Role { .. }
-            | CommentObjectType::Database { .. }
-            | CommentObjectType::Schema { .. }
-            | CommentObjectType::Cluster { .. }
-            | CommentObjectType::ClusterReplica { .. }
-            | CommentObjectType::ContinualTask { .. }
-            | CommentObjectType::NetworkPolicy { .. } => {
+        // Handle column comments specially (they reference the parent table)
+        if let CommentObjectType::Column { name } = &comment.object {
+            let column_parent: DatabaseIdent = name.relation.name().clone().into();
+            if !column_parent.matches(main_ident) {
                 errors.push(ValidationError::with_file_and_sql(
-                    ValidationErrorKind::UnsupportedCommentType,
+                    ValidationErrorKind::ColumnCommentReferenceMismatch {
+                        referenced: column_parent.object,
+                        expected: main_ident.object.clone(),
+                    },
                     fqn.path.clone(),
                     comment_sql,
                 ));
             }
+            continue;
         }
+
+        // Handle supported object types
+        if let Some((name, comment_obj_type)) = comment_object_to_target(&comment.object) {
+            validate_comment_target(
+                name,
+                main_ident,
+                obj_type,
+                comment_obj_type,
+                fqn,
+                &comment_sql,
+                errors,
+            );
+            continue;
+        }
+
+        // Unsupported comment type
+        errors.push(ValidationError::with_file_and_sql(
+            ValidationErrorKind::UnsupportedCommentType,
+            fqn.path.clone(),
+            comment_sql,
+        ));
     }
 }
 
@@ -841,21 +813,9 @@ pub(super) fn validate_database_mod_statements(
                         }
                     }
                     _ => {
-                        let target = match &comment_stmt.object {
-                            CommentObjectType::Table { .. } => "TABLE",
-                            CommentObjectType::View { .. } => "VIEW",
-                            CommentObjectType::MaterializedView { .. } => "MATERIALIZED VIEW",
-                            CommentObjectType::Source { .. } => "SOURCE",
-                            CommentObjectType::Sink { .. } => "SINK",
-                            CommentObjectType::Connection { .. } => "CONNECTION",
-                            CommentObjectType::Secret { .. } => "SECRET",
-                            CommentObjectType::Schema { .. } => "SCHEMA",
-                            CommentObjectType::Column { .. } => "COLUMN",
-                            _ => "unknown",
-                        };
                         errors.push(ValidationError::with_file_and_sql(
                             ValidationErrorKind::DatabaseModCommentTargetMismatch {
-                                target: target.to_string(),
+                                target: comment_object_type_name(&comment_stmt.object).to_string(),
                                 database_name: database_name.to_string(),
                             },
                             database_path.to_path_buf(),
@@ -1031,21 +991,9 @@ pub(super) fn validate_schema_mod_statements(
                         }
                     }
                     _ => {
-                        let target = match &comment_stmt.object {
-                            CommentObjectType::Table { .. } => "TABLE",
-                            CommentObjectType::View { .. } => "VIEW",
-                            CommentObjectType::MaterializedView { .. } => "MATERIALIZED VIEW",
-                            CommentObjectType::Source { .. } => "SOURCE",
-                            CommentObjectType::Sink { .. } => "SINK",
-                            CommentObjectType::Connection { .. } => "CONNECTION",
-                            CommentObjectType::Secret { .. } => "SECRET",
-                            CommentObjectType::Database { .. } => "DATABASE",
-                            CommentObjectType::Column { .. } => "COLUMN",
-                            _ => "unknown",
-                        };
                         errors.push(ValidationError::with_file_and_sql(
                             ValidationErrorKind::SchemaModCommentTargetMismatch {
-                                target: target.to_string(),
+                                target: comment_object_type_name(&comment_stmt.object).to_string(),
                                 schema_name: format!("{}.{}", database_name, schema_name),
                             },
                             schema_path.to_path_buf(),

@@ -8,6 +8,7 @@ use crate::project::deployment_snapshot::DeploymentSnapshotError;
 use crate::project::error::{DependencyError, ProjectError};
 use crate::types::{TypeCheckError, TypesError};
 use crate::unit_test::TestValidationError;
+use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
 use thiserror::Error;
 
@@ -144,11 +145,17 @@ impl CliError {
             Self::DeploymentConflict { conflicts } => {
                 let conflict_list = conflicts
                     .iter()
-                    .map(|c| format!("  - {}.{} (last promoted by '{}' at {:?})",
-                        c.database.yellow(),
-                        c.schema.yellow(),
-                        c.deploy_id,
-                        c.promoted_at))
+                    .map(|c| {
+                        let promoted_datetime: DateTime<Local> = c.promoted_at.into();
+                        let promoted_str = promoted_datetime
+                            .format("%a %b %d %H:%M:%S %Y %z")
+                            .to_string();
+                        format!("  - {}.{} (last promoted by '{}' at {})",
+                            c.database.yellow(),
+                            c.schema.yellow(),
+                            c.deploy_id,
+                            promoted_str)
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
                 Some(format!(
