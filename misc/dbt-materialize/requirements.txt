@@ -13,7 +13,7 @@ dbt-core==1.10.15
 dbt-extractor==0.6.0
 dbt-materialize @ file:///dbt-materialize
 dbt-postgres==1.9.1
-dbt-protos==1.0.397
+dbt-protos==1.0.402
 dbt-semantic-interfaces==0.9.0
 dbt-tests-adapter @ git+https://github.com/dbt-labs/dbt-adapters.git@f6ee73c42f1d34132ed489defb9eb9ef83221256#subdirectory=dbt-tests-adapter
 deepdiff==8.6.1
@@ -27,7 +27,7 @@ jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
 leather==0.4.0
 MarkupSafe==3.0.3
-mashumaro==3.9
+mashumaro==3.17
 more-itertools==10.8.0
 msgpack==1.1.2
 networkx==3.4.2
