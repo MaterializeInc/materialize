@@ -69,7 +69,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
-use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::errors::{CollectionMissing, CollectionMissingOrUnreadable};
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -914,10 +914,31 @@ where
             // Determine if this collection has another dependency.
             let storage_dependencies = self.determine_collection_dependencies(id, &description)?;
 
-            let dependency_read_holds = self
+            let dependency_read_holds = match self
                 .storage_collections
                 .acquire_read_holds(storage_dependencies)
-                .expect("can acquire read holds");
+            {
+                Ok(holds) => holds,
+                Err(CollectionMissingOrUnreadable::CollectionMissing(d)) => {
+                    panic!(
+                        "dependency {} of {} not found in the storage controller",
+                        d, id
+                    );
+                }
+                Err(CollectionMissingOrUnreadable::CollectionUnreadable(d)) => {
+                    if write_frontier.is_empty() {
+                        Vec::new()
+                    } else {
+                        halt!(
+                            "dependency since frontier is empty while dependent upper \
+                            is not empty (dependent id={id}, write_frontier={:?}, dependency_id={:?}), \
+                            this indicates concurrent deletion of a collection",
+                            write_frontier,
+                            d
+                        );
+                    }
+                }
+            };
 
             let mut dependency_since = Antichain::from_elem(T::minimum());
             for read_hold in dependency_read_holds.iter() {
