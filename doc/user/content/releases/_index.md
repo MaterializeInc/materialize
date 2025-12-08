@@ -16,7 +16,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.2.0
-*Released 2025-12-05*
+*Released: 2025-12-05*
 
 This release focuses primarily on bug fixes.
 
