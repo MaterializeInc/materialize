@@ -140,9 +140,9 @@ toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.7", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
-tracing = { version = "0.1.41", features = ["log"] }
+tracing = { version = "0.1.43", features = ["log"] }
 tracing-core = { version = "0.1.35" }
-tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
@@ -283,9 +283,9 @@ toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.7", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
-tracing = { version = "0.1.41", features = ["log"] }
+tracing = { version = "0.1.43", features = ["log"] }
 tracing-core = { version = "0.1.35" }
-tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }

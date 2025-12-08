@@ -12,7 +12,7 @@ workspace = true
 [dependencies]
 anyhow = { version = "1.0.100" }
 mz-ore = { path = "../ore", features = ["test"] }
-openssh = { version = "0.11.5", default-features = false, features = ["native-mux"] }
+openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
 openssh-mux-client = "0.17.9"
 openssl = { version = "0.10.75", features = ["vendored"] }
 rand = "0.9.2"
@@ -26,7 +26,7 @@ tempfile = "3.23.0"
 thiserror = { version = "2.0.17" }
 tokio = "1.48.0"
 tokio-stream = "0.1.17"
-tracing = "0.1.37"
+tracing = "0.1.43"
 zeroize = { version = "1.8.2", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

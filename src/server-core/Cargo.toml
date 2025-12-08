@@ -21,12 +21,12 @@ serde_json = "1.0.145"
 socket2 = "0.5.10"
 tokio-stream = "0.1.17"
 proxy-header = "0.1.2"
-tracing = "0.1.37"
+tracing = "0.1.43"
 futures = "0.3.31"
 mz-dyncfg = { path = "../dyncfg", default-features = false }
 mz-ore = { path = "../ore", default-features = false, features = ["async", "network", "test"] }
 tokio = "1.48.0"
-tokio-metrics = "0.4.5"
+tokio-metrics = "0.4.6"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 uuid = { version = "1.18.1", features = ["v4"] }
 

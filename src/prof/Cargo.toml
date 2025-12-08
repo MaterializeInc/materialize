@@ -21,7 +21,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof = "0.15.0"
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
-tracing = "0.1.37"
+tracing = "0.1.43"
 tokio = { version = "1.48.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

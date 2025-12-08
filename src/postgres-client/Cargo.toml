@@ -16,7 +16,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["metrics", "as
 mz-tls-util = { path = "../tls-util" }
 prometheus = { version = "0.14.0", default-features = false }
 tokio = { version = "1.48.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
-tracing = "0.1.37"
+tracing = "0.1.43"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

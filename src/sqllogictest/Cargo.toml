@@ -50,7 +50,7 @@ shell-words = "1.1.0"
 serde_json = "1.0.145"
 tempfile = "3.23.0"
 time = "0.3.17"
-tracing = "0.1.37"
+tracing = "0.1.43"
 tokio = "1.48.0"
 tokio-postgres = { version = "0.7.15", features = [
     "with-chrono-0_4",
