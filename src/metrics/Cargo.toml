@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 lgalloc = "0.6"
-libc = "0.2.177"
+libc = "0.2.178"
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", features = ["metrics"] }
 paste = "1.0"
