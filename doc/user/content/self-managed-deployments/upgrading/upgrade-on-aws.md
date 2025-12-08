@@ -87,7 +87,7 @@ The Materialize Kubernetes operator is deployed via Helm and can be updated thro
 1. Upgrade the Materialize operator using Helm:
 
    - If your deployment has not specified custom settings:
-   
+
      ```bash
      helm upgrade materialize-operator materialize/materialize-operator \
        -n materialize \
