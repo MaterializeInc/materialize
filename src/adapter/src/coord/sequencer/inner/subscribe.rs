@@ -85,7 +85,7 @@ impl Coordinator {
 
     #[instrument]
     fn subscribe_validate(
-        &mut self,
+        &self,
         session: &mut Session,
         plan: plan::SubscribePlan,
         target_cluster: TargetCluster,
@@ -171,7 +171,7 @@ impl Coordinator {
 
     #[instrument]
     fn subscribe_optimize_mir(
-        &mut self,
+        &self,
         session: &Session,
         SubscribeOptimizeMir {
             mut validity,

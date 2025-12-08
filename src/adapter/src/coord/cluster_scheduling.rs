@@ -109,7 +109,7 @@ impl SchedulingDecision {
 impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     /// Call each scheduling policy.
-    pub(crate) async fn check_scheduling_policies(&mut self) {
+    pub(crate) async fn check_scheduling_policies(&self) {
         // (So far, we have only this one policy.)
         self.check_refresh_policy();
     }

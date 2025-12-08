@@ -188,7 +188,7 @@ impl Coordinator {
 
     #[instrument]
     pub(crate) fn explain_index(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -277,7 +277,7 @@ impl Coordinator {
     // sequencing an EXPLAIN for this statement.
     #[instrument]
     fn create_index_validate(
-        &mut self,
+        &self,
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
         explain_ctx: ExplainContext,
@@ -528,7 +528,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_index_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateIndexExplain {
             exported_index_id,

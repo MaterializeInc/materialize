@@ -156,7 +156,7 @@ impl Coordinator {
     #[instrument(level = "debug")]
     async fn apply_catalog_implications_inner(
         &mut self,
-        mut ctx: Option<&mut ExecuteContext>,
+        ctx: Option<&mut ExecuteContext>,
         implications: Vec<(CatalogItemId, CatalogImplication)>,
         cluster_commands: Vec<(ClusterId, CatalogImplication)>,
         cluster_replica_commands: Vec<((ClusterId, ReplicaId), CatalogImplication)>,
@@ -203,7 +203,7 @@ impl Coordinator {
             match implication {
                 CatalogImplication::Table(CatalogImplicationKind::Added(table)) => {
                     self.handle_create_table(
-                        &mut ctx,
+                        &ctx,
                         &mut table_collections_to_create,
                         &mut storage_policies_to_initialize,
                         &mut execution_timestamps_to_set,
@@ -900,8 +900,8 @@ impl Coordinator {
 
     #[instrument(level = "debug")]
     async fn handle_create_table(
-        &mut self,
-        ctx: &mut Option<&mut ExecuteContext>,
+        &self,
+        ctx: &Option<&mut ExecuteContext>,
         storage_collections_to_create: &mut BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
         storage_policies_to_initialize: &mut BTreeMap<CompactionWindow, BTreeSet<GlobalId>>,
         execution_timestamps_to_set: &mut BTreeSet<StatementLoggingId>,
@@ -1155,7 +1155,7 @@ impl Coordinator {
 
     #[instrument(level = "debug")]
     async fn handle_create_source(
-        &mut self,
+        &self,
         storage_collections_to_create: &mut BTreeMap<GlobalId, CollectionDescription<Timestamp>>,
         storage_policies_to_initialize: &mut BTreeMap<CompactionWindow, BTreeSet<GlobalId>>,
         item_id: CatalogItemId,

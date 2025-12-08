@@ -925,7 +925,7 @@ impl Coordinator {
 
     #[instrument]
     async fn peek_copy_to_preflight(
-        &mut self,
+        &self,
         copy_to: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let connection_context = self.connection_context().clone();

@@ -17,7 +17,7 @@ postgres-openssl = { version = "0.5.2" }
 thiserror = "2.0.17"
 tokio = { version = "1.48.0", default-features = false, features = ["fs", "macros", "sync", "rt", "rt-multi-thread"] }
 tokio-postgres = { version = "0.7.15" }
-tracing = "0.1.37"
+tracing = "0.1.43"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]

@@ -110,7 +110,7 @@ thiserror = "2.0.17"
 tokio = { version = "1.48.0", features = ["sync"] }
 tokio-postgres = { version = "0.7.15" }
 tokio-stream = { version = "0.1.17", features = ["net"] }
-tokio-metrics = "0.4.5"
+tokio-metrics = "0.4.6"
 tower = { version = "0.5.2", features = ["buffer", "limit", "load-shed"] }
 tower-http = { version = "0.6.7", features = [
     "cors",
@@ -121,10 +121,10 @@ tower-http = { version = "0.6.7", features = [
 ] }
 tower-sessions = "0.13.0"
 tower-sessions-memory-store = "0.13.0"
-tracing = "0.1.37"
+tracing = "0.1.43"
 tracing-capture = { version = "0.1.0", optional = true }
 tracing-opentelemetry = { version = "0.25.0" }
-tracing-subscriber = "0.3.19"
+tracing-subscriber = "0.3.22"
 tungstenite = { version = "0.24.0" }
 url = "2.5.7"
 uuid = "1.18.1"

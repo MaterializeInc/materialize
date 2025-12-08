@@ -19,7 +19,7 @@ mz-build-info = { path = "../build-info" }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 tokio = { version = "1.48.0", default-features = false }
-tracing = "0.1.37"
+tracing = "0.1.43"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

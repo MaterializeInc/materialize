@@ -3026,7 +3026,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, &Antichain<T>)]) {
+    async fn update_write_frontiers(&self, updates: &[(GlobalId, &Antichain<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");

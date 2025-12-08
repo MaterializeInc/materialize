@@ -76,10 +76,10 @@ uuid = { version = "1.18.1", features = ["serde"] }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 thiserror = "2.0.17"
-tracing = { version = "0.1.37" }
+tracing = { version = "0.1.43" }
 
 # for the tracing feature
-tracing-subscriber = { version = "0.3.19", default-features = false, optional = true }
+tracing-subscriber = { version = "0.3.22", default-features = false, optional = true }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

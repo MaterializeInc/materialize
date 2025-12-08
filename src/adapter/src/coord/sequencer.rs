@@ -542,7 +542,7 @@ impl Coordinator {
                 }
                 Plan::AlterMaterializedViewApplyReplacement(plan) => {
                     let result = self
-                        .sequence_alter_materialized_view_apply_replacement(&mut ctx, plan)
+                        .sequence_alter_materialized_view_apply_replacement(&ctx, plan)
                         .await;
                     ctx.retire(result);
                 }
