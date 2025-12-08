@@ -1,0 +1,76 @@
+- name: installation-landing-intro
+  content: |
+    You can install Self-Managed Materialize on a Kubernetes cluster running
+    locally or on a cloud provider. Self-Managed Materialize requires:
+
+    {{% self-managed/materialize-components-list %}}
+
+    ## License key
+
+    Starting in v26.0, Materialize requires a license key.
+
+    {{< yaml-table data="self_managed/license_key" >}}
+
+    ## Installation guides
+
+    The following installation guides are available to help you get started:
+
+- name: installation-landing-guides-helm
+  content: |
+
+    ### Install using Helm Commands
+
+    |  Guide         | Description  |
+    | ------------- | -------|
+    | [Install locally on Kind](/self-managed-deployments/installation/install-on-local-kind/) | Uses standard Helm commands to deploy Materialize to a Kind cluster in Docker.
+
+
+- name: installation-landing-guides-unified
+  content: |
+    ### Install using Unified Terraform Modules
+
+
+    |  Guide         | Description  |
+    | ------------- | -------|
+    | [Install on AWS](/self-managed-deployments/installation/install-on-aws/) |Uses Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
+    | [Install on Azure](/self-managed-deployments/installation/install-on-azure/) | Uses Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
+    | [Install on GCP](/self-managed-deployments/installation/install-on-gcp/) | Uses Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
+
+
+- name: installation-landing-guides-legacy
+  content: |
+
+    ### Install using Legacy Terraform Modules
+
+    |  Guide         | Description  |
+    | -------------  | ----------- |
+    | [Install on AWS (Legacy Terraform)](/self-managed-deployments/installation/legacy/install-on-aws-legacy/) | Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
+    | [Install on Azure (Legacy Terraform)](/self-managed-deployments/installation/legacy/install-on-azure-legacy/) | Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
+    | [Install on GCP (Legacy Terraform)](/self-managed-deployments/installation/legacy/install-on-gcp-legacy/) | Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
+
+- name: install-uses-self-signed-cluster-issuer
+  content: |
+    The example uses a self-signed ClusterIssuer. As such, you may encounter a
+    warning with regards to the certificate. In production, run with
+    certificates from an official Certificate Authority (CA) rather than
+    self-signed certificates.
+
+- name: installation-verify-status
+  content: |
+    {{< tabs >}}
+    {{< tab "Operator" >}}
+    To check the status of the Materialize operator, which runs in the `materialize` namespace:
+    ```bash
+    kubectl -n materialize get all
+    ```
+    {{< /tabs >}}
+    {{< tab "Materialize instance" >}}
+    To check the status of the Materialize instance, which runs in the `materialize-environment` namespace:
+    ```bash
+    kubectl -n materialize-environment get all
+    ```
+    {{< /tab >}}
+    {{< /tabs >}}
+
+    If you run into an error during deployment, refer to the
+    [Troubleshooting](/self-managed-deployments/troubleshooting/).

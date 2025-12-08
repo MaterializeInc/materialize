@@ -6,17 +6,17 @@ rows:
 - "Module": |
     [Amazon Web Services (AWS)](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws)
   "Description": |
-    An example Terraform module for deploying Materialize on AWS
-    See [Install on Azure](/installation/install-on-gcp/) for detailed instructions usage.
+    An example Terraform module for deploying Materialize on AWS.
+    See [Install on AWS](/self-managed-deployments/installation/install-on-aws/) for detailed instructions usage.
 
 - "Module": |
     [Azure](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure)
   "Description": |
-    An example Terraform module for deploying Materialize on Azure
-    See [Install on Azure](/installation/install-on-azure/) for detailed instructions usage.
+    An example Terraform module for deploying Materialize on Azure.
+    See [Install on Azure](/self-managed-deployments/installation/install-on-azure/) for detailed instructions usage.
 
 - "Module": |
     [Google Cloud Platform (GCP)](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp)
   "Description": |
-    An example Terraform module for deploying Materialize on GCP
-    See [Install on Azure](/installation/install-on-gcp/) for detailed instructions usage.
+    An example Terraform module for deploying Materialize on GCP.
+    See [Install on GCP](/self-managed-deployments/installation/install-on-gcp/) for detailed instructions usage.

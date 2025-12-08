@@ -1,0 +1,39 @@
+- name: upgrades-general-rules
+  content: |
+    When upgrading:
+
+    - **Always** check the [version specific upgrade
+      notes](/self-managed-deployments/upgrading/#version-specific-upgrade-notes).
+
+    - **Always** upgrade the operator **first** and ensure version compatibility
+      between the operator and the Materialize instance you are upgrading to.
+
+    - **Always** upgrade your Materialize instances **after** upgrading the operator
+      to ensure compatibility.
+
+- name: upgrade-landing-guides-helm
+  content: |
+
+    ### Upgrade using Helm Commands
+
+    |  Guide         | Description  |
+    | ------------- | -------|
+    | [Upgrade on Kind](/self-managed-deployments/upgrading/upgrade-on-kind/) | Uses standard Helm commands to upgrade Materialize on a Kind cluster in Docker.
+
+
+- name: upgrade-landing-guides-unified
+  content: |
+    ### Upgrade using Unified Terraform Modules
+
+
+
+- name: upgrade-landing-guides-legacy
+  content: |
+
+    ### Upgrade using Legacy Terraform Modules
+
+    |  Guide         | Description  |
+    | -------------  | ----------- |
+    | [Upgrade on AWS (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-aws-legacy/) | Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
+    | [Upgrade on Azure (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-azure-legacy/) | Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
+    | [Upgrade on GCP (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-gcp-legacy/) | Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).

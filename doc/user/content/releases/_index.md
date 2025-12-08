@@ -77,7 +77,7 @@ file="shared-content/self-managed/gcp-terraform-v0.6.1-upgrade-notes.md" >}}.
 - To upgrade if <red>**not**</red> using a Materialize-provided Terraforms,  you
 must prepare your nodes by adding the required labels. For detailed
 instructions, see [Prepare for swap and upgrade to
-v26.0](/installation/upgrade-to-swap/).
+v26.0](/self-managed-deployments/appendix/upgrade-to-swap/).
 
 
 ### SASL/SCRAM-SHA-256 support
@@ -103,7 +103,7 @@ Starting in v26.0.0, Self-Managed Materialize requires a license key.
 
 For new deployments, you configure your license key in the Kubernetes Secret
 resource during the installation process. For details, see the [installation
-guides](/installation/). For existing deployments, you can configure your
+guides](/self-managed-deployments/installation/). For existing deployments, you can configure your
 license key via:
 
 ```bash
@@ -146,7 +146,7 @@ use the new setting `rolloutStrategy` to specify either:
 - `WaitUntilReady` (*Default*)
 - `ImmediatelyPromoteCausingDowntime`
 
-For more information, see [`rolloutStrategy`](/installation/upgrading/#rollout-strategies).
+For more information, see [`rolloutStrategy`](/self-managed-deployments/upgrading/#rollout-strategies).
 
 ### Terraform helpers
 
@@ -195,7 +195,8 @@ See also Upgrade Notes for release specific notes.
 
 {{< include-md file="shared-content/self-managed/upgrade-notes/v26.0.md" >}}
 
-See also [Version specific upgrade notes](/installation/upgrading/#version-specific-upgrade-notes).
+See also [Version specific upgrade
+notes](/self-managed-deployments/upgrading/#version-specific-upgrade-notes).
 
 
 ## See also
