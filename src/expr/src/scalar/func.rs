@@ -2657,7 +2657,8 @@ pub enum BinaryFunc {
     EncodedBytesCharLength(EncodedBytesCharLength),
     ListLengthMax { max_layer: usize },
     ArrayContains(ArrayContains),
-    ArrayContainsArray { rev: bool },
+    ArrayContainsArray(ArrayContainsArray),
+    ArrayContainsArrayRev(ArrayContainsArrayRev),
     ArrayLength(ArrayLength),
     ArrayLower(ArrayLower),
     ArrayRemove(ArrayRemove),
@@ -2937,8 +2938,12 @@ impl BinaryFunc {
             // BinaryFunc::ListLengthMax { max_layer }(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayLength(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayContains(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::ArrayContainsArray { rev: false } => Ok(array_contains_array(a, b)),
-            // BinaryFunc::ArrayContainsArray { rev: true } => Ok(array_contains_array(b, a)),
+            BinaryFunc::ArrayContainsArray(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::ArrayContainsArrayRev(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             BinaryFunc::ArrayLower(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayRemove(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayUpper(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
@@ -3029,8 +3034,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
             BinaryFunc::ListLengthMax { max_layer } => list_length_max(a, b, *max_layer),
-            BinaryFunc::ArrayContainsArray { rev: false } => Ok(array_contains_array(a, b)),
-            BinaryFunc::ArrayContainsArray { rev: true } => Ok(array_contains_array(b, a)),
             BinaryFunc::ListContainsList { rev: false } => Ok(list_contains_list(a, b)),
             BinaryFunc::ListContainsList { rev: true } => Ok(list_contains_list(b, a)),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
@@ -3084,7 +3087,8 @@ impl BinaryFunc {
             Gt(s) => s.output_type(input1_type, input2_type),
             Gte(s) => s.output_type(input1_type, input2_type),
             ArrayContains(s) => s.output_type(input1_type, input2_type),
-            ArrayContainsArray { .. } => SqlScalarType::Bool.nullable(in_nullable),
+            ArrayContainsArray(s) => s.output_type(input1_type, input2_type),
+            ArrayContainsArrayRev(s) => s.output_type(input1_type, input2_type),
             // like and regexp produce errors on invalid like-strings or regexes
             IsLikeMatchCaseInsensitive(s) => s.output_type(input1_type, input2_type),
             IsLikeMatchCaseSensitive(s) => s.output_type(input1_type, input2_type),
@@ -3334,7 +3338,8 @@ impl BinaryFunc {
             BinaryFunc::AgeTimestampTz(s) => s.propagates_nulls(),
             BinaryFunc::ArrayArrayConcat(s) => s.propagates_nulls(),
             BinaryFunc::ArrayContains(s) => s.propagates_nulls(),
-            BinaryFunc::ArrayContainsArray { .. } => true,
+            BinaryFunc::ArrayContainsArray(s) => s.propagates_nulls(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.propagates_nulls(),
             BinaryFunc::ArrayLength(s) => s.propagates_nulls(),
             BinaryFunc::ArrayLower(s) => s.propagates_nulls(),
             BinaryFunc::ArrayRemove(s) => s.propagates_nulls(),
@@ -3541,7 +3546,8 @@ impl BinaryFunc {
             AgeTimestampTz(s) => s.introduces_nulls(),
             ArrayArrayConcat(s) => s.introduces_nulls(),
             ArrayContains(s) => s.introduces_nulls(),
-            ArrayContainsArray { .. } => false,
+            ArrayContainsArray(s) => s.introduces_nulls(),
+            ArrayContainsArrayRev(s) => s.introduces_nulls(),
             ArrayRemove(s) => s.introduces_nulls(),
             BitAndInt16(s) => s.introduces_nulls(),
             BitAndInt32(s) => s.introduces_nulls(),
@@ -3742,7 +3748,8 @@ impl BinaryFunc {
             AddUint64(s) => s.is_infix_op(),
             ArrayArrayConcat(s) => s.is_infix_op(),
             ArrayContains(s) => s.is_infix_op(),
-            ArrayContainsArray { .. } => true,
+            ArrayContainsArray(s) => s.is_infix_op(),
+            ArrayContainsArrayRev(s) => s.is_infix_op(),
             ArrayLength(s) => s.is_infix_op(),
             ArrayLower(s) => s.is_infix_op(),
             ArrayUpper(s) => s.is_infix_op(),
@@ -3947,7 +3954,8 @@ impl BinaryFunc {
             BinaryFunc::AgeTimestampTz(s) => s.negate(),
             BinaryFunc::ArrayArrayConcat(s) => s.negate(),
             BinaryFunc::ArrayContains(s) => s.negate(),
-            BinaryFunc::ArrayContainsArray { .. } => None,
+            BinaryFunc::ArrayContainsArray(s) => s.negate(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.negate(),
             BinaryFunc::ArrayLength(s) => s.negate(),
             BinaryFunc::ArrayLower(s) => s.negate(),
             BinaryFunc::ArrayRemove(s) => s.negate(),
@@ -4139,7 +4147,8 @@ impl BinaryFunc {
             BinaryFunc::AddUint32(s) => s.could_error(),
             BinaryFunc::AddUint64(s) => s.could_error(),
             BinaryFunc::ArrayContains(s) => s.could_error(),
-            BinaryFunc::ArrayContainsArray { rev: _ } => false,
+            BinaryFunc::ArrayContainsArray(s) => s.could_error(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.could_error(),
             BinaryFunc::ArrayLower(s) => s.could_error(),
             BinaryFunc::BitAndInt16(s) => s.could_error(),
             BinaryFunc::BitAndInt32(s) => s.could_error(),
@@ -4505,7 +4514,8 @@ impl BinaryFunc {
             BinaryFunc::EncodedBytesCharLength(s) => s.is_monotone(),
             BinaryFunc::ListLengthMax { .. } => (false, false),
             BinaryFunc::ArrayContains(s) => s.is_monotone(),
-            BinaryFunc::ArrayContainsArray { .. } => (false, false),
+            BinaryFunc::ArrayContainsArray(s) => s.is_monotone(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.is_monotone(),
             BinaryFunc::ArrayLength(s) => s.is_monotone(),
             BinaryFunc::ArrayLower(s) => s.is_monotone(),
             BinaryFunc::ArrayRemove(s) => s.is_monotone(),
@@ -4713,7 +4723,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::EncodedBytesCharLength(s) => s.fmt(f),
             BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
             BinaryFunc::ArrayContains(s) => s.fmt(f),
-            BinaryFunc::ArrayContainsArray { rev } => f.write_str(if *rev { "<@" } else { "@>" }),
+            BinaryFunc::ArrayContainsArray(s) => s.fmt(f),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.fmt(f),
             BinaryFunc::ArrayLength(s) => s.fmt(f),
             BinaryFunc::ArrayLower(s) => s.fmt(f),
             BinaryFunc::ArrayRemove(s) => s.fmt(f),
@@ -5271,39 +5282,23 @@ fn array_contains<'a>(a: Datum<'a>, array: Array<'a>) -> bool {
     array.elements().iter().any(|e| e == a)
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "@>",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
-    let a = a.unwrap_array().elements();
-    let b = b.unwrap_array().elements();
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
+fn array_contains_array<'a>(a: Array<'a>, b: Array<'a>) -> bool {
+    let a = a.elements();
+    let b = b.elements();
 
     // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
     if b.iter().contains(&Datum::Null) {
-        Datum::False
+        false
     } else {
         b.iter()
             .all(|item_b| a.iter().any(|item_a| item_a == item_b))
-            .into()
     }
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "<@",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn array_contains_array_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    array_contains_array(a, b)
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
+fn array_contains_array_rev<'a>(a: Array<'a>, b: Array<'a>) -> bool {
+    array_contains_array(b, a)
 }
 
 #[sqlfunc(
