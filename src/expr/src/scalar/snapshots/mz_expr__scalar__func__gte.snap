@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \">=\",\n    propagates_nulls = true,\n    negate = \"Some(Lt.into())\"\n)]\nfn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {\n    a >= b\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \">=\",\n    negate = \"Some(Lt.into())\"\n)]\nfn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {\n    a >= b\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -54,9 +54,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Gte {
     }
     fn negate(&self) -> Option<crate::BinaryFunc> {
         Some(Lt.into())
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for Gte {

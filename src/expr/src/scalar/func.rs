@@ -1679,7 +1679,6 @@ fn gt<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = ">=",
-    propagates_nulls = true,
     negate = "Some(Lt.into())"
 )]
 fn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {

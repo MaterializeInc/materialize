@@ -1990,6 +1990,11 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
 }
 
 /// A wrapper type that excludes `NULL` values, even if `B` allows them.
+///
+/// The wrapper allows for using types that can represent `NULL` values in contexts where
+/// `NULL` values are not allowed, enforcing the non-null constraint at the type level.
+/// For example, functions that propagate `NULL` values can use this type to ensure that
+/// their inputs are non-null, even if the type could represent `NULL` values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ExcludeNull<B>(B);
 
