@@ -23,8 +23,11 @@ use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTI
 use mz_compute_types::plan::AvailableCollections;
 use mz_dyncfg::ConfigSet;
 use mz_expr::{Id, MapFilterProject, MirScalarExpr};
+use mz_ore::madvise::AccessPattern;
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ToDatumIter;
+
+use crate::row_spine::AdviseBatch;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
@@ -325,12 +328,17 @@ where
 
         match &self {
             ArrangementFlavor::Local(oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
+                // For local arrangements, we can advise sequential access for scans.
+                let advise =
+                    Some(|batch: &_| AdviseBatch::madvise(batch, AccessPattern::Sequential));
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel, advise);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
             ArrangementFlavor::Trace(_, oks, errs) => {
-                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel);
+                // For trace arrangements, the batch is wrapped and we can't access inner storage.
+                let advise: Option<fn(&_)> = None;
+                let oks = CollectionBundle::<S, T>::flat_map_core(oks, key, logic, refuel, advise);
                 let errs = errs.as_collection(|k, &()| k.clone());
                 (oks, errs)
             }
@@ -601,11 +609,12 @@ where
     ///
     /// The function presents the contents of the trace as `(key, value, time, delta)` tuples,
     /// where key and value are potentially specialized, but convertible into rows.
-    fn flat_map_core<Tr, D, I, L>(
+    fn flat_map_core<Tr, D, I, L, A>(
         trace: &Arranged<S, Tr>,
         key: Option<&Tr::KeyOwn>,
         mut logic: L,
         refuel: usize,
+        batch_advice: Option<A>,
     ) -> Stream<S, I::Item>
     where
         Tr: for<'a> TraceReader<
@@ -619,6 +628,7 @@ where
         I: IntoIterator<Item = (D, Tr::Time, Tr::Diff)>,
         D: Data,
         L: FnMut(Tr::Key<'_>, Tr::Val<'_>, S::Timestamp, mz_repr::Diff) -> I + 'static,
+        A: Fn(&Tr::Batch) + 'static,
     {
         use differential_dataflow::consolidation::ConsolidatingContainerBuilder as CB;
 
@@ -638,10 +648,17 @@ where
                 let mut todo = std::collections::VecDeque::new();
                 move |input, output| {
                     let key = key_con.get(0);
+                    let is_scan = key.is_none();
                     // First, dequeue all batches.
                     input.for_each(|time, data| {
                         let capability = time.retain();
                         for batch in data.iter() {
+                            // Advise sequential access pattern for full scans.
+                            if is_scan {
+                                if let Some(ref advise) = batch_advice {
+                                    advise(batch);
+                                }
+                            }
                             // enqueue a capability, cursor, and batch.
                             todo.push_back(PendingWork::new(
                                 capability.clone(),
