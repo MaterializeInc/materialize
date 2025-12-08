@@ -19,7 +19,7 @@ use std::time::SystemTime;
 /// # Arguments
 /// * `profile` - Database profile containing connection information
 /// * `directory` - Project directory
-/// * `stage_id` - Staging deployment ID
+/// * `deploy_id` - Staging deployment ID
 /// * `force` - Force promotion despite conflicts
 /// * `planned_project` - Compiled project (for cluster dependencies)
 ///
@@ -31,8 +31,8 @@ use std::time::SystemTime;
 /// Returns `CliError::StagingAlreadyPromoted` if already promoted
 /// Returns `CliError::DeploymentConflict` if conflicts detected (without --force)
 /// Returns `CliError::Connection` for database errors
-pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), CliError> {
-    println!("Deploying '{}' to production", stage_id);
+pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), CliError> {
+    println!("Deploying '{}' to production", deploy_id);
 
     let client = Client::connect_with_profile(profile.clone())
         .await
@@ -41,12 +41,12 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
     project::deployment_snapshot::initialize_deployment_table(&client).await?;
 
     // Validate deployment exists and is not promoted
-    let metadata = client.get_deployment_metadata(stage_id).await?;
+    let metadata = client.get_deployment_metadata(deploy_id).await?;
 
     match metadata {
         Some(meta) if meta.promoted_at.is_some() => {
             return Err(CliError::StagingAlreadyPromoted {
-                name: stage_id.to_string(),
+                name: deploy_id.to_string(),
             });
         }
         Some(_) => {
@@ -54,14 +54,14 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
         }
         None => {
             return Err(CliError::StagingEnvironmentNotFound {
-                name: stage_id.to_string(),
+                name: deploy_id.to_string(),
             });
         }
     }
 
     // Load staging deployment state to identify what's deployed in staging
     let staging_snapshot =
-        project::deployment_snapshot::load_from_database(&client, Some(stage_id)).await?;
+        project::deployment_snapshot::load_from_database(&client, Some(deploy_id)).await?;
 
     if staging_snapshot.objects.is_empty() {
         return Err(CliError::NoSchemas);
@@ -73,7 +73,7 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
     );
 
     verbose!("Checking for deployment conflicts...");
-    let conflicts = client.check_deployment_conflicts(stage_id).await?;
+    let conflicts = client.check_deployment_conflicts(deploy_id).await?;
 
     if !conflicts.is_empty() {
         if force {
@@ -98,12 +98,12 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
     }
 
     // Get schemas and clusters from deployment tables
-    let staging_suffix = format!("_{}", stage_id);
+    let staging_suffix = format!("_{}", deploy_id);
     let mut staging_schemas = BTreeSet::new();
     let mut staging_clusters = BTreeSet::new();
 
     // Get schemas from deploy.deployments table for this deployment
-    let deployment_records = client.get_schema_deployments(Some(stage_id)).await?;
+    let deployment_records = client.get_schema_deployments(Some(deploy_id)).await?;
     for record in deployment_records {
         let staging_schema = format!("{}{}", record.schema, staging_suffix);
 
@@ -122,10 +122,10 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
     }
 
     // Validate that all clusters in the deployment still exist
-    client.validate_deployment_clusters(stage_id).await?;
+    client.validate_deployment_clusters(deploy_id).await?;
 
     // Get clusters from deploy.clusters table
-    let cluster_names = client.get_deployment_clusters(stage_id).await?;
+    let cluster_names = client.get_deployment_clusters(deploy_id).await?;
     for cluster_name in cluster_names {
         let staging_cluster = format!("{}{}", cluster_name, staging_suffix);
 
@@ -216,14 +216,14 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
 
     // Promote to production by updating promoted_at timestamp
     client
-        .update_promoted_at(stage_id)
+        .update_promoted_at(deploy_id)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 
     // Clean up cluster tracking records after successful swap
     verbose!("Cleaning up cluster tracking records...");
     client
-        .delete_deployment_clusters(stage_id)
+        .delete_deployment_clusters(deploy_id)
         .await
         .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
 
@@ -261,7 +261,7 @@ pub async fn run(profile: &Profile, stage_id: &str, force: bool) -> Result<(), C
     }
 
     println!("Deployment completed successfully!");
-    println!("Staging deployment '{}' is now in production", stage_id);
+    println!("Staging deployment '{}' is now in production", deploy_id);
 
     Ok(())
 }
