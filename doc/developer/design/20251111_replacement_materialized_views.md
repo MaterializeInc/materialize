@@ -155,6 +155,15 @@ An issue with implementing this is that the materialized view dataflow would nee
     * Surface metadata about the amount of staged changes (records, bytes) between the current and replacement definitions.
     * Document how users can observe hydration progress, or implement new ways to do so.
       Specifically, users should be able to monitor progress through the `mz_frontiers` and `mz_arrangement_sizes` introspection views.
+* Design a mechanism to read from replacement materialized views.
+  (The actual design of the mechanism is out of scope for this document.)
+
+## GA considerations
+
+The `mz_replacements` is separate from the existing `mz_materialized_views` system relation, and to get a complete picture of materialized views and their replacements, users need to query both.
+For GA, we should add a column `replacement_for` to `mz_materialized_views` that indicates whether a materialized view is a replacement, and if so, for which materialized view.
+For regular materialized views, this column would be NULL.
+We should only implement this change for GA, as it would be a breaking change to remove it in the future.
 
 ## Future work
 
@@ -216,3 +225,10 @@ process, you are responsible for getting answers to these open
 questions. All open questions should be answered by the time a design
 document is merged.
 -->
+
+### SQL syntax
+
+The current proposal uses the term `REPLACING` in the `CREATE MATERIALIZED VIEW` statement.
+An alternative is to use `AS REPLACEMENT FOR mv_name`, which might be more explicit.
+We could also consider the term `REPLACE`, but that might be confused with `CREATE OR REPLACE`.
+Alternatively, we could use `REPLACES` instead of `REPLACING`.
