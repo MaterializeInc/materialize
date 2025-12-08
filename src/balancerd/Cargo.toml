@@ -58,7 +58,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 mz-environmentd = { path = "../environmentd", default-features = false, features = ["test"] }
 mz-frontegg-mock = { path = "../frontegg-mock" }
 postgres = "0.19.12"
-reqwest = "0.11.24"
+reqwest = "0.12.24"
 tempfile = "3.23.0"
 
 [features]
