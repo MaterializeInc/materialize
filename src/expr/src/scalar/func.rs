@@ -44,7 +44,8 @@ use mz_repr::adt::range::{Range, RangeOps};
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    Datum, DatumList, DatumMap, DatumType, Row, RowArena, SqlColumnType, SqlScalarType, strconv,
+    Datum, DatumList, DatumMap, DatumType, ExcludeNull, Row, RowArena, SqlColumnType,
+    SqlScalarType, strconv,
 };
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
@@ -1631,101 +1632,57 @@ fn range_difference<'a>(
     l.difference(&r)?.into_result(temp_storage)
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "=",
-    propagates_nulls = true,
-    negate = "Some(NotEq.into())"
-)]
-fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+#[sqlfunc(is_infix_op = true, sqlname = "=", negate = "Some(NotEq.into())")]
+fn eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     // SQL equality demands that if either input is null, then the result should be null. However,
     // we don't need to handle this case here; it is handled when `BinaryFunc::eval` checks
     // `propagates_nulls`.
-    if a == Datum::Null || b == Datum::Null {
-        Datum::Null
-    } else {
-        Datum::from(a == b)
-    }
+    a == b
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "!=",
-    propagates_nulls = true,
-    negate = "Some(Eq.into())"
-)]
-fn not_eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        Datum::Null
-    } else {
-        Datum::from(a != b)
-    }
+#[sqlfunc(is_infix_op = true, sqlname = "!=", negate = "Some(Eq.into())")]
+fn not_eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
+    a != b
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "bool",
     is_infix_op = true,
     sqlname = "<",
-    propagates_nulls = true,
     negate = "Some(Gte.into())"
 )]
-fn lt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        Datum::Null
-    } else {
-        Datum::from(a < b)
-    }
+fn lt<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
+    a < b
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "bool",
     is_infix_op = true,
     sqlname = "<=",
-    propagates_nulls = true,
     negate = "Some(Gt.into())"
 )]
-fn lte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        Datum::Null
-    } else {
-        Datum::from(a <= b)
-    }
+fn lte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
+    a <= b
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "bool",
     is_infix_op = true,
     sqlname = ">",
-    propagates_nulls = true,
     negate = "Some(Lte.into())"
 )]
-fn gt<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        Datum::Null
-    } else {
-        Datum::from(a > b)
-    }
+fn gt<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
+    a > b
 }
 
 #[sqlfunc(
     is_monotone = "(true, true)",
-    output_type = "bool",
     is_infix_op = true,
     sqlname = ">=",
-    propagates_nulls = true,
     negate = "Some(Lt.into())"
 )]
-fn gte<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        Datum::Null
-    } else {
-        Datum::from(a >= b)
-    }
+fn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
+    a >= b
 }
 
 #[sqlfunc(sqlname = "tocharts", propagates_nulls = true)]
@@ -1888,51 +1845,28 @@ fn map_get_value<'a>(a: DatumMap<'a>, target_key: &str) -> Datum<'a> {
     }
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "@>",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn list_contains_list<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null {
-        return Datum::Null;
-    }
-
-    let a = a.unwrap_list();
-    let b = b.unwrap_list();
-
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
+fn list_contains_list<'a>(a: ExcludeNull<DatumList<'a>>, b: ExcludeNull<DatumList<'a>>) -> bool {
     // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
     if b.iter().contains(&Datum::Null) {
-        Datum::False
+        false
     } else {
         b.iter()
             .all(|item_b| a.iter().any(|item_a| item_a == item_b))
-            .into()
     }
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "<@",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-#[allow(dead_code)]
-fn list_contains_list_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
+fn list_contains_list_rev<'a>(
+    a: ExcludeNull<DatumList<'a>>,
+    b: ExcludeNull<DatumList<'a>>,
+) -> bool {
     list_contains_list(b, a)
 }
 
 // TODO(jamii) nested loops are possibly not the fastest way to do this
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "@>",
-    propagates_nulls = true
-)]
-fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
+fn jsonb_contains_jsonb<'a>(a: JsonbRef<'a>, b: JsonbRef<'a>) -> bool {
     // https://www.postgresql.org/docs/current/datatype-json.html#JSON-CONTAINMENT
     fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
         match (a, b) {
@@ -1957,19 +1891,16 @@ fn jsonb_contains_jsonb<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
             _ => false,
         }
     }
-    contains(a, b, true).into()
+    contains(a.into_datum(), b.into_datum(), true)
 }
 
-#[sqlfunc(
-    output_type_expr = "SqlScalarType::Jsonb.nullable(true)",
-    is_infix_op = true,
-    sqlname = "||",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
-fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    match (a, b) {
-        (Datum::Null, _) | (_, Datum::Null) => Datum::Null,
+#[sqlfunc(is_infix_op = true, sqlname = "||")]
+fn jsonb_concat<'a>(
+    a: JsonbRef<'a>,
+    b: JsonbRef<'a>,
+    temp_storage: &'a RowArena,
+) -> Option<JsonbRef<'a>> {
+    let res = match (a.into_datum(), b.into_datum()) {
         (Datum::Map(dict_a), Datum::Map(dict_b)) => {
             let mut pairs = dict_b.iter().chain(dict_a.iter()).collect::<Vec<_>>();
             // stable sort, so if keys collide dedup prefers dict_b
@@ -1989,8 +1920,9 @@ fn jsonb_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> D
             let elems = Some(a).into_iter().chain(list_b.iter());
             temp_storage.make_datum(|packer| packer.push_list(elems))
         }
-        _ => Datum::Null,
-    }
+        _ => return None,
+    };
+    Some(JsonbRef::from_datum(res))
 }
 
 #[sqlfunc(
@@ -2655,9 +2587,10 @@ pub enum BinaryFunc {
     TrimLeading(TrimLeading),
     TrimTrailing(TrimTrailing),
     EncodedBytesCharLength(EncodedBytesCharLength),
-    ListLengthMax { max_layer: usize },
+    ListLengthMax(ListLengthMax),
     ArrayContains(ArrayContains),
-    ArrayContainsArray { rev: bool },
+    ArrayContainsArray(ArrayContainsArray),
+    ArrayContainsArrayRev(ArrayContainsArrayRev),
     ArrayLength(ArrayLength),
     ArrayLower(ArrayLower),
     ArrayRemove(ArrayRemove),
@@ -2667,7 +2600,8 @@ pub enum BinaryFunc {
     ListElementConcat(ListElementConcat),
     ElementListConcat(ElementListConcat),
     ListRemove(ListRemove),
-    ListContainsList { rev: bool },
+    ListContainsList(ListContainsList),
+    ListContainsListRev(ListContainsListRev),
     DigestString(DigestString),
     DigestBytes(DigestBytes),
     MzRenderTypmod(MzRenderTypmod),
@@ -2934,11 +2868,15 @@ impl BinaryFunc {
             BinaryFunc::EncodedBytesCharLength(s) => {
                 return s.eval(datums, temp_storage, a_expr, b_expr);
             }
-            // BinaryFunc::ListLengthMax { max_layer }(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::ListLengthMax(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayLength(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayContains(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::ArrayContainsArray { rev: false } => Ok(array_contains_array(a, b)),
-            // BinaryFunc::ArrayContainsArray { rev: true } => Ok(array_contains_array(b, a)),
+            BinaryFunc::ArrayContainsArray(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::ArrayContainsArrayRev(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             BinaryFunc::ArrayLower(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayRemove(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayUpper(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
@@ -2951,8 +2889,10 @@ impl BinaryFunc {
                 return s.eval(datums, temp_storage, a_expr, b_expr);
             }
             BinaryFunc::ListRemove(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
-            // BinaryFunc::ListContainsList { rev: false } => Ok(list_contains_list(a, b)),
-            // BinaryFunc::ListContainsList { rev: true } => Ok(list_contains_list(b, a)),
+            BinaryFunc::ListContainsList(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::ListContainsListRev(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             BinaryFunc::DigestString(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::DigestBytes(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::MzRenderTypmod(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
@@ -3028,11 +2968,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
-            BinaryFunc::ListLengthMax { max_layer } => list_length_max(a, b, *max_layer),
-            BinaryFunc::ArrayContainsArray { rev: false } => Ok(array_contains_array(a, b)),
-            BinaryFunc::ArrayContainsArray { rev: true } => Ok(array_contains_array(b, a)),
-            BinaryFunc::ListContainsList { rev: false } => Ok(list_contains_list(a, b)),
-            BinaryFunc::ListContainsList { rev: true } => Ok(list_contains_list(b, a)),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
             BinaryFunc::Normalize => normalize_with_form(a, b, temp_storage),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
@@ -3084,7 +3019,8 @@ impl BinaryFunc {
             Gt(s) => s.output_type(input1_type, input2_type),
             Gte(s) => s.output_type(input1_type, input2_type),
             ArrayContains(s) => s.output_type(input1_type, input2_type),
-            ArrayContainsArray { .. } => SqlScalarType::Bool.nullable(in_nullable),
+            ArrayContainsArray(s) => s.output_type(input1_type, input2_type),
+            ArrayContainsArrayRev(s) => s.output_type(input1_type, input2_type),
             // like and regexp produce errors on invalid like-strings or regexes
             IsLikeMatchCaseInsensitive(s) => s.output_type(input1_type, input2_type),
             IsLikeMatchCaseSensitive(s) => s.output_type(input1_type, input2_type),
@@ -3251,7 +3187,7 @@ impl BinaryFunc {
             ArrayLower(s) => s.output_type(input1_type, input2_type),
             ArrayUpper(s) => s.output_type(input1_type, input2_type),
 
-            ListLengthMax { .. } => SqlScalarType::Int32.nullable(true),
+            ListLengthMax(s) => s.output_type(input1_type, input2_type),
 
             ArrayArrayConcat(s) => s.output_type(input1_type, input2_type),
             ArrayRemove(s) => s.output_type(input1_type, input2_type),
@@ -3261,7 +3197,8 @@ impl BinaryFunc {
 
             ElementListConcat(s) => s.output_type(input1_type, input2_type),
 
-            ListContainsList { .. } => SqlScalarType::Bool.nullable(in_nullable),
+            ListContainsList(s) => s.output_type(input1_type, input2_type),
+            ListContainsListRev(s) => s.output_type(input1_type, input2_type),
 
             DigestString(s) => s.output_type(input1_type, input2_type),
             DigestBytes(s) => s.output_type(input1_type, input2_type),
@@ -3334,7 +3271,8 @@ impl BinaryFunc {
             BinaryFunc::AgeTimestampTz(s) => s.propagates_nulls(),
             BinaryFunc::ArrayArrayConcat(s) => s.propagates_nulls(),
             BinaryFunc::ArrayContains(s) => s.propagates_nulls(),
-            BinaryFunc::ArrayContainsArray { .. } => true,
+            BinaryFunc::ArrayContainsArray(s) => s.propagates_nulls(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.propagates_nulls(),
             BinaryFunc::ArrayLength(s) => s.propagates_nulls(),
             BinaryFunc::ArrayLower(s) => s.propagates_nulls(),
             BinaryFunc::ArrayRemove(s) => s.propagates_nulls(),
@@ -3423,9 +3361,10 @@ impl BinaryFunc {
             BinaryFunc::JsonbGetStringStringify(s) => s.propagates_nulls(),
             BinaryFunc::Left(s) => s.propagates_nulls(),
             BinaryFunc::LikeEscape(s) => s.propagates_nulls(),
-            BinaryFunc::ListContainsList { .. } => true,
+            BinaryFunc::ListContainsList(s) => s.propagates_nulls(),
+            BinaryFunc::ListContainsListRev(s) => s.propagates_nulls(),
             BinaryFunc::ListElementConcat(s) => s.propagates_nulls(),
-            BinaryFunc::ListLengthMax { .. } => true,
+            BinaryFunc::ListLengthMax(s) => s.propagates_nulls(),
             BinaryFunc::ListListConcat(s) => s.propagates_nulls(),
             BinaryFunc::ListRemove(s) => s.propagates_nulls(),
             BinaryFunc::LogNumeric(s) => s.propagates_nulls(),
@@ -3541,7 +3480,8 @@ impl BinaryFunc {
             AgeTimestampTz(s) => s.introduces_nulls(),
             ArrayArrayConcat(s) => s.introduces_nulls(),
             ArrayContains(s) => s.introduces_nulls(),
-            ArrayContainsArray { .. } => false,
+            ArrayContainsArray(s) => s.introduces_nulls(),
+            ArrayContainsArrayRev(s) => s.introduces_nulls(),
             ArrayRemove(s) => s.introduces_nulls(),
             BitAndInt16(s) => s.introduces_nulls(),
             BitAndInt32(s) => s.introduces_nulls(),
@@ -3618,7 +3558,8 @@ impl BinaryFunc {
             JsonbContainsString(s) => s.introduces_nulls(),
             Left(s) => s.introduces_nulls(),
             LikeEscape(s) => s.introduces_nulls(),
-            ListContainsList { .. } => false,
+            ListContainsList(s) => s.introduces_nulls(),
+            ListContainsListRev(s) => s.introduces_nulls(),
             ListElementConcat(s) => s.introduces_nulls(),
             ListListConcat(s) => s.introduces_nulls(),
             ListRemove(s) => s.introduces_nulls(),
@@ -3717,7 +3658,7 @@ impl BinaryFunc {
             JsonbGetPathStringify(s) => s.introduces_nulls(),
             JsonbGetString(s) => s.introduces_nulls(),
             JsonbGetStringStringify(s) => s.introduces_nulls(),
-            ListLengthMax { .. } => true,
+            ListLengthMax(s) => s.introduces_nulls(),
             MapGetValue(s) => s.introduces_nulls(),
         }
     }
@@ -3742,7 +3683,8 @@ impl BinaryFunc {
             AddUint64(s) => s.is_infix_op(),
             ArrayArrayConcat(s) => s.is_infix_op(),
             ArrayContains(s) => s.is_infix_op(),
-            ArrayContainsArray { .. } => true,
+            ArrayContainsArray(s) => s.is_infix_op(),
+            ArrayContainsArrayRev(s) => s.is_infix_op(),
             ArrayLength(s) => s.is_infix_op(),
             ArrayLower(s) => s.is_infix_op(),
             ArrayUpper(s) => s.is_infix_op(),
@@ -3804,7 +3746,8 @@ impl BinaryFunc {
             JsonbGetPathStringify(s) => s.is_infix_op(),
             JsonbGetString(s) => s.is_infix_op(),
             JsonbGetStringStringify(s) => s.is_infix_op(),
-            ListContainsList { .. } => true,
+            ListContainsList(s) => s.is_infix_op(),
+            ListContainsListRev(s) => s.is_infix_op(),
             ListElementConcat(s) => s.is_infix_op(),
             ListListConcat(s) => s.is_infix_op(),
             Lt(s) => s.is_infix_op(),
@@ -3894,7 +3837,7 @@ impl BinaryFunc {
             GetByte(s) => s.is_infix_op(),
             Left(s) => s.is_infix_op(),
             LikeEscape(s) => s.is_infix_op(),
-            ListLengthMax { .. } => false,
+            ListLengthMax(s) => s.is_infix_op(),
             ListRemove(s) => s.is_infix_op(),
             LogNumeric(s) => s.is_infix_op(),
             MzAclItemContainsPrivilege(s) => s.is_infix_op(),
@@ -3947,7 +3890,8 @@ impl BinaryFunc {
             BinaryFunc::AgeTimestampTz(s) => s.negate(),
             BinaryFunc::ArrayArrayConcat(s) => s.negate(),
             BinaryFunc::ArrayContains(s) => s.negate(),
-            BinaryFunc::ArrayContainsArray { .. } => None,
+            BinaryFunc::ArrayContainsArray(s) => s.negate(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.negate(),
             BinaryFunc::ArrayLength(s) => s.negate(),
             BinaryFunc::ArrayLower(s) => s.negate(),
             BinaryFunc::ArrayRemove(s) => s.negate(),
@@ -4036,9 +3980,10 @@ impl BinaryFunc {
             BinaryFunc::JsonbGetStringStringify(s) => s.negate(),
             BinaryFunc::Left(s) => s.negate(),
             BinaryFunc::LikeEscape(s) => s.negate(),
-            BinaryFunc::ListContainsList { .. } => None,
+            BinaryFunc::ListContainsList(s) => s.negate(),
+            BinaryFunc::ListContainsListRev(s) => s.negate(),
             BinaryFunc::ListElementConcat(s) => s.negate(),
-            BinaryFunc::ListLengthMax { .. } => None,
+            BinaryFunc::ListLengthMax(s) => s.negate(),
             BinaryFunc::ListListConcat(s) => s.negate(),
             BinaryFunc::ListRemove(s) => s.negate(),
             BinaryFunc::LogNumeric(s) => s.negate(),
@@ -4139,7 +4084,8 @@ impl BinaryFunc {
             BinaryFunc::AddUint32(s) => s.could_error(),
             BinaryFunc::AddUint64(s) => s.could_error(),
             BinaryFunc::ArrayContains(s) => s.could_error(),
-            BinaryFunc::ArrayContainsArray { rev: _ } => false,
+            BinaryFunc::ArrayContainsArray(s) => s.could_error(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.could_error(),
             BinaryFunc::ArrayLower(s) => s.could_error(),
             BinaryFunc::BitAndInt16(s) => s.could_error(),
             BinaryFunc::BitAndInt32(s) => s.could_error(),
@@ -4181,7 +4127,8 @@ impl BinaryFunc {
             BinaryFunc::JsonbGetPathStringify(s) => s.could_error(),
             BinaryFunc::JsonbGetString(s) => s.could_error(),
             BinaryFunc::JsonbGetStringStringify(s) => s.could_error(),
-            BinaryFunc::ListContainsList { rev: _ } => false,
+            BinaryFunc::ListContainsList(s) => s.could_error(),
+            BinaryFunc::ListContainsListRev(s) => s.could_error(),
             BinaryFunc::ListElementConcat(s) => s.could_error(),
             BinaryFunc::ListListConcat(s) => s.could_error(),
             BinaryFunc::ListRemove(s) => s.could_error(),
@@ -4303,7 +4250,7 @@ impl BinaryFunc {
             BinaryFunc::RepeatString => true,
             BinaryFunc::Normalize => true,
             BinaryFunc::EncodedBytesCharLength(s) => s.could_error(),
-            BinaryFunc::ListLengthMax { .. } => true,
+            BinaryFunc::ListLengthMax(s) => s.could_error(),
             BinaryFunc::ArrayLength(s) => s.could_error(),
             BinaryFunc::ArrayRemove(s) => s.could_error(),
             BinaryFunc::ArrayUpper(s) => s.could_error(),
@@ -4503,9 +4450,10 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading(s) => s.is_monotone(),
             BinaryFunc::TrimTrailing(s) => s.is_monotone(),
             BinaryFunc::EncodedBytesCharLength(s) => s.is_monotone(),
-            BinaryFunc::ListLengthMax { .. } => (false, false),
+            BinaryFunc::ListLengthMax(s) => s.is_monotone(),
             BinaryFunc::ArrayContains(s) => s.is_monotone(),
-            BinaryFunc::ArrayContainsArray { .. } => (false, false),
+            BinaryFunc::ArrayContainsArray(s) => s.is_monotone(),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.is_monotone(),
             BinaryFunc::ArrayLength(s) => s.is_monotone(),
             BinaryFunc::ArrayLower(s) => s.is_monotone(),
             BinaryFunc::ArrayRemove(s) => s.is_monotone(),
@@ -4514,7 +4462,8 @@ impl BinaryFunc {
             BinaryFunc::ListListConcat(s) => s.is_monotone(),
             BinaryFunc::ListElementConcat(s) => s.is_monotone(),
             BinaryFunc::ElementListConcat(s) => s.is_monotone(),
-            BinaryFunc::ListContainsList { .. } => (false, false),
+            BinaryFunc::ListContainsList(s) => s.is_monotone(),
+            BinaryFunc::ListContainsListRev(s) => s.is_monotone(),
             BinaryFunc::ListRemove(s) => s.is_monotone(),
             BinaryFunc::DigestString(s) => s.is_monotone(),
             BinaryFunc::DigestBytes(s) => s.is_monotone(),
@@ -4711,9 +4660,10 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimLeading(s) => s.fmt(f),
             BinaryFunc::TrimTrailing(s) => s.fmt(f),
             BinaryFunc::EncodedBytesCharLength(s) => s.fmt(f),
-            BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
+            BinaryFunc::ListLengthMax(s) => s.fmt(f),
             BinaryFunc::ArrayContains(s) => s.fmt(f),
-            BinaryFunc::ArrayContainsArray { rev } => f.write_str(if *rev { "<@" } else { "@>" }),
+            BinaryFunc::ArrayContainsArray(s) => s.fmt(f),
+            BinaryFunc::ArrayContainsArrayRev(s) => s.fmt(f),
             BinaryFunc::ArrayLength(s) => s.fmt(f),
             BinaryFunc::ArrayLower(s) => s.fmt(f),
             BinaryFunc::ArrayRemove(s) => s.fmt(f),
@@ -4723,7 +4673,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::ListElementConcat(s) => s.fmt(f),
             BinaryFunc::ElementListConcat(s) => s.fmt(f),
             BinaryFunc::ListRemove(s) => s.fmt(f),
-            BinaryFunc::ListContainsList { rev } => f.write_str(if *rev { "<@" } else { "@>" }),
+            BinaryFunc::ListContainsList(s) => s.fmt(f),
+            BinaryFunc::ListContainsListRev(s) => s.fmt(f),
             BinaryFunc::DigestString(s) => s.fmt(f),
             BinaryFunc::DigestBytes(s) => s.fmt(f),
             BinaryFunc::MzRenderTypmod(s) => s.fmt(f),
@@ -5219,48 +5170,6 @@ fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
         .transpose()
 }
 
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
-fn list_length_max<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    max_layer: usize,
-) -> Result<Datum<'a>, EvalError> {
-    fn max_len_on_layer<'a>(d: Datum<'a>, on_layer: i64) -> Option<usize> {
-        match d {
-            Datum::List(i) => {
-                let mut i = i.iter();
-                if on_layer > 1 {
-                    let mut max_len = None;
-                    while let Some(Datum::List(i)) = i.next() {
-                        max_len =
-                            std::cmp::max(max_len_on_layer(Datum::List(i), on_layer - 1), max_len);
-                    }
-                    max_len
-                } else {
-                    Some(i.count())
-                }
-            }
-            Datum::Null => None,
-            _ => unreachable!(),
-        }
-    }
-
-    let b = b.unwrap_int64();
-
-    if b as usize > max_layer || b < 1 {
-        Err(EvalError::InvalidLayer { max_layer, val: b })
-    } else {
-        match max_len_on_layer(a, b) {
-            Some(l) => match l.try_into() {
-                Ok(c) => Ok(Datum::Int32(c)),
-                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string().into())),
-            },
-            None => Ok(Datum::Null),
-        }
-    }
-}
-
 #[sqlfunc(
     is_infix_op = true,
     sqlname = "array_contains",
@@ -5271,39 +5180,23 @@ fn array_contains<'a>(a: Datum<'a>, array: Array<'a>) -> bool {
     array.elements().iter().any(|e| e == a)
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "@>",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn array_contains_array<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a.is_null() || b.is_null() {
-        return Datum::Null;
-    }
-    let a = a.unwrap_array().elements();
-    let b = b.unwrap_array().elements();
+#[sqlfunc(is_infix_op = true, sqlname = "@>")]
+fn array_contains_array<'a>(a: Array<'a>, b: Array<'a>) -> bool {
+    let a = a.elements();
+    let b = b.elements();
 
     // NULL is never equal to NULL. If NULL is an element of b, b cannot be contained in a, even if a contains NULL.
     if b.iter().contains(&Datum::Null) {
-        Datum::False
+        false
     } else {
         b.iter()
             .all(|item_b| a.iter().any(|item_a| item_a == item_b))
-            .into()
     }
 }
 
-#[sqlfunc(
-    output_type = "bool",
-    is_infix_op = true,
-    sqlname = "<@",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn array_contains_array_rev<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    array_contains_array(a, b)
+#[sqlfunc(is_infix_op = true, sqlname = "<@")]
+fn array_contains_array_rev<'a>(a: Array<'a>, b: Array<'a>) -> bool {
+    array_contains_array(b, a)
 }
 
 #[sqlfunc(

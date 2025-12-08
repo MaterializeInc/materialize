@@ -200,7 +200,8 @@ mod derive {
         AgeTimestampTz,
         ArrayArrayConcat,
         ArrayContains,
-        // ArrayContainsArray { rev: bool },
+        ArrayContainsArray,
+        ArrayContainsArrayRev,
         ArrayLength,
         ArrayLower,
         ArrayRemove,
@@ -289,9 +290,10 @@ mod derive {
         JsonbGetStringStringify,
         Left,
         LikeEscape,
-        // ListContainsList
+        ListContainsList,
+        ListContainsListRev,
         ListElementConcat,
-        // ListLengthMax
+        ListLengthMax,
         ListListConcat,
         ListRemove,
         LogNumeric(LogBaseNumeric),
@@ -821,31 +823,6 @@ mod test {
             &i32_ty,
         );
 
-        check(
-            func::ListContainsList,
-            BF::ListContainsList { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ListContainsListRev,
-            BF::ListContainsList { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
-
         // check(func::ListLength, BF::ListLength, &i32_ty, &i32_ty);
-        check(
-            func::ArrayContainsArray,
-            BF::ArrayContainsArray { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ArrayContainsArrayRev,
-            BF::ArrayContainsArray { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
     }
 }

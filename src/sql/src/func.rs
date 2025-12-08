@@ -3753,7 +3753,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             vec![ListAny, Plain(SqlScalarType::Int64)] => Operation::binary(|ecx, lhs, rhs| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
+                Ok(lhs.call_binary(rhs, BinaryFunc::from(func::ListLengthMax { max_layer })))
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
         },
         "list_prepend" => Scalar {
@@ -4816,10 +4816,10 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange { rev: false }))
             }) => Bool, 3890;
             params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayContainsArray { rev: false }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArray)))
             }) => Bool, 2751;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: false }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ListContainsList)))
             }) => Bool, oid::OP_CONTAINS_LIST_LIST_OID;
         },
         "<@" => Scalar {
@@ -4850,10 +4850,10 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(rhs.call_binary(lhs, BF::RangeContainsRange { rev: true }))
             }) => Bool, 3892;
             params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BF::ArrayContainsArray { rev: true }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArrayRev)))
             }) => Bool, 2752;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BF::ListContainsList { rev: true }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ListContainsListRev)))
             }) => Bool, oid::OP_IS_CONTAINED_LIST_LIST_OID;
         },
         "?" => Scalar {
