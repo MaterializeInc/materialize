@@ -3347,9 +3347,11 @@ impl TableFunc {
         match inner {
             TableFunc::AclExplode
             | TableFunc::MzAclExplode
-            | TableFunc::JsonbEach { .. }
+            | TableFunc::JsonbEach
+            | TableFunc::JsonbEachStringify
             | TableFunc::JsonbObjectKeys
-            | TableFunc::JsonbArrayElements { .. }
+            | TableFunc::JsonbArrayElements
+            | TableFunc::JsonbArrayElementsStringify
             | TableFunc::RegexpExtract(_)
             | TableFunc::CsvExtract(_)
             | TableFunc::GenerateSeriesInt32
@@ -3369,7 +3371,7 @@ impl TableFunc {
             })),
             // IMPORTANT: Before adding a new table function here, consider negative diffs:
             // `WithOrdinality::eval` will panic if the inner table function emits a negative diff.
-            _ => None,
+            TableFunc::WithOrdinality(_) => None,
         }
     }
 }
@@ -3719,10 +3721,10 @@ impl fmt::Display for TableFunc {
             TableFunc::AclExplode => f.write_str("aclexplode"),
             TableFunc::MzAclExplode => f.write_str("mz_aclexplode"),
             TableFunc::JsonbEach => f.write_str("jsonb_each"),
-            TableFunc::JsonbEachStringify => f.write_str("jsonb_each"),
+            TableFunc::JsonbEachStringify => f.write_str("jsonb_each_text"),
             TableFunc::JsonbObjectKeys => f.write_str("jsonb_object_keys"),
             TableFunc::JsonbArrayElements => f.write_str("jsonb_array_elements"),
-            TableFunc::JsonbArrayElementsStringify => f.write_str("jsonb_array_elements"),
+            TableFunc::JsonbArrayElementsStringify => f.write_str("jsonb_array_elements_text"),
             TableFunc::RegexpExtract(a) => write!(f, "regexp_extract({:?}, _)", a.0),
             TableFunc::CsvExtract(n_cols) => write!(f, "csv_extract({}, _)", n_cols),
             TableFunc::GenerateSeriesInt32 => f.write_str("generate_series"),
