@@ -7051,6 +7051,9 @@ impl<'a> Parser<'a> {
                 BOOLEAN => other(ident!("bool")),
                 BYTES => other(ident!("bytea")),
                 JSON => other(ident!("jsonb")),
+                
+                // We do not want any reserved keywords to be parsed as data type names, 
+                // eg "CASE 'foo' WHEN ... END" should not parse as "CAST 'foo' AS CASE"
                 kw if kw.is_sometimes_reserved() => {
                     return self.expected(
                         self.peek_prev_pos(),
