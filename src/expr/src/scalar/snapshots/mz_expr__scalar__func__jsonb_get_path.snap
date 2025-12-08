@@ -1,0 +1,83 @@
+---
+source: src/expr/src/scalar/func.rs
+expression: "#[sqlfunc(sqlname = \"#>\", is_infix_op = true)]\nfn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'a>> {\n    let path = b.elements();\n    for key in path.iter() {\n        let key = match key {\n            Datum::String(s) => s,\n            Datum::Null => return None,\n            _ => unreachable!(\"keys in jsonb_get_path known to be strings\"),\n        };\n        let v = match json.into_datum() {\n            Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),\n            Datum::List(list) => {\n                let i = strconv::parse_int64(key).ok()?;\n                let i = if i >= 0 {\n                    usize::cast_from(i.unsigned_abs())\n                } else {\n                    let i = usize::cast_from(i.unsigned_abs());\n                    (list.iter().count()).wrapping_sub(i)\n                };\n                list.iter().nth(i)\n            }\n            _ => return None,\n        }?;\n        json = JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()?;\n    }\n    Some(json)\n}\n"
+---
+#[derive(
+    proptest_derive::Arbitrary,
+    Ord,
+    PartialOrd,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    serde::Serialize,
+    serde::Deserialize,
+    Hash,
+    mz_lowertest::MzReflect
+)]
+pub struct JsonbGetPath;
+impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbGetPath {
+    type Input1 = JsonbRef<'a>;
+    type Input2 = Array<'a>;
+    type Output = Option<JsonbRef<'a>>;
+    fn call(
+        &self,
+        a: Self::Input1,
+        b: Self::Input2,
+        temp_storage: &'a mz_repr::RowArena,
+    ) -> Self::Output {
+        jsonb_get_path(a, b)
+    }
+    fn output_type(
+        &self,
+        input_type_a: mz_repr::SqlColumnType,
+        input_type_b: mz_repr::SqlColumnType,
+    ) -> mz_repr::SqlColumnType {
+        use mz_repr::AsColumnType;
+        let output = Self::Output::as_column_type();
+        let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
+            self,
+        );
+        let nullable = output.nullable;
+        output
+            .nullable(
+                nullable
+                    || (propagates_nulls
+                        && (input_type_a.nullable || input_type_b.nullable)),
+            )
+    }
+    fn is_infix_op(&self) -> bool {
+        true
+    }
+}
+impl std::fmt::Display for JsonbGetPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("#>")
+    }
+}
+fn jsonb_get_path<'a>(mut json: JsonbRef<'a>, b: Array<'a>) -> Option<JsonbRef<'a>> {
+    let path = b.elements();
+    for key in path.iter() {
+        let key = match key {
+            Datum::String(s) => s,
+            Datum::Null => return None,
+            _ => unreachable!("keys in jsonb_get_path known to be strings"),
+        };
+        let v = match json.into_datum() {
+            Datum::Map(map) => map.iter().find(|(k, _)| key == *k).map(|(_k, v)| v),
+            Datum::List(list) => {
+                let i = strconv::parse_int64(key).ok()?;
+                let i = if i >= 0 {
+                    usize::cast_from(i.unsigned_abs())
+                } else {
+                    let i = usize::cast_from(i.unsigned_abs());
+                    (list.iter().count()).wrapping_sub(i)
+                };
+                list.iter().nth(i)
+            }
+            _ => return None,
+        }?;
+        json = JsonbRef::try_from_result(Ok::<_, ()>(v)).ok()?;
+    }
+    Some(json)
+}

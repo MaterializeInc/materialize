@@ -3353,7 +3353,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbArrayElements { stringify: false },
+                        func: TableFunc::JsonbArrayElements,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["value".into()],
@@ -3364,7 +3364,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbArrayElements { stringify: true },
+                        func: TableFunc::JsonbArrayElementsStringify,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["value".into()],
@@ -3375,7 +3375,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbEach { stringify: false },
+                        func: TableFunc::JsonbEach,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["key".into(), "value".into()],
@@ -3386,7 +3386,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbEach { stringify: true },
+                        func: TableFunc::JsonbEachStringify,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["key".into(), "value".into()],
@@ -4781,19 +4781,19 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // JSON, MAP, RANGE, LIST, ARRAY
         "->" => Scalar {
-            params!(Jsonb, Int64) => BinaryFunc::JsonbGetInt64 => Jsonb, 3212;
-            params!(Jsonb, String) => BinaryFunc::JsonbGetString => Jsonb, 3211;
+            params!(Jsonb, Int64) => BF::from(func::JsonbGetInt64) => Jsonb, 3212;
+            params!(Jsonb, String) => BF::from(func::JsonbGetString) => Jsonb, 3211;
             params!(MapAny, String) => BF::from(func::MapGetValue) => Any, oid::OP_GET_VALUE_MAP_OID;
         },
         "->>" => Scalar {
-            params!(Jsonb, Int64) => BinaryFunc::JsonbGetInt64Stringify => String, 3481;
-            params!(Jsonb, String) => BinaryFunc::JsonbGetStringStringify => String, 3477;
+            params!(Jsonb, Int64) => BF::from(func::JsonbGetInt64Stringify) => String, 3481;
+            params!(Jsonb, String) => BF::from(func::JsonbGetStringStringify) => String, 3477;
         },
         "#>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BinaryFunc::JsonbGetPath => Jsonb, 3213;
+            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BF::from(func::JsonbGetPath) => Jsonb, 3213;
         },
         "#>>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BinaryFunc::JsonbGetPathStringify => String, 3206;
+            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BF::from(func::JsonbGetPathStringify) => String, 3206;
         },
         "@>" => Scalar {
             params!(Jsonb, Jsonb) => BF::from(func::JsonbContainsJsonb) => Bool, 3246;
