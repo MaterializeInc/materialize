@@ -2587,7 +2587,7 @@ pub enum BinaryFunc {
     TrimLeading(TrimLeading),
     TrimTrailing(TrimTrailing),
     EncodedBytesCharLength(EncodedBytesCharLength),
-    ListLengthMax { max_layer: usize },
+    ListLengthMax(ListLengthMax),
     ArrayContains(ArrayContains),
     ArrayContainsArray(ArrayContainsArray),
     ArrayContainsArrayRev(ArrayContainsArrayRev),
@@ -2868,7 +2868,7 @@ impl BinaryFunc {
             BinaryFunc::EncodedBytesCharLength(s) => {
                 return s.eval(datums, temp_storage, a_expr, b_expr);
             }
-            // BinaryFunc::ListLengthMax { max_layer }(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
+            BinaryFunc::ListLengthMax(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayLength(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayContains(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::ArrayContainsArray(s) => {
@@ -2968,7 +2968,6 @@ impl BinaryFunc {
             BinaryFunc::TimezoneIntervalTimestamp => timezone_interval_timestamp(a, b),
             BinaryFunc::TimezoneIntervalTimestampTz => timezone_interval_timestamptz(a, b),
             BinaryFunc::TimezoneIntervalTime => timezone_interval_time(a, b),
-            BinaryFunc::ListLengthMax { max_layer } => list_length_max(a, b, *max_layer),
             BinaryFunc::RepeatString => repeat_string(a, b, temp_storage),
             BinaryFunc::Normalize => normalize_with_form(a, b, temp_storage),
             BinaryFunc::RangeContainsElem { elem_type, rev: _ } => Ok(match elem_type {
@@ -3188,7 +3187,7 @@ impl BinaryFunc {
             ArrayLower(s) => s.output_type(input1_type, input2_type),
             ArrayUpper(s) => s.output_type(input1_type, input2_type),
 
-            ListLengthMax { .. } => SqlScalarType::Int32.nullable(true),
+            ListLengthMax(s) => s.output_type(input1_type, input2_type),
 
             ArrayArrayConcat(s) => s.output_type(input1_type, input2_type),
             ArrayRemove(s) => s.output_type(input1_type, input2_type),
@@ -3365,7 +3364,7 @@ impl BinaryFunc {
             BinaryFunc::ListContainsList(s) => s.propagates_nulls(),
             BinaryFunc::ListContainsListRev(s) => s.propagates_nulls(),
             BinaryFunc::ListElementConcat(s) => s.propagates_nulls(),
-            BinaryFunc::ListLengthMax { .. } => true,
+            BinaryFunc::ListLengthMax(s) => s.propagates_nulls(),
             BinaryFunc::ListListConcat(s) => s.propagates_nulls(),
             BinaryFunc::ListRemove(s) => s.propagates_nulls(),
             BinaryFunc::LogNumeric(s) => s.propagates_nulls(),
@@ -3659,7 +3658,7 @@ impl BinaryFunc {
             JsonbGetPathStringify(s) => s.introduces_nulls(),
             JsonbGetString(s) => s.introduces_nulls(),
             JsonbGetStringStringify(s) => s.introduces_nulls(),
-            ListLengthMax { .. } => true,
+            ListLengthMax(s) => s.introduces_nulls(),
             MapGetValue(s) => s.introduces_nulls(),
         }
     }
@@ -3838,7 +3837,7 @@ impl BinaryFunc {
             GetByte(s) => s.is_infix_op(),
             Left(s) => s.is_infix_op(),
             LikeEscape(s) => s.is_infix_op(),
-            ListLengthMax { .. } => false,
+            ListLengthMax(s) => s.is_infix_op(),
             ListRemove(s) => s.is_infix_op(),
             LogNumeric(s) => s.is_infix_op(),
             MzAclItemContainsPrivilege(s) => s.is_infix_op(),
@@ -3984,7 +3983,7 @@ impl BinaryFunc {
             BinaryFunc::ListContainsList(s) => s.negate(),
             BinaryFunc::ListContainsListRev(s) => s.negate(),
             BinaryFunc::ListElementConcat(s) => s.negate(),
-            BinaryFunc::ListLengthMax { .. } => None,
+            BinaryFunc::ListLengthMax(s) => s.negate(),
             BinaryFunc::ListListConcat(s) => s.negate(),
             BinaryFunc::ListRemove(s) => s.negate(),
             BinaryFunc::LogNumeric(s) => s.negate(),
@@ -4251,7 +4250,7 @@ impl BinaryFunc {
             BinaryFunc::RepeatString => true,
             BinaryFunc::Normalize => true,
             BinaryFunc::EncodedBytesCharLength(s) => s.could_error(),
-            BinaryFunc::ListLengthMax { .. } => true,
+            BinaryFunc::ListLengthMax(s) => s.could_error(),
             BinaryFunc::ArrayLength(s) => s.could_error(),
             BinaryFunc::ArrayRemove(s) => s.could_error(),
             BinaryFunc::ArrayUpper(s) => s.could_error(),
@@ -4451,7 +4450,7 @@ impl BinaryFunc {
             BinaryFunc::TrimLeading(s) => s.is_monotone(),
             BinaryFunc::TrimTrailing(s) => s.is_monotone(),
             BinaryFunc::EncodedBytesCharLength(s) => s.is_monotone(),
-            BinaryFunc::ListLengthMax { .. } => (false, false),
+            BinaryFunc::ListLengthMax(s) => s.is_monotone(),
             BinaryFunc::ArrayContains(s) => s.is_monotone(),
             BinaryFunc::ArrayContainsArray(s) => s.is_monotone(),
             BinaryFunc::ArrayContainsArrayRev(s) => s.is_monotone(),
@@ -4661,7 +4660,7 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::TrimLeading(s) => s.fmt(f),
             BinaryFunc::TrimTrailing(s) => s.fmt(f),
             BinaryFunc::EncodedBytesCharLength(s) => s.fmt(f),
-            BinaryFunc::ListLengthMax { .. } => f.write_str("list_length_max"),
+            BinaryFunc::ListLengthMax(s) => s.fmt(f),
             BinaryFunc::ArrayContains(s) => s.fmt(f),
             BinaryFunc::ArrayContainsArray(s) => s.fmt(f),
             BinaryFunc::ArrayContainsArrayRev(s) => s.fmt(f),
@@ -5169,48 +5168,6 @@ fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
                 .map_err(|_| EvalError::Int32OutOfRange(dim.length.to_string().into()))
         })
         .transpose()
-}
-
-// TODO(benesch): remove potentially dangerous usage of `as`.
-#[allow(clippy::as_conversions)]
-fn list_length_max<'a>(
-    a: Datum<'a>,
-    b: Datum<'a>,
-    max_layer: usize,
-) -> Result<Datum<'a>, EvalError> {
-    fn max_len_on_layer<'a>(d: Datum<'a>, on_layer: i64) -> Option<usize> {
-        match d {
-            Datum::List(i) => {
-                let mut i = i.iter();
-                if on_layer > 1 {
-                    let mut max_len = None;
-                    while let Some(Datum::List(i)) = i.next() {
-                        max_len =
-                            std::cmp::max(max_len_on_layer(Datum::List(i), on_layer - 1), max_len);
-                    }
-                    max_len
-                } else {
-                    Some(i.count())
-                }
-            }
-            Datum::Null => None,
-            _ => unreachable!(),
-        }
-    }
-
-    let b = b.unwrap_int64();
-
-    if b as usize > max_layer || b < 1 {
-        Err(EvalError::InvalidLayer { max_layer, val: b })
-    } else {
-        match max_len_on_layer(a, b) {
-            Some(l) => match l.try_into() {
-                Ok(c) => Ok(Datum::Int32(c)),
-                Err(_) => Err(EvalError::Int32OutOfRange(l.to_string().into())),
-            },
-            None => Ok(Datum::Null),
-        }
-    }
 }
 
 #[sqlfunc(
