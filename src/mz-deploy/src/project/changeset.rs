@@ -257,7 +257,66 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
     }
 }
 
-/// Compute dirty objects, clusters, and schemas
+/// Pre-computed indexes for efficient Datalog rule evaluation.
+struct DatalogIndexes {
+    /// Object -> clusters used by the statement
+    stmt_to_clusters: BTreeMap<ObjectId, Vec<String>>,
+    /// Object -> clusters used by indexes on that object
+    index_to_clusters: BTreeMap<ObjectId, Vec<String>>,
+    /// Parent -> list of dependent children (reverse of depends_on)
+    dependents: BTreeMap<ObjectId, Vec<ObjectId>>,
+    /// Object -> (database, schema) it belongs to
+    object_to_schema: BTreeMap<ObjectId, (String, String)>,
+}
+
+impl DatalogIndexes {
+    fn from_base_facts(facts: &BaseFacts) -> Self {
+        // stmt_to_clusters: group by object
+        let mut stmt_to_clusters: BTreeMap<ObjectId, Vec<String>> = BTreeMap::new();
+        for (obj, cluster) in &facts.stmt_uses_cluster {
+            stmt_to_clusters
+                .entry(obj.clone())
+                .or_default()
+                .push(cluster.clone());
+        }
+
+        // index_to_clusters: group by object (ignoring index name)
+        let mut index_to_clusters: BTreeMap<ObjectId, Vec<String>> = BTreeMap::new();
+        for (obj, _index_name, cluster) in &facts.index_uses_cluster {
+            index_to_clusters
+                .entry(obj.clone())
+                .or_default()
+                .push(cluster.clone());
+        }
+
+        // dependents: reverse the depends_on relation (parent -> children)
+        let mut dependents: BTreeMap<ObjectId, Vec<ObjectId>> = BTreeMap::new();
+        for (child, parent) in &facts.depends_on {
+            dependents
+                .entry(parent.clone())
+                .or_default()
+                .push(child.clone());
+        }
+
+        // object_to_schema: direct mapping
+        let object_to_schema = facts
+            .object_in_schema
+            .iter()
+            .map(|(obj, db, sch)| (obj.clone(), (db.clone(), sch.clone())))
+            .collect();
+
+        DatalogIndexes {
+            stmt_to_clusters,
+            index_to_clusters,
+            dependents,
+            object_to_schema,
+        }
+    }
+}
+
+/// Compute dirty objects, clusters, and schemas using fixed-point iteration.
+///
+/// Implements the Datalog rules defined at the top of this module.
 fn compute_dirty_datalog(
     changed_stmts: &BTreeSet<ObjectId>,
     base_facts: &BaseFacts,
@@ -266,87 +325,62 @@ fn compute_dirty_datalog(
     BTreeSet<Cluster>,
     BTreeSet<(String, String)>,
 ) {
-    // Build indexes for efficient lookup
-    let stmt_cluster_index = build_stmt_cluster_index(&base_facts.stmt_uses_cluster);
-    let index_cluster_index = build_index_cluster_index(&base_facts.index_uses_cluster);
-    let reverse_deps = build_reverse_deps(&base_facts.depends_on);
-    let object_schema_map = build_object_schema_map(&base_facts.object_in_schema);
-
-    // Note: index_cluster_index is still used for marking clusters dirty when statements change (Rule 2),
-    // but NOT for marking objects dirty
+    let indexes = DatalogIndexes::from_base_facts(base_facts);
 
     // Initialize result sets
     let mut dirty_stmts: BTreeSet<ObjectId> = changed_stmts.clone();
     let mut dirty_clusters: BTreeSet<String> = BTreeSet::new();
     let mut dirty_schemas: BTreeSet<(String, String)> = BTreeSet::new();
 
-    // Fixed-point iteration
+    // Fixed-point iteration: apply rules until no changes
     loop {
-        let prev_stmts_size = dirty_stmts.len();
-        let prev_clusters_size = dirty_clusters.len();
-        let prev_schemas_size = dirty_schemas.len();
+        let prev_sizes = (dirty_stmts.len(), dirty_clusters.len(), dirty_schemas.len());
 
+        // --- Cluster dirtiness rules (only from changed statements) ---
         // Rule 1: DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C)
-        // Only mark statement clusters dirty when the STATEMENT itself changed,
-        // not when the object is dirty for other reasons (index clusters, schema, etc.)
-        for obj in changed_stmts {
-            if let Some(clusters) = stmt_cluster_index.get(obj) {
-                dirty_clusters.extend(clusters.iter().cloned());
-            }
-        }
-
         // Rule 2: DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C)
-        // Only mark index clusters dirty when the STATEMENT itself changed,
-        // not when the object is dirty for other reasons (schema, dependencies, etc.)
         for obj in changed_stmts {
-            if let Some(clusters) = index_cluster_index.get(obj) {
+            if let Some(clusters) = indexes.stmt_to_clusters.get(obj) {
+                dirty_clusters.extend(clusters.iter().cloned());
+            }
+            if let Some(clusters) = indexes.index_to_clusters.get(obj) {
                 dirty_clusters.extend(clusters.iter().cloned());
             }
         }
 
+        // --- Statement dirtiness rules ---
         // Rule 3: DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)
-        // Objects using dirty statement clusters become dirty
-        for (obj, clusters) in &stmt_cluster_index {
+        for (obj, clusters) in &indexes.stmt_to_clusters {
             if clusters.iter().any(|c| dirty_clusters.contains(c)) {
                 dirty_stmts.insert(obj.clone());
             }
         }
 
         // Rule 4: DirtyStmt(O) :- DependsOn(O, P), DirtyStmt(P)
-        // Dependencies propagate dirtiness
-        let mut new_dirty = Vec::new();
-        for dirty_obj in &dirty_stmts.clone() {
-            if let Some(dependents) = reverse_deps.get(dirty_obj) {
-                for dependent in dependents {
-                    if !dirty_stmts.contains(dependent) {
-                        new_dirty.push(dependent.clone());
-                    }
-                }
+        let current_dirty: Vec<_> = dirty_stmts.iter().cloned().collect();
+        for dirty_obj in current_dirty {
+            if let Some(children) = indexes.dependents.get(&dirty_obj) {
+                dirty_stmts.extend(children.iter().cloned());
             }
         }
-        dirty_stmts.extend(new_dirty);
 
+        // --- Schema dirtiness rules ---
         // Rule 5: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch)
-        // All dirty objects make their schemas dirty
         for obj in &dirty_stmts {
-            if let Some((db, sch)) = object_schema_map.get(obj) {
+            if let Some((db, sch)) = indexes.object_to_schema.get(obj) {
                 dirty_schemas.insert((db.clone(), sch.clone()));
             }
         }
 
         // Rule 6: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch)
-        // All objects in dirty schemas become dirty
-        for (obj, (db, sch)) in &object_schema_map {
+        for (obj, (db, sch)) in &indexes.object_to_schema {
             if dirty_schemas.contains(&(db.clone(), sch.clone())) {
                 dirty_stmts.insert(obj.clone());
             }
         }
 
-        // Check if any set grew (fixed point reached when no changes)
-        if dirty_stmts.len() == prev_stmts_size
-            && dirty_clusters.len() == prev_clusters_size
-            && dirty_schemas.len() == prev_schemas_size
-        {
+        // Fixed point reached when no sets grew
+        if (dirty_stmts.len(), dirty_clusters.len(), dirty_schemas.len()) == prev_sizes {
             break;
         }
     }
@@ -355,41 +389,6 @@ fn compute_dirty_datalog(
     let dirty_cluster_structs = dirty_clusters.into_iter().map(Cluster::new).collect();
 
     (dirty_stmts, dirty_cluster_structs, dirty_schemas)
-}
-
-fn build_stmt_cluster_index(facts: &[(ObjectId, String)]) -> BTreeMap<ObjectId, Vec<String>> {
-    let mut index: BTreeMap<ObjectId, Vec<String>> = BTreeMap::new();
-    for (obj, cluster) in facts {
-        index.entry(obj.clone()).or_default().push(cluster.clone());
-    }
-    index
-}
-
-fn build_index_cluster_index(
-    facts: &[(ObjectId, String, String)],
-) -> BTreeMap<ObjectId, Vec<String>> {
-    let mut index: BTreeMap<ObjectId, Vec<String>> = BTreeMap::new();
-    for (obj, _index_name, cluster) in facts {
-        index.entry(obj.clone()).or_default().push(cluster.clone());
-    }
-    index
-}
-
-fn build_reverse_deps(facts: &[(ObjectId, ObjectId)]) -> BTreeMap<ObjectId, Vec<ObjectId>> {
-    let mut index: BTreeMap<ObjectId, Vec<ObjectId>> = BTreeMap::new();
-    for (child, parent) in facts {
-        index.entry(parent.clone()).or_default().push(child.clone());
-    }
-    index
-}
-
-fn build_object_schema_map(
-    facts: &[(ObjectId, String, String)],
-) -> BTreeMap<ObjectId, (String, String)> {
-    facts
-        .iter()
-        .map(|(obj, db, sch)| (obj.clone(), (db.clone(), sch.clone())))
-        .collect()
 }
 
 #[cfg(test)]

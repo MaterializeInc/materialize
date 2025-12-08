@@ -12,7 +12,9 @@ use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
+
+use crate::utils::timestamp::{epoch_to_system_time, epoch_to_system_time_opt};
 use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
@@ -464,9 +466,8 @@ pub async fn get_schema_deployments(
         let git_commit: Option<String> = row.get("commit");
         let kind_str: String = row.get("kind");
 
-        let deployed_at = UNIX_EPOCH + Duration::from_secs_f64(deployed_at_epoch);
-        let promoted_at =
-            promoted_at_epoch.map(|epoch| UNIX_EPOCH + Duration::from_secs_f64(epoch));
+        let deployed_at = epoch_to_system_time(deployed_at_epoch);
+        let promoted_at = epoch_to_system_time_opt(promoted_at_epoch);
 
         let kind = kind_str.parse().map_err(|e| {
             ConnectionError::Message(format!("Failed to parse deployment kind: {}", e))
@@ -566,7 +567,7 @@ pub async fn get_deployment_metadata(
     let first_row = &rows[0];
     let deploy_id: String = first_row.get("deploy_id");
     let promoted_at_epoch: Option<f64> = first_row.get("promoted_at_epoch");
-    let promoted_at = promoted_at_epoch.map(|epoch| UNIX_EPOCH + Duration::from_secs_f64(epoch));
+    let promoted_at = epoch_to_system_time_opt(promoted_at_epoch);
 
     let mut schemas = Vec::new();
     for row in rows {
@@ -631,8 +632,8 @@ pub async fn get_deployment_details(
     let commit: Option<String> = first_row.get("commit");
     let kind: String = first_row.get("kind");
 
-    let deployed_at = UNIX_EPOCH + Duration::from_secs_f64(deployed_at_epoch);
-    let promoted_at = promoted_at_epoch.map(|epoch| UNIX_EPOCH + Duration::from_secs_f64(epoch));
+    let deployed_at = epoch_to_system_time(deployed_at_epoch);
+    let promoted_at = epoch_to_system_time_opt(promoted_at_epoch);
 
     let mut schemas = Vec::new();
     for row in rows {
@@ -707,7 +708,7 @@ pub async fn list_staging_deployments(
         let database: String = row.get("database");
         let schema: String = row.get("schema");
 
-        let deployed_at = UNIX_EPOCH + Duration::from_secs_f64(deployed_at_epoch);
+        let deployed_at = epoch_to_system_time(deployed_at_epoch);
 
         deployments
             .entry(deploy_id)
@@ -815,7 +816,7 @@ pub async fn list_deployment_history(
         let database: String = row.get("database");
         let schema: String = row.get("schema");
 
-        let promoted_at = UNIX_EPOCH + Duration::from_secs_f64(promoted_at_epoch);
+        let promoted_at = epoch_to_system_time(promoted_at_epoch);
         let key = (
             deploy_id.clone(),
             promoted_at,
@@ -869,7 +870,7 @@ pub async fn check_deployment_conflicts(
         .iter()
         .map(|row| {
             let promoted_at_epoch: f64 = row.get("promoted_at_epoch");
-            let promoted_at = UNIX_EPOCH + Duration::from_secs_f64(promoted_at_epoch);
+            let promoted_at = epoch_to_system_time(promoted_at_epoch);
 
             ConflictRecord {
                 database: row.get("database"),
