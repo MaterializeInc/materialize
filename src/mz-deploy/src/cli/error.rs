@@ -7,6 +7,7 @@ use crate::client::{ConflictRecord, ConnectionError, DatabaseValidationError};
 use crate::project::deployment_snapshot::DeploymentSnapshotError;
 use crate::project::error::{DependencyError, ProjectError};
 use crate::types::{TypeCheckError, TypesError};
+use crate::unit_test::TestValidationError;
 use owo_colors::OwoColorize;
 use thiserror::Error;
 
@@ -103,6 +104,10 @@ pub enum CliError {
     #[error("{failed} test{plural} failed, {passed} passed",
         plural = if *failed == 1 { "" } else { "s" })]
     TestsFailed { failed: usize, passed: usize },
+
+    /// Test validation failed (schema mismatch, missing mocks)
+    #[error(transparent)]
+    TestValidationFailed(#[from] TestValidationError),
 
     /// Type check failed
     #[error(transparent)]
@@ -249,6 +254,11 @@ impl CliError {
             )),
             Self::TestsFailed { .. } => Some(
                 "review the test output above for details on which assertions failed"
+                    .to_string(),
+            ),
+            Self::TestValidationFailed(_) => Some(
+                "review the validation error above and update your test to match the schema.\n\
+                 Run 'mz-deploy compile' to regenerate types.cache if needed"
                     .to_string(),
             ),
             Self::TypeCheckFailed(_) => Some(

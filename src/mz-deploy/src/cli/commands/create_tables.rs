@@ -156,10 +156,7 @@ pub async fn run(
 
         for (database, schema) in &table_schemas {
             verbose!("Creating schema {}.{} if not exists", database, schema);
-            let create_schema_sql = format!(
-                "CREATE SCHEMA IF NOT EXISTS {}.{}",
-                database, schema
-            );
+            let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}.{}", database, schema);
             executor.execute_sql(&create_schema_sql).await?;
         }
 

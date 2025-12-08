@@ -1,8 +1,8 @@
 //! Debug command - test database connection.
 
-use crossterm::style::Stylize;
 use crate::cli::CliError;
 use crate::client::{Client, Profile};
+use crossterm::style::Stylize;
 use owo_colors::OwoColorize;
 
 /// Test database connection with the specified profile.
@@ -23,11 +23,16 @@ pub async fn run(profile: &Profile) -> Result<(), CliError> {
         .await
         .map_err(CliError::Connection)?;
 
-    let row = client.query_one(r#"
+    let row = client
+        .query_one(
+            r#"
         SELECT
             mz_version() AS version,
             mz_environment_id() AS environment_id,
-            current_role() as role"#, &[]).await?;
+            current_role() as role"#,
+            &[],
+        )
+        .await?;
 
     let version: String = row.get("version");
     let environment_id: String = row.get("environment_id");

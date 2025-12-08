@@ -144,13 +144,12 @@ impl<'a> DeploymentExecutor<'a> {
             println!("{};", sql);
             println!();
         } else {
-            self.client
-                .execute(&sql, &[])
-                .await
-                .map_err(|source| CliError::SqlExecutionFailed {
+            self.client.execute(&sql, &[]).await.map_err(|source| {
+                CliError::SqlExecutionFailed {
                     statement: sql,
                     source,
-                })?;
+                }
+            })?;
         }
         Ok(())
     }
