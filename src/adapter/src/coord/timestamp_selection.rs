@@ -299,6 +299,7 @@ pub trait TimestampProvider {
         }
 
         if when.advance_to_since() {
+            // Note: This `advance_by` is a no-op if the given frontier is `[]`.
             candidate.advance_by(since.borrow());
         }
 
@@ -385,6 +386,8 @@ pub trait TimestampProvider {
             );
             candidate
         } else {
+            // This can happen not just when the query has AS OF, but also when the passed in
+            // `since` is `[]`.
             coord_bail!(generate_timestamp_not_valid_error_msg(
                 id_bundle,
                 compute_instance,
@@ -558,6 +561,7 @@ pub trait TimestampProvider {
         // Determine a candidate based on constraints and preferences.
         let constraint_candidate = {
             let mut candidate = Timestamp::minimum();
+            // Note: These `advance_by` calls are no-ops if the given frontier is `[]`.
             candidate.advance_by(constraints.lower_bound().borrow());
             // If we have a preference to be the freshest available, advance to the minimum
             // of the upper bound constraints and the `largest_not_in_advance_of_upper`.
@@ -566,8 +570,13 @@ pub trait TimestampProvider {
                 upper_bound.insert(largest_not_in_advance_of_upper);
                 candidate.advance_by(upper_bound.borrow());
             }
-            // If the candidate strictly exceeds the upper bound, we didn't have a viable timestamp.
-            if constraints.upper_bound().less_than(&candidate) {
+            // If the candidate is strictly outside the constraints, we didn't have a viable
+            // timestamp. This can happen e.g. when the query has AS OF, or when the lower bound is
+            // `[]`.
+            if !constraints.lower_bound().less_equal(&candidate)
+                || constraints.upper_bound().less_than(&candidate)
+            {
+                // TODO: Generate a better error msg, which includes all the constraints.
                 coord_bail!(generate_timestamp_not_valid_error_msg(
                     id_bundle,
                     compute_instance,
@@ -643,6 +652,27 @@ pub trait TimestampProvider {
         let timeline = Self::get_timeline(timeline_context);
         let largest_not_in_advance_of_upper = Coordinator::largest_not_in_advance_of_upper(&upper);
         let since = read_holds.least_valid_read();
+
+        // If the `since` is empty, then timestamp determination would fail. Let's return a more
+        // specific error in this case: Empty `since` frontiers happen here when collections were
+        // dropped concurrently with sequencing the query.
+        if since.is_empty() {
+            // Figure out what made the since frontier empty.
+            let mut unreadable_collections = Vec::new();
+            for (coll_id, hold) in read_holds.storage_holds {
+                if hold.since().is_empty() {
+                    unreadable_collections.push(coll_id);
+                }
+            }
+            for ((_instance_id, coll_id), hold) in read_holds.compute_holds {
+                if hold.since().is_empty() {
+                    unreadable_collections.push(coll_id);
+                }
+            }
+            return Err(AdapterError::CollectionUnreadable {
+                id: unreadable_collections.into_iter().join(", "),
+            });
+        }
 
         let raw_determination = match constraint_based {
             ConstraintBasedTimestampSelection::Disabled => Self::determine_timestamp_classical(
