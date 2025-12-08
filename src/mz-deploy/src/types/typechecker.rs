@@ -50,6 +50,10 @@ pub enum TypeCheckError {
     /// Failed to get sorted objects
     #[error("failed to get sorted objects: {0}")]
     SortError(#[from] crate::project::error::DependencyError),
+
+    /// Failed to write types cache
+    #[error("failed to write types cache: {0}")]
+    TypesCacheWriteFailed(#[from] crate::types::TypesError),
 }
 
 /// A single type check error for a specific object
@@ -213,7 +217,7 @@ pub async fn typecheck_with_client(
     );
     let mut errors = Vec::new();
 
-    for (object_id, typed_object) in sorted_objects {
+    for (object_id, typed_object) in &sorted_objects {
         verbose!("Type checking: {}", object_id);
 
         // Build the FQN from the object_id
@@ -248,7 +252,7 @@ pub async fn typecheck_with_client(
 
                     verbose!("  ✗ Type check failed: {}", error_message);
 
-                    let path = object_paths.get(&object_id).cloned().unwrap_or_else(|| {
+                    let path = object_paths.get(object_id).cloned().unwrap_or_else(|| {
                         project_root
                             .join(&object_id.database)
                             .join(&object_id.schema)
@@ -272,10 +276,40 @@ pub async fn typecheck_with_client(
 
     if errors.is_empty() {
         verbose!("All type checks passed!");
+
+        // Query types for all successfully type-checked views and write to cache
+        let view_object_ids: Vec<&ObjectId> = sorted_objects
+            .iter()
+            .filter(|(_, typed_obj)| is_view_or_materialized_view(&typed_obj.stmt))
+            .map(|(oid, _)| oid)
+            .collect();
+
+        if !view_object_ids.is_empty() {
+            verbose!(
+                "Caching types for {} view(s) to types.cache",
+                view_object_ids.len()
+            );
+
+            // Query types using flattened names (temporary views)
+            let internal_types = client.query_internal_types(&view_object_ids, true).await?;
+
+            // Write types.cache
+            internal_types.write_types_cache(project_root)?;
+            verbose!("Successfully wrote types.cache");
+        }
+
         Ok(())
     } else {
         Err(TypeCheckError::Multiple(TypeCheckErrors { errors }))
     }
+}
+
+/// Check if a statement is a view or materialized view
+fn is_view_or_materialized_view(stmt: &Statement) -> bool {
+    matches!(
+        stmt,
+        Statement::CreateView(_) | Statement::CreateMaterializedView(_)
+    )
 }
 
 /// Build object path mapping for error reporting

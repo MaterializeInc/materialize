@@ -556,7 +556,9 @@ async fn create_resources_with_rollback<'a>(
         Err(e) => {
             if dry_run || no_rollback {
                 if !dry_run {
-                    progress::error("Deployment failed (skipping rollback due to --no-rollback flag)");
+                    progress::error(
+                        "Deployment failed (skipping rollback due to --no-rollback flag)",
+                    );
                 }
                 return Err(e);
             }

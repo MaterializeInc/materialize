@@ -212,6 +212,69 @@ impl Client {
         })
     }
 
+    /// Query types for internal project views from the database.
+    ///
+    /// This is used after type checking to capture the column schemas of all views
+    /// defined in the project. These types are cached in `.mz-deploy/types.cache`
+    /// and used by the test command to validate unit tests.
+    ///
+    /// Note: This should be called after the views have been created in the database
+    /// (either as permanent or temporary views during type checking).
+    ///
+    /// # Arguments
+    /// * `object_ids` - The object IDs to query types for
+    /// * `flatten` - If true, query using flattened FQN names (for temporary views)
+    ///
+    /// # Returns
+    /// A Types struct containing the column schemas for all queried objects
+    pub async fn query_internal_types(
+        &mut self,
+        object_ids: &[&ObjectId],
+        flatten: bool,
+    ) -> Result<Types, ConnectionError> {
+        let mut objects = BTreeMap::new();
+
+        for oid in object_ids {
+            // Build the object name (flattened for temp views, or regular FQN)
+            let object_ref = if flatten {
+                // For temporary views, the name is a single flattened identifier
+                format!("\"{}.{}.{}\"", oid.database, oid.schema, oid.object)
+            } else {
+                let quoted_db = quote_identifier(&oid.database);
+                let quoted_schema = quote_identifier(&oid.schema);
+                let quoted_object = quote_identifier(&oid.object);
+                format!("{}.{}.{}", quoted_db, quoted_schema, quoted_object)
+            };
+
+            let rows = self
+                .client
+                .query(&format!("SHOW COLUMNS FROM {}", object_ref), &[])
+                .await?;
+
+            let mut columns = BTreeMap::new();
+            for row in rows {
+                let name: String = row.get("name");
+                let type_str: String = row.get("type");
+                let nullable: bool = row.get("nullable");
+
+                let column_type = ColumnType {
+                    r#type: type_str,
+                    nullable,
+                };
+
+                columns.insert(name, column_type);
+            }
+
+            // Always store with regular FQN key (not flattened)
+            objects.insert(oid.to_string(), columns);
+        }
+
+        Ok(Types {
+            version: 1,
+            objects,
+        })
+    }
+
     // =========================================================================
     // Schema Operations
     // =========================================================================

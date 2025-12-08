@@ -2,11 +2,12 @@
 
 use crate::cli::CliError;
 use crate::project::{self, typed};
-use crate::types::{TypeCheckError, Types};
+use crate::types::{self, TypeCheckError, Types};
 use crate::unit_test;
 use crate::utils::docker_runtime::DockerRuntime;
 use mz_sql_parser::ast::Ident;
 use owo_colors::OwoColorize;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Run unit tests against the database.
@@ -56,7 +57,7 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
     let planned_project = project::plan(directory)?;
 
     // Tests use their own mocks, so don't pre-create tables from types.lock
-    let types = Types::default();
+    let empty_types = Types::default();
 
     // Create Docker runtime and get connected client
     let runtime = DockerRuntime::new();
@@ -65,6 +66,15 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
         return Ok(());
     }
 
+    // Load types for validation
+    // 1. Load types.lock (external dependencies) - ok if missing
+    let mut combined_types = types::load_types_lock(directory).unwrap_or_default();
+
+    // 2. Load types.cache (internal views) or trigger typecheck if stale/missing
+    let internal_types =
+        load_or_generate_types_cache(directory, &planned_project, &runtime).await?;
+    combined_types.merge(&internal_types);
+
     println!(
         "{}\n",
         format!("Running tests from {}:", directory.display()).bold()
@@ -72,10 +82,47 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
 
     let mut passed_tests = 0;
     let mut failed_tests = 0;
+    let mut validation_failed = 0;
 
     // Run each test from the compiled project
     for (object_id, test) in &planned_project.tests {
-        let client = match runtime.get_client(&types).await {
+        // Get dependencies for this object from the project's dependency graph
+        let dependencies = planned_project
+            .dependency_graph
+            .get(object_id)
+            .cloned()
+            .unwrap_or_else(BTreeSet::new);
+
+        // Validate test before running
+        if let Err(e) =
+            unit_test::validate_unit_test(test, object_id, &combined_types, &dependencies)
+        {
+            println!(
+                "{} {} ... {}",
+                "test".cyan(),
+                test.name.cyan(),
+                "VALIDATION FAILED".red().bold()
+            );
+            // Print the inner error which has the detailed display
+            match &e {
+                unit_test::TestValidationError::UnmockedDependency(inner) => eprintln!("{}", inner),
+                unit_test::TestValidationError::MockSchemaMismatch(inner) => eprintln!("{}", inner),
+                unit_test::TestValidationError::ExpectedSchemaMismatch(inner) => {
+                    eprintln!("{}", inner)
+                }
+                unit_test::TestValidationError::TypesCacheUnavailable { reason } => {
+                    eprintln!(
+                        "{}: types cache unavailable: {}",
+                        "error".bright_red().bold(),
+                        reason
+                    );
+                }
+            }
+            validation_failed += 1;
+            continue;
+        }
+
+        let client = match runtime.get_client(&empty_types).await {
             Ok(client) => client,
             Err(TypeCheckError::ContainerStartFailed(e)) => {
                 return Err(CliError::Message(format!(
@@ -220,24 +267,99 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
 
     // Print test summary
     print!("\n{}: ", "test result".bold());
-    if failed_tests == 0 {
+    let total_failed = failed_tests + validation_failed;
+    if total_failed == 0 {
         print!("{}. ", "ok".green().bold());
     } else {
         print!("{}. ", "FAILED".red().bold());
     }
     print!("{}; ", format!("{} passed", passed_tests).green());
     if failed_tests > 0 {
-        println!("{}", format!("{} failed", failed_tests).red());
+        print!("{}; ", format!("{} failed", failed_tests).red());
     } else {
-        println!("{} failed", failed_tests);
+        print!("{} failed; ", failed_tests);
+    }
+    if validation_failed > 0 {
+        println!(
+            "{}",
+            format!("{} validation errors", validation_failed).red()
+        );
+    } else {
+        println!("{} validation errors", validation_failed);
     }
 
-    if failed_tests > 0 {
+    if total_failed > 0 {
         return Err(CliError::TestsFailed {
-            failed: failed_tests,
+            failed: total_failed,
             passed: passed_tests,
         });
     }
 
     Ok(())
+}
+
+/// Load types.cache or generate it by running type checking if stale/missing.
+async fn load_or_generate_types_cache(
+    directory: &Path,
+    planned_project: &project::planned::Project,
+    runtime: &DockerRuntime,
+) -> Result<Types, CliError> {
+    // Check if types.cache exists and is up-to-date
+    if !types::is_types_cache_stale(directory) {
+        if let Ok(cached) = types::load_types_cache(directory) {
+            println!(
+                "{}",
+                "Using cached types from .mz-deploy/types.cache".dimmed()
+            );
+            return Ok(cached);
+        }
+    }
+
+    // Types cache is stale or missing - regenerate by type checking
+    println!(
+        "{}",
+        "Types cache stale or missing, running type check...".yellow()
+    );
+
+    // Load types.lock for external dependencies (used in Docker runtime)
+    let external_types = types::load_types_lock(directory).unwrap_or_default();
+
+    // Get a client from the Docker runtime with external dependencies staged
+    let mut client = match runtime.get_client(&external_types).await {
+        Ok(client) => client,
+        Err(TypeCheckError::ContainerStartFailed(e)) => {
+            // Docker not available - warn and return empty types
+            // Tests will still run but validation will be limited
+            eprintln!(
+                "{}: Docker not available for type checking: {}",
+                "warning".yellow().bold(),
+                e
+            );
+            eprintln!(
+                "{}",
+                "Test validation will be limited without types.cache".yellow()
+            );
+            return Ok(Types::default());
+        }
+        Err(e) => {
+            return Err(CliError::Message(format!(
+                "Failed to start type check environment: {}",
+                e
+            )));
+        }
+    };
+
+    // Run type checking (this will also generate types.cache)
+    match types::typecheck_with_client(&mut client, planned_project, directory).await {
+        Ok(()) => {
+            // Type checking succeeded and wrote types.cache - load it
+            types::load_types_cache(directory).map_err(|e| {
+                CliError::Message(format!("Failed to load generated types.cache: {}", e))
+            })
+        }
+        Err(e) => {
+            // Type check failed - return error
+            Err(CliError::TypeCheckFailed(e))
+        }
+    }
 }
