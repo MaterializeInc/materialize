@@ -474,5 +474,6 @@ components:
 
 ## See also
 
-- [Materialize Operator Configuration](/self-managed-deployments/appendix/configuration/)
+- [Materialize Operator
+  Configuration](/self-managed-deployments/operator-configuration/)
 - [Troubleshooting](/self-managed-deployments/troubleshooting/)

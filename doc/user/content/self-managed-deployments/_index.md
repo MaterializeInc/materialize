@@ -107,7 +107,7 @@ The operator watches for Materialize custom resources and creates/manages all th
 
 For configuration options for the Materialize Operator, see
 the [Materialize Operator Configuration
-page](/self-managed-deployments/appendix/configuration/).
+page](/self-managed-deployments/operator-configuration/).
 
 ## Materialize Instance
 
@@ -151,7 +151,7 @@ A Materialize instance manages:
 To deploy Materialize instances with the operator, create and apply Materialize
 custom resources definitions(CRDs). For a full list of fields available for the
 Materialize CR, see [Materialize CRD Field
-Descriptions](/self-managed-deployments/appendix/materialize-crd-field-descriptions/).
+Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/).
 
 ```yaml
 apiVersion: materialize.cloud/v1alpha1
@@ -179,7 +179,7 @@ watches for updates but does not roll out the changes.
 
 For a full list of fields available for the Materialize CR, see [Materialize CRD
 Field
-Descriptions](/self-managed-deployments/appendix/materialize-crd-field-descriptions/).
+Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/).
 
 See also:
 
@@ -187,8 +187,8 @@ See also:
 
 ### Connecting to an instance
 
-Once deployed, you interact with a Materialize instance through standard
-PostgreSQL-compatible tools and drivers:
+Once deployed, you interact with a Materialize instance through the Materialize
+Console or standard PostgreSQL-compatible tools and drivers:
 
 ```bash
 # Connect with psql
@@ -279,8 +279,10 @@ components work together:
    operator detects this and creates all necessary Kubernetes resources,
    including the `environmentd`, `balancerd`, and `console` pods.
 
-1. **Connect to the instance**: Use a SQL client to connect to the
-   `environmentd` service endpoint.
+1. **Connect to the instance**: Use the Materialize Console on port 8080 (or SQL
+   client on port 6875) to connect to the `environmentd` service endpoint.
+
+   If authentication is enabled, you must set up users.
 
 1. **Create clusters**: Issue SQL commands to create clusters. Materialize
    coordinates with the operator to provision StatefulSets for replicas.
@@ -340,8 +342,10 @@ SQL level.
 ## Related pages
 
 - [Installation guides](/self-managed-deployments/installation/)
-- [Materialize Operator Configuration](/self-managed-deployments/appendix/configuration/)
-- [Materialize CRD Field Descriptions](/self-managed-deployments/appendix/materialize-crd-field-descriptions/)
+- [Materialize Operator
+  Configuration](/self-managed-deployments/operator-configuration/)
+- [Materialize CRD Field
+  Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
 - [Operational guidelines](/self-managed-deployments/deployment-guidelines/)
 - [Clusters concept page](/concepts/clusters/)
 - [Materialize architecture overview](/concepts/)

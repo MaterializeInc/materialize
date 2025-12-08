@@ -54,5 +54,5 @@ having both the old and new Materialize instances running.
 ## See also
 
 - [Materialize Operator
-  Configuration](/self-managed-deployments/appendix/configuration/)
+  Configuration](/self-managed-deployments/operator-configuration/)
 - [Troubleshooting](/self-managed-deployments/troubleshooting/)

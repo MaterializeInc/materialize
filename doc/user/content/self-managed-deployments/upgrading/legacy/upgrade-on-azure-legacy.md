@@ -7,7 +7,7 @@ menu:
   main:
     parent: "upgrading-legacy"
     identifier: "upgrade-on-azure-legacy"
-    weight: 20
+    weight: 30
 
 ---
 

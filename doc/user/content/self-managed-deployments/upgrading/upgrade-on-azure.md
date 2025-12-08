@@ -1,16 +1,16 @@
 ---
-title: "Upgrade on AWS"
-description: "Upgrade Materialize on AWS using the Unified Terraform module."
+title: "Upgrade on Azure"
+description: "Upgrade Materialize on Azure using the Unified Terraform module."
 menu:
   main:
     parent: "upgrading"
-    weight: 20
+    weight: 30
 ---
 
-The following tutorial upgrades your Materialize deployment running on AWS
-Elastic Kubernetes Service (EKS). The tutorial assumes you have installed the
+The following tutorial upgrades your Materialize deployment running on Azure
+Kubernetes Service (AKS). The tutorial assumes you have installed the
 example on [Install on
-AWS](/self-managed-deployments/installation/install-on-aws/).
+Azure](/self-managed-deployments/installation/install-on-azure/).
 
 ## Upgrade guidelines
 
@@ -27,8 +27,8 @@ name="upgrade-major-version-restriction" >}}
 ### Required Tools
 
 - [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
-- [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html)
-- [kubectl](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html)
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
 
 ## Upgrade process
@@ -43,24 +43,24 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
 1. Open a Terminal window.
 
-1. Configure AWS CLI with your AWS credentials. For details, see the [AWS
-   documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html).
+1. Configure Azure CLI with your Azure credentials. For details, see the [Azure
+   documentation](https://learn.microsoft.com/en-us/cli/azure/authenticate-azure-cli).
 
 1. Go to the Terraform directory for your Materialize deployment. For example,
-   if you deployed from the `aws/examples/simple` directory:
+   if you deployed from the `azure/examples/simple` directory:
 
    ```bash
-   cd materialize-terraform-self-managed/aws/examples/simple
+   cd materialize-terraform-self-managed/azure/examples/simple
    ```
 
-1. Configure `kubectl` to connect to your EKS cluster, replacing:
+1. Configure `kubectl` to connect to your AKS cluster, replacing:
 
-   - `<your-eks-cluster-name>` with the name of your EKS cluster. Your cluster name can be found in the Terraform output or AWS console.
+   - `<your-resource-group>` with the name of your Azure resource group. Your resource group name can be found in the Terraform output or Azure portal.
 
-   - `<your-region>` with the region of your EKS cluster.
+   - `<your-aks-cluster-name>` with the name of your AKS cluster. Your cluster name can be found in the Terraform output or Azure portal.
 
    ```bash
-   aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
+   az aks get-credentials --resource-group <your-resource-group> --name <your-aks-cluster-name>
    ```
 
    To verify that you have configured correctly, run the following command:

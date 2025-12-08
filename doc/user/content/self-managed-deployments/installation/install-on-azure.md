@@ -84,8 +84,8 @@ This example provisions the following infrastructure:
 
 | Resource | Description |
 |----------|-------------|
-| Operator | Materialize Kubernetes operator |
-| Instance | Single Materialize instance in `materialize-environment` namespace |
+| Operator | Materialize Kubernetes operator in the `materialize` namespace |
+| Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Load Balancers | Internal Azure Load Balancers for Materialize access |
 
 ## Prerequisites

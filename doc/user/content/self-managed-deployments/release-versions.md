@@ -4,7 +4,7 @@ description: ""
 menu:
   main:
     parent: "sm-deployments"
-    weight: 85
+    weight: 95
 aliases:
   - /installation/release-versions/
 ---

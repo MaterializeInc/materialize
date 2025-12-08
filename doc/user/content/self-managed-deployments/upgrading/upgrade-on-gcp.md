@@ -1,16 +1,16 @@
 ---
-title: "Upgrade on AWS"
-description: "Upgrade Materialize on AWS using the Unified Terraform module."
+title: "Upgrade on GCP"
+description: "Upgrade Materialize on GCP using the Unified Terraform module."
 menu:
   main:
     parent: "upgrading"
-    weight: 20
+    weight: 30
 ---
 
-The following tutorial upgrades your Materialize deployment running on AWS
-Elastic Kubernetes Service (EKS). The tutorial assumes you have installed the
+The following tutorial upgrades your Materialize deployment running on Google
+Kubernetes Engine (GKE). The tutorial assumes you have installed the
 example on [Install on
-AWS](/self-managed-deployments/installation/install-on-aws/).
+GCP](/self-managed-deployments/installation/install-on-gcp/).
 
 ## Upgrade guidelines
 
@@ -27,8 +27,8 @@ name="upgrade-major-version-restriction" >}}
 ### Required Tools
 
 - [Terraform](https://developer.hashicorp.com/terraform/install?product_intent=terraform)
-- [AWS CLI](https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html)
-- [kubectl](https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html)
+- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install)
+- [kubectl](https://kubernetes.io/docs/tasks/tools/)
 - [Helm 3.2.0+](https://helm.sh/docs/intro/install/)
 
 ## Upgrade process
@@ -43,24 +43,32 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
 1. Open a Terminal window.
 
-1. Configure AWS CLI with your AWS credentials. For details, see the [AWS
-   documentation](https://docs.aws.amazon.com/cli/latest/userguide/cli-chap-configure.html).
+1. Configure Google Cloud CLI with your GCP credentials. For details, see the [Google Cloud
+   documentation](https://cloud.google.com/sdk/docs/initializing).
 
 1. Go to the Terraform directory for your Materialize deployment. For example,
-   if you deployed from the `aws/examples/simple` directory:
+   if you deployed from the `gcp/examples/simple` directory:
 
    ```bash
-   cd materialize-terraform-self-managed/aws/examples/simple
+   cd materialize-terraform-self-managed/gcp/examples/simple
    ```
 
-1. Configure `kubectl` to connect to your EKS cluster, replacing:
+1. Configure `kubectl` to connect to your GKE cluster, replacing:
 
-   - `<your-eks-cluster-name>` with the name of your EKS cluster. Your cluster name can be found in the Terraform output or AWS console.
+   - `<cluster-name>` with the name of your GKE cluster. Your cluster name can
+     be found in the Terraform output. For the sample example, the cluster name
+     is `<name_prefix>-eks`.
 
-   - `<your-region>` with the region of your EKS cluster.
+   - `<your-region>` with the region of your GKE cluster. Your region can be
+     found in the Terraform output `gke_cluster_location`, corresponds to the
+     `region` value in your `terraform.tfvars`.
+
+   - `<your-project-id>` with your GCP project ID.
 
    ```bash
-   aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
+   gcloud container clusters get-credentials <cluster-name>  \
+    --region <region> \
+    --project <project>
    ```
 
    To verify that you have configured correctly, run the following command:

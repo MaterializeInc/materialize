@@ -7,7 +7,7 @@ menu:
   main:
     parent: "upgrading-legacy"
     identifier: "upgrade-on-gcp-legacy-terraform-module"
-    weight: 30
+    weight: 40
 ---
 
 {{< annotation type="Disambiguation" >}}

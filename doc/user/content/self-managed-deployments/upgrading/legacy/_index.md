@@ -4,7 +4,7 @@ description: "Upgrading Self-Managed Materialize using legacy Terraform modules"
 menu:
   main:
     parent: "upgrading"
-    weight: 30
+    weight: 60
     identifier: "upgrading-legacy"
 ---
 

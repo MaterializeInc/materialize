@@ -79,24 +79,22 @@ This example provisions the following infrastructure:
 
 | Resource | Description |
 |----------|-------------|
-| Operator | Materialize Kubernetes operator in `materialize` namespace |
-| Instance | Single Materialize instance in `materialize-environment` namespace |
+| Operator | Materialize Kubernetes operator in the `materialize` namespace |
+| Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Load Balancers | GCP Load Balancers for Materialize access {{< yaml-table data="self_managed/default_ports" >}} |
 
 ## Prerequisites
 
 ### GCP Account Requirements
 
-- A Google account with permission to enable Google Cloud APIs/services on for
-your project.
-- A [Google service
-account](https://docs.cloud.google.com/iam/docs/service-accounts-create#creating)
-with appropriate permissions to create:
-   - GKE clusters
-   - Cloud SQL instances
-   - Cloud Storage buckets
-   - VPC networks and networking resources
-   - Service accounts and IAM bindings
+A Google account with permission to:
+- Enable Google Cloud APIs/services on for your project.
+- Create:
+  - GKE clusters
+  - Cloud SQL instances
+  - Cloud Storage buckets
+  - VPC networks and networking resources
+  - Service accounts and IAM bindings
 
 ### Required Tools
 
@@ -130,14 +128,23 @@ with appropriate permissions to create:
    cd materialize-terraform-self-managed/gcp/examples/simple
    ```
 
-1. Initialize the gcloud CLI (`gcloud init`) to specify the GCP project you want
-   to use. For details, see the [Initializing the gcloud CLI
-   documentation](https://cloud.google.com/sdk/docs/initializing#initialize_the).
+1. Authenticate to GCP with your user account.
 
-   {{< tip >}}
-   You do not need to configure a default Compute Region and Zone as you will
-   specify the region.
-   {{</ tip >}}
+   ```bash
+   gcloud auth login
+   ```
+
+1. Find the list of GCP projects:
+
+   ```bash
+   gcloud projects list
+   ```
+
+1. Set your active GCP project, substitute with your `<PROJECT_ID>`.
+
+   ```bash
+   gcloud config set project <PROJECT_ID>
+   ```
 
 1. Enable the following APIs for your project:
 
@@ -152,35 +159,25 @@ with appropriate permissions to create:
    gcloud services enable storage.googleapis.com                 # For Cloud Storage buckets
    ```
 
-1. For the service account, authenticate to allow Terraform to
-   interact with your GCP project. For details, see [Terraform: Google Cloud
-   Provider Configuration
-   reference](https://registry.terraform.io/providers/hashicorp/google/latest/docs/guides/provider_reference#authentication).
-
-   For example, if using [User Application Default
-   Credentials](https://cloud.google.com/sdk/gcloud/reference/auth/application-default),
-   you can run the following command:
+1. Authenticate application default credentials for Terraform
 
    ```bash
    gcloud auth application-default login
    ```
 
-   {{< tip >}}
-   If using `GOOGLE_APPLICATION_CREDENTIALS`, use absolute path to your key file.
-   {{</ tip >}}
-
-
 ### Step 2: Configure Terraform Variables
 
-1. Create a `terraform.tfvars` file with the following variables:
+1. Create a `terraform.tfvars` file and specify the following variables:
 
-   - `project_id`: GCP project ID
-   - `name_prefix`: Prefix for all resource names (e.g., `simple-demo`)
-   - `region`: GCP region for deployment (e.g., `us-central1`)
-   - `license_key`: Materialize license key
-   - `labels`: Map of labels to apply to resources
+   | Variable      | Description                 |
+   | -----------   | ----------------------------|
+   | `project_id`  | Set to your GCP project ID. |
+   | `name_prefix` | Set a prefix for all resource names (e.g., `simple-demo`) as well as your release name for the Operator |
+   | `region`      | Set the GCP region for the deployment (e.g., `us-central1`).  |
+   | `license_key` | Set to your Materialize license key.     |
+   | `labels`      | Set to the labels to apply to resources. |
 
-   ```hcl
+   ```bash
    project_id  = "my-gcp-project"
    name_prefix = "simple-demo"
    region      = "us-central1"
@@ -218,16 +215,28 @@ with appropriate permissions to create:
    to proceed.
 
 1. From the output, you will need the following field(s) to connect:
+   - `<console_load_balancer_ip>`
 
-### Step 4. Optional. Verify the deployment.
+1. Configure `kubectl` to connect to your GKE cluster, replacing:
 
-1. Configure `kubectl` to connect to your cluster:
+   - `<your-cluster-name>` with the name of your GKE cluster. Your cluster name
+     can be found in the Terraform output. For the sample example, the cluster
+     name is `<name_prefix>-eks`.
+
+   - `<your-region>` with the region of your GKE cluster. Your region can be
+     found in the Terraform output `gke_cluster_location`, corresponds to the
+     `region` value in your `terraform.tfvars`.
+
+   - `<your-project-id>` with your GCP project ID.
 
    ```bash
-   gcloud container clusters get-credentials <cluster-name>  \
-    --region <region> \
-    --project <project>
+   gcloud container clusters get-credentials <your-cluster-name>  \
+    --region <your-region> \
+    --project <your-project-id>
    ```
+
+### Step 4. Optional. Verify the status of your deployment
+
 1. Check the status of your deployment:
    {{% include-from-yaml data="self_managed/installation"
    name="installation-verify-status" %}}

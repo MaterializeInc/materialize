@@ -84,8 +84,8 @@ This example provisions the following infrastructure:
 
 | Resource | Description |
 |----------|-------------|
-| Operator | Materialize Kubernetes operator |
-| Instance | Single Materialize instance in `materialize-environment` namespace |
+| Operator | Materialize Kubernetes operator in the `materialize` namespace |
+| Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Network Load Balancer | Dedicated internal NLB for Materialize access {{< yaml-table data="self_managed/default_ports" >}} |
 
 
@@ -271,5 +271,6 @@ guide](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines
 
 ## See Also
 
-- [Materialize Operator Configuration](/self-managed-deployments/appendix/configuration/)
+- [Materialize Operator
+  Configuration](/self-managed-deployments/operator-configuration/)
 - [Troubleshooting](/self-managed-deployments/troubleshooting/)

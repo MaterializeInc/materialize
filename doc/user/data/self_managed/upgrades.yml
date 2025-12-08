@@ -5,11 +5,31 @@
     - **Always** check the [version specific upgrade
       notes](/self-managed-deployments/upgrading/#version-specific-upgrade-notes).
 
-    - **Always** upgrade the operator **first** and ensure version compatibility
-      between the operator and the Materialize instance you are upgrading to.
+    - {{< include-from-yaml data="self_managed/upgrades" name="upgrade-order-rule" >}}
 
-    - **Always** upgrade your Materialize instances **after** upgrading the operator
-      to ensure compatibility.
+- name: upgrade-order-rule
+  content: |
+    **Always** upgrade the Materialize Operator **before**
+    upgrading the Materialize instances.
+
+- name: syntax-helm-upgrade-operator
+  code: |
+    helm upgrade -n <namespace> <release-name> materialize/materialize-operator \
+      --version <new_version> \
+      -f <your-custom-values.yml>
+  syntax_elements:
+    - name: "`<namespace>`"
+      description: |
+        The namespace where the Operator is running. (e.g., `materialize`)
+    - name: "`<release-name>`"
+      description: |
+        The release name. You can use `helm list -n <namespace>` to find your release name.
+    - name: "`<new_version>`"
+      description: |
+        The upgrade version.
+    - name: "`<your-custom-values.yml>`"
+      description: |
+        The name of your customization file, if using. If you are configuring using `\-\-set key=value` options, include them as well.
 
 - name: upgrade-landing-guides-helm
   content: |
@@ -25,7 +45,11 @@
   content: |
     ### Upgrade using Unified Terraform Modules
 
-
+    |  Guide         | Description  |
+    | -------------  | ----------- |
+    | [Upgrade on AWS (Unified Terraform)](/self-managed-deployments/upgrading/upgrade-on-aws/) | Uses Unified Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
+    | [Upgrade on Azure (Unified Terraform)](/self-managed-deployments/upgrading/upgrade-on-azure/) | Uses Unified Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
+    | [Upgrade on GCP (Unified Terraform)](/self-managed-deployments/upgrading/upgrade-on-gcp/) | Uses Unified Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
 
 - name: upgrade-landing-guides-legacy
   content: |
@@ -37,3 +61,128 @@
     | [Upgrade on AWS (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-aws-legacy/) | Uses legacy Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
     | [Upgrade on Azure (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-azure-legacy/) | Uses legacy Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
     | [Upgrade on GCP (Legacy Terraform)](/self-managed-deployments/upgrading/legacy/upgrade-on-gcp-legacy/) | Uses legacy Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
+
+- name: downgrade-restriction
+  content: |
+    Downgrading is not supported.
+
+- name: upgrade-major-version-restriction
+  content: |
+    For major version upgrades, you can **only** upgrade **one** major version
+    at a time. For example, upgrades from **v26**.1.0 to **v27**.3.0 is
+    permitted but **v26**.1.0 to **v28**.0.0 is not.
+
+- name: upgrade-update-helm-chart
+  content: |
+    To update your Materialize Helm Chart repository:
+
+    1. Update the Helm repo:
+
+       ```shell
+       helm repo update materialize
+       ```
+
+    1. View the available chart versions:
+
+       ```shell
+       helm search repo materialize/materialize-operator --versions
+       ```
+- name: upgrade-materialize-operator
+  content: |
+    1. Use `helm list` to find the release name. The sample example
+    deployment using the unified Terraform module deploys the Operator in the
+    `materialize` namespace.
+
+       ```shell
+       helm list -n materialize
+       ```
+
+       Retrieve the release name (corresponds to the `name_prefix` variable
+       specified in your `terraform.tfvars`) associated with the
+       `materialize-operator` **CHART**; for example, `simple-demo` in the following output:
+
+       ```none
+       NAME    	    NAMESPACE    REVISION   UPDATED                               STATUS     CHART                         APP VERSION
+       simple-demo  materialize  1         2025-12-08 11:39:50.185976 -0500 EST   deployed  materialize-operator-v26.1.0  v26.1.0
+       ```
+
+    1. Upgrade your Operator. For example, the following upgrades the Operator
+    to {{< self-managed/versions/get-latest-version >}}:
+
+       {{< note >}}
+       {{% include-from-yaml data="self_managed/upgrades"
+       name="upgrade-major-version-restriction" %}}
+       {{< /note >}}
+
+       ```shell
+       helm upgrade -n materialize my-demo materialize/misc/helm-charts/operator  \
+         -f my-values.yaml \
+         --version {{< self-managed/versions/get-latest-version >}}
+       ```
+
+    1. Verify that the Operator is running:
+
+       ```bash
+       kubectl -n materialize get all
+       ```
+
+    1. Get the **APP VERSION** of the Operator.
+
+       ```shell
+       helm list -n materialize
+       ```
+
+       The **APP VERSION** will be the value that you will use for upgrading
+       Materialize instances.
+
+- name: upgrade-materialize-instance
+  content: |
+
+    **After** you have upgraded your Materialize Operator, upgrade your
+    Materialize instance(s) to the **APP Version** of the Operator. When
+    upgrading Materialize Instances versions, changes are not automatically
+    rolled out by the Operator in order to minimize unexpected downtime and
+    avoid connection drops at critical periods. Instead, the upgrade process
+    involves two steps:
+
+    - First, staging the version change to the Materialize custom resource.
+    - Second, rolling out the changes via a `requestRollout` flag.
+
+    1. Find the name of the Materialize instance to upgrade. The sample example
+    deployment using the unified Terraform module deploys the Materialie
+    instance in the`materialize-environment` namespace.
+
+       ```shell
+       kubectl get materialize -n  materialize-environment
+       ```
+
+       In the example deployment, the name of the instance is `main`.
+
+       ```none
+       NAME
+       main
+       ```
+
+    1. Stage, but not rollout, the Materialize instance version upgrade.
+
+       ```shell
+       kubectl patch materialize main\
+         -n materialize-environment \
+         --type='merge' \
+         -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd: {{< self-managed/versions/get-latest-version >}}\"}}"
+       ```
+
+    1. Rollout the Materialize instance version change.
+
+       ```shell
+       kubectl patch materialize main \
+         -n materialize-environment \
+         --type='merge' \
+         -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
+       ```
+
+    1. Verify the upgrade by checking the `environmentd` events:
+
+       ```bash
+       kubectl -n materialize-environment describe pod -l app=environmentd
+       ```

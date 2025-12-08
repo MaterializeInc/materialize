@@ -1,5 +1,5 @@
 ---
-title: "FAQ: Self-managed deployments"
+title: "FAQ"
 description: "Frequently asked questions about self-managed deployments."
 aliases:
   - /self-hosted/faq/
@@ -28,3 +28,8 @@ existing installation, run:
 ```bash
 kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
 ```
+
+## How can I downgrade Self-Managed Materialize?
+
+{{< include-from-yaml data="self_managed/upgrades"
+name="downgrade-restriction" >}}

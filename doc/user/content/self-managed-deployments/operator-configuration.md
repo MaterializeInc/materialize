@@ -8,8 +8,8 @@ aliases:
   - /installation/configuration/
 menu:
   main:
-    parent: "sm-deployments-appendix"
-    weight: 10
+    parent: "sm-deployments"
+    weight: 65
 ---
 
 ## Configure the Materialize operator

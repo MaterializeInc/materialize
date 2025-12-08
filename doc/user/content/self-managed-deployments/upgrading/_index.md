@@ -9,73 +9,114 @@ menu:
     identifier: "upgrading"
 ---
 
-## Upgrading guidelines
+Materialize releases new Self-Managed versions per the schedule outlined in [Release schedule](/releases/schedule/#self-managed-release-schedule).
 
-{{< include-md file="shared-content/self-managed/general-rules-for-upgrades.md" >}}
+## General rules for upgrading
 
-## Upgrade guides
+{{< include-from-yaml data="self_managed/upgrades"
+name="upgrades-general-rules" >}}
 
-The following upgrade guides are available:
+{{< note >}}
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-helm" %}}
+{{< include-from-yaml data="self_managed/upgrades"
+name="upgrade-major-version-restriction" >}}
 
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-legacy" %}}
+{{< /note >}}
 
-
-## Upgrading the Helm Chart and Kubernetes Operator
+## Upgrading the Helm Chart and Materialize Operator
 
 {{< important >}}
 
-When upgrading Materialize, always upgrade the Operator first.
+When upgrading Materialize, always upgrade the Helm Chart and Materialize
+Operator first.
 
 {{</ important >}}
 
-The Materialize Kubernetes Operator is deployed via Helm and can be updated through standard Helm upgrade commands.
+### Update the Helm Chart repository
+
+To update your Materialize Helm Chart repository:
 
 ```shell
-helm upgrade my-materialize-operator materialize/misc/helm-charts/operator
+helm repo update materialize
 ```
 
-If you have custom values, make sure to include your values file:
+View the available chart versions:
 
 ```shell
-helm upgrade my-materialize-operator materialize/misc/helm-charts/operator -f my-values.yaml
+helm search repo materialize/materialize-operator --versions
 ```
 
-## Upgrading Materialize Instances
+### Upgrade your Materialize Operator
 
-To minimize unexpected downtime and avoid connection drops at critical
-periods for your application, the upgrade process involves two steps:
+The Materialize Kubernetes Operator is deployed via Helm and can be updated
+through standard `helm upgrade` command:
 
-- First, stage the changes (`environmentdImageRef` with the new version) to the
-  Materialize custom resource. The Operator watches for changes but does not
-  automatically roll out the changes.
+{{% include-syntax file="self_managed/upgrades"
+example="syntax-helm-upgrade-operator" %}}
 
-- Second, roll out the changes by specifying a new UUID for `requestRollout`.
-
-
-### Updating the `environmentdImageRef`
-
-When upgrading your Materialize instances, you'll first want to update the
-`environmentdImageRef` field in the Materialize custom resource spec.
-
-To find a compatible version with your currently deployed Materialize Operator, check the `appVersion` in the Helm repository.
+You can use `helm list` to find your release name. For example, if your Operator
+is running in the namespace `materialize`, run `helm list`:
 
 ```shell
 helm list -n materialize
 ```
 
-Using the returned version, we can construct an image ref.
+Retrieve the name associated with the `materialize-operator` **CHART**; for
+example, `my-demo` in the following helm list:
 
-```
-environmentdImageRef: docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}
+```none
+NAME    	  NAMESPACE  	REVISION	UPDATED                             	STATUS  	CHART                                          APP VERSION
+my-demo	materialize	1      2025-12-08 11:39:50.185976 -0500 EST	deployed	materialize-operator-v26.1.0    v26.1.0
 ```
 
-The following is an example of how to patch the version.
+Then, to upgrade:
+
 ```shell
-# For version updates, first update the image reference
+helm upgrade -n materialize my-demo materialize/misc/helm-charts/operator \
+  -f my-values.yaml \
+  --version {{< self-managed/versions/get-latest-version >}}
+```
+
+## Upgrading Materialize Instances
+
+**After** you have upgraded your Materialize Operator, upgrade your Materialize
+instance(s) to the **APP Version** of the Operator. To find the version of your
+currently deployed Materialize Operator:
+
+```shell
+helm list -n materialize
+```
+
+You will use the returned **App Version** for the updated `environmentdImageRef`
+value. Specifically, for your Materialize instance(s), set
+`environmentdImageRef` value to use the new version:
+
+```
+spec:
+  environmentdImageRef: docker.io/materialize/environmentd:<app_version>
+```
+
+
+To minimize unexpected downtime and avoid connection drops at critical
+periods for your application, the upgrade process involves two steps:
+
+- First, stage the changes (update the `environmentdImageRef` with the new
+  version) to the Materialize custom resource. The Operator watches for changes
+  but does not automatically roll out the changes.
+
+- Second, roll out the changes by specifying a new UUID for `requestRollout`.
+
+
+### Stage the Materialize instance version change
+
+To stage the Materialize instances version upgrade, update the
+`environmentdImageRef` field in the Materialize custom resource spec to the
+compatible version of your currently deployed Materialize Operator.
+
+To stage, but **not** rollout, the Materialize instance version upgrade, you can
+use the `kubectl patch` command; for example, if the **App Version** is {{< self-managed/versions/get-latest-version >}}:
+
+```shell
 kubectl patch materialize <instance-name> \
   -n <materialize-instance-namespace> \
   --type='merge' \
@@ -83,14 +124,14 @@ kubectl patch materialize <instance-name> \
 ```
 
 {{< note >}}
-Until you specify a new `requestRollout`, the Operator
-watches for updates but does not roll out the changes.
+Until you specify a new `requestRollout`, the Operator watches for updates but
+does not roll out the changes.
 {{< /note >}}
 
 
 ### Applying the changes via `requestRollout`
 
-To apply changes and kick off the Materialize instance upgrade, you must update the `requestRollout` field in the Materialize custom resource spec to a new UUID.
+To apply chang Materialize instance upgrade, you must update the `requestRollout` field in the Materialize custom resource spec to a new UUID.
 Be sure to consult the [Rollout Configurations](#rollout-configuration) to ensure you've selected the correct rollout behavior.
 ```shell
 # Then trigger the rollout with a new UUID
@@ -99,7 +140,6 @@ kubectl patch materialize <instance-name> \
   --type='merge' \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
 ```
-
 
 It is possible to combine both operations in a single command if preferred:
 
@@ -169,6 +209,20 @@ kubectl get materialize -n materialize-environment -w
 # Check the logs of the operator
 kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
+
+## Upgrade guides
+
+The following upgrade guides are available:
+
+{{% include-from-yaml data="self_managed/upgrades"
+name="upgrade-landing-guides-helm" %}}
+
+{{% include-from-yaml data="self_managed/upgrades"
+name="upgrade-landing-guides-unified" %}}
+
+{{% include-from-yaml data="self_managed/upgrades"
+name="upgrade-landing-guides-legacy" %}}
+
 ## Version Specific Upgrade Notes
 
 ### Upgrading to `v26.1` and later versions
@@ -186,9 +240,9 @@ kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ## See also
 
 - [Materialize Operator
-  Configuration](/self-managed-deployments/appendix/configuration/)
+  Configuration](/self-managed-deployments/operator-configuration/)
 
 - [Materialize CRD Field
-  Descriptions](/self-managed-deployments/appendix/materialize-crd-field-descriptions/)
+  Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
 
 - [Troubleshooting](/self-managed-deployments/troubleshooting/)
