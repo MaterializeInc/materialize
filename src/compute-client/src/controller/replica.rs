@@ -293,7 +293,7 @@ where
 
     /// Update task state according to an observed command.
     #[mz_ore::instrument(level = "debug")]
-    fn observe_command(&mut self, command: &ComputeCommand<T>) {
+    fn observe_command(&self, command: &ComputeCommand<T>) {
         if let ComputeCommand::Peek(peek) = command {
             peek.otel_ctx.attach_as_parent();
         }
@@ -309,7 +309,7 @@ where
 
     /// Update task state according to an observed response.
     #[mz_ore::instrument(level = "debug")]
-    fn observe_response(&mut self, response: &ComputeResponse<T>) {
+    fn observe_response(&self, response: &ComputeResponse<T>) {
         if let ComputeResponse::PeekResponse(_, _, otel_ctx) = response {
             otel_ctx.attach_as_parent();
         }

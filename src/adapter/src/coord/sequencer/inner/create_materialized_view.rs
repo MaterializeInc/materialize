@@ -216,7 +216,7 @@ impl Coordinator {
 
     #[instrument]
     pub(super) fn explain_materialized_view(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -315,7 +315,7 @@ impl Coordinator {
 
     #[instrument]
     fn create_materialized_view_validate(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
@@ -868,7 +868,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_materialized_view_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateMaterializedViewExplain {
             global_id,

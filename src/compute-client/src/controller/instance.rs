@@ -947,17 +947,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         Ok(all_hydrated)
     }
 
-    /// Returns `true` if all non-transient, non-excluded collections are hydrated on at least one
-    /// replica.
-    ///
-    /// This also returns `true` in case this cluster does not have any
-    /// replicas.
-    #[mz_ore::instrument(level = "debug")]
-    pub fn collections_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
-        self.collections_hydrated_on_replicas(None, exclude_collections)
-            .expect("Cannot error if target_replica_ids is None")
-    }
-
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:

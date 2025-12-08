@@ -129,7 +129,7 @@ impl Coordinator {
 
     #[instrument]
     async fn alter_cluster_validate(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::AlterClusterPlan,
     ) -> Result<ClusterStage, AdapterError> {

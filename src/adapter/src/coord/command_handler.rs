@@ -444,7 +444,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn handle_generate_sasl_challenge(
-        &mut self,
+        &self,
         tx: oneshot::Sender<Result<SASLChallengeResponse, AdapterError>>,
         role_name: String,
         client_nonce: String,
@@ -521,7 +521,7 @@ impl Coordinator {
 
     #[mz_ore::instrument(level = "debug")]
     async fn handle_authenticate_password(
-        &mut self,
+        &self,
         tx: oneshot::Sender<Result<AuthResponse, AdapterError>>,
         role_name: String,
         password: Option<Password>,

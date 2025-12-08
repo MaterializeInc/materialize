@@ -2612,7 +2612,7 @@ impl Coordinator {
     /// table.
     #[instrument]
     fn bootstrap_audit_log_table<'a>(
-        &mut self,
+        &self,
         table_id: CatalogItemId,
         name: &'a QualifiedItemName,
         table: &'a Table,

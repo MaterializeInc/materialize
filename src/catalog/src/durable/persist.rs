@@ -856,9 +856,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
     #[mz_ore::instrument(level = "debug")]
-    async fn persist_snapshot(
-        &mut self,
-    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+    async fn persist_snapshot(&self) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
         let mut read_handle = self.read_handle().await;
         let as_of = as_of(&read_handle, self.upper);
         let snapshot = snapshot_binary(&mut read_handle, as_of, &self.metrics)

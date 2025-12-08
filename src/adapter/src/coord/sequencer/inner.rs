@@ -838,7 +838,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_database(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan: plan::CreateDatabasePlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let ops = vec![catalog::Op::CreateDatabase {
@@ -861,7 +861,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_create_schema(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         plan: plan::CreateSchemaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let op = catalog::Op::CreateSchema {
@@ -3644,7 +3644,7 @@ impl Coordinator {
     #[instrument]
     pub(crate) async fn sequence_alter_connection_stage_finish(
         &mut self,
-        session: &mut Session,
+        session: &Session,
         id: CatalogItemId,
         connection: Connection,
     ) -> Result<ExecuteResponse, AdapterError> {
@@ -4251,7 +4251,7 @@ impl Coordinator {
     // Returns the name of the portal to execute.
     #[instrument]
     pub(super) fn sequence_execute(
-        &mut self,
+        &self,
         session: &mut Session,
         plan: plan::ExecutePlan,
     ) -> Result<String, AdapterError> {
@@ -4703,7 +4703,7 @@ impl Coordinator {
     #[instrument]
     pub(super) async fn sequence_alter_materialized_view_apply_replacement(
         &mut self,
-        ctx: &mut ExecuteContext,
+        ctx: &ExecuteContext,
         plan: AlterMaterializedViewApplyReplacementPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         let AlterMaterializedViewApplyReplacementPlan { id, replacement_id } = plan;

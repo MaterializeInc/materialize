@@ -290,7 +290,7 @@ impl Coordinator {
     /// called after this function successfully returns on any built
     /// [`DataflowDesc`](mz_compute_types::dataflows::DataflowDesc).
     #[instrument(name = "coord::catalog_transact_inner")]
-    pub(crate) async fn catalog_transact_inner<'a>(
+    pub(crate) async fn catalog_transact_inner(
         &mut self,
         conn_id: Option<&ConnectionId>,
         ops: Vec<catalog::Op>,

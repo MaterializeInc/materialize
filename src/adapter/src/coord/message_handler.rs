@@ -207,7 +207,7 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub async fn storage_usage_fetch(&mut self) {
+    pub async fn storage_usage_fetch(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 

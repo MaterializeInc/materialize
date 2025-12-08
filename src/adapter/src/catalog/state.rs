@@ -994,7 +994,7 @@ impl CatalogState {
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
-        return Ok((plan, resolved_ids));
+        Ok((plan, resolved_ids))
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
