@@ -41,7 +41,7 @@ psycopg2-binary==2.9.11
 pydantic==2.12.5
 pydantic_core==2.41.5
 Pygments==2.19.2
-pytest==8.4.2
+pytest==9.0.1
 pytest-split==0.10.0
 python-dateutil==2.9.0.post0
 python-slugify==8.0.4
