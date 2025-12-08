@@ -32,7 +32,7 @@ mysql_async = { version = "0.36.1", default-features = false, features = [
     "tracing",
 ] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 fancy-regex = "0.16.2"
 regex = "1.12.2"

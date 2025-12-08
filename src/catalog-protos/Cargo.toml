@@ -17,7 +17,7 @@ mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-storage-types = { path = "../storage-types" }
 paste = "1.0.11"
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = "0.13.5"
 serde = { version = "1.0.219", features = ["derive"] }
@@ -27,7 +27,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 mz-build-tools = { path = "../build-tools", default-features = false }
 mz-ore = { path = "../ore", features = ["test"] }
 mz-proto = { path = "../proto" }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 similar-asserts = "1.7"
 
 [build-dependencies]

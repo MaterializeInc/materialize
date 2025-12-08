@@ -15,7 +15,7 @@ mz-ore = { path = "../ore", features = ["test"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 serde = "1.0.219"
 proptest-derive = "0.7.0"
-proptest = "1.7.0"
+proptest = "1.9.0"
 static_assertions = "1.1"
 openssl = { version = "0.10.75", features = ["vendored"] }
 itertools = "0.14.0"
