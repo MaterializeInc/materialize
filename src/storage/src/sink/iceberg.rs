@@ -81,6 +81,7 @@ use arrow::datatypes::{DataType, Field};
 use arrow::{
     array::RecordBatch, datatypes::Schema as ArrowSchema, datatypes::SchemaRef as ArrowSchemaRef,
 };
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use iceberg::ErrorKind;
@@ -134,9 +135,7 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::operators::{
-    Broadcast, Capability, CapabilitySet, Concatenate, Map, ToStream,
-};
+use timely::dataflow::operators::{Broadcast, CapabilitySet, Concatenate, Map, ToStream};
 use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 
@@ -568,7 +567,6 @@ where
                         batch_descriptions.push(batch_description);
                     }
 
-
                     // Mint initial future batch descriptions at configurable intervals
                     for i in 1..INITIAL_DESCRIPTIONS_TO_MINT + 1 {
                         let duration_millis = commit_interval.as_millis()
@@ -586,18 +584,7 @@ where
                     minted_batches.extend(batch_descriptions.clone());
 
                     for desc in batch_descriptions {
-                        let cap = capset
-                            .try_delayed(desc.0.as_option().unwrap())
-                            .ok_or_else(|| {
-                                format!(
-                                    "minter cannot delay {:?} to {:?}. \
-                                        Likely because we already emitted a \
-                                        batch description and delayed.",
-                                    capset, desc.1
-                                )
-                            })
-                            .unwrap();
-                        batch_desc_output.give(&cap, desc);
+                        batch_desc_output.give(&capset[0], desc);
                     }
 
                     capset.downgrade(current_upper);
@@ -614,7 +601,6 @@ where
 
                         let newest_upper = minted_batches.back().unwrap().1.clone();
                         let new_lower = newest_upper.clone();
-                        let new_lower_ts = new_lower.as_option().unwrap().clone();
                         let duration_ts = Timestamp::new(commit_interval.as_millis()
                             .try_into()
                             .expect("commit interval too large for u64"));
@@ -627,20 +613,7 @@ where
                         minted_batches.pop_front();
                         minted_batches.push_back(new_batch_description.clone());
 
-                        let cap = capset
-                            .try_delayed(&new_lower_ts)
-                            .ok_or_else(|| {
-                                format!(
-                                    "minter cannot delay {:?} to {:?}. \
-                                        Likely because we already emitted a \
-                                        batch description and delayed.",
-                                    capset, new_upper
-                                )
-                            })
-                            .unwrap();
-
-
-                        batch_desc_output.give(&cap, new_batch_description);
+                        batch_desc_output.give(&capset[0], new_batch_description);
 
                         capset.downgrade(new_upper);
                     }
@@ -783,7 +756,7 @@ where
     let scope = input.scope();
     let mut builder = OperatorBuilder::new(name, scope.clone());
 
-    let (output, output_stream) = builder.new_output();
+    let (output, output_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut batch_desc_input =
         builder.new_input_for(&batch_desc_input.broadcast(), Pipeline, &output);
@@ -792,7 +765,6 @@ where
     let (button, errors) = builder.build_fallible(|caps| {
         Box::pin(async move {
             let [capset]: &mut [_; 1] = caps.try_into().unwrap();
-            *capset = CapabilitySet::new();
             let catalog = connection
                 .catalog_connection
                 .connect(&storage_configuration, InTask::Yes)
@@ -931,7 +903,7 @@ where
             #[allow(clippy::disallowed_types)]
             let mut in_flight_batches: std::collections::HashMap<
                 (Antichain<Timestamp>, Antichain<Timestamp>),
-                (Capability<Timestamp>, DeltaWriterType),
+                DeltaWriterType,
             > = std::collections::HashMap::new();
 
             let mut batch_description_frontier = Antichain::from_elem(Timestamp::minimum());
@@ -948,7 +920,7 @@ where
 
                 while let Some(event) = batch_desc_input.next_sync() {
                     match event {
-                        Event::Data(cap, data) => {
+                        Event::Data(_cap, data) => {
                             for batch_desc in data {
                                 let (lower, upper) = &batch_desc;
                                 let mut delta_writer = create_delta_writer().await?;
@@ -974,12 +946,12 @@ where
                                         }
                                     }
                                 }
-                                let prev = in_flight_batches
-                                    .insert(batch_desc, (cap.delayed(cap.time()), delta_writer));
-                                if let Some(prev) = prev {
+                                let prev =
+                                    in_flight_batches.insert(batch_desc.clone(), delta_writer);
+                                if prev.is_some() {
                                     anyhow::bail!(
-                                        "Duplicate batch description received: {:?}",
-                                        prev.0
+                                        "Duplicate batch description received for description {:?}",
+                                        batch_desc
                                     );
                                 }
                             }
@@ -999,8 +971,7 @@ where
                                 let ts_antichain = Antichain::from_elem(row_ts.clone());
                                 let mut written = false;
                                 // Try writing the row to any in-flight batch it belongs to...
-                                for (batch_desc, (_, delta_writer)) in in_flight_batches.iter_mut()
-                                {
+                                for (batch_desc, delta_writer) in in_flight_batches.iter_mut() {
                                     let (lower, upper) = batch_desc;
                                     if PartialOrder::less_equal(lower, &ts_antichain)
                                         && PartialOrder::less_than(&ts_antichain, upper)
@@ -1039,27 +1010,33 @@ where
                 ) || PartialOrder::less_than(&processed_input_frontier, &input_frontier)
                 {
                     // Close batches whose upper is now in the past
-                    let ready_batch_descriptions =
-                        in_flight_batches.extract_if(|(lower, upper), _| {
+                    let ready_batches: Vec<_> = in_flight_batches
+                        .extract_if(|(lower, upper), _| {
                             PartialOrder::less_than(lower, &batch_description_frontier)
                                 && PartialOrder::less_than(upper, &input_frontier)
-                        });
-                    for (desc, (cap, mut delta_writer)) in ready_batch_descriptions {
-                        let data_files = delta_writer
-                            .close()
-                            .await
-                            .context("Failed to close DeltaWriter")?;
-                        let mut data_files = data_files
-                            .into_iter()
-                            .map(|data_file| {
-                                BoundedDataFile::new(
+                        })
+                        .collect();
+
+                    if !ready_batches.is_empty() {
+                        let mut max_upper = Antichain::from_elem(Timestamp::minimum());
+                        for (desc, mut delta_writer) in ready_batches {
+                            let data_files = delta_writer
+                                .close()
+                                .await
+                                .context("Failed to close DeltaWriter")?;
+                            for data_file in data_files {
+                                let file = BoundedDataFile::new(
                                     data_file,
                                     current_schema.as_ref().clone(),
                                     desc.clone(),
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        output.give_container(&cap, &mut data_files);
+                                );
+                                output.give(&capset[0], file);
+                            }
+
+                            max_upper = max_upper.join(&desc.1);
+                        }
+
+                        capset.downgrade(max_upper);
                     }
                     processed_batch_description_frontier.clone_from(&batch_description_frontier);
                     processed_input_frontier.clone_from(&input_frontier);
