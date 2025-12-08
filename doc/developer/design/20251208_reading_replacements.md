@@ -1,6 +1,8 @@
-# <Insert Name>
+# Reading from replacement materialized views
 
-- Associated: (Insert list of associated epics, issues, or PRs)
+Associated:
+* https://github.com/MaterializeInc/materialize/pull/34234 (MVP: `CREATE MATERIALIZED VIEW ... REPLACING`)
+* [Replacement materialized views](./20251111_replacement_materialized_views.md) (design doc for the broader feature)
 
 <!--
 The goal of a design document is to thoroughly discover problems and
@@ -22,6 +24,12 @@ The answer to this question should link to at least one open GitHub
 issue describing the problem.
 -->
 
+We recently introduced the feature of replacement materialized views, which allow users to create materialized views that can replace existing ones.
+The feature relies on the ability of materialized views to self-correct, meaning that only once the user applies the replacement, its results will be visible to queries.
+However, there are scenarios where users may want to read from the replacement materialized view even before applying it.
+For example, users may want to validate the correctness of the replacement materialized view before applying it by querying it and comparing its results to the original materialized view.
+To address this issue, we need to provide a mechanism for users to read from replacement materialized views.
+
 ## Success Criteria
 
 <!--
@@ -33,6 +41,10 @@ our problem without naming a specific solution. Instead, focus on the
 outcomes we hope result from this work. Feel free to list both qualitative
 and quantitative measurements.
 -->
+
+Users can inspect the contents of replacement materialized views before applying them.
+Ideally, they can use familiar SQL constructs (e.g., `SELECT` statements) to read from replacement materialized views.
+Secondarily, users can inspect meta-data about replacement materialized views, such as the size and volume of the correction data they would write once applied.
 
 ## Out of Scope
 
@@ -60,6 +72,72 @@ unsure, reach out to your manager for help.
 Remember to document any dependencies that may need to break or change as a
 result of this work.
 -->
+
+The implementation of this feature is not immediately clear, as we're facing several constraints related to the current architecture of replacement materialized views and how Materialize handles queries.
+Let's first define axioms that we'd like to uphold with our design:
+1. Homogeneity: Reading from a replacement materialized view behaves similarly to reading from a regular view and does not require special syntax.
+2. Structural equivalence: After applying a replacement materialized view, its shape and behavior should be identical to that of a regular materialized view.
+3. Reading from a replacement materialized view does not interfere with the ongoing replacement process or the original materialized view.
+4. The solution should be efficient and not introduce significant overhead to the system.
+5. Replacements, and replaced materialized views survive environmentd restarts, and can be reconciled after a restart.
+
+### Constraint: Materialized views are readable through persist
+
+Currently, users can only query the contents of materialized views through the persist source.
+This means that we cannot use the canonical shard of a materialized view to read its replacement's contents, as it is not directly queryable.
+Instead, we need to find a way to expose the replacement materialized view's contents through a different mechanism.
+
+* Proposal: Create a temporary persist shard for the replacement materialized view.
+    When a user creates a replacement materialized view, we can create a temporary persist shard.
+    The replacement materialized view writes to the canonical shard (but is in read-only mode), and also writes to the temporary persist shard.
+    Users can then query the temporary persist shard to read the contents of the replacement materialized view.
+
+* Proposal: Expose an index of the replacement materialized view's contents.
+    Instead of creating a temporary persist shard, we can expose an index of the replacement materialized view.
+    This index would be queryable, allowing users to read the contents of the replacement materialized view directly.
+
+Both proposals would allow users to read from replacement materialized views without interfering with the ongoing replacement process or the original materialized view.
+Writing to a temporary persist shard may introduce some overhead, but it would provide a straightforward way for users to query the replacement materialized view and would allow querying the replacement from a different cluster.
+Providing an index would introduce memory overhead, but it would allow for more efficient querying of the replacement materialized view from the same cluster.
+
+Both proposals would need to ensure that the replacement materialized view's shape and behavior are identical to that of a regular materialized view after applying the replacement.
+At the moment, we render a materialized view (and replacements) as single dataflows.
+Timely constrains us from modifying dataflows after they are created, so we cannot add or remove operators after a dataflow is created.
+To avoid violating the structural equivalence axiom, we would need to ensure that the dataflow for the replacement materialized view is identical in shape to that of a regular materialized view.
+
+It follows that we need finer-grained control over the structure of dataflows serving materialized views.
+
+> [!NOTE]
+> Why we cannot easily shut down parts of running dataflows.
+> In Timely dataflow, an operator lives as long as it can produce data.
+> Timely determines this based on its upstream operators and the capabilities that the operator holds.
+> Only once all upstream operators have terminated and the operator has no capabilities left, can it terminate.
+> This means that even if we were to "shut down" an operator in a dataflow, it would still be alive as long as its upstream operators are alive.
+> This makes it challenging to shut down parts of a dataflow without terminating the entire dataflow.
+>
+> We could introduce a shunt operator that can be toggled to either pass through data or drop it.
+> This operator would allow us to effectively "shut down" parts of a dataflow by dropping capabilities and data.
+> However, we would need to clone data for each output of the shunt operator, which could introduce memory overhead.
+>
+> TODO: Could we use an operator that works on reference-counted data?
+> We'd need to clone the data, but that's cheap for `Rc`.
+
+One solution to this problem is to split the dataflow into multiple dataflows and connect them with a capture/replay mechanism.
+For example, we could have one dataflow that computes the view's results and captures the output, and another dataflow that writes the data to persist.
+A replacement materialized view could then have a similar structure, with an additional dataflow that writes to the temporary persist shard or maintains the index.
+One the user applies the replacement, we could shut down the dataflow that writes the temporary persist shard or maintains the index, and keep the rest running.
+This would allow us to have finer-grained control over the structure of the dataflows and ensure structural equivalence.
+
+A downside of this approach is that it introduces additional complexity to the system.
+We would need to name each of the dataflows and manage their lifecycles, which would complicate the meaning of (global) IDs.
+
+### Constraint: Reconciliation and restarts
+
+In Materialize, all parts should behave deterministically and be restorable after a restart.
+This means that the planner and coordinator need to be able to reconstruct the state of replacement materialized views after a restart.
+For this to work, we need to ensure that any temporary persist shards or indexes are also restorable after a restart, and that the dataflow fragments have unique names/IDs that can be used to identify them.
+
+This implies that we'd break the 1:1 association of catalog items to global IDs, as a replacement materialized view would now be associated with multiple dataflows (one for the original materialized view, one for the replacement, and potentially one for the temporary persist shard or index).
 
 ## Minimal Viable Prototype
 
