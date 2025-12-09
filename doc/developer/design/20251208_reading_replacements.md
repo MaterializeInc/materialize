@@ -26,7 +26,7 @@ issue describing the problem.
 
 We recently introduced the feature of replacement materialized views, which allow users to create materialized views that can replace existing ones.
 The feature relies on the ability of materialized views to self-correct, meaning that only once the user applies the replacement, its results will be visible to queries.
-However, there are scenarios where users may want to read from the replacement materialized view even before applying it.
+However, users may want to read from the replacement materialized view even before applying it.
 For example, users may want to validate the correctness of the replacement materialized view before applying it by querying it and comparing its results to the original materialized view.
 To address this issue, we need to provide a mechanism for users to read from replacement materialized views.
 
@@ -77,13 +77,13 @@ The implementation of this feature is not immediately clear, as we're facing sev
 Let's first define axioms that we'd like to uphold with our design:
 1. Homogeneity: Reading from a replacement materialized view behaves similarly to reading from a regular view and does not require special syntax.
 2. Structural equivalence: After applying a replacement materialized view, its shape and behavior should be identical to that of a regular materialized view.
-3. Reading from a replacement materialized view does not interfere with the ongoing replacement process or the original materialized view.
+3. Reading from a replacement materialized view does not interfere with the ongoing replacement process of the original materialized view.
 4. The solution should be efficient and not introduce significant overhead to the system.
 5. Replacements, and replaced materialized views survive environmentd restarts, and can be reconciled after a restart.
 
 ### Constraint: Materialized views are readable through persist
 
-Currently, users can only query the contents of materialized views through the persist source.
+Users can only query the contents of materialized views through the persist source.
 This means that we cannot use the canonical shard of a materialized view to read its replacement's contents, as it is not directly queryable.
 Instead, we need to find a way to expose the replacement materialized view's contents through a different mechanism.
 
@@ -101,7 +101,7 @@ Writing to a temporary persist shard may introduce some overhead, but it would p
 Providing an index would introduce memory overhead, but it would allow for more efficient querying of the replacement materialized view from the same cluster.
 
 Both proposals would need to ensure that the replacement materialized view's shape and behavior are identical to that of a regular materialized view after applying the replacement.
-At the moment, we render a materialized view (and replacements) as single dataflows.
+We render a materialized view (and replacements) as single dataflows.
 Timely constrains us from modifying dataflows after they are created, so we cannot add or remove operators after a dataflow is created.
 To avoid violating the structural equivalence axiom, we would need to ensure that the dataflow for the replacement materialized view is identical in shape to that of a regular materialized view.
 
@@ -110,8 +110,8 @@ It follows that we need finer-grained control over the structure of dataflows se
 > [!NOTE]
 > Why we cannot easily shut down parts of running dataflows.
 > In Timely dataflow, an operator lives as long as it can produce data.
-> Timely determines this based on its upstream operators and the capabilities that the operator holds.
-> Only once all upstream operators have terminated and the operator has no capabilities left, can it terminate.
+> Timely determines this based on its upstream operators, and the capabilities that the operator holds.
+> Only once all upstream operators have terminated, and the operator has no capabilities left, can it terminate.
 > This means that even if we were to "shut down" an operator in a dataflow, it would still be alive as long as its upstream operators are alive.
 > This makes it challenging to shut down parts of a dataflow without terminating the entire dataflow.
 >
@@ -121,6 +121,7 @@ It follows that we need finer-grained control over the structure of dataflows se
 >
 > TODO: Could we use an operator that works on reference-counted data?
 > We'd need to clone the data, but that's cheap for `Rc`.
+> Downstream dataflows aren't set up to accept reference-counted data today, though.
 
 One solution to this problem is to split the dataflow into multiple dataflows and connect them with a capture/replay mechanism.
 For example, we could have one dataflow that computes the view's results and captures the output, and another dataflow that writes the data to persist.
@@ -129,7 +130,7 @@ One the user applies the replacement, we could shut down the dataflow that write
 This would allow us to have finer-grained control over the structure of the dataflows and ensure structural equivalence.
 
 A downside of this approach is that it introduces additional complexity to the system.
-We would need to name each of the dataflows and manage their lifecycles, which would complicate the meaning of (global) IDs.
+We would need to name the dataflows and manage their lifecycles, which would complicate the meaning of (global) IDs.
 
 ### Constraint: Reconciliation and restarts
 
@@ -162,6 +163,52 @@ there is a good reason for skipping or delaying the prototype, please
 explicitly mention it in this section and provide details on why you'd
 like to skip or delay it.
 -->
+
+### Coordinator changes
+
+In the coordinator, we adjust handling materialized views as follows:
+* We render a materialized view as two dataflows:
+    1. A dataflow that computes the view's results and captures the output.
+    2. A dataflow that replays the captured output to persist.
+* For replacement materialized views, we render an additional dataflow that writes to a temporary persist shard or maintains an index.
+* We assign unique global IDs to each dataflow fragment associated with a materialized view.
+  We store the global IDs, and their purpose in the catalog item, as part of the version information.
+
+### Catalog changes
+
+Once we complete above steps, catalog items can have multiple global IDs per version associated with them.
+We need to change how we store this information.
+Previously, a version associates a single global ID:
+```protobuf
+syntax = "proto3";
+
+message ItemVersion {
+  GlobalId global_id = 1;
+  Version version = 2;
+}
+```
+
+We need to adjust this to store multiple global IDs with their purpose:
+```protobuf
+syntax = "proto3";
+
+message ItemVersion {
+  repeated GlobalIdMapping global_ids = 1;
+  Version version = 2;
+}
+
+message GlobalIdMapping {
+  GlobalId global_id = 1;
+  string purpose = 2; // e.g., "view", "persist", "temp_persist", "index"
+}
+```
+
+An alternative to consider is to have strongly-typed purposes, e.g., an enum instead of a string.
+
+### Optimizer changes
+
+Splitting dataflows into multiple fragments may affect optimization.
+It can give us the opportunity to unify optimization pipelines for views, indexes, materialized views, and replacement materialized views.
 
 ## Alternatives
 
