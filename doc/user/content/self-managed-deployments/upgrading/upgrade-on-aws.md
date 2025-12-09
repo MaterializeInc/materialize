@@ -22,6 +22,11 @@ name="upgrades-general-rules" %}}
 name="upgrade-major-version-restriction" >}}
 {{< /note >}}
 
+{{< note >}}
+{{< include-from-yaml data="self_managed/upgrades"
+name="downgrade-restriction" >}}
+{{< /note >}}
+
 ## Prerequisites
 
 ### Required Tools

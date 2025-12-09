@@ -279,10 +279,12 @@ components work together:
    operator detects this and creates all necessary Kubernetes resources,
    including the `environmentd`, `balancerd`, and `console` pods.
 
-1. **Connect to the instance**: Use the Materialize Console on port 8080 (or SQL
-   client on port 6875) to connect to the `environmentd` service endpoint.
+1. **Connect to the instance**: Use the Materialize Console on port 8080 to
+   connecto to the `console` service endpoint or SQL client on port 6875 to
+   connect to the `balancerd` service endpoint.
 
-   If authentication is enabled, you must set up users.
+   If authentication is enabled, you must first connect to the Materialize
+   Console and set up users.
 
 1. **Create clusters**: Issue SQL commands to create clusters. Materialize
    coordinates with the operator to provision StatefulSets for replicas.

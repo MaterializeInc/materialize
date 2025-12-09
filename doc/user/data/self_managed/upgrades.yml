@@ -106,6 +106,13 @@
        simple-demo  materialize  1         2025-12-08 11:39:50.185976 -0500 EST   deployed  materialize-operator-v26.1.0  v26.1.0
        ```
 
+    1. Export your current values to a file to preserve any custom settings:
+    
+       ```shell
+       helm get values -n materialize simple-demo -o yaml > my-values.yaml
+       ```
+
+
     1. Upgrade your Operator. For example, the following upgrades the Operator
     to {{< self-managed/versions/get-latest-version >}}:
 
@@ -115,7 +122,7 @@
        {{< /note >}}
 
        ```shell
-       helm upgrade -n materialize my-demo materialize/misc/helm-charts/operator  \
+       helm upgrade -n materialize simple-demo materialize/materialize-operator  \
          -f my-values.yaml \
          --version {{< self-managed/versions/get-latest-version >}}
        ```
@@ -169,7 +176,7 @@
        kubectl patch materialize main\
          -n materialize-environment \
          --type='merge' \
-         -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd: {{< self-managed/versions/get-latest-version >}}\"}}"
+         -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
        ```
 
     1. Rollout the Materialize instance version change.

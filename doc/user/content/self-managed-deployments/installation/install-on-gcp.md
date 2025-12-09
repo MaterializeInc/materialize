@@ -215,13 +215,14 @@ A Google account with permission to:
    to proceed.
 
 1. From the output, you will need the following field(s) to connect:
-   - `<console_load_balancer_ip>`
+   - `console_load_balancer_ip` for the Materialize Console
+   - `balancerd_load_balancer_ip` to connect PostgreSQL-compatible clients/drivers.
 
 1. Configure `kubectl` to connect to your GKE cluster, replacing:
 
    - `<your-cluster-name>` with the name of your GKE cluster. Your cluster name
      can be found in the Terraform output. For the sample example, the cluster
-     name is `<name_prefix>-eks`.
+     name is `<name_prefix>-gke`.
 
    - `<your-region>` with the region of your GKE cluster. Your region can be
      found in the Terraform output `gke_cluster_location`, corresponds to the
@@ -243,8 +244,6 @@ A Google account with permission to:
 
 ### Step 5: Connect to Materialize
 
-Using the `console_load_balancer_ip` from the Terraform output, you can connect
-to Materialize via the Materialize Console.
 
 {{< note >}}
 
@@ -254,16 +253,31 @@ privately connected to it.
 
 {{< /note >}}
 
-1. To connect to the Materialize Console, open a browser to
-    `https://<console_load_balancer_ip>:8080`, substituting your
-    `<console_load_balancer_ip>`.
+#### Connect using the Materialize Console
 
-   {{< tip >}}
+Using the `console_load_balancer_ip` from the Terraform output, you can connect
+to Materialize via the Materialize Console.
 
-   {{% include-from-yaml data="self_managed/installation"
-   name="install-uses-self-signed-cluster-issuer" %}}
+To connect to the Materialize Console, open a browser to
+`https://<console_load_balancer_ip>:8080`, substituting your
+`<console_load_balancer_ip>`.
 
-   {{< /tip >}}
+{{< tip >}}
+
+{{% include-from-yaml data="self_managed/installation"
+name="install-uses-self-signed-cluster-issuer" %}}
+
+{{< /tip >}}
+
+#### Connect using the `psql`
+
+Using the `balancerd_load_balancer_ip` value from the Terraform output, you can
+connect to Materialize via PostgreSQL-compatible clients/drivers, such as
+`psql`:
+
+```bash
+psql postgres://<balancerd_load_balancer_ip>:6875/materialize
+```
 
 ## Customizing Your Deployment
 

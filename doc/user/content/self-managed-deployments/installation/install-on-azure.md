@@ -86,7 +86,7 @@ This example provisions the following infrastructure:
 |----------|-------------|
 | Operator | Materialize Kubernetes operator in the `materialize` namespace |
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
-| Load Balancers | Internal Azure Load Balancers for Materialize access |
+| Load Balancers | Internal Azure Load Balancers for Materialize access {{< yaml-table data="self_managed/default_ports" >}}  |
 
 ## Prerequisites
 
@@ -206,14 +206,19 @@ An active Azure subscription with appropriate permissions to create:
    to proceed.
 
 1. From the output, you will need the following field(s) to connect:
-   - `console_load_balancer_ip`
+   - `console_load_balancer_ip` for the Materialize Console
+   - `balancerd_load_balancer_ip` to connect PostgreSQL-compatible clients/drivers.
 
 ### Step 4. Optional. Verify the deployment.
 
 1. Configure `kubectl` to connect to your cluster:
+   - `<your-resource-group>` with the name of your Azure resource group. Your resource group name can be found in the Terraform output or Azure portal.
 
+   - `<your-aks-cluster-name>` with the name of your AKS cluster. Your cluster
+     name can be found in the Terraform output or Azure portal.
+   
    ```bash
-   az aks get-credentials --resource-group <resource_group_name> --name <cluster_name>
+   az aks get-credentials --resource-group <resource_group_name> --name <your-aks-cluster-name>
    ```
 
 1. Check the status of your deployment:
@@ -222,9 +227,6 @@ An active Azure subscription with appropriate permissions to create:
 
 ### Step 5: Connect to Materialize
 
-Using the `console_load_balancer_ip` from the Terraform output, you can connect
-to Materialize via the Materialize Console.
-
 {{< note >}}
 
 If using an **internal Network Load Balancer (NLB)** for your Materialize
@@ -232,6 +234,11 @@ access, you can connect from inside the same VPC or from networks that are
 privately connected to it.
 
 {{< /note >}}
+
+#### Connect using the Materialize Console
+
+Using the `console_load_balancer_ip` from the Terraform output, you can connect
+to Materialize via the Materialize Console.
 
 1. To connect to the Materialize Console, open a browser to
     `https://<console_load_balancer_ip>:8080`, substituting your
@@ -243,6 +250,17 @@ privately connected to it.
    name="install-uses-self-signed-cluster-issuer" %}}
 
    {{< /tip >}}
+
+#### Connect using the `psql`
+
+Using the `balancerd_load_balancer_ip` value from the Terraform output, you can
+connect to Materialize via PostgreSQL-compatible clients/drivers, such as
+`psql`:
+
+```bash
+psql postgres://<balancerd_load_balancer_ip>:6875/materialize
+```
+
 
 ## Customizing Your Deployment
 

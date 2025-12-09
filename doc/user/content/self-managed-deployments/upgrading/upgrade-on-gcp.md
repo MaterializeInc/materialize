@@ -22,6 +22,11 @@ name="upgrades-general-rules" %}}
 name="upgrade-major-version-restriction" >}}
 {{< /note >}}
 
+{{< note >}}
+{{< include-from-yaml data="self_managed/upgrades"
+name="downgrade-restriction" >}}
+{{< /note >}}
+
 ## Prerequisites
 
 ### Required Tools
@@ -57,7 +62,7 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
    - `<cluster-name>` with the name of your GKE cluster. Your cluster name can
      be found in the Terraform output. For the sample example, the cluster name
-     is `<name_prefix>-eks`.
+     is `<name_prefix>-gke`.
 
    - `<your-region>` with the region of your GKE cluster. Your region can be
      found in the Terraform output `gke_cluster_location`, corresponds to the

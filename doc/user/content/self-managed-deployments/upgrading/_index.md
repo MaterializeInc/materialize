@@ -72,7 +72,7 @@ my-demo	materialize	1      2025-12-08 11:39:50.185976 -0500 EST	deployed	materia
 Then, to upgrade:
 
 ```shell
-helm upgrade -n materialize my-demo materialize/misc/helm-charts/operator \
+helm upgrade -n materialize my-demo materialize/operator \
   -f my-values.yaml \
   --version {{< self-managed/versions/get-latest-version >}}
 ```
@@ -120,7 +120,7 @@ use the `kubectl patch` command; for example, if the **App Version** is {{< self
 kubectl patch materialize <instance-name> \
   -n <materialize-instance-namespace> \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\"}}"
 ```
 
 {{< note >}}
@@ -147,7 +147,7 @@ It is possible to combine both operations in a single command if preferred:
 kubectl patch materialize <instance-name> \
   -n materialize-environment \
   --type='merge' \
-  -p "{\"spec\": {\"environmentdImageRef\": \"materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\", \"requestRollout\": \"$(uuidgen)\"}}"
+  -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
 ### Using YAML Definition
