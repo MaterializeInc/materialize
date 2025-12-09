@@ -23,12 +23,14 @@ import subprocess
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from enum import Enum
 from typing import Any
 
 import psycopg
 import requests
 import yaml
+from psycopg import sql as psycopg_sql
 from semver.version import Version
 
 from materialize import MZ_ROOT, buildkite, ci_util, git, spawn
@@ -179,6 +181,56 @@ def get_environmentd_data() -> dict[str, Any]:
     return get_pod_data(
         labels={"materialize.cloud/app": "environmentd"},
     )
+
+
+@contextmanager
+def port_forward_environmentd(
+    local_port: int = 6875,
+    namespace: str = "materialize-environment",
+) -> Iterator[int]:
+    """
+    Context manager that sets up port forwarding to environmentd.
+
+    Usage:
+        with port_forward_environmentd() as port:
+            conn = psycopg.connect(f"host=localhost port={port} user=mz_system")
+            # ... use connection ...
+    """
+    environmentd = get_environmentd_data()
+    pod_name = environmentd["items"][0]["metadata"]["name"]
+
+    process = subprocess.Popen(
+        [
+            "kubectl",
+            "port-forward",
+            f"pod/{pod_name}",
+            f"{local_port}:6875",
+            "-n",
+            namespace,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        # Wait briefly for port-forward to establish
+        time.sleep(2)
+
+        # Check if process is still running
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise RuntimeError(
+                f"Port forward failed to start: stdout={stdout.decode()}, stderr={stderr.decode()}"
+            )
+
+        yield local_port
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
 def retry(fn: Callable, timeout: int) -> None:
@@ -785,6 +837,113 @@ class ConsoleReplicas(Modification):
 
         # console doesn't get launched until last
         retry(check_replicas, 120)
+
+
+class SystemParamConfigMap(Modification):
+    @classmethod
+    def values(cls) -> list[Any]:
+        return [{"max_connections": 1000}]
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            # Create a configmap with system parameters
+            configmap_name = "system-params-test"
+
+            # First create the configmap in the cluster
+            configmap_yaml = yaml.safe_dump(
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {
+                        "name": configmap_name,
+                        "namespace": "materialize-environment",
+                    },
+                    "data": {
+                        "system-params.json": json.dumps(self.value),
+                    },
+                }
+            )
+            # Apply the configmap (will be done in init/run)
+            definition["system_params_configmap"] = configmap_yaml
+            # Set the configmap name in the Materialize spec
+            definition["materialize"]["spec"][
+                "systemParameterConfigmapName"
+            ] = configmap_name
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if self.value is None:
+            return
+
+        def check() -> None:
+            environmentd = get_environmentd_data()
+
+            # Check that the volume is mounted
+            volumes = environmentd["items"][0]["spec"]["volumes"]
+            volume_found = False
+            for volume in volumes:
+                if volume.get("name") == "system-params":
+                    assert (
+                        volume.get("configMap") is not None
+                    ), f"Expected configMap in volume, but found {volume}"
+                    assert (
+                        volume["configMap"]["name"] == "system-params-test"
+                    ), f"Expected configmap name system-params-test, but found {volume['configMap']['name']}"
+                    volume_found = True
+                    break
+            assert volume_found, f"Expected to find system-params volume in {volumes}"
+
+            # Check that the volume mount is present
+            volume_mounts = environmentd["items"][0]["spec"]["containers"][0][
+                "volumeMounts"
+            ]
+            volume_mount_found = False
+            for mount in volume_mounts:
+                if mount.get("name") == "system-params":
+                    assert (
+                        mount.get("mountPath") == "/etc/materialize/system-params"
+                    ), f"Expected mount path /etc/materialize/system-params, but found {mount['mountPath']}"
+                    volume_mount_found = True
+                    break
+            assert (
+                volume_mount_found
+            ), f"Expected to find system-params volume mount in {volume_mounts}"
+
+            # Check that the config-sync-file-path arg is present
+            args = environmentd["items"][0]["spec"]["containers"][0]["args"]
+            expected_arg = "--config-sync-file-path=/etc/materialize/system-params/system-params.json"
+            assert any(
+                expected_arg in arg for arg in args
+            ), f"Expected {expected_arg} in environmentd args, but only found: {args}"
+
+        retry(check, 240)
+
+        # Validate that the system parameters have actually been applied via SQL
+        def check_system_params() -> None:
+            with port_forward_environmentd() as port:
+                with psycopg.connect(
+                    f"host=localhost port={port} user=mz_system sslmode=disable"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        for param_name, expected_value in self.value.items():
+                            cur.execute(
+                                psycopg_sql.SQL("SHOW {}").format(
+                                    psycopg_sql.Identifier(param_name)
+                                )
+                            )
+                            result = cur.fetchone()
+                            assert (
+                                result is not None
+                            ), f"No result for SHOW {param_name}"
+                            actual_value = result[0]
+                            assert str(actual_value) == str(
+                                expected_value
+                            ), f"Expected {param_name}={expected_value}, but got {actual_value}"
+
+        retry(check_system_params, 120)
 
 
 def validate_cluster_replica_size(
@@ -2225,6 +2384,8 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
     ]
     if "materialize2" in definition:
         defs.append(definition["materialize2"])
+    if "system_params_configmap" in definition:
+        defs.append(definition["system_params_configmap"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
