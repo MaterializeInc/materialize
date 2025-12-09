@@ -2298,7 +2298,7 @@ pub mod datadriven {
                 match event {
                     ListenEvent::Updates(x) => {
                         for ((k, _v), t, d) in x.iter() {
-                            write!(s, "{} {} {}\n", k.as_ref().unwrap(), t, d);
+                            write!(s, "{} {} {}\n", k, t, d);
                         }
                     }
                     ListenEvent::Progress(x) => {

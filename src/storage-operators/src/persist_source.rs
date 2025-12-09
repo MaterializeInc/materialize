@@ -577,7 +577,7 @@ impl PendingWork {
                 continue;
             }
             match (key, val) {
-                (Ok(SourceData(Ok(row))), Ok(())) => {
+                (SourceData(Ok(row)), ()) => {
                     if let Some(mfp) = map_filter_project {
                         // We originally accounted work as the number of outputs, to give downstream
                         // operators a chance to reduce down anything we've emitted. This mfp call
@@ -660,15 +660,11 @@ impl PendingWork {
                         *work += 1;
                     }
                 }
-                (Ok(SourceData(Err(err))), Ok(())) => {
+                (SourceData(Err(err)), ()) => {
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
                     session.give((Err(err), emit_time, diff.into()));
                     *work += 1;
-                }
-                // TODO(petrosagg): error handling
-                (Err(_), Ok(_)) | (Ok(_), Err(_)) | (Err(_), Err(_)) => {
-                    panic!("decoding failed")
                 }
             }
             if yield_fn(start_time, *work) {

@@ -1738,7 +1738,7 @@ mod tests {
             .await;
 
         let (actual, _) = read.expect_listen(0).await.read_until(&3).await;
-        let expected = vec![(((Ok("foo".to_owned())), Ok(())), 2, 1)];
+        let expected = vec![((("foo".to_owned()), ()), 2, 1)];
         assert_eq!(actual, expected);
     }
 

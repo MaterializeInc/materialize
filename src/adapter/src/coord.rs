@@ -2558,8 +2558,7 @@ impl Coordinator {
 
                 // Retract the current contents, spilling into our builder.
                 while let Some(values) = snapshot_cursor.next().await {
-                    for ((key, _val), _t, d) in values {
-                        let key = key.expect("builtin table had errors");
+                    for (key, _t, d) in values {
                         let d_invert = d.neg();
                         batch.add(&key, &(), &d_invert).await;
                     }
