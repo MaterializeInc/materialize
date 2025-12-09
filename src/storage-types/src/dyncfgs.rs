@@ -309,7 +309,7 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
 /// Configure mz-ore overflowing type behavior.
 pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
-    "ignore",
+    "soft_panic",
     "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
 );
 
