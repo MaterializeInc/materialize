@@ -169,6 +169,7 @@ fn test_persistence() {
 fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
+    target_data_rate: &str,
     test_harness: test_util::TestHarness,
 ) -> (test_util::TestServerWithRuntime, postgres::Client) {
     let server = test_harness
@@ -179,6 +180,14 @@ fn setup_statement_logging_core(
         .with_system_parameter_default(
             "statement_logging_default_sample_rate".to_string(),
             sample_rate.to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_max_data_credit".to_string(),
+            "".to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_target_data_rate".to_string(),
+            target_data_rate.to_string(),
         )
         .with_system_parameter_default(
             "statement_logging_use_reproducible_rng".to_string(),
@@ -196,10 +205,12 @@ fn setup_statement_logging_core(
 fn setup_statement_logging(
     max_sample_rate: f64,
     sample_rate: f64,
+    target_data_rate: &str,
 ) -> (test_util::TestServerWithRuntime, postgres::Client) {
     setup_statement_logging_core(
         max_sample_rate,
         sample_rate,
+        target_data_rate,
         test_util::TestHarness::default(),
     )
 }
@@ -207,7 +218,7 @@ fn setup_statement_logging(
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
 fn test_statement_logging_immediate() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
 
     let mut mz_client = server
         .pg_config_internal()
@@ -353,7 +364,7 @@ fn test_statement_logging_immediate() {
 
 #[mz_ore::test]
 fn test_statement_logging_basic() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     client.execute("SELECT 1", &[]).unwrap();
     // We test that queries of this view execute on a cluster.
     // If we ever change the threshold for constant folding such that
@@ -513,14 +524,7 @@ ORDER BY mseh.began_at",
 }
 
 fn run_throttling_test(use_prepared_statement: bool) {
-    let (server, mut client) = setup_statement_logging_core(
-        1.0,
-        1.0,
-        test_util::TestHarness::default().with_system_parameter_default(
-            "statement_logging_target_data_rate".to_string(),
-            "1000".to_string(),
-        ),
-    );
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "1000");
     thread::sleep(Duration::from_secs(2));
 
     if use_prepared_statement {
@@ -592,7 +596,7 @@ fn test_statement_logging_prepared_statement_throttling() {
 
 #[mz_ore::test]
 fn test_statement_logging_subscribes() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     let cancel_token = client.cancel_token();
 
     // This should finish
@@ -731,7 +735,7 @@ fn test_statement_logging_sampling_inner(
 
 #[mz_ore::test]
 fn test_statement_logging_sampling() {
-    let (server, client) = setup_statement_logging(1.0, 0.5);
+    let (server, client) = setup_statement_logging(1.0, 0.5, "");
     test_statement_logging_sampling_inner(server, client);
 }
 
@@ -739,7 +743,7 @@ fn test_statement_logging_sampling() {
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
 fn test_statement_logging_sampling_constrained() {
-    let (server, client) = setup_statement_logging(0.5, 1.0);
+    let (server, client) = setup_statement_logging(0.5, 1.0, "");
     test_statement_logging_sampling_inner(server, client);
 }
 
@@ -825,6 +829,7 @@ fn test_enable_internal_statement_logging() {
     let (server, mut client) = setup_statement_logging_core(
         1.0,
         1.0,
+        "",
         test_util::TestHarness::default().with_system_parameter_default(
             "enable_internal_statement_logging".to_string(),
             "true".to_string(),

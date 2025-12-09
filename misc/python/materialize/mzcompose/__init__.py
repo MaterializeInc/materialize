@@ -375,9 +375,19 @@ def get_variable_system_parameters(
             ["0", "0.01", "0.5", "0.99", "1.0"],
         ),
         VariableSystemParameter(
+            "statement_logging_max_data_credit",
+            "",
+            ["", "0", "1024", "1048576", "1073741824"],
+        ),
+        VariableSystemParameter(
             "statement_logging_max_sample_rate",
             "1.0",
             ["0", "0.01", "0.5", "0.99", "1.0"],
+        ),
+        VariableSystemParameter(
+            "statement_logging_target_data_rate",
+            "",
+            ["", "0", "1", "1000", "2071", "1000000"],
         ),
         VariableSystemParameter("storage_reclock_to_latest", "true", ["true", "false"]),
         VariableSystemParameter(

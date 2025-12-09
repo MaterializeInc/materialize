@@ -1336,7 +1336,7 @@ pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::
 
 pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new(
     "statement_logging_max_data_credit",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(50 * 1024 * 1024)),
     // The idea is that during periods of low logging, tokens can accumulate up to this value,
     // and then be depleted during periods of high logging.
     "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
@@ -1345,7 +1345,7 @@ pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new
 
 pub static STATEMENT_LOGGING_TARGET_DATA_RATE: VarDefinition = VarDefinition::new(
     "statement_logging_target_data_rate",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(2071)),
     "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
     false,
 );
