@@ -865,9 +865,9 @@ pub trait CatalogItem {
 pub trait CatalogCollectionItem: CatalogItem + Send + Sync {
     /// Returns a description of the result set produced by the catalog item.
     ///
-    /// If the catalog item is not of a type that produces data (i.e., a sink or
-    /// an index), it returns an error.
-    fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, CatalogError>;
+    /// If the catalog item is not of a type that produces data (e.g., a sink or
+    /// an index), it returns `None`.
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>>;
 
     /// The [`GlobalId`] for this item.
     fn global_id(&self) -> GlobalId;
@@ -1386,13 +1386,6 @@ pub enum CatalogError {
         /// The expected type of the item.
         expected_type: CatalogItemType,
     },
-    /// Invalid attempt to depend on a non-dependable item.
-    InvalidDependency {
-        /// The invalid item's name.
-        name: String,
-        /// The invalid item's type.
-        typ: CatalogItemType,
-    },
     /// Ran out of unique IDs.
     IdExhaustion,
     /// Ran out of unique OIDs.
@@ -1454,17 +1447,6 @@ impl fmt::Display for CatalogError {
             } => {
                 write!(f, "\"{name}\" is a {actual_type} not a {expected_type}")
             }
-            Self::InvalidDependency { name, typ } => write!(
-                f,
-                "catalog item '{}' is {} {} and so cannot be depended upon",
-                name,
-                if matches!(typ, CatalogItemType::Index) {
-                    "an"
-                } else {
-                    "a"
-                },
-                typ,
-            ),
             Self::IdExhaustion => write!(f, "id counter overflows i64"),
             Self::OidExhaustion => write!(f, "oid counter overflows u32"),
             Self::TimelineAlreadyExists(name) => write!(f, "timeline '{name}' already exists"),

@@ -675,18 +675,14 @@ pub struct CatalogCollectionEntry {
 }
 
 impl CatalogCollectionEntry {
-    pub fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.item().desc(name, self.version)
-    }
-
-    pub fn desc_opt(&self) -> Option<Cow<'_, RelationDesc>> {
-        self.item().desc_opt(self.version)
+    pub fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
     }
 }
 
 impl mz_sql::catalog::CatalogCollectionItem for CatalogCollectionEntry {
-    fn desc(&self, name: &FullItemName) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        CatalogCollectionEntry::desc(self, name)
+    fn relation_desc(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item().relation_desc(self.version)
     }
 
     fn global_id(&self) -> GlobalId {
@@ -1780,20 +1776,8 @@ impl CatalogItem {
     /// matches a specific [`GlobalId`] or historical definition. Other relation
     /// types ignore `version` because they have a single shape. Non-relational
     /// items ( for example functions, indexes, sinks, secrets, and connections)
-    /// return [`SqlCatalogError::InvalidDependency`].
-    pub fn desc(
-        &self,
-        name: &FullItemName,
-        version: RelationVersionSelector,
-    ) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.desc_opt(version)
-            .ok_or_else(|| SqlCatalogError::InvalidDependency {
-                name: name.to_string(),
-                typ: self.typ(),
-            })
-    }
-
-    pub fn desc_opt(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
+    /// return `None`.
+    pub fn relation_desc(&self, version: RelationVersionSelector) -> Option<Cow<'_, RelationDesc>> {
         match &self {
             CatalogItem::Source(src) => Some(Cow::Borrowed(&src.desc)),
             CatalogItem::Log(log) => Some(Cow::Owned(log.variant.desc())),
@@ -2509,21 +2493,10 @@ impl CatalogItem {
 }
 
 impl CatalogEntry {
-    /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`],
-    /// returning an error if this [`CatalogEntry`] does not produce rows.
-    ///
-    /// If you need to get the [`RelationDesc`] for a specific version, see [`CatalogItem::desc`].
-    pub fn desc_latest(
-        &self,
-        name: &FullItemName,
-    ) -> Result<Cow<'_, RelationDesc>, SqlCatalogError> {
-        self.item.desc(name, RelationVersionSelector::Latest)
-    }
-
     /// Reports the latest [`RelationDesc`] of the rows produced by this [`CatalogEntry`], if it
     /// produces rows.
-    pub fn desc_opt_latest(&self) -> Option<Cow<'_, RelationDesc>> {
-        self.item.desc_opt(RelationVersionSelector::Latest)
+    pub fn relation_desc_latest(&self) -> Option<Cow<'_, RelationDesc>> {
+        self.item.relation_desc(RelationVersionSelector::Latest)
     }
 
     /// Reports if the item has columns.
@@ -2532,7 +2505,7 @@ impl CatalogEntry {
             CatalogItem::Type(Type { details, .. }) => {
                 matches!(details.typ, CatalogType::Record { .. })
             }
-            _ => self.desc_opt_latest().is_some(),
+            _ => self.relation_desc_latest().is_some(),
         }
     }
 

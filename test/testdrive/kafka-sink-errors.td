@@ -61,10 +61,10 @@ contains:LEGACY IDs option is not supported
 contains:s1 is a sink, which cannot be exported as a sink
 
 ! CREATE VIEW v2 AS SELECT * FROM s1
-contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
+contains:materialize.public.s1 is a sink, which cannot be depended upon
 
 ! SELECT * FROM s1
-contains:catalog item 'materialize.public.s1' is a sink and so cannot be depended upon
+contains:materialize.public.s1 is a sink, which cannot be depended upon
 
 > DROP SINK s1
 

@@ -147,7 +147,7 @@ impl Optimize<Index> for Optimizer {
             .catalog
             .resolve_full_name(&index.name, on_entry.conn_id());
         let on_desc = on_entry
-            .desc(&full_name)
+            .relation_desc()
             .expect("can only create indexes on items with a valid description");
 
         let mut df_builder = {

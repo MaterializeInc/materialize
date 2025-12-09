@@ -365,11 +365,10 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
             let item = catalog
                 .get_item(object_id)
                 .at_version(RelationVersionSelector::Latest);
-            let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,
                 qualifiers: item.name().qualifiers.clone(),
-                full_name: full_name.clone(),
+                full_name: catalog.resolve_full_name(item.name()),
                 print_id: !matches!(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
@@ -398,18 +397,12 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 // Attach comment for each column in the item, if the user has
                 // not already provided an overriding `DOC ON` option for the
                 // column.
-                let column_descs: Result<Option<RelationDesc>, PlanError> = match item.item_type() {
-                    CatalogItemType::Type => item
-                        .type_details()
-                        .and_then(|details| details.typ.desc(catalog).transpose())
-                        .transpose(),
-                    _ => item
-                        .desc(&full_name)
-                        .map(|desc| Some(desc.into_owned()))
-                        .map_err(Into::into),
+                let column_descs = match item.type_details() {
+                    Some(details) => details.typ.desc(catalog).unwrap_or_default(),
+                    None => item.relation_desc().map(|d| d.into_owned()),
                 };
 
-                if let Ok(Some(desc)) = column_descs {
+                if let Some(desc) = column_descs {
                     for (pos, column_name) in desc.iter_names().enumerate() {
                         if let Some(comment_str) = comments_map.get(&Some(pos + 1)) {
                             let doc_on_column_key = AvroDocOn {

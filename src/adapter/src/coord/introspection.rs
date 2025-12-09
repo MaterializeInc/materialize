@@ -210,7 +210,6 @@ impl Coordinator {
             compute_instance,
             view_id,
             subscribe_id,
-            None,
             plan.with_snapshot,
             None,
             format!("introspection-subscribe-{subscribe_id}"),

@@ -70,8 +70,9 @@ pub enum PlanError {
         table: Option<PartialItemName>,
         column: ColumnName,
     },
-    TypeWithoutColumns {
-        type_name: PartialItemName,
+    ItemWithoutColumns {
+        name: String,
+        item_type: CatalogItemType,
     },
     WrongJoinTypeForLateralColumn {
         table: Option<PartialItemName>,
@@ -147,6 +148,10 @@ pub enum PlanError {
         version: String,
     },
     InvalidSinkFrom {
+        name: String,
+        item_type: CatalogItemType,
+    },
+    InvalidDependency {
         name: String,
         item_type: CatalogItemType,
     },
@@ -540,11 +545,10 @@ impl fmt::Display for PlanError {
                 "column {} must appear in the GROUP BY clause or be used in an aggregate function",
                 ColumnDisplay { table, column },
             ),
-            Self::TypeWithoutColumns { type_name } => write!(
-                f,
-                "type {} does not have addressable columns",
-                type_name.item.quoted(),
-            ),
+            Self::ItemWithoutColumns { name, item_type } => {
+                let name = name.quoted();
+                write!(f, "{item_type} {name} does not have columns")
+            }
             Self::WrongJoinTypeForLateralColumn { table, column } => write!(
                 f,
                 "column {} cannot be referenced from this part of the query: \
@@ -657,6 +661,10 @@ impl fmt::Display for PlanError {
             },
             Self::InvalidSinkFrom { name, item_type } => {
                 write!(f, "{name} is a {item_type}, which cannot be exported as a sink")
+            },
+            Self::InvalidDependency { name, item_type } => {
+                let a = if *item_type == CatalogItemType::Index { "an" } else { "a" };
+                write!(f, "{name} is {a} {item_type}, which cannot be depended upon")
             },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
