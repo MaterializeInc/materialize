@@ -219,8 +219,6 @@ pub enum IcebergSinkPurificationError {
     CatalogError(Arc<anyhow::Error>),
     #[error("error loading aws sdk context")]
     AwsSdkContextError(Arc<anyhow::Error>),
-    #[error("error listing sts identity")]
-    StsIdentityError(Arc<GetCallerIdentityError>),
 }
 
 impl IcebergSinkPurificationError {
@@ -228,7 +226,6 @@ impl IcebergSinkPurificationError {
         match self {
             Self::CatalogError(e) => Some(e.to_string_with_causes()),
             Self::AwsSdkContextError(e) => Some(e.to_string_with_causes()),
-            Self::StsIdentityError(e) => Some(e.to_string_with_causes()),
         }
     }
 
