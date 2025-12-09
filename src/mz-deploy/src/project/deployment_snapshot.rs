@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
 use crate::client::{Client, ConnectionError};
@@ -223,13 +224,12 @@ pub async fn write_to_database(
     snapshot: &DeploymentSnapshot,
     deploy_id: &str,
     metadata: &DeploymentMetadata,
-    promoted_at: Option<std::time::SystemTime>,
+    promoted_at: Option<DateTime<Utc>>,
     kind: crate::client::DeploymentKind,
 ) -> Result<(), DeploymentSnapshotError> {
     use crate::client::{DeploymentObjectRecord, SchemaDeploymentRecord};
-    use std::time::SystemTime;
 
-    let now = SystemTime::now();
+    let now = Utc::now();
 
     // Build schema deployment records
     let mut schema_records = Vec::new();

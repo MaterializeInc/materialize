@@ -1,7 +1,7 @@
 //! Describe command - show detailed information about a specific deployment.
 
 use crate::cli::CliError;
-use crate::client::{Client, Profile};
+use crate::client::{Client, DeploymentKind, Profile};
 use chrono::{DateTime, Local};
 use owo_colors::OwoColorize;
 
@@ -32,8 +32,8 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
     client.create_deployments().await?;
 
     // Get deployment metadata
-    let metadata = client.get_deployment_details(deploy_id).await?;
-    let Some((deployed_at, promoted_at, deployed_by, commit, kind, schemas)) = metadata else {
+    let details = client.get_deployment_details(deploy_id).await?;
+    let Some(details) = details else {
         return Err(CliError::Message(format!(
             "Deployment '{}' not found",
             deploy_id
@@ -48,24 +48,24 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
         "{} {} [{}]",
         "deployment".yellow().bold(),
         deploy_id.cyan(),
-        kind.dimmed()
+        details.kind.to_string().dimmed()
     );
 
-    if let Some(commit_sha) = commit {
+    if let Some(commit_sha) = &details.git_commit {
         println!("{}: {}", "Commit".dimmed(), commit_sha);
     }
 
-    println!("{}: {}", "Deployed by".dimmed(), deployed_by.yellow());
+    println!("{}: {}", "Deployed by".dimmed(), details.deployed_by.yellow());
 
-    let deployed_datetime: DateTime<Local> = deployed_at.into();
+    let deployed_datetime: DateTime<Local> = details.deployed_at.with_timezone(&Local);
     let deployed_str = deployed_datetime
         .format("%a %b %d %H:%M:%S %Y %z")
         .to_string();
     println!("{}: {}", "Deployed at".dimmed(), deployed_str);
 
-    if let Some(promoted) = promoted_at {
-        if kind == "objects" {
-            let promoted_datetime: DateTime<Local> = promoted.into();
+    if let Some(promoted) = details.promoted_at {
+        if details.kind == DeploymentKind::Objects {
+            let promoted_datetime: DateTime<Local> = promoted.with_timezone(&Local);
             let promoted_str = promoted_datetime
                 .format("%a %b %d %H:%M:%S %Y %z")
                 .to_string();
@@ -78,8 +78,8 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
     println!();
 
     // Display schemas
-    println!("{} ({}):", "Schemas".bold(), schemas.len());
-    for (database, schema) in &schemas {
+    println!("{} ({}):", "Schemas".bold(), details.schemas.len());
+    for (database, schema) in &details.schemas {
         println!("    {}.{}", database.dimmed(), schema);
     }
     println!();

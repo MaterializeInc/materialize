@@ -19,7 +19,7 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 crossterm = "0.28"
 owo-colors = "4.0"
 tokio = { version = "1", features = ["full"] }
-tokio-postgres = "0.7"
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
 toml = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 dirs = "5.0"

@@ -5,6 +5,7 @@ use crate::client::{Client, Profile};
 use crate::project::ast::Statement;
 use crate::utils::git;
 use crate::{project, verbose};
+use chrono::Utc;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -233,7 +234,7 @@ pub async fn run(
         let metadata = helpers::collect_deployment_metadata(&client, directory).await;
 
         // Write deployment state to database (promoted deployment)
-        let now = std::time::SystemTime::now();
+        let now = Utc::now();
         project::deployment_snapshot::write_to_database(
             &client,
             &new_snapshot,

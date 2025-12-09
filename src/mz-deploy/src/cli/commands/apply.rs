@@ -5,7 +5,6 @@ use crate::client::{Client, Profile};
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
-use std::time::SystemTime;
 
 /// Promote a staging deployment to production using ALTER SWAP.
 ///
@@ -211,8 +210,6 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
 
     // Promote staging to production with promoted_at timestamps
     verbose!("\nUpdating deployment table...");
-
-    let _now = SystemTime::now();
 
     // Promote to production by updating promoted_at timestamp
     client

@@ -6,15 +6,14 @@
 
 use crate::client::errors::ConnectionError;
 use crate::client::models::{
-    ConflictRecord, DeploymentMetadata, DeploymentObjectRecord, SchemaDeploymentRecord,
+    ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,
+    DeploymentObjectRecord, SchemaDeploymentRecord, StagingDeployment,
 };
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
+use chrono::{DateTime, Utc};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::time::SystemTime;
-
-use crate::utils::timestamp::{epoch_to_system_time, epoch_to_system_time_opt};
 use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
@@ -421,9 +420,9 @@ pub async fn get_schema_deployments(
     let query = if deploy_id.is_none() {
         r#"
             SELECT deploy_id, database, schema,
-                   CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as deployed_at_epoch,
+                   promoted_at as deployed_at,
                    '' as deployed_by,
-                   CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                   promoted_at,
                    commit,
                    kind
             FROM deploy.production
@@ -432,9 +431,9 @@ pub async fn get_schema_deployments(
     } else {
         r#"
             SELECT deploy_id, database, schema,
-                   CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
+                   deployed_at,
                    deployed_by,
-                   CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                   promoted_at,
                    commit,
                    kind
             FROM deploy.deployments
@@ -460,14 +459,11 @@ pub async fn get_schema_deployments(
         let deploy_id: String = row.get("deploy_id");
         let database: String = row.get("database");
         let schema: String = row.get("schema");
-        let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
+        let deployed_at: DateTime<Utc> = row.get("deployed_at");
         let deployed_by: String = row.get("deployed_by");
-        let promoted_at_epoch: Option<f64> = row.get("promoted_at_epoch");
+        let promoted_at: Option<DateTime<Utc>> = row.get("promoted_at");
         let git_commit: Option<String> = row.get("commit");
         let kind_str: String = row.get("kind");
-
-        let deployed_at = epoch_to_system_time(deployed_at_epoch);
-        let promoted_at = epoch_to_system_time_opt(promoted_at_epoch);
 
         let kind = kind_str.parse().map_err(|e| {
             ConnectionError::Message(format!("Failed to parse deployment kind: {}", e))
@@ -548,7 +544,7 @@ pub async fn get_deployment_metadata(
 ) -> Result<Option<DeploymentMetadata>, ConnectionError> {
     let query = r#"
         SELECT deploy_id,
-               CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+               promoted_at,
                database,
                schema
         FROM deploy.deployments
@@ -566,8 +562,7 @@ pub async fn get_deployment_metadata(
 
     let first_row = &rows[0];
     let deploy_id: String = first_row.get("deploy_id");
-    let promoted_at_epoch: Option<f64> = first_row.get("promoted_at_epoch");
-    let promoted_at = epoch_to_system_time_opt(promoted_at_epoch);
+    let promoted_at: Option<DateTime<Utc>> = first_row.get("promoted_at");
 
     let mut schemas = Vec::new();
     for row in rows {
@@ -585,27 +580,15 @@ pub async fn get_deployment_metadata(
 
 /// Get detailed information about a specific deployment.
 ///
-/// Returns a tuple of (deployed_at, promoted_at, deployed_by, commit, kind, schemas)
-/// if the deployment exists, or None if not found.
-#[allow(clippy::type_complexity)]
+/// Returns deployment details if the deployment exists, or None if not found.
 pub async fn get_deployment_details(
     client: &PgClient,
     deploy_id: &str,
-) -> Result<
-    Option<(
-        SystemTime,
-        Option<SystemTime>,
-        String,
-        Option<String>,
-        String,
-        Vec<(String, String)>,
-    )>,
-    ConnectionError,
-> {
+) -> Result<Option<DeploymentDetails>, ConnectionError> {
     let query = r#"
         SELECT deploy_id,
-               CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
-               CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+               deployed_at,
+               promoted_at,
                deployed_by,
                commit,
                kind,
@@ -626,14 +609,14 @@ pub async fn get_deployment_details(
     }
 
     let first_row = &rows[0];
-    let deployed_at_epoch: f64 = first_row.get("deployed_at_epoch");
-    let promoted_at_epoch: Option<f64> = first_row.get("promoted_at_epoch");
+    let deployed_at: DateTime<Utc> = first_row.get("deployed_at");
+    let promoted_at: Option<DateTime<Utc>> = first_row.get("promoted_at");
     let deployed_by: String = first_row.get("deployed_by");
-    let commit: Option<String> = first_row.get("commit");
-    let kind: String = first_row.get("kind");
-
-    let deployed_at = epoch_to_system_time(deployed_at_epoch);
-    let promoted_at = epoch_to_system_time_opt(promoted_at_epoch);
+    let git_commit: Option<String> = first_row.get("commit");
+    let kind_str: String = first_row.get("kind");
+    let kind: DeploymentKind = kind_str
+        .parse()
+        .map_err(|e| ConnectionError::Message(e))?;
 
     let mut schemas = Vec::new();
     for row in rows {
@@ -642,37 +625,25 @@ pub async fn get_deployment_details(
         schemas.push((database, schema));
     }
 
-    Ok(Some((
+    Ok(Some(DeploymentDetails {
         deployed_at,
         promoted_at,
         deployed_by,
-        commit,
+        git_commit,
         kind,
         schemas,
-    )))
+    }))
 }
 
 /// List all staging deployments (promoted_at IS NULL), grouped by deploy_id.
 ///
-/// Returns a map from deploy_id to list of (database, schema) tuples and deployment metadata.
+/// Returns a map from deploy_id to staging deployment details.
 pub async fn list_staging_deployments(
     client: &PgClient,
-) -> Result<
-    BTreeMap<
-        String,
-        (
-            SystemTime,
-            String,
-            Option<String>,
-            String,
-            Vec<(String, String)>,
-        ),
-    >,
-    ConnectionError,
-> {
+) -> Result<BTreeMap<String, StagingDeployment>, ConnectionError> {
     let query = r#"
         SELECT deploy_id,
-               CAST(EXTRACT(EPOCH FROM deployed_at) AS DOUBLE PRECISION) as deployed_at_epoch,
+               deployed_at,
                deployed_by,
                commit,
                kind,
@@ -688,40 +659,31 @@ pub async fn list_staging_deployments(
         .await
         .map_err(ConnectionError::Query)?;
 
-    let mut deployments: BTreeMap<
-        String,
-        (
-            SystemTime,
-            String,
-            Option<String>,
-            String,
-            Vec<(String, String)>,
-        ),
-    > = BTreeMap::new();
+    let mut deployments: BTreeMap<String, StagingDeployment> = BTreeMap::new();
 
     for row in rows {
         let deploy_id: String = row.get("deploy_id");
-        let deployed_at_epoch: f64 = row.get("deployed_at_epoch");
+        let deployed_at: DateTime<Utc> = row.get("deployed_at");
         let deployed_by: String = row.get("deployed_by");
-        let commit: Option<String> = row.get("commit");
-        let kind: String = row.get("kind");
+        let git_commit: Option<String> = row.get("commit");
+        let kind_str: String = row.get("kind");
         let database: String = row.get("database");
         let schema: String = row.get("schema");
-
-        let deployed_at = epoch_to_system_time(deployed_at_epoch);
 
         deployments
             .entry(deploy_id)
             .or_insert_with(|| {
-                (
+                // Parse kind - default to Objects if parsing fails (shouldn't happen)
+                let kind = kind_str.parse().unwrap_or(DeploymentKind::Objects);
+                StagingDeployment {
                     deployed_at,
-                    deployed_by.clone(),
-                    commit.clone(),
-                    kind.clone(),
-                    Vec::new(),
-                )
+                    deployed_by: deployed_by.clone(),
+                    git_commit: git_commit.clone(),
+                    kind,
+                    schemas: Vec::new(),
+                }
             })
-            .4
+            .schemas
             .push((database, schema));
     }
 
@@ -730,23 +692,11 @@ pub async fn list_staging_deployments(
 
 /// List deployment history in chronological order (promoted deployments only).
 ///
-/// Returns a vector of tuples containing (deploy_id, promoted_at, deployed_by, commit, kind, schemas),
-/// representing complete deployments ordered by promotion time.
-#[allow(clippy::type_complexity)]
+/// Returns a vector of deployment history entries ordered by promotion time.
 pub async fn list_deployment_history(
     client: &PgClient,
     limit: Option<usize>,
-) -> Result<
-    Vec<(
-        String,
-        SystemTime,
-        String,
-        Option<String>,
-        String,
-        Vec<(String, String)>,
-    )>,
-    ConnectionError,
-> {
+) -> Result<Vec<DeploymentHistoryEntry>, ConnectionError> {
     // We need to limit unique deployments, not individual schema rows
     // First get distinct deployments, then join with schemas
     let query = if let Some(limit) = limit {
@@ -760,7 +710,7 @@ pub async fn list_deployment_history(
                 LIMIT {}
             )
             SELECT d.deploy_id,
-                   CAST(EXTRACT(EPOCH FROM d.promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                   d.promoted_at,
                    d.deployed_by,
                    d.commit,
                    d.kind,
@@ -778,7 +728,7 @@ pub async fn list_deployment_history(
     } else {
         r#"
             SELECT deploy_id,
-                   CAST(EXTRACT(EPOCH FROM promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch,
+                   promoted_at,
                    deployed_by,
                    commit,
                    kind,
@@ -797,50 +747,36 @@ pub async fn list_deployment_history(
         .map_err(ConnectionError::Query)?;
 
     // Group by (deploy_id, promoted_at, deployed_by, commit, kind)
-    let mut deployments: Vec<(
-        String,
-        SystemTime,
-        String,
-        Option<String>,
-        String,
-        Vec<(String, String)>,
-    )> = Vec::new();
-    let mut current_key: Option<(String, SystemTime, String, Option<String>, String)> = None;
+    let mut deployments: Vec<DeploymentHistoryEntry> = Vec::new();
+    let mut current_deploy_id: Option<String> = None;
 
     for row in rows {
         let deploy_id: String = row.get("deploy_id");
-        let promoted_at_epoch: f64 = row.get("promoted_at_epoch");
+        let promoted_at: DateTime<Utc> = row.get("promoted_at");
         let deployed_by: String = row.get("deployed_by");
-        let commit: Option<String> = row.get("commit");
-        let kind: String = row.get("kind");
+        let git_commit: Option<String> = row.get("commit");
+        let kind_str: String = row.get("kind");
         let database: String = row.get("database");
         let schema: String = row.get("schema");
 
-        let promoted_at = epoch_to_system_time(promoted_at_epoch);
-        let key = (
-            deploy_id.clone(),
-            promoted_at,
-            deployed_by.clone(),
-            commit.clone(),
-            kind.clone(),
-        );
-
         // Check if this is a new deployment or same as current
-        if current_key.as_ref() != Some(&key) {
+        if current_deploy_id.as_ref() != Some(&deploy_id) {
+            // Parse kind - default to Objects if parsing fails (shouldn't happen)
+            let kind = kind_str.parse().unwrap_or(DeploymentKind::Objects);
             // Start a new deployment group
-            deployments.push((
-                deploy_id,
+            deployments.push(DeploymentHistoryEntry {
+                deploy_id: deploy_id.clone(),
                 promoted_at,
                 deployed_by,
-                commit,
+                git_commit,
                 kind,
-                vec![(database, schema)],
-            ));
-            current_key = Some(key);
+                schemas: vec![(database, schema)],
+            });
+            current_deploy_id = Some(deploy_id);
         } else {
             // Add schema to current deployment
             if let Some(last) = deployments.last_mut() {
-                last.5.push((database, schema));
+                last.schemas.push((database, schema));
             }
         }
     }
@@ -854,8 +790,7 @@ pub async fn check_deployment_conflicts(
     deploy_id: &str,
 ) -> Result<Vec<ConflictRecord>, ConnectionError> {
     let query = r#"
-        SELECT p.database, p.schema, p.deploy_id,
-               CAST(EXTRACT(EPOCH FROM p.promoted_at) AS DOUBLE PRECISION) as promoted_at_epoch
+        SELECT p.database, p.schema, p.deploy_id, p.promoted_at
         FROM deploy.production p
         JOIN deploy.deployments d USING (database, schema)
         WHERE d.deploy_id = $1 AND p.promoted_at > d.deployed_at
@@ -868,16 +803,11 @@ pub async fn check_deployment_conflicts(
 
     let conflicts = rows
         .iter()
-        .map(|row| {
-            let promoted_at_epoch: f64 = row.get("promoted_at_epoch");
-            let promoted_at = epoch_to_system_time(promoted_at_epoch);
-
-            ConflictRecord {
-                database: row.get("database"),
-                schema: row.get("schema"),
-                deploy_id: row.get("deploy_id"),
-                promoted_at,
-            }
+        .map(|row| ConflictRecord {
+            database: row.get("database"),
+            schema: row.get("schema"),
+            deploy_id: row.get("deploy_id"),
+            promoted_at: row.get("promoted_at"),
         })
         .collect();
 

@@ -3,4 +3,3 @@ pub mod git;
 pub mod log;
 pub mod progress;
 pub mod sql_utils;
-pub mod timestamp;
