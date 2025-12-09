@@ -183,24 +183,25 @@ else
     cd ..
   done
 
-  echo "--- Bumping new terraform repository"
-  rm -rf materialize-terraform-self-managed
-  git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
-  cd materialize-terraform-self-managed
-  sed -i "s/\".*\"\(.*\) # META: helm-chart version/\"$BUILDKITE_TAG\"\\1 # META: helm-chart version/" aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf
-  sed -i "s/\".*\"\(.*\) # META: mz version/\"$BUILDKITE_TAG\"\\1 # META: mz version/" kubernetes/modules/materialize-instance/variables.tf
-  for dir in aws/modules/operator azure/modules/operator gcp/modules/operator kubernetes/modules/materialize-instance; do
-    terraform-docs --config .terraform-docs.yml $dir > $dir/README.md
-  done
-  git config user.email "noreply@materialize.com"
-  git config user.name "Buildkite"
-  git add aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf kubernetes/modules/materialize-instance/variables.tf aws/modules/operator/README.md azure/modules/operator/README.md gcp/modules/operator/README.md kubernetes/modules/materialize-instance/README.md
-  git commit -m "Bump to helm-chart $BUILDKITE_TAG"
-  # Bump the patch version by one (v0.1.12 -> v0.1.13)
-  TERRAFORM_SELF_MANAGED_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
-  git tag "$TERRAFORM_SELF_MANAGED_VERSION"
-  git --no-pager diff HEAD~
-  run_if_not_dry git push origin main "$TERRAFORM_SELF_MANAGED_VERSION"
+  # TODO(def-) Reenable when https://github.com/MaterializeInc/materialize-terraform-self-managed/issues/123 is fixed
+  # echo "--- Bumping new terraform repository"
+  # rm -rf materialize-terraform-self-managed
+  # git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
+  # cd materialize-terraform-self-managed
+  # sed -i "s/\".*\"\(.*\) # META: helm-chart version/\"$BUILDKITE_TAG\"\\1 # META: helm-chart version/" aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf
+  # sed -i "s/\".*\"\(.*\) # META: mz version/\"$BUILDKITE_TAG\"\\1 # META: mz version/" kubernetes/modules/materialize-instance/variables.tf
+  # for dir in aws/modules/operator azure/modules/operator gcp/modules/operator kubernetes/modules/materialize-instance; do
+  #   terraform-docs --config .terraform-docs.yml $dir > $dir/README.md
+  # done
+  # git config user.email "noreply@materialize.com"
+  # git config user.name "Buildkite"
+  # git add aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf kubernetes/modules/materialize-instance/variables.tf aws/modules/operator/README.md azure/modules/operator/README.md gcp/modules/operator/README.md kubernetes/modules/materialize-instance/README.md
+  # git commit -m "Bump to helm-chart $BUILDKITE_TAG"
+  # # Bump the patch version by one (v0.1.12 -> v0.1.13)
+  # TERRAFORM_SELF_MANAGED_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
+  # git tag "$TERRAFORM_SELF_MANAGED_VERSION"
+  # git --no-pager diff HEAD~
+  # run_if_not_dry git push origin main "$TERRAFORM_SELF_MANAGED_VERSION"
 fi
 
 if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
@@ -222,10 +223,6 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
     yq -i ".terraform_azure_version= \"${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"" $VERSIONS_YAML_PATH
     yq -i ".terraform_aws_version= \"${TERRAFORM_VERSION[terraform-aws-materialize]}\"" $VERSIONS_YAML_PATH
   fi
-  git add $VERSIONS_YAML_PATH
-  git commit -m "docs: Bump self-managed to $BUILDKITE_TAG"
-  git --no-pager diff HEAD~
-  run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
 
   OPERATOR_COMPAT_YAML_PATH=doc/user/data/self_managed/self_managed_operator_compatibility.yml
   yq --prettyPrint --inplace ".rows = [{
@@ -235,6 +232,11 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
     \"Release date\": \"$(date +%Y-%m-%d)\",
     \"Notes\": \"\"
   }] + .rows" $OPERATOR_COMPAT_YAML_PATH
+
+  git add $VERSIONS_YAML_PATH
+  git commit -m "docs: Bump self-managed to $BUILDKITE_TAG"
+  git --no-pager diff HEAD~
+  run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
 fi
 
 if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
