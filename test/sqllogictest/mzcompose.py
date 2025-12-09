@@ -185,7 +185,7 @@ def run_sqllogictest(
         if failed_files:
             if ui.env_is_truthy("CI"):
                 diff = spawn.capture(["git", "diff", "-C", MZ_ROOT])
-                if diff:
+                if diff.strip():
                     with open(
                         MZ_ROOT / f"slt{buildkite.get_parallelism_index() + 1}.diff",
                         "w",

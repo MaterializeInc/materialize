@@ -107,6 +107,7 @@ ERROR_RE = re.compile(
     | source-table-migration\ issue
     # sql logic tests
     | Rewrite\ SLT\ files\ locally\ with:\ [\s\S]*? ^EOF$
+    | ^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s+thread\ '.*?'\ panicked\ at\ .*\n.*
     # rdkafka assertions
     | Assertion\ `.*'\ failed\.
     | Invalid\ data\ in\ source\ errors,\ saw\ retractions
