@@ -10,9 +10,9 @@
 use crate::durable::traits::UpgradeFrom;
 use crate::durable::upgrade::MigrationAction;
 use crate::durable::upgrade::{objects_v73 as v73, objects_v74 as v74};
-use crate::wire_compatible;
+use crate::json_compatible;
 
-wire_compatible!(v73::RoleKey with v74::RoleKey);
+json_compatible!(v73::RoleKey with v74::RoleKey);
 
 /// in v74, we add attributes to RoleAttribute.
 pub fn upgrade(
