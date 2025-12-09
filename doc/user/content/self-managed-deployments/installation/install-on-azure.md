@@ -293,6 +293,10 @@ specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/t
 deployment
 guide](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/).
 
+{{< note >}}
+Autoscaling: Uses Azure's native cluster autoscaler that integrates directly with Azure Virtual Machine Scale Sets for automated node scaling. In future we are planning to enhance this by making use of karpenter-provider-azure.
+{{< /note >}}
+
 See also:
 - [Materialize Operator
   Configuration](/self-managed-deployments/operator-configuration/)
