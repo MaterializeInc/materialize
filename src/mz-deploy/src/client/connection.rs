@@ -14,8 +14,8 @@ use crate::client::deployment_ops::{self, ClusterStatusContext, DEFAULT_ALLOWED_
 use crate::client::errors::{ConnectionError, DatabaseValidationError};
 use crate::client::introspection;
 use crate::client::models::{
-    Cluster, ClusterOptions, ConflictRecord, DeploymentMetadata, DeploymentObjectRecord,
-    SchemaDeploymentRecord,
+    Cluster, ClusterConfig, ClusterOptions, ConflictRecord, DeploymentMetadata,
+    DeploymentObjectRecord, SchemaDeploymentRecord,
 };
 use crate::client::validation;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
@@ -353,6 +353,118 @@ impl Client {
     /// List all clusters.
     pub async fn list_clusters(&self) -> Result<Vec<Cluster>, ConnectionError> {
         introspection::list_clusters(&self.client).await
+    }
+
+    /// Get cluster configuration including replicas and grants.
+    ///
+    /// This fetches all information needed to clone a cluster's configuration:
+    /// - For managed clusters: size and replication factor
+    /// - For unmanaged clusters: replica configurations
+    /// - For both: privilege grants
+    pub async fn get_cluster_config(
+        &self,
+        name: &str,
+    ) -> Result<Option<ClusterConfig>, ConnectionError> {
+        introspection::get_cluster_config(&self.client, name).await
+    }
+
+    /// Create a cluster with the specified configuration (managed or unmanaged).
+    ///
+    /// For managed clusters, creates a cluster with SIZE and REPLICATION FACTOR.
+    /// For unmanaged clusters, creates an empty cluster and then adds replicas.
+    /// In both cases, applies the privilege grants from the configuration.
+    pub async fn create_cluster_with_config(
+        &self,
+        name: &str,
+        config: &ClusterConfig,
+    ) -> Result<(), ConnectionError> {
+        match config {
+            ClusterConfig::Managed { options, grants } => {
+                // Create managed cluster
+                self.create_cluster(name, options).await?;
+
+                // Apply grants
+                for grant in grants {
+                    let sql = format!(
+                        "GRANT {} ON CLUSTER {} TO {}",
+                        grant.privilege_type,
+                        quote_identifier(name),
+                        quote_identifier(&grant.grantee)
+                    );
+                    self.client.execute(&sql, &[]).await.map_err(|e| {
+                        ConnectionError::Message(format!(
+                            "Failed to grant {} to {} on cluster '{}': {}",
+                            grant.privilege_type, grant.grantee, name, e
+                        ))
+                    })?;
+                }
+
+                Ok(())
+            }
+            ClusterConfig::Unmanaged { replicas, grants } => {
+                // Create empty unmanaged cluster
+                let create_cluster_sql =
+                    format!("CREATE CLUSTER {} REPLICAS ()", quote_identifier(name));
+
+                self.client
+                    .execute(&create_cluster_sql, &[])
+                    .await
+                    .map_err(|e| {
+                        if e.to_string().contains("already exists") {
+                            ConnectionError::ClusterAlreadyExists {
+                                name: name.to_string(),
+                            }
+                        } else {
+                            ConnectionError::ClusterCreationFailed {
+                                name: name.to_string(),
+                                source: Box::new(e),
+                            }
+                        }
+                    })?;
+
+                // Create each replica
+                for replica in replicas {
+                    let mut options_parts = vec![format!("SIZE = '{}'", replica.size)];
+
+                    if let Some(ref az) = replica.availability_zone {
+                        options_parts.push(format!("AVAILABILITY ZONE '{}'", az));
+                    }
+
+                    let create_replica_sql = format!(
+                        "CREATE CLUSTER REPLICA {}.{} ({})",
+                        quote_identifier(name),
+                        quote_identifier(&replica.name),
+                        options_parts.join(", ")
+                    );
+
+                    self.client
+                        .execute(&create_replica_sql, &[])
+                        .await
+                        .map_err(|e| ConnectionError::ClusterCreationFailed {
+                            name: format!("{}.{}", name, replica.name),
+                            source: Box::new(e),
+                        })?;
+                }
+
+                // Apply grants
+                for grant in grants {
+                    let sql = format!(
+                        "GRANT {} ON CLUSTER {} TO {}",
+                        grant.privilege_type,
+                        quote_identifier(name),
+                        quote_identifier(&grant.grantee)
+                    );
+                    self.client.execute(&sql, &[]).await.map_err(|e| {
+                        ConnectionError::Message(format!(
+                            "Failed to grant {} to {} on cluster '{}': {}",
+                            grant.privilege_type, grant.grantee, name, e
+                        ))
+                    })?;
+                }
+
+                Ok(())
+            }
+        }
     }
 
     // =========================================================================

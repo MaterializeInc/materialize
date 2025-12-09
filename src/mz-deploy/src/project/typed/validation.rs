@@ -325,9 +325,7 @@ fn validate_comment_target(
 ///
 /// Returns Some((name, object_type)) for supported comment types, None for unsupported types.
 /// Column comments are handled separately since they reference the parent table.
-fn comment_object_to_target(
-    obj: &CommentObjectType<Raw>,
-) -> Option<(&RawItemName, ObjectType)> {
+fn comment_object_to_target(obj: &CommentObjectType<Raw>) -> Option<(&RawItemName, ObjectType)> {
     match obj {
         CommentObjectType::Table { name } => Some((name, ObjectType::Table)),
         CommentObjectType::View { name } => Some((name, ObjectType::View)),

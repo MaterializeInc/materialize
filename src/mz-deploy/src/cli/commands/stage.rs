@@ -1,7 +1,7 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
 use crate::cli::{CliError, helpers};
-use crate::client::{Client, ClusterOptions, Profile};
+use crate::client::{Client, ClusterConfig, Profile};
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
 use crate::project::object_id::ObjectId;
@@ -406,10 +406,10 @@ async fn create_resources_with_rollback<'a>(
                 continue;
             }
 
-            // Get production cluster configuration
-            let prod_config = client.get_cluster(prod_cluster).await?;
+            // Get production cluster configuration (handles both managed and unmanaged)
+            let config = client.get_cluster_config(prod_cluster).await?;
 
-            let prod_config = match prod_config {
+            let config = match config {
                 Some(config) => config,
                 None => {
                     return Err(CliError::ClusterNotFound {
@@ -418,19 +418,46 @@ async fn create_resources_with_rollback<'a>(
                 }
             };
 
-            // Create cluster options from production config
-            let options = ClusterOptions::from_cluster(&prod_config)?;
-
-            // Create staging cluster
-            client.create_cluster(&staging_cluster, &options).await?;
+            // Create staging cluster with same configuration
+            client
+                .create_cluster_with_config(&staging_cluster, &config)
+                .await?;
             created_clusters += 1;
-            verbose!(
-                "  Created cluster '{}' (size: {}, replication_factor: {}, cloned from '{}')",
-                staging_cluster,
-                options.size,
-                options.replication_factor,
-                prod_cluster
-            );
+
+            // Log details based on cluster type
+            match &config {
+                ClusterConfig::Managed { options, grants } => {
+                    verbose!(
+                        "  Created managed cluster '{}' (size: {}, replication_factor: {}, {} grant(s), cloned from '{}')",
+                        staging_cluster,
+                        options.size,
+                        options.replication_factor,
+                        grants.len(),
+                        prod_cluster
+                    );
+                }
+                ClusterConfig::Unmanaged { replicas, grants } => {
+                    verbose!(
+                        "  Created unmanaged cluster '{}' with {} replica(s), {} grant(s) (cloned from '{}')",
+                        staging_cluster,
+                        replicas.len(),
+                        grants.len(),
+                        prod_cluster
+                    );
+                    for replica in replicas {
+                        verbose!(
+                            "    - {} (size: {}{})",
+                            replica.name,
+                            replica.size,
+                            replica
+                                .availability_zone
+                                .as_ref()
+                                .map(|az| format!(", az: {}", az))
+                                .unwrap_or_default()
+                        );
+                    }
+                }
+            }
         }
 
         if !dry_run {
