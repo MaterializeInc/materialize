@@ -393,7 +393,7 @@ query TT
 SHOW CREATE VIEW d_renamed."case";
 ----
 materialize.d_renamed.case
-CREATE VIEW materialize.d_renamed.case (case) AS SELECT * FROM materialize.case.case;
+CREATE VIEW materialize.d_renamed."case" ("case") AS SELECT * FROM materialize."case"."case";
 
 statement ok
 CREATE SCHEMA "CASE";
@@ -418,13 +418,13 @@ query TT
 SHOW CREATE VIEW "cAsE".case;
 ----
 materialize.cAsE.case
-CREATE VIEW materialize."cAsE".case AS VALUES (1);
+CREATE VIEW materialize."cAsE"."case" AS VALUES (1);
 
 query TT
 SHOW CREATE VIEW d_renamed.case;
 ----
 materialize.d_renamed.case
-CREATE VIEW materialize.d_renamed.case (case) AS SELECT * FROM materialize."cAsE".case;
+CREATE VIEW materialize.d_renamed."case" ("case") AS SELECT * FROM materialize."cAsE"."case";
 
 statement ok
 CREATE SCHEMA j;
