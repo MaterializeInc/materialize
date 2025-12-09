@@ -161,7 +161,7 @@ pub struct ExprPrepStyleOneShot<'a> {
     pub session: &'a dyn SessionMetadata,
     pub catalog_state: &'a CatalogState,
 }
-/// Prepared  an expression for evaluation in a CHECK expression of a webhook source.
+/// Prepare an expression for evaluation in a CHECK expression of a webhook source.
 /// Replaces calls to `UnmaterializableFunc::CurrentTimestamp`, others are left untouched.
 pub struct ExprPrepStyleWebhookValidation {
     /// Time at which this expression is being evaluated.
@@ -538,7 +538,7 @@ impl ExprPrepStyle for ExprPrepStyleWebhookValidation {
                 let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
                 *e = const_expr;
             }
-            Ok::<_, OptimizerError>(())
+            Ok(())
         })
     }
 }
