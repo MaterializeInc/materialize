@@ -400,6 +400,9 @@ fn decode<'a>(
 ) -> Result<&'a [u8], EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
+    if (out.len()) > MAX_STRING_FUNC_RESULT_BYTES {
+        return Err(EvalError::LengthTooLarge);
+    }
     Ok(temp_storage.push_bytes(out))
 }
 
@@ -4838,6 +4841,9 @@ fn regexp_replace_static<'a>(
         Cow::Borrowed(s) => s,
         Cow::Owned(s) => temp_storage.push_string(s),
     };
+    if (replaced.len() > MAX_STRING_FUNC_RESULT_BYTES) {
+        return Err(EvalError::LengthTooLarge);
+    }
     Ok(Datum::String(replaced))
 }
 
