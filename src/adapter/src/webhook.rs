@@ -24,7 +24,7 @@ use mz_storage_client::statistics::WebhookStatistics;
 use mz_storage_types::controller::StorageError;
 use tokio::sync::Semaphore;
 
-use crate::optimize::dataflows::{ExprPrepStyle, prep_scalar_expr};
+use crate::optimize::dataflows::{ExprPrepStyle, ExprPrepStyleWebhookValidation};
 
 /// Errors returns when attempting to append to a webhook.
 #[derive(thiserror::Error, Debug)]
@@ -113,14 +113,12 @@ impl AppendWebhookValidator {
         //
         // Note: we do this outside the closure, because otherwise there are some odd catch unwind
         // boundary errors, and this shouldn't be too computationally expensive.
-        prep_scalar_expr(
-            &mut expression,
-            ExprPrepStyle::WebhookValidation { now: received_at },
-        )
-        .map_err(|err| {
-            tracing::error!(?err, "failed to evaluate current time");
-            AppendWebhookError::ValidationError
-        })?;
+        ExprPrepStyleWebhookValidation { now: received_at }
+            .prep_scalar_expr(&mut expression)
+            .map_err(|err| {
+                tracing::error!(?err, "failed to evaluate current time");
+                AppendWebhookError::ValidationError
+            })?;
 
         // Create a closure to run our validation, this allows lifetimes and unwind boundaries to
         // work.

@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{ActiveCopyFrom, Coordinator, TargetCluster};
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, ExprPrepStyleOneShot};
 use crate::session::{TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
@@ -47,13 +47,13 @@ impl Coordinator {
         } = plan;
 
         let eval_uri = |from: HirScalarExpr| -> Result<String, AdapterError> {
-            let style = ExprPrepStyle::OneShot {
+            let style = ExprPrepStyleOneShot {
                 logical_time: EvalTime::NotAvailable,
                 session: ctx.session(),
                 catalog_state: self.catalog().state(),
             };
             let mut from = from.lower_uncorrelated()?;
-            prep_scalar_expr(&mut from, style)?;
+            style.prep_scalar_expr(&mut from)?;
 
             // TODO(cf3): Add structured errors for the below uses of `coord_bail!`
             // and AdapterError::Unstructured.

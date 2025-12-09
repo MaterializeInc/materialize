@@ -2397,7 +2397,7 @@ mod tests {
 
     use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
-    use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+    use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, ExprPrepStyleOneShot};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -3444,7 +3444,7 @@ mod tests {
         session
             .start_transaction(to_datetime(0), None, None)
             .expect("must succeed");
-        let prep_style = ExprPrepStyle::OneShot {
+        let prep_style = ExprPrepStyleOneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
             session: &session,
             catalog_state: &catalog.state,
@@ -3456,7 +3456,7 @@ mod tests {
         if let Ok(hir) = res {
             if let Ok(mut mir) = hir.lower_uncorrelated() {
                 // Populate unmaterialized functions.
-                prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
+                prep_style.prep_scalar_expr(&mut mir).expect("must succeed");
 
                 if let Ok(eval_result_datum) = mir.eval(&[], &arena) {
                     if let Some(return_styp) = return_styp {
