@@ -580,10 +580,10 @@ async fn purify_create_sink(
                 .await
                 .map_err(|e| IcebergSinkPurificationError::AwsSdkContextError(Arc::new(e)))?;
 
-            let sts_client = aws_sdk_sts::Client::new(&sdk_config);
-            let _ = sts_client.get_caller_identity().send().await.map_err(|e| {
-                IcebergSinkPurificationError::StsIdentityError(Arc::new(e.into_service_error()))
-            })?;
+            // let sts_client = aws_sdk_sts::Client::new(&sdk_config);
+            // let _ = sts_client.get_caller_identity().send().await.map_err(|e| {
+            //     IcebergSinkPurificationError::StsIdentityError(Arc::new(e.into_service_error()))
+            // })?;
         }
     }
 

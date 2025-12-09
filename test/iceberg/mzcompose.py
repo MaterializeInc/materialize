@@ -27,7 +27,11 @@ SERVICES = [
     Minio(),
     PolarisBootstrap(),
     Polaris(),
-    Materialized(depends_on=["polaris", "minio"], sanity_restart=False),
+    Materialized(
+        depends_on=["minio"],
+        sanity_restart=False,
+        system_parameter_defaults={"enable_iceberg_sink": "true"},
+    ),
     Testdrive(),
     Mc(),
 ]
@@ -99,8 +103,6 @@ def workflow_default(c: Composition) -> None:
     c.up(
         "postgres",
         "minio",
-        "polaris-bootstrap",
-        "polaris",
         "materialized",
         Service("mc", idle=True),
     )
@@ -126,6 +128,16 @@ def workflow_default(c: Composition) -> None:
     )
 
     key = make_user("tduser", minio_alias, c)
+
+    with c.override(
+        Polaris(
+            extra_environment=[
+                "AWS_ACCESS_KEY_ID=tduser",
+                f"AWS_SECRET_ACCESS_KEY={key}",
+            ],
+        )
+    ):
+        c.up("polaris")
 
     access_token = None
     token_resp = c.exec(
@@ -158,9 +170,11 @@ def workflow_default(c: Composition) -> None:
             "s3.region": "minio",
         },
         "storageConfigInfo": {
-            "roleArn": "arn:aws:iam::000000000000:role/minio-polaris-role",
             "storageType": "S3",
             "allowedLocations": ["s3://test-bucket/*"],
+            "endpoint": "http://minio:9000",
+            "endpointInternal": "http://minio:9000",
+            "pathStyleAccess": True,
         },
     }
 
@@ -180,4 +194,29 @@ def workflow_default(c: Composition) -> None:
         json.dumps(catalog_payload),
     )
 
-    c.run_testdrive_files(*[f"--var=s3-access-key={key}"], "*.td")
+    # Create a namespace
+    namespace_payload = {
+        "namespace": ["default_namespace"],
+    }
+
+    c.exec(
+        "polaris",
+        "curl",
+        "-sS",
+        "-i",
+        "-X",
+        "POST",
+        "-H",
+        f"Authorization: Bearer {access_token}",
+        "-H",
+        "Content-Type: application/json",
+        "http://localhost:8181/api/catalog/v1/default_catalog/namespaces",
+        "--data-binary",
+        json.dumps(namespace_payload),
+    )
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "*.td",
+    )
