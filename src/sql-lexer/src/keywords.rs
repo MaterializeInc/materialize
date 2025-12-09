@@ -72,15 +72,12 @@ impl Keyword {
     }
 
     // This refers to the PostgreSQL notion of "reserved" keywords,
-    // which generally refers to built in tables, functions, and 
+    // which generally refers to built in tables, functions, and
     // constructs that cannot be used as identifiers without quoting.
-    // See https://www.postgresql.org/docs/current/sql-keywords-appendix.html 
+    // See https://www.postgresql.org/docs/current/sql-keywords-appendix.html
     // for more details.
     pub fn is_reserved(self) -> bool {
-        matches!(
-            self,
-            CASE | END | ELSE | WHEN | THEN
-        ) || self.is_always_reserved()
+        matches!(self, CASE | END | ELSE | WHEN | THEN) || self.is_always_reserved()
     }
 
     /// Reports whether this keyword requires quoting when used as a table
