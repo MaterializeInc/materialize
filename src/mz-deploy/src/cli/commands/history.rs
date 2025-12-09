@@ -53,31 +53,31 @@ pub async fn run(profile: &Profile, limit: Option<usize>) -> Result<(), CliError
     let mut output = String::new();
     output.push_str("Deployment history (promoted):\n\n");
 
-    for (environment, promoted_at, deployed_by, commit, kind, schemas) in history {
-        // Convert SystemTime to DateTime for formatting
-        let datetime: DateTime<Local> = promoted_at.into();
+    for entry in history {
+        // Convert UTC to local time for display
+        let datetime: DateTime<Local> = entry.promoted_at.with_timezone(&Local);
         let date_str = datetime.format("%a %b %d %H:%M:%S %Y %z").to_string();
 
         // Display deployment header (like a git commit)
         output.push_str(&format!(
             "{} {} [{}]\n",
             "deployment".yellow().bold(),
-            environment.cyan(),
-            kind.dimmed()
+            entry.deploy_id.cyan(),
+            entry.kind.to_string().dimmed()
         ));
-        if let Some(commit_sha) = commit {
+        if let Some(commit_sha) = &entry.git_commit {
             output.push_str(&format!("{}: {}\n", "Commit".dimmed(), commit_sha));
         }
         output.push_str(&format!(
             "{}: {}\n",
             "Promoted by".dimmed(),
-            deployed_by.yellow()
+            entry.deployed_by.yellow()
         ));
         output.push_str(&format!("{}:   {}\n", "Date".dimmed(), date_str));
         output.push('\n');
 
         // List all schemas in this deployment (like files in a git commit)
-        for (database, schema) in schemas {
+        for (database, schema) in &entry.schemas {
             output.push_str(&format!("    {}.{}\n", database.dimmed(), schema));
         }
         output.push('\n');

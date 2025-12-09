@@ -14,8 +14,9 @@ use crate::client::deployment_ops::{self, ClusterStatusContext, DEFAULT_ALLOWED_
 use crate::client::errors::{ConnectionError, DatabaseValidationError};
 use crate::client::introspection;
 use crate::client::models::{
-    Cluster, ClusterConfig, ClusterOptions, ConflictRecord, DeploymentMetadata,
-    DeploymentObjectRecord, SchemaDeploymentRecord,
+    Cluster, ClusterConfig, ClusterOptions, ConflictRecord, DeploymentDetails,
+    DeploymentHistoryEntry, DeploymentMetadata, DeploymentObjectRecord, SchemaDeploymentRecord,
+    StagingDeployment,
 };
 use crate::client::validation;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
@@ -697,60 +698,25 @@ impl Client {
     }
 
     /// Get detailed information about a specific deployment.
-    #[allow(clippy::type_complexity)]
     pub async fn get_deployment_details(
         &self,
         deploy_id: &str,
-    ) -> Result<
-        Option<(
-            std::time::SystemTime,
-            Option<std::time::SystemTime>,
-            String,
-            Option<String>,
-            String,
-            Vec<(String, String)>,
-        )>,
-        ConnectionError,
-    > {
+    ) -> Result<Option<DeploymentDetails>, ConnectionError> {
         deployment_ops::get_deployment_details(&self.client, deploy_id).await
     }
 
     /// List all staging deployments (promoted_at IS NULL), grouped by deploy_id.
-    #[allow(clippy::type_complexity)]
     pub async fn list_staging_deployments(
         &self,
-    ) -> Result<
-        BTreeMap<
-            String,
-            (
-                std::time::SystemTime,
-                String,
-                Option<String>,
-                String,
-                Vec<(String, String)>,
-            ),
-        >,
-        ConnectionError,
-    > {
+    ) -> Result<BTreeMap<String, StagingDeployment>, ConnectionError> {
         deployment_ops::list_staging_deployments(&self.client).await
     }
 
     /// List deployment history in chronological order (promoted deployments only).
-    #[allow(clippy::type_complexity)]
     pub async fn list_deployment_history(
         &self,
         limit: Option<usize>,
-    ) -> Result<
-        Vec<(
-            String,
-            std::time::SystemTime,
-            String,
-            Option<String>,
-            String,
-            Vec<(String, String)>,
-        )>,
-        ConnectionError,
-    > {
+    ) -> Result<Vec<DeploymentHistoryEntry>, ConnectionError> {
         deployment_ops::list_deployment_history(&self.client, limit).await
     }
 

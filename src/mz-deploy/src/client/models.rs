@@ -3,6 +3,7 @@
 //! These types represent objects in the Materialize system catalog and provide
 //! a type-safe interface over raw database rows.
 
+use chrono::{DateTime, Utc};
 use std::fmt;
 use std::str::FromStr;
 
@@ -151,11 +152,11 @@ pub struct SchemaDeploymentRecord {
     /// Schema name (e.g., "public")
     pub schema: String,
     /// When this schema was deployed
-    pub deployed_at: std::time::SystemTime,
+    pub deployed_at: DateTime<Utc>,
     /// Which Materialize user/role deployed this schema
     pub deployed_by: String,
     /// When this schema was promoted to production (NULL for staging, set on promotion)
-    pub promoted_at: Option<std::time::SystemTime>,
+    pub promoted_at: Option<DateTime<Utc>>,
     /// Git commit hash if available
     pub git_commit: Option<String>,
     /// Type of deployment (tables or objects)
@@ -180,7 +181,7 @@ pub struct DeploymentObjectRecord {
     /// Hash of the HIR DatabaseObject (semantic content hash)
     pub object_hash: String,
     /// When this object was deployed
-    pub deployed_at: std::time::SystemTime,
+    pub deployed_at: DateTime<Utc>,
 }
 
 /// Metadata about a deployment.
@@ -191,7 +192,7 @@ pub struct DeploymentMetadata {
     /// Deploy ID
     pub deploy_id: String,
     /// When this deployment was promoted (NULL if not promoted)
-    pub promoted_at: Option<std::time::SystemTime>,
+    pub promoted_at: Option<DateTime<Utc>>,
     /// List of (database, schema) tuples in this deployment
     pub schemas: Vec<(String, String)>,
 }
@@ -210,7 +211,62 @@ pub struct ConflictRecord {
     /// Deploy ID that last promoted this schema
     pub deploy_id: String,
     /// When the schema was last promoted to production
-    pub promoted_at: std::time::SystemTime,
+    pub promoted_at: DateTime<Utc>,
+}
+
+/// Details about a specific deployment.
+///
+/// Returned by `get_deployment_details()` for the describe command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeploymentDetails {
+    /// When this deployment was created
+    pub deployed_at: DateTime<Utc>,
+    /// When this deployment was promoted (None if still staging)
+    pub promoted_at: Option<DateTime<Utc>>,
+    /// Which Materialize user/role deployed this
+    pub deployed_by: String,
+    /// Git commit hash if available
+    pub git_commit: Option<String>,
+    /// Type of deployment (tables or objects)
+    pub kind: DeploymentKind,
+    /// List of (database, schema) tuples in this deployment
+    pub schemas: Vec<(String, String)>,
+}
+
+/// Summary of a staging deployment.
+///
+/// Used by `list_staging_deployments()` for the deployments command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagingDeployment {
+    /// When this deployment was created
+    pub deployed_at: DateTime<Utc>,
+    /// Which Materialize user/role deployed this
+    pub deployed_by: String,
+    /// Git commit hash if available
+    pub git_commit: Option<String>,
+    /// Type of deployment (tables or objects)
+    pub kind: DeploymentKind,
+    /// List of (database, schema) tuples in this deployment
+    pub schemas: Vec<(String, String)>,
+}
+
+/// A promoted deployment in history.
+///
+/// Returned by `list_deployment_history()` for the history command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeploymentHistoryEntry {
+    /// Deploy ID for this deployment
+    pub deploy_id: String,
+    /// When this deployment was promoted
+    pub promoted_at: DateTime<Utc>,
+    /// Which Materialize user/role deployed this
+    pub deployed_by: String,
+    /// Git commit hash if available
+    pub git_commit: Option<String>,
+    /// Type of deployment (tables or objects)
+    pub kind: DeploymentKind,
+    /// List of (database, schema) tuples in this deployment
+    pub schemas: Vec<(String, String)>,
 }
 
 #[cfg(test)]

@@ -2,6 +2,7 @@
 
 use crate::cli::CliError;
 use crate::client::{Client, Profile};
+use chrono::Utc;
 use owo_colors::OwoColorize;
 
 /// List all active staging deployments.
@@ -45,36 +46,37 @@ pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliErro
     env_names.sort();
 
     for env_name in env_names {
-        let (deployed_at, deployed_by, commit, kind, schemas) = &deployments[env_name];
+        let deployment = &deployments[env_name];
 
         // Format timestamp
-        let timestamp = match deployed_at.elapsed() {
-            Ok(duration) => {
-                let hours = duration.as_secs() / 3600;
-                if hours < 1 {
-                    let minutes = (duration.as_secs() % 3600) / 60;
-                    format!("{} minutes ago", minutes)
-                } else if hours < 24 {
-                    format!("{} hours ago", hours)
-                } else {
-                    let days = hours / 24;
-                    format!("{} days ago", days)
-                }
+        let now = Utc::now();
+        let duration = now.signed_duration_since(deployment.deployed_at);
+        let timestamp = if duration.num_seconds() < 0 {
+            "recently".to_string()
+        } else {
+            let hours = duration.num_hours();
+            if hours < 1 {
+                let minutes = duration.num_minutes();
+                format!("{} minutes ago", minutes)
+            } else if hours < 24 {
+                format!("{} hours ago", hours)
+            } else {
+                let days = hours / 24;
+                format!("{} days ago", days)
             }
-            Err(_) => "recently".to_string(),
         };
 
         println!(
             "  {} {} by {} {} [{}]",
             "●".green(),
             env_name.cyan().bold(),
-            deployed_by.yellow(),
+            deployment.deployed_by.yellow(),
             format!("({})", timestamp).dimmed(),
-            kind.dimmed()
+            deployment.kind.to_string().dimmed()
         );
 
         // Display commit if available
-        if let Some(commit_sha) = commit {
+        if let Some(commit_sha) = &deployment.git_commit {
             println!("    commit: {}", commit_sha.dimmed());
         }
 
@@ -111,7 +113,7 @@ pub async fn run(profile: &Profile, allowed_lag_secs: i64) -> Result<(), CliErro
             }
         }
 
-        for (database, schema) in schemas {
+        for (database, schema) in &deployment.schemas {
             println!("    {}.{}", database.dimmed(), schema);
         }
         println!();
