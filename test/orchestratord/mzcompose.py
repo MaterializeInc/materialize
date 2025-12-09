@@ -1878,6 +1878,8 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
         finally:
             if port_forward_process:
                 os.killpg(os.getpgid(port_forward_process.pid), signal.SIGTERM)
+        if len(downtimes) == 1:
+            downtimes.insert(0, 0)
 
     definition = setup(c, args)
     init(definition)
