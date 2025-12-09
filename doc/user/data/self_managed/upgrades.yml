@@ -107,7 +107,7 @@
        ```
 
     1. Export your current values to a file to preserve any custom settings:
-    
+
        ```shell
        helm get values -n materialize simple-demo -o yaml > my-values.yaml
        ```

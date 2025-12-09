@@ -216,7 +216,7 @@ An active Azure subscription with appropriate permissions to create:
 
    - `<your-aks-cluster-name>` with the name of your AKS cluster. Your cluster
      name can be found in the Terraform output or Azure portal.
-   
+
    ```bash
    az aks get-credentials --resource-group <resource_group_name> --name <your-aks-cluster-name>
    ```
