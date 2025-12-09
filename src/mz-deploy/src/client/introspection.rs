@@ -4,7 +4,7 @@
 //! such as checking for existence of schemas, clusters, and objects.
 
 use crate::client::errors::ConnectionError;
-use crate::client::models::Cluster;
+use crate::client::models::{Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica};
 use crate::project::object_id::ObjectId;
 use crate::utils::sql_utils::quote_identifier;
 use std::collections::BTreeSet;
@@ -121,6 +121,126 @@ pub async fn list_clusters(client: &PgClient) -> Result<Vec<Cluster>, Connection
             replication_factor: row.get("replication_factor"),
         })
         .collect())
+}
+
+/// Get cluster configuration including replicas and grants.
+///
+/// This fetches all information needed to clone a cluster's configuration:
+/// - For managed clusters: size and replication factor
+/// - For unmanaged clusters: replica configurations
+/// - For both: privilege grants
+pub async fn get_cluster_config(
+    client: &PgClient,
+    name: &str,
+) -> Result<Option<ClusterConfig>, ConnectionError> {
+    // Query 1: Get cluster info and replicas with LEFT JOIN
+    let cluster_query = r#"
+        SELECT
+            c.id,
+            c.name,
+            c.managed,
+            c.size,
+            c.replication_factor,
+            r.name AS replica_name,
+            r.size AS replica_size,
+            r.availability_zone
+        FROM mz_catalog.mz_clusters c
+        LEFT JOIN mz_catalog.mz_cluster_replicas r ON c.id = r.cluster_id
+        WHERE c.name = $1
+        ORDER BY r.name
+    "#;
+
+    let cluster_rows = client
+        .query(cluster_query, &[&name])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    if cluster_rows.is_empty() {
+        return Ok(None);
+    }
+
+    // Extract cluster-level info from first row
+    let first_row = &cluster_rows[0];
+    let managed: bool = first_row.get("managed");
+    let size: Option<String> = first_row.get("size");
+    let replication_factor: Option<i64> = first_row
+        .try_get("replication_factor")
+        .or_else(|_| {
+            first_row
+                .try_get::<_, Option<i32>>("replication_factor")
+                .map(|v| v.map(i64::from))
+        })
+        .or_else(|_| {
+            first_row
+                .try_get::<_, Option<i16>>("replication_factor")
+                .map(|v| v.map(i64::from))
+        })
+        .unwrap_or(None);
+
+    // Query 2: Get grants
+    let grants_query = r#"
+        WITH cluster_privilege AS (
+            SELECT mz_internal.mz_aclexplode(privileges).*
+            FROM mz_clusters
+            WHERE name = $1
+        )
+        SELECT
+            grantee.name AS grantee,
+            c.privilege_type
+        FROM cluster_privilege AS c
+        JOIN mz_roles AS grantee ON c.grantee = grantee.id
+        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+    "#;
+
+    let grant_rows = client
+        .query(grants_query, &[&name])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    let grants: Vec<ClusterGrant> = grant_rows
+        .iter()
+        .map(|row| ClusterGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect();
+
+    if managed {
+        // Managed cluster
+        let size = size.ok_or_else(|| {
+            ConnectionError::Message(format!(
+                "Managed cluster '{}' has no size (unexpected)",
+                name
+            ))
+        })?;
+
+        let replication_factor = replication_factor.unwrap_or(1).try_into().map_err(|_| {
+            ConnectionError::Message(format!("Invalid replication_factor for cluster '{}'", name))
+        })?;
+
+        Ok(Some(ClusterConfig::Managed {
+            options: ClusterOptions {
+                size,
+                replication_factor,
+            },
+            grants,
+        }))
+    } else {
+        // Unmanaged cluster - collect replicas
+        let mut replicas = Vec::new();
+        for row in &cluster_rows {
+            let replica_name: Option<String> = row.get("replica_name");
+            if let Some(replica_name) = replica_name {
+                replicas.push(ClusterReplica {
+                    name: replica_name,
+                    size: row.get("replica_size"),
+                    availability_zone: row.get("availability_zone"),
+                });
+            }
+        }
+
+        Ok(Some(ClusterConfig::Unmanaged { replicas, grants }))
+    }
 }
 
 /// Get the current Materialize user/role.

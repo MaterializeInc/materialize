@@ -86,6 +86,58 @@ impl ClusterOptions {
     }
 }
 
+/// Configuration for a cluster replica (used for unmanaged clusters).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterReplica {
+    /// Replica name (e.g., "r1", "r2")
+    pub name: String,
+    /// Replica size (e.g., "25cc")
+    pub size: String,
+    /// Optional availability zone
+    pub availability_zone: Option<String>,
+}
+
+/// A privilege grant on a cluster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClusterGrant {
+    /// Role name that receives the grant
+    pub grantee: String,
+    /// Privilege type (e.g., "USAGE", "CREATE")
+    pub privilege_type: String,
+}
+
+/// Configuration for creating a cluster (managed or unmanaged).
+///
+/// This captures all the information needed to clone a cluster's configuration
+/// including its replicas (for unmanaged clusters) and privilege grants.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClusterConfig {
+    /// Managed cluster with SIZE and REPLICATION FACTOR
+    Managed {
+        /// Cluster options (size, replication factor)
+        options: ClusterOptions,
+        /// Privilege grants on the cluster
+        grants: Vec<ClusterGrant>,
+    },
+    /// Unmanaged cluster with explicit replicas
+    Unmanaged {
+        /// Replica configurations
+        replicas: Vec<ClusterReplica>,
+        /// Privilege grants on the cluster
+        grants: Vec<ClusterGrant>,
+    },
+}
+
+impl ClusterConfig {
+    /// Get the grants for this cluster configuration.
+    pub fn grants(&self) -> &[ClusterGrant] {
+        match self {
+            ClusterConfig::Managed { grants, .. } => grants,
+            ClusterConfig::Unmanaged { grants, .. } => grants,
+        }
+    }
+}
+
 /// A schema deployment record tracking when and how a schema was deployed.
 ///
 /// Stored in the `deploy.deployments` table. Schemas are deployed
@@ -304,5 +356,114 @@ mod tests {
 
         assert_eq!(opts1, opts2);
         assert_ne!(opts1, opts3);
+    }
+
+    #[test]
+    fn test_cluster_replica_equality() {
+        let r1 = ClusterReplica {
+            name: "r1".to_string(),
+            size: "25cc".to_string(),
+            availability_zone: Some("use1-az1".to_string()),
+        };
+
+        let r2 = ClusterReplica {
+            name: "r1".to_string(),
+            size: "25cc".to_string(),
+            availability_zone: Some("use1-az1".to_string()),
+        };
+
+        let r3 = ClusterReplica {
+            name: "r2".to_string(),
+            size: "25cc".to_string(),
+            availability_zone: None,
+        };
+
+        assert_eq!(r1, r2);
+        assert_ne!(r1, r3);
+    }
+
+    #[test]
+    fn test_cluster_grant_equality() {
+        let g1 = ClusterGrant {
+            grantee: "reader".to_string(),
+            privilege_type: "USAGE".to_string(),
+        };
+
+        let g2 = ClusterGrant {
+            grantee: "reader".to_string(),
+            privilege_type: "USAGE".to_string(),
+        };
+
+        let g3 = ClusterGrant {
+            grantee: "writer".to_string(),
+            privilege_type: "CREATE".to_string(),
+        };
+
+        assert_eq!(g1, g2);
+        assert_ne!(g1, g3);
+    }
+
+    #[test]
+    fn test_cluster_config_managed() {
+        let config = ClusterConfig::Managed {
+            options: ClusterOptions {
+                size: "25cc".to_string(),
+                replication_factor: 2,
+            },
+            grants: vec![ClusterGrant {
+                grantee: "reader".to_string(),
+                privilege_type: "USAGE".to_string(),
+            }],
+        };
+
+        assert_eq!(config.grants().len(), 1);
+        assert_eq!(config.grants()[0].grantee, "reader");
+    }
+
+    #[test]
+    fn test_cluster_config_unmanaged() {
+        let config = ClusterConfig::Unmanaged {
+            replicas: vec![
+                ClusterReplica {
+                    name: "r1".to_string(),
+                    size: "25cc".to_string(),
+                    availability_zone: None,
+                },
+                ClusterReplica {
+                    name: "r2".to_string(),
+                    size: "50cc".to_string(),
+                    availability_zone: Some("use1-az1".to_string()),
+                },
+            ],
+            grants: vec![],
+        };
+
+        if let ClusterConfig::Unmanaged { replicas, grants } = &config {
+            assert_eq!(replicas.len(), 2);
+            assert_eq!(replicas[0].name, "r1");
+            assert_eq!(replicas[1].availability_zone, Some("use1-az1".to_string()));
+            assert!(grants.is_empty());
+        } else {
+            panic!("Expected Unmanaged config");
+        }
+    }
+
+    #[test]
+    fn test_cluster_config_unmanaged_empty_replicas() {
+        // Unmanaged clusters with 0 replicas are valid
+        let config = ClusterConfig::Unmanaged {
+            replicas: vec![],
+            grants: vec![ClusterGrant {
+                grantee: "admin".to_string(),
+                privilege_type: "CREATE".to_string(),
+            }],
+        };
+
+        if let ClusterConfig::Unmanaged { replicas, grants } = &config {
+            assert!(replicas.is_empty());
+            assert_eq!(grants.len(), 1);
+        } else {
+            panic!("Expected Unmanaged config");
+        }
     }
 }

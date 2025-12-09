@@ -13,6 +13,6 @@ pub use deployment_ops::{
 };
 pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
 pub use models::{
-    Cluster, ClusterOptions, ConflictRecord, DeploymentKind, DeploymentMetadata,
-    DeploymentObjectRecord, SchemaDeploymentRecord,
+    Cluster, ClusterConfig, ClusterGrant, ClusterOptions, ClusterReplica, ConflictRecord,
+    DeploymentKind, DeploymentMetadata, DeploymentObjectRecord, SchemaDeploymentRecord,
 };
