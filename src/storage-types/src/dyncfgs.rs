@@ -202,6 +202,17 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
     "Interval to re-validate the schemas of ingested tables.",
 );
 
+/// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
+/// is to emit a definite error forcing soruce recreation. In cases of HA, the upstream DB may
+/// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
+/// flag puts the owness on the customer to recreate the source if the upgstream DB changes timeline
+/// in a way that introduces data loss (e.g. manual failover, restore, etc.).
+pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
+    "pg_source_validate_timeline",
+    true,
+    "Whether to treat a timeline switch as a definite error",
+);
+
 // Networking
 
 /// Whether or not to enforce that external connection addresses are global
@@ -345,6 +356,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PG_FETCH_SLOT_RESUME_LSN_INTERVAL)
         .add(&PG_OFFSET_KNOWN_INTERVAL)
         .add(&PG_SCHEMA_VALIDATION_INTERVAL)
+        .add(&PG_SOURCE_VALIDATE_TIMELINE)
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)
         .add(&SINK_PROGRESS_SEARCH)

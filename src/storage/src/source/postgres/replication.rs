@@ -81,12 +81,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use differential_dataflow::AsCollection;
 use futures::{FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
+use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -631,8 +633,12 @@ async fn raw_stream<'a>(
     // Skip the timeline ID check for sources without a known timeline ID
     // (sources created before the timeline ID was added to the source details)
     if let Some(expected_timeline_id) = timeline_id {
-        if let Err(err) =
-            ensure_replication_timeline_id(&replication_client, expected_timeline_id).await?
+        if let Err(err) = ensure_replication_timeline_id(
+            &replication_client,
+            expected_timeline_id,
+            config.config.config_set(),
+        )
+        .await?
         {
             return Ok(Err(err));
         }
@@ -1068,15 +1074,23 @@ async fn ensure_publication_exists(
 async fn ensure_replication_timeline_id(
     replication_client: &Client,
     expected_timeline_id: &u64,
+    config_set: &ConfigSet,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
     let timeline_id = mz_postgres_util::get_timeline_id(replication_client).await?;
     if timeline_id == *expected_timeline_id {
         Ok(Ok(()))
     } else {
-        Ok(Err(DefiniteError::InvalidTimelineId {
-            expected: *expected_timeline_id,
-            actual: timeline_id,
-        }))
+        if PG_SOURCE_VALIDATE_TIMELINE.get(config_set) {
+            Ok(Err(DefiniteError::InvalidTimelineId {
+                expected: *expected_timeline_id,
+                actual: timeline_id,
+            }))
+        } else {
+            tracing::warn!(
+                "Timeline ID mismatch ignored: expected={expected_timeline_id} actual={timeline_id}"
+            );
+            Ok(Ok(()))
+        }
     }
 }
 
