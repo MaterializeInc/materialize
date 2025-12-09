@@ -96,7 +96,6 @@ spec:
   environmentdImageRef: docker.io/materialize/environmentd:<app_version>
 ```
 
-
 To minimize unexpected downtime and avoid connection drops at critical
 periods for your application, the upgrade process involves two steps:
 
@@ -105,7 +104,6 @@ periods for your application, the upgrade process involves two steps:
   but does not automatically roll out the changes.
 
 - Second, roll out the changes by specifying a new UUID for `requestRollout`.
-
 
 ### Stage the Materialize instance version change
 
@@ -141,7 +139,11 @@ kubectl patch materialize <instance-name> \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
-It is possible to combine both operations in a single command if preferred:
+### Staging and applying in a single command
+
+Although separating the staging and rollout of the changes into two steps can
+minimize unexpected downtime and avoid connection drops at critical periods, you
+can, if preferred, combine both operations in a single command
 
 ```shell
 kubectl patch materialize <instance-name> \
@@ -177,9 +179,30 @@ kubectl apply -f materialize.yaml
 
 ## Rollout Configuration
 
-### Forced Rollouts
+### `requestRollout`
 
-If you need to force a rollout even when there are no changes to the instance:
+Specify a new `UUID` value for the `requestRollout` to roll out the changes to
+the Materialize instance.
+
+{{< note >}}
+
+`requestRollout` without the `forcedRollout` field only rolls out if changes
+exist to the Materialize instance. To roll out even if there are no changes to
+the instance, use with `forcedRollouts`.
+
+{{< /note >}}
+
+```shell
+# Only rolls out if there are changes
+kubectl patch materialize <instance-name> \
+  -n <materialize-instance-namespace> \
+  --type='merge' \
+  -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
+```
+### `requestRollout` with `forcedRollouts`
+
+Specify a new `UUID` value for `forcedRollout` to roll out even when there are
+no changes to the instance. Use `forcedRollout` with `requestRollout`.
 
 ```shell
 kubectl patch materialize <instance-name> \

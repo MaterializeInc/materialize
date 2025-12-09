@@ -218,21 +218,30 @@ A Google account with permission to:
    - `console_load_balancer_ip` for the Materialize Console
    - `balancerd_load_balancer_ip` to connect PostgreSQL-compatible clients/drivers.
 
-1. Configure `kubectl` to connect to your GKE cluster, replacing:
+   ```bash
+   terraform output -raw <field_name>
+   ```
 
-   - `<your-cluster-name>` with the name of your GKE cluster. Your cluster name
-     can be found in the Terraform output. For the sample example, the cluster
-     name is `<name_prefix>-gke`.
+   {{< tip >}}
+   Your shell may show an ending marker (such as `%`) because the
+   output did not end with a newline. Do not include the marker when using the value.
+   {{< /tip >}}
 
-   - `<your-region>` with the region of your GKE cluster. Your region can be
+1. Configure `kubectl` to connect to your GKE cluster, using your:
+   - `gke_cluster_name`. Your cluster name can be found in the Terraform output.
+     For the sample example, your cluster
+     name your cluster name has the form `<name_prefix>-gke`.
+
+   - `gke_cluster_location`. Your region can be
      found in the Terraform output `gke_cluster_location`, corresponds to the
      `region` value in your `terraform.tfvars`.
 
-   - `<your-project-id>` with your GCP project ID.
+   - `<project-id>`. Replace with your GCP project ID.
 
    ```bash
-   gcloud container clusters get-credentials <your-cluster-name>  \
-    --region <your-region> \
+   # gcloud container clusters get-credentials <your-cluster-name> --region <your-region> --project <your-project-id>
+   gcloud container clusters get-credentials $(terraform output -raw gke_cluster_name) \
+    --region $(terraform output -raw gke_cluster_location) \
     --project <your-project-id>
    ```
 
@@ -281,15 +290,21 @@ psql postgres://<balancerd_load_balancer_ip>:6875/materialize
 
 ## Customizing Your Deployment
 
-For more information on the Terraform modules, see both the [top
+{{< tip >}}
+To reduce cost in your demo environment, you can tweak machine types and database tiers in `main.tf`.
+{{< /tip >}}
+
+You can customize each module independently.
+
+- For details on the Terraform modules, see both the [top
 level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
 and [GCP
 specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp)
-details.
+modules.
 
-{{< tip >}}
-You can customize each module independently. To reduce cost in your demo environment, you can tweak machine types and database tiers in `main.tf`.
-{{< /tip >}}
+- For details on recommended instance sizing and configuration, see the [GCP
+deployment
+guide](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines/).
 
 {{< note >}}
 **GCP Storage Authentication Limitation:** Materialize currently only supports HMAC key authentication for GCS access (S3-compatible API).
@@ -297,9 +312,11 @@ Current State: The modules configure both HMAC keys and Workload Identity, but M
 Future: Native GCS access via Workload Identity Federation or Kubernetes service account impersonation will be supported in a future release, eliminating the need for static credentials.
 {{< /note >}}
 
-For details on recommended instance sizing and configuration, see the [GCP
-deployment
-guide](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines/).
+See also:
+- [Materialize Operator
+  Configuration](/self-managed-deployments/operator-configuration/)
+- [Materialize CRD Field
+  Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
 
 ## Cleanup
 

@@ -179,24 +179,35 @@ An active AWS account with appropriate permissions to create:
     to proceed.
 
 
-1. From the output, you will need the following fields to connect:
-    - `dns_name`
-    - `external_login_password_mz_system`
-
-        {{< tip >}}
-
-        To get the unredacted value for `external_login_password_mz_system`,
-        you can run `terraform output -json external_login_password_mz_system`
-
-        {{< /tip >}}
-
-### Step 4. Optional. Verify the deployment.
-
-1. Configure `kubectl` to connect to your cluster:
+1. From the output, you will need the following fields to connect using the
+   Materialize Console and PostgreSQL-compatible clients/drivers:
+   - `nlb_dns_name`
+   - `external_login_password_mz_system`.
 
    ```bash
-   aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
+   terraform output -raw <field_name>
    ```
+
+   {{< tip >}}
+   Your shell may show an ending marker (such as `%`) because the
+   output did not end with a newline. Do not include the marker when using the value.
+   {{< /tip >}}
+
+
+1. Configure `kubectl` to connect to your cluster using your:
+   - `eks_cluster_name`. Your cluster name can be found in the Terraform output.
+     For the sample example, your cluster name has the form `{prefix_name}-eks`;
+     e.g., `simple-demo-eks`.
+
+   - `region`. The region specified in your `terraform.tfvars` file; e.g.,
+     `us-east-1`
+
+   ```bash
+   # aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
+   aws eks update-kubeconfig --name $(terraform output -raw eks_cluster_name) --region us-east-1
+   ```
+
+### Step 4. Optional. Verify the deployment.
 
 1. Check the status of your deployment:
    {{% include-from-yaml data="self_managed/installation"
@@ -205,8 +216,10 @@ An active AWS account with appropriate permissions to create:
 ### Step 5: Connect to Materialize
 
 Using the `dns_name` and `external_login_password_mz_system` from the Terraform
-output, you can connect to Materialize via the Materialize Console to create
-your users.
+output, you can connect to Materialize via the Materialize Console or
+PostgreSQL-compatible tools/drivers using the following ports:
+
+{{< yaml-table data="self_managed/default_ports" >}}
 
 {{< note >}}
 
@@ -215,6 +228,8 @@ access, you can connect from inside the same VPC or from networks that are
 privately connected to it.
 
 {{< /note >}}
+
+#### Connect to the Materialize Console
 
 1. To connect to the Materialize Console, open a browser to
     `https://<dns_name>:8080`, substituting your `<dns_name>`.
@@ -227,42 +242,76 @@ privately connected to it.
    {{< /tip >}}
 
 1. Log in as `mz_system`, using `external_login_password_mz_system` as the
-    password and create new users.
+   password.
 
-    In general, other than the initial login to create new users for new
-    deployments, avoid using `mz_system` since `mz_system` also used by the
-    Materialize Operator for upgrades and maintenance tasks.
+1. Create new users and log out.
 
-1. Once new users are created, logout as `mz_system` and login as one of the
-    created user.
+   In general, other than the initial login to create new users for new
+   deployments, avoid using `mz_system` since `mz_system` also used by the
+   Materialize Operator for upgrades and maintenance tasks.
 
-    For non-`mz_system` users, you can connect using the Materialize Console
-    or PostgreSQL-compatible tools and drivers using the following ports:
+   For more information on authentication and authorization for Self-Managed
+   Materialize, see:
 
-    {{< yaml-table data="self_managed/default_ports" >}}
+   - [Authentication](/security/self-managed/authentication/)
+   - [Access Control](/security/self-managed/access-control/)
 
-For more information on authentication and authorization for Self-Managed
-Materialize, see:
+1. Login as one of the created user.
 
-- [Authentication](/security/self-managed/authentication/)
-- [Access Control](/security/self-managed/access-control/)
+#### Connect using `psql`
 
+1. To connect using `psql`, in the connection string, specify:
+
+   - `mz_system` as the user
+   - Your `<dns_name>` as the host
+   - `6875` as the port:
+
+   ```sh
+   psql postgres://mz_system@<dns_name>:6875/materialize
+   ```
+
+   When prompted for the password, enter the
+   `external_login_password_mz_system` value.
+
+1. Create new users and log out.
+
+   In general, other than the initial login to create new users for new
+   deployments, avoid using `mz_system` since `mz_system` also used by the
+   Materialize Operator for upgrades and maintenance tasks.
+
+   For more information on authentication and authorization for Self-Managed
+   Materialize, see:
+
+   - [Authentication](/security/self-managed/authentication/)
+   - [Access Control](/security/self-managed/access-control/)
+
+1. Login as one of the created user.
 
 ## Customizing Your Deployment
 
-For more information on the Terraform modules, see both the [top
-level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
-and [AWS
-specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws)
-details.
-
 {{< tip >}}
-You can customize each module independently. To reduce cost in your demo environment, you can tweak subnet CIDRs and instance types in `main.tf`.
+To reduce cost in your demo environment, you can tweak subnet CIDRs
+and instance types in `main.tf`.
 {{< /tip >}}
 
-For details on recommended instance sizing and configuration, see the [AWS
+You can customize each Terraform module independently.
+
+- For details on the Terraform modules, see both the [top
+level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
+and [AWS
+specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/aws) READMEs.
+
+- For details on recommended instance sizing and configuration, see the [AWS
 deployment
 guide](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines/).
+
+See also:
+
+- [Materialize Operator
+  Configuration](/self-managed-deployments/operator-configuration/)
+- [Materialize CRD Field
+  Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
+
 
 ## Cleanup
 
@@ -271,6 +320,5 @@ guide](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines
 
 ## See Also
 
-- [Materialize Operator
-  Configuration](/self-managed-deployments/operator-configuration/)
+
 - [Troubleshooting](/self-managed-deployments/troubleshooting/)

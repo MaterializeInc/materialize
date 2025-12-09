@@ -209,17 +209,31 @@ An active Azure subscription with appropriate permissions to create:
    - `console_load_balancer_ip` for the Materialize Console
    - `balancerd_load_balancer_ip` to connect PostgreSQL-compatible clients/drivers.
 
-### Step 4. Optional. Verify the deployment.
+   ```bash
+   terraform output -raw <field_name>
+   ```
 
-1. Configure `kubectl` to connect to your cluster:
-   - `<your-resource-group>` with the name of your Azure resource group. Your resource group name can be found in the Terraform output or Azure portal.
+   {{< tip >}}
+   Your shell may show an ending marker (such as `%`) because the
+   output did not end with a newline. Do not include the marker when using the value.
+   {{< /tip >}}
 
-   - `<your-aks-cluster-name>` with the name of your AKS cluster. Your cluster
-     name can be found in the Terraform output or Azure portal.
+1. Configure `kubectl` to connect to your cluster using your:
+   - `resource_group_name`. Your
+     resource group name can be found in the Terraform output or in the
+     `terraform.tfvars` file.
+
+   - `akw_cluster_name`. Your cluster name can be found in the Terraform output.
+     For the sample example, your cluster name has the form `{prefix_name}-aks`;
+     e.g., simple-demo-aks`.
 
    ```bash
-   az aks get-credentials --resource-group <resource_group_name> --name <your-aks-cluster-name>
+   # az aks get-credentials --resource-group <resource_group_name> --name <your-aks-cluster-name>
+   az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -raw aks_cluster_name)
    ```
+
+
+### Step 4. Optional. Verify the deployment.
 
 1. Check the status of your deployment:
    {{% include-from-yaml data="self_managed/installation"
@@ -240,16 +254,16 @@ privately connected to it.
 Using the `console_load_balancer_ip` from the Terraform output, you can connect
 to Materialize via the Materialize Console.
 
-1. To connect to the Materialize Console, open a browser to
-    `https://<console_load_balancer_ip>:8080`, substituting your
-    `<console_load_balancer_ip>`.
+To connect to the Materialize Console, open a browser to
+`https://<console_load_balancer_ip>:8080`, substituting your
+`<console_load_balancer_ip>`.
 
-   {{< tip >}}
+{{< tip >}}
 
-   {{% include-from-yaml data="self_managed/installation"
-   name="install-uses-self-signed-cluster-issuer" %}}
+{{% include-from-yaml data="self_managed/installation"
+name="install-uses-self-signed-cluster-issuer" %}}
 
-   {{< /tip >}}
+{{< /tip >}}
 
 #### Connect using the `psql`
 
@@ -264,23 +278,26 @@ psql postgres://<balancerd_load_balancer_ip>:6875/materialize
 
 ## Customizing Your Deployment
 
-For more information on the Terraform modules, see both the [top
-level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
-and [Azure
-specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure)
-details.
-
 {{< tip >}}
-You can customize each module independently. To reduce cost in your demo environment, you can tweak VM sizes and database tiers in `main.tf`.
+To reduce cost in your demo environment, you can tweak VM sizes and database tiers in `main.tf`.
 {{< /tip >}}
 
-{{< note >}}
-Autoscaling: Uses Azure's native cluster autoscaler that integrates directly with Azure Virtual Machine Scale Sets for automated node scaling. In future we are planning to enhance this by making use of karpenter-provider-azure.
-{{< /note >}}
+You can customize each Terraform module independently.
 
-For details on recommended instance sizing and configuration, see the [Azure
+- For details on the Terraform modules, see both the [top
+level](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main)
+and [Azure
+specific](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/azure) modules.
+
+- For details on recommended instance sizing and configuration, see the [Azure
 deployment
 guide](/self-managed-deployments/deployment-guidelines/azure-deployment-guidelines/).
+
+See also:
+- [Materialize Operator
+  Configuration](/self-managed-deployments/operator-configuration/)
+- [Materialize CRD Field
+  Descriptions](/self-managed-deployments/materialize-crd-field-descriptions/)
 
 ## Cleanup
 
