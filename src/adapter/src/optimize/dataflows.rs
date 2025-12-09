@@ -131,23 +131,41 @@ pub struct DataflowBuilder<'a> {
 }
 
 /// The styles in which an expression can be prepared for use in a dataflow.
-#[derive(Clone, Copy, Debug)]
-pub enum ExprPrepStyle<'a> {
-    /// The expression is being prepared for installation as a maintained dataflow, e.g.,
-    /// index, materialized view, or subscribe.
-    Maintained,
-    /// The expression is being prepared to run once at the specified logical
-    /// time in the specified session.
-    OneShot {
-        logical_time: EvalTime,
-        session: &'a dyn SessionMetadata,
-        catalog_state: &'a CatalogState,
-    },
-    /// The expression is being prepared for evaluation in a CHECK expression of a webhook source.
-    WebhookValidation {
-        /// Time at which this expression is being evaluated.
-        now: DateTime<Utc>,
-    },
+pub trait ExprPrepStyle {
+    /// Prepare a relation expression according to this style.
+    fn prep_relation_expr(&self, expr: &mut OptimizedMirRelationExpr)
+    -> Result<(), OptimizerError>;
+
+    /// Prepare a scalar expression according to this style.
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError>;
+}
+
+/// A no-op expression preparer.
+pub struct NoopExprPrepStyle;
+impl ExprPrepStyle for NoopExprPrepStyle {
+    fn prep_relation_expr(&self, _: &mut OptimizedMirRelationExpr) -> Result<(), OptimizerError> {
+        Ok(())
+    }
+    fn prep_scalar_expr(&self, _expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
+        Ok(())
+    }
+}
+
+/// Preparing an expression for maintained dataflow, e.g., index, materialized view, or subscribe.
+/// Produces errors for calls to an unmaterializable functions.
+pub struct ExprPrepStyleMaintained;
+/// Prepare an expression to run once at a logical time in a session.
+/// Calls to all unmaterializable functions are replaced with constants.
+pub struct ExprPrepStyleOneShot<'a> {
+    pub logical_time: EvalTime,
+    pub session: &'a dyn SessionMetadata,
+    pub catalog_state: &'a CatalogState,
+}
+/// Prepared  an expression for evaluation in a CHECK expression of a webhook source.
+/// Replaces calls to `UnmaterializableFunc::CurrentTimestamp`, others are left untouched.
+pub struct ExprPrepStyleWebhookValidation {
+    /// Time at which this expression is being evaluated.
+    pub now: DateTime<Utc>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -437,102 +455,91 @@ impl<'a> CheckedRecursion for DataflowBuilder<'a> {
     }
 }
 
-/// Prepares a relation expression for dataflow execution by preparing all
-/// contained scalar expressions (see `prep_scalar_expr`) in the specified
-/// style.
-pub fn prep_relation_expr(
-    expr: &mut OptimizedMirRelationExpr,
-    style: ExprPrepStyle,
-) -> Result<(), OptimizerError> {
-    match style {
-        ExprPrepStyle::Maintained => {
-            expr.0.try_visit_mut_post(&mut |e| {
-                // Carefully test filter expressions, which may represent temporal filters.
-                if let MirRelationExpr::Filter { input, predicates } = &*e {
-                    let mfp =
-                        MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
-                    match mfp.into_plan() {
-                        Err(e) => Err(OptimizerError::UnsupportedTemporalExpression(e)),
-                        Ok(mut mfp) => {
-                            for s in mfp.iter_nontemporal_exprs() {
-                                prep_scalar_expr(s, style)?;
-                            }
-                            Ok(())
+impl ExprPrepStyle for ExprPrepStyleMaintained {
+    fn prep_relation_expr(
+        &self,
+        expr: &mut OptimizedMirRelationExpr,
+    ) -> Result<(), OptimizerError> {
+        expr.0.try_visit_mut_post(&mut |e| {
+            // Carefully test filter expressions, which may represent temporal filters.
+            if let MirRelationExpr::Filter { input, predicates } = &*e {
+                let mfp = MapFilterProject::new(input.arity()).filter(predicates.iter().cloned());
+                match mfp.into_plan() {
+                    Err(e) => Err(OptimizerError::UnsupportedTemporalExpression(e)),
+                    Ok(mut mfp) => {
+                        for s in mfp.iter_nontemporal_exprs() {
+                            self.prep_scalar_expr(s)?;
                         }
+                        Ok(())
                     }
-                } else {
-                    e.try_visit_scalars_mut1(&mut |s| prep_scalar_expr(s, style))
                 }
-            })
+            } else {
+                e.try_visit_scalars_mut1(&mut |s| self.prep_scalar_expr(s))
+            }
+        })
+    }
+
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
+        // Reject the query if it contains any unmaterializable function calls.
+        let mut last_observed_unmaterializable_func = None;
+        expr.visit_mut_post(&mut |e| {
+            if let MirScalarExpr::CallUnmaterializable(f) = e {
+                last_observed_unmaterializable_func = Some(f.clone());
+            }
+        })?;
+
+        if let Some(f) = last_observed_unmaterializable_func {
+            Err(OptimizerError::UnmaterializableFunction(f))
+        } else {
+            Ok(())
         }
-        ExprPrepStyle::OneShot { .. } | ExprPrepStyle::WebhookValidation { .. } => expr
-            .0
-            .try_visit_scalars_mut(&mut |s| prep_scalar_expr(s, style)),
     }
 }
 
-/// Prepares a scalar expression for execution by handling unmaterializable
-/// functions.
-///
-/// How we prepare the scalar expression depends on which `style` is specificed.
-///
-/// * `OneShot`: Calls to all unmaterializable functions are replaced.
-/// * `Index`: An error is produced if a call to an unmaterializable function is encountered.
-/// * `AsOfUpTo`: An error is produced if a call to an unmaterializable function is encountered.
-/// * `WebhookValidation`: Only calls to `UnmaterializableFunc::CurrentTimestamp` are replaced,
-///   others are left untouched.
-///
-pub fn prep_scalar_expr(
-    expr: &mut MirScalarExpr,
-    style: ExprPrepStyle,
-) -> Result<(), OptimizerError> {
-    match style {
+impl ExprPrepStyle for ExprPrepStyleOneShot<'_> {
+    fn prep_relation_expr(
+        &self,
+        expr: &mut OptimizedMirRelationExpr,
+    ) -> Result<(), OptimizerError> {
+        expr.0
+            .try_visit_scalars_mut(&mut |s| self.prep_scalar_expr(s))
+    }
+
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
         // Evaluate each unmaterializable function and replace the
         // invocation with the result.
-        ExprPrepStyle::OneShot {
-            logical_time,
-            session,
-            catalog_state,
-        } => expr.try_visit_mut_post(&mut |e| {
+        expr.try_visit_mut_post(&mut |e| {
             if let MirScalarExpr::CallUnmaterializable(f) = e {
-                *e = eval_unmaterializable_func(catalog_state, f, logical_time, session)?;
+                *e = eval_unmaterializable_func(
+                    self.catalog_state,
+                    f,
+                    self.logical_time,
+                    self.session,
+                )?;
             }
             Ok(())
-        }),
+        })
+    }
+}
 
-        // Reject the query if it contains any unmaterializable function calls.
-        ExprPrepStyle::Maintained => {
-            let mut last_observed_unmaterializable_func = None;
-            expr.visit_mut_post(&mut |e| {
-                if let MirScalarExpr::CallUnmaterializable(f) = e {
-                    last_observed_unmaterializable_func = Some(f.clone());
-                }
-            })?;
+impl ExprPrepStyle for ExprPrepStyleWebhookValidation {
+    fn prep_relation_expr(&self, _: &mut OptimizedMirRelationExpr) -> Result<(), OptimizerError> {
+        // No-op
+        Ok(())
+    }
 
-            if let Some(f) = last_observed_unmaterializable_func {
-                let err = match style {
-                    ExprPrepStyle::Maintained => OptimizerError::UnmaterializableFunction(f),
-                    _ => unreachable!(),
-                };
-                return Err(err);
+    fn prep_scalar_expr(&self, expr: &mut MirScalarExpr) -> Result<(), OptimizerError> {
+        let now = self.now;
+        expr.try_visit_mut_post(&mut |e| {
+            if let MirScalarExpr::CallUnmaterializable(f @ UnmaterializableFunc::CurrentTimestamp) =
+                e
+            {
+                let now: Datum = now.try_into()?;
+                let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
+                *e = const_expr;
             }
-            Ok(())
-        }
-
-        ExprPrepStyle::WebhookValidation { now } => {
-            expr.try_visit_mut_post(&mut |e| {
-                if let MirScalarExpr::CallUnmaterializable(
-                    f @ UnmaterializableFunc::CurrentTimestamp,
-                ) = e
-                {
-                    let now: Datum = now.try_into()?;
-                    let const_expr = MirScalarExpr::literal_ok(now, f.output_type().scalar_type);
-                    *e = const_expr;
-                }
-                Ok::<_, anyhow::Error>(())
-            })?;
-            Ok(())
-        }
+            Ok::<_, OptimizerError>(())
+        })
     }
 }
 

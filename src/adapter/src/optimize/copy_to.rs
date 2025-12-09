@@ -39,8 +39,7 @@ use crate::TimestampContext;
 use crate::catalog::Catalog;
 use crate::coord::CopyToContext;
 use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrepStyle, prep_relation_expr,
-    prep_scalar_expr,
+    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrepStyle, ExprPrepStyleOneShot,
 };
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
@@ -292,14 +291,14 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         //
         // Resolve all unmaterializable function calls except mz_now(), because
         // we don't yet have a timestamp.
-        let style = ExprPrepStyle::OneShot {
+        let style = ExprPrepStyleOneShot {
             logical_time: EvalTime::Deferred,
             session,
             catalog_state: self.catalog.state(),
         };
         df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
         )?;
 
         // Set the `as_of` and `until` timestamps for the dataflow.
@@ -314,14 +313,14 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             .expect("unique as_of element");
 
         // Resolve all unmaterializable function calls including mz_now().
-        let style = ExprPrepStyle::OneShot {
+        let style = ExprPrepStyleOneShot {
             logical_time: EvalTime::Time(as_of),
             session,
             catalog_state: self.catalog.state(),
         };
         df_desc.visit_children(
-            |r| prep_relation_expr(r, style),
-            |s| prep_scalar_expr(s, style),
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
         )?;
 
         // Use the opportunity to name an `until` frontier that will prevent
