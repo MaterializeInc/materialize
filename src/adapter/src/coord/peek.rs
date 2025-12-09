@@ -446,11 +446,8 @@ pub fn create_fast_path_plan<T: Timestamp>(
         let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let Some((rows, found_typ)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
-            return Ok(Some(FastPathPlan::Constant(
-                rows.clone()
-                    .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
-                found_typ.clone(),
-            )));
+            let plan = FastPathPlan::Constant(rows.clone(), found_typ.clone());
+            return Ok(Some(plan));
         } else {
             // If there is a TopK that would be completely covered by the finishing, then jump
             // through the TopK.
