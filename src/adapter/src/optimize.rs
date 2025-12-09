@@ -58,6 +58,7 @@ pub mod index;
 pub mod materialized_view;
 pub mod peek;
 pub mod subscribe;
+pub mod unified;
 pub mod view;
 
 use std::fmt::Debug;
