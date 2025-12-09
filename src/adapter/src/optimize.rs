@@ -100,18 +100,8 @@ type LirDataflowDescription = DataflowDescription<Plan>;
 /// Each implementation represents a concrete optimization stage for a fixed
 /// statement type that consumes an input of type `From` and produces output of
 /// type `Self::To`.
-///
-/// The generic lifetime `'ctx` models the lifetime of the optimizer context and
-/// can be passed to the optimizer struct and the `Self::To` types.
-///
-/// The `'s: 'ctx` bound in the `optimize` method call ensures that an optimizer
-/// instance can run an optimization stage that produces a `Self::To` with
-/// `&'ctx` references.
-pub trait Optimize<From>: Send
-where
-    From: Send,
-{
-    type To: Send;
+pub trait Optimize<From> {
+    type To;
 
     /// Execute the optimization stage, transforming the input plan of type
     /// `From` to an output plan of type `To`.
@@ -126,17 +116,6 @@ where
     #[mz_ore::instrument(target = "optimizer", level = "debug", name = "optimize")]
     fn catch_unwind_optimize(&mut self, plan: From) -> Result<Self::To, OptimizerError> {
         mz_transform::catch_unwind_optimize(|| self.optimize(plan))
-    }
-
-    /// Execute the optimization stage and panic if an error occurs.
-    ///
-    /// See [`Optimize::optimize`].
-    #[allow(dead_code)] // This function is never used, but it's useful to keep around.
-    fn must_optimize(&mut self, expr: From) -> Self::To {
-        match self.optimize(expr) {
-            Ok(ok) => ok,
-            Err(err) => panic!("must_optimize call failed: {err}"),
-        }
     }
 }
 
