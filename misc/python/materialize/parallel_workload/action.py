@@ -868,7 +868,14 @@ class CreateTableAction(Action):
             return False
         table_id = exe.db.table_id
         exe.db.table_id += 1
-        schema = self.rng.choice(exe.db.schemas)
+        try:
+            schema = self.rng.choice(exe.db.schemas)
+        except IndexError:
+            # We mostly prevent index errors, but we don't want to lock too
+            # much since that would reduce our chance of finding race
+            # conditions in production code, so ignore the rare case where
+            # we accidentally removed all objects.
+            return False
         with schema.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -987,7 +994,14 @@ class RenameSinkAction(Action):
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
-            sink = self.rng.choice(exe.db.kafka_sinks)
+            try:
+                sink = self.rng.choice(exe.db.kafka_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with sink.lock:
             if sink not in exe.db.kafka_sinks:
                 return False
@@ -1013,7 +1027,14 @@ class AlterKafkaSinkFromAction(Action):
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
-            sink = self.rng.choice(exe.db.kafka_sinks)
+            try:
+                sink = self.rng.choice(exe.db.kafka_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with sink.lock, sink.base_object.lock:
             if sink not in exe.db.kafka_sinks:
                 return False
@@ -1086,7 +1107,14 @@ class DropDatabaseAction(Action):
         with exe.db.lock:
             if len(exe.db.dbs) <= 1:
                 return False
-            db = self.rng.choice(exe.db.dbs)
+            try:
+                db = self.rng.choice(exe.db.dbs)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with db.lock:
             # Was dropped while we were acquiring lock
             if db not in exe.db.dbs:
@@ -1107,7 +1135,14 @@ class CreateSchemaAction(Action):
                 return False
             schema_id = exe.db.schema_id
             exe.db.schema_id += 1
-        schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
+        try:
+            schema = Schema(self.rng.choice(exe.db.dbs), schema_id)
+        except IndexError:
+            # We mostly prevent index errors, but we don't want to lock too
+            # much since that would reduce our chance of finding race
+            # conditions in production code, so ignore the rare case where
+            # we accidentally removed all objects.
+            return False
         schema.create(exe)
         exe.db.schemas.append(schema)
         return True
@@ -1123,7 +1158,14 @@ class DropSchemaAction(Action):
         with exe.db.lock:
             if len(exe.db.schemas) <= 1:
                 return False
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock:
             # Was dropped while we were acquiring lock
             if schema not in exe.db.schemas:
@@ -1147,7 +1189,14 @@ class RenameSchemaAction(Action):
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -1174,7 +1223,14 @@ class SwapSchemaAction(Action):
         if exe.db.scenario != Scenario.Rename:
             return False
         with exe.db.lock:
-            db = self.rng.choice(exe.db.dbs)
+            try:
+                db = self.rng.choice(exe.db.dbs)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
             schemas = [
                 schema for schema in exe.db.schemas if schema.db.db_id == db.db_id
             ]
@@ -1602,7 +1658,14 @@ class CreateViewAction(Action):
         )
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
-        schema = self.rng.choice(exe.db.schemas)
+        try:
+            schema = self.rng.choice(exe.db.schemas)
+        except IndexError:
+            # We mostly prevent index errors, but we don't want to lock too
+            # much since that would reduce our chance of finding race
+            # conditions in production code, so ignore the rare case where
+            # we accidentally removed all objects.
+            return False
         with schema.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -1719,7 +1782,14 @@ class DropClusterAction(Action):
                 return False
             # Keep cluster 0 with 1 replica for sources/sinks
             self.rng.randrange(1, len(exe.db.clusters))
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with cluster.lock:
             # Was dropped while we were acquiring lock
             if cluster not in exe.db.clusters:
@@ -1803,7 +1873,14 @@ class SetClusterAction(Action):
         with exe.db.lock:
             if not exe.db.clusters:
                 return False
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         http = self.rng.choice([Http.NO, Http.YES])
         if self.rng.choice([True, False]):
             exe.commit(http=http)
@@ -2241,8 +2318,15 @@ class CreateWebhookSourceAction(Action):
                 return False
             webhook_source_id = exe.db.webhook_source_id
             exe.db.webhook_source_id += 1
-            cluster = self.rng.choice(exe.db.clusters)
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2265,7 +2349,14 @@ class DropWebhookSourceAction(Action):
         with exe.db.lock:
             if not exe.db.webhook_sources:
                 return False
-            source = self.rng.choice(exe.db.webhook_sources)
+            try:
+                source = self.rng.choice(exe.db.webhook_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.webhook_sources:
@@ -2284,8 +2375,15 @@ class CreateKafkaSourceAction(Action):
                 return False
             source_id = exe.db.kafka_source_id
             exe.db.kafka_source_id += 1
-            cluster = self.rng.choice(exe.db.clusters)
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2321,7 +2419,14 @@ class DropKafkaSourceAction(Action):
         with exe.db.lock:
             if not exe.db.kafka_sources:
                 return False
-            source = self.rng.choice(exe.db.kafka_sources)
+            try:
+                source = self.rng.choice(exe.db.kafka_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.kafka_sources:
@@ -2345,8 +2450,15 @@ class CreateMySqlSourceAction(Action):
                 return False
             source_id = exe.db.mysql_source_id
             exe.db.mysql_source_id += 1
-            schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2382,7 +2494,14 @@ class DropMySqlSourceAction(Action):
         with exe.db.lock:
             if not exe.db.mysql_sources:
                 return False
-            source = self.rng.choice(exe.db.mysql_sources)
+            try:
+                source = self.rng.choice(exe.db.mysql_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.mysql_sources:
@@ -2406,8 +2525,15 @@ class CreatePostgresSourceAction(Action):
                 return False
             source_id = exe.db.postgres_source_id
             exe.db.postgres_source_id += 1
-            schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2443,7 +2569,14 @@ class DropPostgresSourceAction(Action):
         with exe.db.lock:
             if not exe.db.postgres_sources:
                 return False
-            source = self.rng.choice(exe.db.postgres_sources)
+            try:
+                source = self.rng.choice(exe.db.postgres_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.postgres_sources:
@@ -2467,8 +2600,15 @@ class CreateSqlServerSourceAction(Action):
                 return False
             source_id = exe.db.sql_server_source_id
             exe.db.sql_server_source_id += 1
-            schema = self.rng.choice(exe.db.schemas)
-            cluster = self.rng.choice(exe.db.clusters)
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+                cluster = self.rng.choice(exe.db.clusters)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2506,7 +2646,14 @@ class DropSqlServerSourceAction(Action):
         with exe.db.lock:
             if not exe.db.sql_server_sources:
                 return False
-            source = self.rng.choice(exe.db.sql_server_sources)
+            try:
+                source = self.rng.choice(exe.db.sql_server_sources)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with source.lock:
             # Was dropped while we were acquiring lock
             if source not in exe.db.sql_server_sources:
@@ -2531,8 +2678,15 @@ class CreateKafkaSinkAction(Action):
                 return False
             sink_id = exe.db.kafka_sink_id
             exe.db.kafka_sink_id += 1
-            cluster = self.rng.choice(exe.db.clusters)
-            schema = self.rng.choice(exe.db.schemas)
+            try:
+                cluster = self.rng.choice(exe.db.clusters)
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with schema.lock, cluster.lock:
             if schema not in exe.db.schemas:
                 return False
@@ -2561,7 +2715,14 @@ class DropKafkaSinkAction(Action):
         with exe.db.lock:
             if not exe.db.kafka_sinks:
                 return False
-            sink = self.rng.choice(exe.db.kafka_sinks)
+            try:
+                sink = self.rng.choice(exe.db.kafka_sinks)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
         with sink.lock:
             # Was dropped while we were acquiring lock
             if sink not in exe.db.kafka_sinks:
