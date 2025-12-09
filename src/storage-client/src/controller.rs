@@ -728,6 +728,9 @@ pub trait StorageController: Debug {
         BoxFuture<Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,
     >;
+
+    /// Returns the state of the [`StorageController`] formatted as JSON.
+    fn dump(&self) -> Result<serde_json::Value, anyhow::Error>;
 }
 
 impl<T> DataSource<T> {

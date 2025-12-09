@@ -3843,34 +3843,15 @@ impl Coordinator {
             .map(|(id, read_txn)| (id.unhandled().to_string(), format!("{read_txn:?}")))
             .collect();
 
-        let map = serde_json::Map::from_iter([
-            (
-                "global_timelines".to_string(),
-                serde_json::to_value(global_timelines)?,
-            ),
-            (
-                "active_conns".to_string(),
-                serde_json::to_value(active_conns)?,
-            ),
-            (
-                "txn_read_holds".to_string(),
-                serde_json::to_value(txn_read_holds)?,
-            ),
-            (
-                "pending_peeks".to_string(),
-                serde_json::to_value(pending_peeks)?,
-            ),
-            (
-                "client_pending_peeks".to_string(),
-                serde_json::to_value(client_pending_peeks)?,
-            ),
-            (
-                "pending_linearize_read_txns".to_string(),
-                serde_json::to_value(pending_linearize_read_txns)?,
-            ),
-            ("controller".to_string(), self.controller.dump().await?),
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "global_timelines": global_timelines,
+            "active_conns": active_conns,
+            "txn_read_holds": txn_read_holds,
+            "pending_peeks": pending_peeks,
+            "client_pending_peeks": client_pending_peeks,
+            "pending_linearize_read_txns": pending_linearize_read_txns,
+            "controller": self.controller.dump().await?,
+        }))
     }
 
     /// Prune all storage usage events from the [`MZ_STORAGE_USAGE_BY_SHARD`] table that are older
