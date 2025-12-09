@@ -270,7 +270,7 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 /// `compute_peek_response_stash_threshold_bytes`.
 pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "enable_compute_peek_response_stash",
-    false,
+    true,
     "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
 );
 
@@ -279,7 +279,7 @@ pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
 /// query is "streamable" (roughly: doesn't have an ORDER BY).
 pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
     "compute_peek_response_stash_threshold_bytes",
-    1024 * 1024 * 300, /* 300mb */
+    1024 * 10, /* 10KB */
     "The threshold above which to use the peek response stash, for sending back large peek responses.",
 );
 
