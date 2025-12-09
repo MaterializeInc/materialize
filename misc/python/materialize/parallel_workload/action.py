@@ -1276,6 +1276,11 @@ class FlipFlagsAction(Action):
             "16",
             "1000",
         ]
+        self.flags_with_values["persist_gc_global_concurrency"] = [
+            "1",
+            "5",
+            "20",
+        ]
         self.flags_with_values["persist_compaction_memory_bound_bytes"] = [
             # 64 MiB, 1 * 128 MiB, 4 * 128 MiB, 8 * 128 MiB
             "67108864",

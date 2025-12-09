@@ -276,6 +276,15 @@ def get_variable_system_parameters(
             ),
         ),
         VariableSystemParameter(
+            "persist_gc_global_concurrency",
+            "5",
+            [
+                "1",
+                "5",
+                "20",
+            ],
+        ),
+        VariableSystemParameter(
             "persist_gc_min_versions",
             "16",
             ["16", "256", "1024"],
