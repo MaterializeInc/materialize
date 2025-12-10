@@ -19,6 +19,7 @@ mz-expr = { path = "../expr" }
 mz-ore = { path = "../ore", features = ["tracing", "metrics"] }
 mz-repr = { path = "../repr", features = ["tracing"] }
 mz-storage-types = { path = "../storage-types" }
+mz-catalog-types = { path = "../catalog-types" }
 serde = { version = "1.0.219", features = ["derive"] }
 timely = "0.25.1"
 tracing = "0.1.43"

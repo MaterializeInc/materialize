@@ -15,6 +15,7 @@ use std::time::Duration;
 use std::{fmt, io};
 
 use itertools::Itertools;
+use mz_catalog_types::cluster::IdParseError;
 use mz_expr::EvalError;
 use mz_mysql_util::MySqlError;
 use mz_ore::error::ErrorExt;
@@ -915,6 +916,13 @@ impl From<anyhow::Error> for PlanError {
     fn from(e: anyhow::Error) -> PlanError {
         // WIP: Do we maybe want to keep the alternate selector for these?
         sql_err!("{}", e.display_with_causes())
+    }
+}
+
+impl<V: fmt::Display> From<IdParseError<V>> for PlanError {
+    fn from(e: IdParseError<V>) -> PlanError {
+        // TODO: Add a proper variant to PlanError instead of using sql_err!
+        sql_err!("{e}")
     }
 }
 

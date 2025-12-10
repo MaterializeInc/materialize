@@ -38,6 +38,7 @@ mz-adapter-types = { path = "../adapter-types" }
 mz-audit-log = { path = "../audit-log" }
 mz-auth = { path = "../auth" }
 mz-build-info = { path = "../build-info" }
+mz-catalog-types = { path = "../catalog-types" }
 mz-ccsr = { path = "../ccsr" }
 mz-cloud-provider = { path = "../cloud-provider", default-features = false }
 mz-cloud-resources = { path = "../cloud-resources" }

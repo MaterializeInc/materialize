@@ -13,7 +13,10 @@
 
 use std::time::Duration;
 
-pub mod config;
+/// Configuration types.
+pub mod config {
+    pub use mz_catalog_types::compute::*;
+}
 pub mod dataflows;
 pub mod dyncfgs;
 pub mod explain;
