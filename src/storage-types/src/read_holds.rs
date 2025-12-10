@@ -31,10 +31,10 @@ pub type ChangeTx<T> = Arc<
 /// the issuer behind the scenes.
 pub struct ReadHold<T: TimelyTimestamp> {
     /// Identifies that collection that we have a hold on.
-    id: GlobalId,
+    pub id: GlobalId,
 
     /// The times at which we hold.
-    since: Antichain<T>,
+    pub since: Antichain<T>,
 
     /// For communicating changes to this read hold back to whoever issued it.
     change_tx: ChangeTx<T>,
