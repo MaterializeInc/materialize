@@ -147,13 +147,6 @@ pub struct CollectionDescription<T> {
     pub status_collection_id: Option<GlobalId>,
     /// The timeline of the source. Absent for materialized views, continual tasks, etc.
     pub timeline: Option<Timeline>,
-    /// The primary of this collections.
-    ///
-    /// Multiple storage collections can point to the same persist shard,
-    /// possibly with different schemas. In such a configuration, we select one
-    /// of the involved collections as the primary, who "owns" the persist
-    /// shard. All other involved collections have a dependency on the primary.
-    pub primary: Option<GlobalId>,
 }
 
 impl<T> CollectionDescription<T> {
@@ -165,7 +158,6 @@ impl<T> CollectionDescription<T> {
             since,
             status_collection_id: None,
             timeline: None,
-            primary: None,
         }
     }
 
@@ -177,7 +169,6 @@ impl<T> CollectionDescription<T> {
             since: None,
             status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
-            primary: None,
         }
     }
 }

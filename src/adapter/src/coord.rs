@@ -2754,7 +2754,6 @@ impl Coordinator {
                 since: None,
                 status_collection_id,
                 timeline: Some(timeline.clone()),
-                primary: None,
             }
         };
 
@@ -2781,14 +2780,9 @@ impl Coordinator {
                                 .collection_descs()
                                 .map(|(gid, version, desc)| (version, (gid, desc)))
                                 .collect();
-                            let collection_descs = versions.iter().map(|(version, (gid, desc))| {
-                                let next_version = version.bump();
-                                let primary_collection =
-                                    versions.get(&next_version).map(|(gid, _desc)| gid).copied();
-                                let mut collection_desc =
+                            let collection_descs = versions.values().map(|(gid, desc)| {
+                                let collection_desc =
                                     CollectionDescription::for_table(desc.clone());
-                                collection_desc.primary = primary_collection;
-
                                 (*gid, collection_desc)
                             });
                             collections.extend(collection_descs);
@@ -2869,7 +2863,6 @@ impl Coordinator {
                         since: None,
                         status_collection_id: None,
                         timeline: None,
-                        primary: None,
                     };
                     collections.push((sink.global_id, collection_desc));
                 }

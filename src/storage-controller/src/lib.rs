@@ -3276,10 +3276,6 @@ where
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let mut dependencies = Vec::new();
 
-        if let Some(id) = collection_desc.primary {
-            dependencies.push(id);
-        }
-
         match &collection_desc.data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook

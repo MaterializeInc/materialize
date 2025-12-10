@@ -976,7 +976,6 @@ impl Coordinator {
                             since: None,
                             status_collection_id: Some(global_status_collection_id),
                             timeline: Some(timeline.clone()),
-                            primary: None,
                         };
 
                         let global_id = table
@@ -1022,7 +1021,6 @@ impl Coordinator {
                             since: None,
                             status_collection_id: None, // Webhook tables don't use status collections
                             timeline: Some(timeline.clone()),
-                            primary: None,
                         };
 
                         let global_id = table
@@ -1258,7 +1256,6 @@ impl Coordinator {
                 timeline: Some(source.timeline),
                 since: None,
                 status_collection_id,
-                primary: None,
             },
         );
 
