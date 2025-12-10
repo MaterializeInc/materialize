@@ -75,6 +75,33 @@ pub struct ClusterStatusContext {
     pub problematic_replicas: i64,
 }
 
+/// A hydration status update from the SUBSCRIBE stream.
+///
+/// This represents a single update from the streaming subscription
+/// to cluster hydration status. Retractions (mz_diff == -1) are
+/// filtered out before yielding these updates.
+#[derive(Debug, Clone)]
+pub struct HydrationStatusUpdate {
+    /// Cluster name (with deployment suffix).
+    pub cluster_name: String,
+    /// Cluster ID.
+    pub cluster_id: String,
+    /// Overall status.
+    pub status: ClusterDeploymentStatus,
+    /// Reason for failure, if status is Failing.
+    pub failure_reason: Option<FailureReason>,
+    /// Number of hydrated objects.
+    pub hydrated_count: i64,
+    /// Total number of objects.
+    pub total_count: i64,
+    /// Maximum lag in seconds across all objects.
+    pub max_lag_secs: i64,
+    /// Total number of replicas.
+    pub total_replicas: i64,
+    /// Number of problematic (OOM-looping) replicas.
+    pub problematic_replicas: i64,
+}
+
 /// Create the deployment tracking schemas and tables.
 ///
 /// This creates:
@@ -93,8 +120,8 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
         .execute(
             r#"CREATE TABLE IF NOT EXISTS deploy.deployments (
             deploy_id TEXT NOT NULL,
-            deployed_at TIMESTAMP NOT NULL,
-            promoted_at TIMESTAMP,
+            deployed_at TIMESTAMPTZ NOT NULL,
+            promoted_at TIMESTAMPTZ,
             database    TEXT NOT NULL,
             schema      TEXT NOT NULL,
             deployed_by TEXT NOT NULL,

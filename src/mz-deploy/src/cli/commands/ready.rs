@@ -2,7 +2,8 @@
 
 use crate::cli::CliError;
 use crate::client::{
-    Client, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, Profile,
+    Client, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, HydrationStatusUpdate,
+    Profile,
 };
 use crossterm::{
     cursor::{Hide, MoveToColumn, MoveUp, Show},
@@ -10,9 +11,11 @@ use crossterm::{
     style::Stylize,
     terminal::{Clear, ClearType},
 };
+use futures::StreamExt;
 use owo_colors::OwoColorize;
 use std::collections::BTreeMap;
 use std::io::{self, Write};
+use std::pin::pin;
 use std::time::{Duration, Instant};
 
 /// Wait for a staging deployment to become ready by monitoring hydration status.
@@ -301,135 +304,90 @@ async fn monitor_hydration_live(
         allowed_lag_secs,
     )?;
 
-    // Subscribe to updates
-    let txn = client
-        .subscribe_deployment_hydration(deploy_id, allowed_lag_secs)
-        .await?;
+    let stream = client.subscribe_deployment_hydration(deploy_id, allowed_lag_secs);
+    let mut stream = pin!(stream);
 
     // Hide cursor during updates
     execute!(stdout, Hide).ok();
 
-    loop {
-        // Fetch next batch of updates
-        let rows = txn
-            .query("FETCH ALL c", &[])
-            .await
-            .map_err(|e| CliError::Message(format!("Failed to fetch subscription data: {}", e)))?;
+    while let Some(result) = stream.next().await {
+        let update = result.map_err(CliError::Connection)?;
 
-        let mut updated = false;
+        let status = update_to_status(&update);
 
-        for row in rows {
-            // Parse SUBSCRIBE row format:
-            // [mz_timestamp, mz_diff, cluster_name, cluster_id, status, failure_reason,
-            //  hydrated_count, total_count, max_lag_secs, total_replicas, problematic_replicas]
-            let mz_diff: i64 = row.get(1);
+        cluster_states.insert(
+            update.cluster_name.clone(),
+            ClusterStatusContext {
+                cluster_name: update.cluster_name,
+                cluster_id: update.cluster_id,
+                status,
+                hydrated_count: update.hydrated_count,
+                total_count: update.total_count,
+                max_lag_secs: update.max_lag_secs,
+                total_replicas: update.total_replicas,
+                problematic_replicas: update.problematic_replicas,
+            },
+        );
 
-            if mz_diff == -1 {
-                // Retraction - ignore
-                continue;
-            }
-
-            // Parse the new row format
-            let cluster_name: String = row.get(2);
-            let cluster_id: String = row.get(3);
-            let status_str: String = row.get(4);
-            let failure_reason: Option<String> = row.get(5);
-            let hydrated_count: i64 = row.get(6);
-            let total_count: i64 = row.get(7);
-            let max_lag_secs: i64 = row.get(8);
-            let total_replicas: i64 = row.get(9);
-            let problematic_replicas: i64 = row.get(10);
-
-            let status = parse_status(
-                &status_str,
-                failure_reason.as_deref(),
-                hydrated_count,
-                total_count,
-                max_lag_secs,
-                total_replicas,
-                problematic_replicas,
-            );
-
-            cluster_states.insert(
-                cluster_name.clone(),
-                ClusterStatusContext {
-                    cluster_name,
-                    cluster_id,
-                    status,
-                    hydrated_count,
-                    total_count,
-                    max_lag_secs,
-                    total_replicas,
-                    problematic_replicas,
-                },
-            );
-            updated = true;
+        // Move cursor up and clear, then re-render
+        #[allow(clippy::as_conversions)]
+        let lines = lines_per_render as u16;
+        execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
+        for _ in 0..lines_per_render {
+            execute!(stdout, Clear(ClearType::CurrentLine)).ok();
+            println!();
         }
+        execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
 
-        if updated {
-            // Move cursor up and clear, then re-render
-            #[allow(clippy::as_conversions)]
-            let lines = lines_per_render as u16;
-            execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
-            for _ in 0..lines_per_render {
-                execute!(stdout, Clear(ClearType::CurrentLine)).ok();
-                println!();
-            }
-            execute!(stdout, MoveUp(lines), MoveToColumn(0)).ok();
-
-            render_dashboard(
-                &mut stdout,
-                deploy_id,
-                &cluster_states,
-                start_time,
-                false,
-                allowed_lag_secs,
-            )?;
-        }
+        render_dashboard(
+            &mut stdout,
+            deploy_id,
+            &cluster_states,
+            start_time,
+            false,
+            allowed_lag_secs,
+        )?;
 
         let all_ready = cluster_states
             .values()
             .all(|ctx| matches!(ctx.status, ClusterDeploymentStatus::Ready));
 
-        execute!(stdout, Show).ok();
-
         if all_ready {
+            execute!(stdout, Show).ok();
             println!();
             println!("{}", "  All clusters are ready!".green().bold());
             return Ok(());
         }
     }
+
+    execute!(stdout, Show).ok();
+    Ok(())
 }
 
-/// Parse status from string values returned by SUBSCRIBE.
-fn parse_status(
-    status_str: &str,
-    failure_reason: Option<&str>,
-    hydrated_count: i64,
-    total_count: i64,
-    max_lag_secs: i64,
-    total_replicas: i64,
-    problematic_replicas: i64,
-) -> ClusterDeploymentStatus {
-    match status_str {
-        "ready" => ClusterDeploymentStatus::Ready,
-        "hydrating" => ClusterDeploymentStatus::Hydrating {
-            hydrated: hydrated_count,
-            total: total_count,
+/// Convert a HydrationStatusUpdate to a ClusterDeploymentStatus.
+fn update_to_status(update: &HydrationStatusUpdate) -> ClusterDeploymentStatus {
+    match update.status {
+        ClusterDeploymentStatus::Ready => ClusterDeploymentStatus::Ready,
+        ClusterDeploymentStatus::Hydrating { .. } => ClusterDeploymentStatus::Hydrating {
+            hydrated: update.hydrated_count,
+            total: update.total_count,
         },
-        "lagging" => ClusterDeploymentStatus::Lagging { max_lag_secs },
-        "failing" => {
-            let reason = match failure_reason {
-                Some("no_replicas") => FailureReason::NoReplicas,
-                Some("all_replicas_problematic") => FailureReason::AllReplicasProblematic {
-                    problematic: problematic_replicas,
-                    total: total_replicas,
-                },
-                _ => FailureReason::NoReplicas,
+        ClusterDeploymentStatus::Lagging { .. } => ClusterDeploymentStatus::Lagging {
+            max_lag_secs: update.max_lag_secs,
+        },
+        ClusterDeploymentStatus::Failing { .. } => {
+            let reason = match update.failure_reason {
+                Some(FailureReason::NoReplicas) => FailureReason::NoReplicas,
+                Some(FailureReason::AllReplicasProblematic { .. }) => {
+                    FailureReason::AllReplicasProblematic {
+                        problematic: update.problematic_replicas,
+                        total: update.total_replicas,
+                    }
+                }
+                None => FailureReason::NoReplicas,
             };
             ClusterDeploymentStatus::Failing { reason }
         }
-        _ => ClusterDeploymentStatus::Ready,
     }
 }
 
