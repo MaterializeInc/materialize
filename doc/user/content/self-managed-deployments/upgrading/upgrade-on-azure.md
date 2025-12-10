@@ -60,12 +60,17 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
 1. Configure `kubectl` to connect to your AKS cluster, replacing:
 
-   - `<your-resource-group>` with the name of your Azure resource group. Your resource group name can be found in the Terraform output or Azure portal.
+   - `<your-resource-group-name>` with your resource group name; i.e., the
+     `resource_group_name` in the Terraform output or in the
+     `terraform.tfvars` file.
 
-   - `<your-aks-cluster-name>` with the name of your AKS cluster. Your cluster name can be found in the Terraform output or Azure portal.
+   - `<your-aks-cluster-name>` with your cluster name; i.e., the
+     `aks_cluster_name` in the Terraform output. For the sample example,
+     your cluster name has the form `{prefix_name}-aks`; e.g., simple-demo-aks`.
 
    ```bash
-   az aks get-credentials --resource-group <your-resource-group> --name <your-aks-cluster-name>
+   # az aks get-credentials --resource-group <your-resource-group-name> --name <your-aks-cluster-name>
+   az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -raw aks_cluster_name)
    ```
 
    To verify that you have configured correctly, run the following command:

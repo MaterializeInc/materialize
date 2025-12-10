@@ -152,7 +152,7 @@ kubectl patch materialize <instance-name> \
   -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
-### Using YAML Definition
+#### Using YAML Definition
 
 Alternatively, you can update your Materialize custom resource definition directly:
 

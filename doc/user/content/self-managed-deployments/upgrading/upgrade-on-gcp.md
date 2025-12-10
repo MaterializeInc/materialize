@@ -60,20 +60,21 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
 1. Configure `kubectl` to connect to your GKE cluster, replacing:
 
-   - `<cluster-name>` with the name of your GKE cluster. Your cluster name can
-     be found in the Terraform output. For the sample example, the cluster name
-     is `<name_prefix>-gke`.
+   - `<your-gke-cluster-name>` with your cluster name; i.e., the
+     `gke_cluster_name` in the Terraform output. For the sample example, your
+     cluster name has the form `<name_prefix>-gke`; e.g., `simple-demo-gke`
 
-   - `<your-region>` with the region of your GKE cluster. Your region can be
-     found in the Terraform output `gke_cluster_location`, corresponds to the
-     `region` value in your `terraform.tfvars`.
+   - `<your-region>` with your cluster location; i.e., the
+     `gke_cluster_location` in the Terraform output. Your
+     region can also be found in your `terraform.tfvars` file.
 
    - `<your-project-id>` with your GCP project ID.
 
    ```bash
-   gcloud container clusters get-credentials <cluster-name>  \
-    --region <region> \
-    --project <project>
+   # gcloud container clusters get-credentials <your-gke-cluster-name> --region <your-region> --project <your-project-id>
+   gcloud container clusters get-credentials $(terraform output -raw gke_cluster_name) \
+    --region $(terraform output -raw gke_cluster_location) \
+    --project <your-project-id>
    ```
 
    To verify that you have configured correctly, run the following command:

@@ -218,20 +218,19 @@ An active Azure subscription with appropriate permissions to create:
    output did not end with a newline. Do not include the marker when using the value.
    {{< /tip >}}
 
-1. Configure `kubectl` to connect to your cluster using your:
-   - `resource_group_name`. Your
-     resource group name can be found in the Terraform output or in the
+1. Configure `kubectl` to connect to your cluster, replacing:
+   - `<your-resource-group-name>` with your resource group name; i.e., the
+     `resource_group_name` in the Terraform output or in the
      `terraform.tfvars` file.
 
-   - `akw_cluster_name`. Your cluster name can be found in the Terraform output.
-     For the sample example, your cluster name has the form `{prefix_name}-aks`;
-     e.g., simple-demo-aks`.
+   - `<your-aks-cluster-name>` with your cluster name; i.e., the
+     `aks_cluster_name` in the Terraform output. For the sample example,
+     your cluster name has the form `{prefix_name}-aks`; e.g., `simple-demo-aks`.
 
    ```bash
-   # az aks get-credentials --resource-group <resource_group_name> --name <your-aks-cluster-name>
+   # az aks get-credentials --resource-group <your-resource-group-name> --name <your-aks-cluster-name>
    az aks get-credentials --resource-group $(terraform output -raw resource_group_name) --name $(terraform output -raw aks_cluster_name)
    ```
-
 
 ### Step 4. Optional. Verify the deployment.
 
@@ -258,6 +257,12 @@ To connect to the Materialize Console, open a browser to
 `https://<console_load_balancer_ip>:8080`, substituting your
 `<console_load_balancer_ip>`.
 
+From the terminal, you can type:
+
+```sh
+open https://$(terraform output -raw  console_load_balancer_ip):8080/materialize
+```
+
 {{< tip >}}
 
 {{% include-from-yaml data="self_managed/installation"
@@ -272,7 +277,7 @@ connect to Materialize via PostgreSQL-compatible clients/drivers, such as
 `psql`:
 
 ```bash
-psql postgres://<balancerd_load_balancer_ip>:6875/materialize
+psql postgres://$(terraform output -raw balancerd_load_balancer_ip):6875/materialize
 ```
 
 

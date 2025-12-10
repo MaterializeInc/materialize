@@ -58,14 +58,27 @@ The following procedure performs a rolling upgrade, where both the old and new M
    cd materialize-terraform-self-managed/aws/examples/simple
    ```
 
-1. Configure `kubectl` to connect to your EKS cluster, replacing:
-
-   - `<your-eks-cluster-name>` with the name of your EKS cluster. Your cluster name can be found in the Terraform output or AWS console.
-
-   - `<your-region>` with the region of your EKS cluster.
+1. Ensure your AWS CLI is configured with the appropriate profile, substitute
+   `<your-aws-profile>` with the profile to use:
 
    ```bash
-   aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
+   # Set your AWS profile for the session
+   export AWS_PROFILE=<your-aws-profile>
+   ```
+
+1. Configure `kubectl` to connect to your EKS cluster, replacing:
+
+   - `<your-eks-cluster-name>` with the your cluster name; i.e., the
+     `eks_cluster_name` in the Terraform output. For the
+     sample example, your cluster name has the form `{prefix_name}-eks`; e.g.,
+     `simple-demo-eks`.
+
+   - `<your-region>` with the region of your cluster. Your region can be
+     found in your `terraform.tfvars` file; e.g., `us-east-1`.
+
+   ```bash
+   # aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
+   aws eks update-kubeconfig --name $(terraform output -raw eks_cluster_name) --region <your-region>
    ```
 
    To verify that you have configured correctly, run the following command:

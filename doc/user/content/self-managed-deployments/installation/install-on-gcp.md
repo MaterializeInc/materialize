@@ -227,19 +227,20 @@ A Google account with permission to:
    output did not end with a newline. Do not include the marker when using the value.
    {{< /tip >}}
 
-1. Configure `kubectl` to connect to your GKE cluster, using your:
-   - `gke_cluster_name`. Your cluster name can be found in the Terraform output.
-     For the sample example, your cluster
-     name your cluster name has the form `<name_prefix>-gke`.
+1. Configure `kubectl` to connect to your GKE cluster, replacing:
 
-   - `gke_cluster_location`. Your region can be
-     found in the Terraform output `gke_cluster_location`, corresponds to the
-     `region` value in your `terraform.tfvars`.
+   - `<your-gke-cluster-name>` with your cluster name; i.e., the
+     `gke_cluster_name` in the Terraform output. For the sample example, your
+     cluster name has the form `<name_prefix>-gke`; e.g., `simple-demo-gke`
 
-   - `<project-id>`. Replace with your GCP project ID.
+   - `<your-region>` with your cluster location; i.e., the
+     `gke_cluster_location` in the Terraform output. Your
+     region can also be found in your `terraform.tfvars` file.
+
+   - `<your-project-id>` with your GCP project ID.
 
    ```bash
-   # gcloud container clusters get-credentials <your-cluster-name> --region <your-region> --project <your-project-id>
+   # gcloud container clusters get-credentials <your-gke-cluster-name> --region <your-region> --project <your-project-id>
    gcloud container clusters get-credentials $(terraform output -raw gke_cluster_name) \
     --region $(terraform output -raw gke_cluster_location) \
     --project <your-project-id>
@@ -252,7 +253,6 @@ A Google account with permission to:
    name="installation-verify-status" %}}
 
 ### Step 5: Connect to Materialize
-
 
 {{< note >}}
 
@@ -271,6 +271,12 @@ To connect to the Materialize Console, open a browser to
 `https://<console_load_balancer_ip>:8080`, substituting your
 `<console_load_balancer_ip>`.
 
+From the terminal, you can type:
+
+```sh
+open https://$(terraform output -raw console_load_balancer_ip):8080/materialize
+```
+
 {{< tip >}}
 
 {{% include-from-yaml data="self_managed/installation"
@@ -285,7 +291,7 @@ connect to Materialize via PostgreSQL-compatible clients/drivers, such as
 `psql`:
 
 ```bash
-psql postgres://<balancerd_load_balancer_ip>:6875/materialize
+psql postgres://$(terraform output -raw balancerd_load_balancer_ip):6875/materialize
 ```
 
 ## Customizing Your Deployment

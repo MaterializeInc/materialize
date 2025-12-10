@@ -132,6 +132,14 @@ An active AWS account with appropriate permissions to create:
    cd materialize-terraform-self-managed/aws/examples/simple
    ```
 
+1. Ensure your AWS CLI is configured with the appropriate profile, substitute
+   `<your-aws-profile>` with the profile to use:
+
+   ```bash
+   # Set your AWS profile for the session
+   export AWS_PROFILE=<your-aws-profile>
+   ```
+
 ### Step 2: Configure Terraform Variables
 
 1. Create a `terraform.tfvars` file with the following variables:
@@ -194,17 +202,19 @@ An active AWS account with appropriate permissions to create:
    {{< /tip >}}
 
 
-1. Configure `kubectl` to connect to your cluster using your:
-   - `eks_cluster_name`. Your cluster name can be found in the Terraform output.
-     For the sample example, your cluster name has the form `{prefix_name}-eks`;
-     e.g., `simple-demo-eks`.
+1. Configure `kubectl` to connect to your cluster, replacing:
 
-   - `region`. The region specified in your `terraform.tfvars` file; e.g.,
-     `us-east-1`
+   - `<your-eks-cluster-name>` with the your cluster name; i.e., the
+     `eks_cluster_name` in the Terraform output. For the
+     sample example, your cluster name has the form `{prefix_name}-eks`; e.g.,
+     `simple-demo-eks`.
+
+   - `<your-region>` with the region of your cluster. Your region can be
+     found in your `terraform.tfvars` file; e.g., `us-east-1`.
 
    ```bash
    # aws eks update-kubeconfig --name <your-eks-cluster-name> --region <your-region>
-   aws eks update-kubeconfig --name $(terraform output -raw eks_cluster_name) --region us-east-1
+   aws eks update-kubeconfig --name $(terraform output -raw eks_cluster_name) --region <your-region>
    ```
 
 ### Step 4. Optional. Verify the deployment.
@@ -232,7 +242,13 @@ privately connected to it.
 #### Connect to the Materialize Console
 
 1. To connect to the Materialize Console, open a browser to
-    `https://<dns_name>:8080`, substituting your `<dns_name>`.
+    `https://<nlb_dns_name>:8080`, substituting your `<nlb_dns_name>`.
+
+   From the terminal, you can type:
+
+   ```sh
+   open https://$(terraform output -raw  nlb_dns_name):8080/materialize
+   ```
 
    {{< tip >}}
 
@@ -263,11 +279,11 @@ privately connected to it.
 1. To connect using `psql`, in the connection string, specify:
 
    - `mz_system` as the user
-   - Your `<dns_name>` as the host
+   - Your `<nlb_dns_name>` as the host
    - `6875` as the port:
 
    ```sh
-   psql postgres://mz_system@<dns_name>:6875/materialize
+   psql postgres://mz_system@$(terraform output -raw  nlb_dns_name):6875/materialize
    ```
 
    When prompted for the password, enter the
