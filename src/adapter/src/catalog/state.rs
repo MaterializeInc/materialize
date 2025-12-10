@@ -1306,11 +1306,12 @@ impl CatalogState {
                     .map(|gid| self.get_entry_by_global_id(&gid).id())
                     .collect();
 
+                let typ = raw_expr.top_level_typ();
                 CatalogItem::View(View {
                     create_sql: view.create_sql,
                     global_id,
                     raw_expr,
-                    desc: RelationDesc::new(optimized_expr.typ(), view.column_names),
+                    desc: RelationDesc::new(typ, view.column_names),
                     optimized_expr,
                     conn_id: None,
                     resolved_ids,
@@ -1368,7 +1369,7 @@ impl CatalogState {
                         (Arc::new(raw_expr), Arc::new(optimized_expr))
                     }
                 };
-                let mut typ = optimized_expr.typ();
+                let mut typ = raw_expr.top_level_typ();
                 for &i in &materialized_view.non_null_assertions {
                     typ.column_types[i].nullable = false;
                 }

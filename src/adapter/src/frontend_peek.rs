@@ -1087,6 +1087,7 @@ impl PeekClient {
                 // Continue with normal execution
                 // # From peek_finish
 
+                // The typ here was generated from the HIR SQL type and simply stored in LIR.
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
                 coord::sequencer::emit_optimizer_notices(

@@ -36,7 +36,7 @@ use mz_compute_types::sinks::{
 use mz_expr::{MirRelationExpr, OptimizedMirRelationExpr};
 use mz_repr::explain::trace_plan;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{ColumnName, GlobalId, RelationDesc};
+use mz_repr::{ColumnName, GlobalId, RelationDesc, SqlRelationType};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
@@ -139,6 +139,7 @@ impl Optimizer {
 pub struct LocalMirPlan {
     expr: MirRelationExpr,
     df_meta: DataflowMetainfo,
+    typ: SqlRelationType,
 }
 
 /// The (sealed intermediate) result after:
@@ -192,6 +193,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
+        let typ = expr.top_level_typ();
         let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
@@ -208,7 +210,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         self.duration += time.elapsed();
 
         // Return the (sealed) plan at the end of this optimization step.
-        Ok(LocalMirPlan { expr, df_meta })
+        Ok(LocalMirPlan { expr, df_meta, typ })
     }
 }
 
@@ -220,13 +222,16 @@ impl LocalMirPlan {
 
 /// This is needed only because the pipeline in the bootstrap code starts from an
 /// [`OptimizedMirRelationExpr`] attached to a [`mz_catalog::memory::objects::CatalogItem`].
-impl Optimize<OptimizedMirRelationExpr> for Optimizer {
+impl Optimize<(OptimizedMirRelationExpr, SqlRelationType)> for Optimizer {
     type To = GlobalMirPlan;
 
-    fn optimize(&mut self, expr: OptimizedMirRelationExpr) -> Result<Self::To, OptimizerError> {
+    fn optimize(
+        &mut self,
+        (expr, typ): (OptimizedMirRelationExpr, SqlRelationType),
+    ) -> Result<Self::To, OptimizerError> {
         let expr = expr.into_inner();
         let df_meta = DataflowMetainfo::default();
-        self.optimize(LocalMirPlan { expr, df_meta })
+        self.optimize(LocalMirPlan { expr, df_meta, typ })
     }
 }
 
@@ -239,7 +244,8 @@ impl Optimize<LocalMirPlan> for Optimizer {
         let expr = OptimizedMirRelationExpr(plan.expr);
         let mut df_meta = plan.df_meta;
 
-        let mut rel_typ = expr.typ();
+        // We may not have a stored HIR SQL type from the plan if we're using a cached plan.
+        let mut rel_typ = plan.typ;
         for &i in self.non_null_assertions.iter() {
             rel_typ.column_types[i].nullable = false;
         }
