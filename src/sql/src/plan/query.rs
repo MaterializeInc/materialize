@@ -551,7 +551,8 @@ pub fn plan_copy_item(
                 // If one a column from the table does not exist in the source data, then a default
                 // value will get appended to the end of the input Row from the source data.
                 let hir = plan_default_expr(scx, &col_default, &col_type.scalar_type)?;
-                let mir = hir.lower_uncorrelated()?;
+                let mir =
+                    hir.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
                 project_keys.push(source_column_names.len() + default_exprs.len());
                 default_exprs.push(mir);
             }
@@ -1128,7 +1129,7 @@ pub fn plan_secret_as(
     };
     let expr = plan_expr(ecx, &expr)?
         .type_as(ecx, &SqlScalarType::Bytes)?
-        .lower_uncorrelated()?;
+        .lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
     Ok(expr)
 }
 
@@ -1279,7 +1280,7 @@ pub fn plan_webhook_validate_using(
     };
     let expr = plan_expr(ecx, &expr)?
         .type_as(ecx, &SqlScalarType::Bool)?
-        .lower_uncorrelated()?;
+        .lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
     let validation = WebhookValidation {
         expression: expr,
         relation_desc: desc,
@@ -1342,7 +1343,7 @@ pub fn plan_params<'a>(
                 ecx.humanize_scalar_type(&actual_ty, false),
             ));
         }
-        let ex = ex.lower_uncorrelated()?;
+        let ex = ex.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
         let evaled = ex.eval(&[], temp_storage)?;
         packer.push(evaled);
         actual_types.push(actual_ty);
@@ -1400,7 +1401,8 @@ pub fn plan_index_exprs<'a>(
     for mut expr in exprs {
         transform_ast::transform(scx, &mut expr)?;
         let expr = plan_expr_or_col_index(ecx, &expr)?;
-        let mut expr = expr.lower_uncorrelated()?;
+        let mut expr =
+            expr.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
         expr.reduce(&on_desc.typ().column_types);
         out.push(expr);
     }
@@ -1479,7 +1481,8 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
 
             let limit = if limit.is_constant() {
                 let arena = RowArena::new();
-                let limit = limit.lower_uncorrelated()?;
+                let limit = limit
+                    .lower_uncorrelated(qcx.scx.catalog.system_vars().enable_cast_elimination())?;
 
                 // TODO: Don't use ? on eval, but instead wrap the error and add the information
                 // that the error happened in a LIMIT clause, so that we have better error msg for

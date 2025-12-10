@@ -111,7 +111,7 @@ pub fn plan_insert(
         .into_iter()
         .map(|mut expr| {
             expr.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-            expr.lower_uncorrelated()
+            expr.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())
         })
         .collect::<Result<Vec<_>, _>>()?;
 
@@ -171,7 +171,7 @@ pub fn plan_read_then_write(
     let mut assignments_outer = BTreeMap::new();
     for (idx, mut set) in assignments {
         set.bind_parameters(scx, QueryLifetime::OneShot, params)?;
-        let set = set.lower_uncorrelated()?;
+        let set = set.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
         assignments_outer.insert(idx, set);
     }
 
