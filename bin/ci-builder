@@ -329,54 +329,73 @@ case "$cmd" in
                 --env "GITHUB_OUTPUT=/tmp/github-output"
             )
         fi
-        if [[ "$(uname -s)" = Linux ]]; then
-            # Allow Docker-in-Docker by mounting the Docker socket in the
-            # container. Host networking allows us to see ports created by
-            # containers that we launch.
-            args+=(
-                --volume "/var/run/docker.sock:/var/run/docker.sock"
-                --user "$(id -u):$(stat -c %g /var/run/docker.sock)"
-                --network host
-                --env "DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY-}"
-                --env "DOCKER_HOST=${DOCKER_HOST-}"
-            )
 
-            # Forward Docker daemon certificates, if requested.
-            if [[ "${DOCKER_CERT_PATH:-}" ]]; then
-                args+=(
-                    --volume "$DOCKER_CERT_PATH:/docker-certs"
-                    --env "DOCKER_CERT_PATH=/docker-certs"
-                )
-            fi
-
-            # Forward Docker configuration too, if available.
-            docker_dir=${DOCKER_CONFIG:-$HOME/.docker}
-            if [[ -d "$docker_dir" ]]; then
-                args+=(
-                    --volume "$docker_dir:/docker"
-                    --env "DOCKER_CONFIG=/docker"
-                )
-            fi
-
-            # Override the Docker daemon we use to run the builder itself, if
-            # requested.
-            export DOCKER_HOST=${MZ_DEV_CI_BUILDER_DOCKER_HOST-${DOCKER_HOST-}}
-            export DOCKER_TLS_VERIFY=${MZ_DEV_CI_BUILDER_DOCKER_TLS_VERIFY-${DOCKER_TLS_VERIFY-}}
-            export DOCKER_CERT_PATH=${MZ_DEV_CI_BUILDER_DOCKER_CERT_PATH-${DOCKER_CERT_PATH-}}
-
-            # Forward the host's buildkite-agent binary, if available.
-            if command -v buildkite-agent > /dev/null 2>&1; then
-                args+=(--volume "$(command -v buildkite-agent)":/usr/local/bin/buildkite-agent)
-            fi
-
-            # Install a persistent volume to hold Cargo metadata. We can't
-            # forward the host's `~/.cargo` directly to the container, since
-            # that can forward binaries in `~/.cargo/bin` that override the
-            # version of Cargo installed in the container (!).
-            args+=(--volume "mz-ci-builder-cargo:/cargo")
+        ORBSTACK_SOCK="$HOME/.orbstack/run/docker.sock"
+        DOCKER_DESKTOP_SOCK="$HOME/.docker/run/docker.sock"
+        ROOT_SOCK="/var/run/docker.sock"
+        if [ -S "$ORBSTACK_SOCK" ]; then
+            DOCKER_SOCK="$ORBSTACK_SOCK"
+        elif [ -S "$DOCKER_DESKTOP_SOCK" ]; then
+            DOCKER_SOCK="$DOCKER_DESKTOP_SOCK"
+        elif [ -S "$ROOT_SOCK" ]; then
+            DOCKER_SOCK=$ROOT_SOCK
         else
-            args+=(--user "$(id -u):1001")
+            DOCKER_SOCK=
         fi
+
+        # Allow Docker-in-Docker by mounting the Docker socket in the
+        # container. Host networking allows us to see ports created by
+        # containers that we launch.
+        if [ -n "$DOCKER_SOCK" ]; then
+            args+=(--volume "$DOCKER_SOCK:$DOCKER_SOCK")
+            if [[ "$(uname -s)" = Linux ]]; then
+                args+=(--user "$(id -u):$(stat -c %g "$DOCKER_SOCK")")
+            else
+                args+=(--user "$(id -u):$(ls -lnd "$DOCKER_SOCK" | awk '{print $4'})")
+            fi
+
+        fi
+
+        args+=(
+            --network host
+            --env "DOCKER_TLS_VERIFY=${DOCKER_TLS_VERIFY-}"
+            --env "DOCKER_HOST=${DOCKER_HOST-}"
+        )
+
+        # Forward Docker daemon certificates, if requested.
+        if [[ "${DOCKER_CERT_PATH:-}" ]]; then
+            args+=(
+                --volume "$DOCKER_CERT_PATH:/docker-certs"
+                --env "DOCKER_CERT_PATH=/docker-certs"
+            )
+        fi
+
+        # Forward Docker configuration too, if available.
+        docker_dir=${DOCKER_CONFIG:-$HOME/.docker}
+        if [[ -d "$docker_dir" ]]; then
+            args+=(
+                --volume "$docker_dir:/docker"
+                --env "DOCKER_CONFIG=/docker"
+            )
+        fi
+
+        # Override the Docker daemon we use to run the builder itself, if
+        # requested.
+        export DOCKER_HOST=${MZ_DEV_CI_BUILDER_DOCKER_HOST-${DOCKER_HOST-}}
+        export DOCKER_TLS_VERIFY=${MZ_DEV_CI_BUILDER_DOCKER_TLS_VERIFY-${DOCKER_TLS_VERIFY-}}
+        export DOCKER_CERT_PATH=${MZ_DEV_CI_BUILDER_DOCKER_CERT_PATH-${DOCKER_CERT_PATH-}}
+
+        # Forward the host's buildkite-agent binary, if available.
+        if command -v buildkite-agent > /dev/null 2>&1; then
+            args+=(--volume "$(command -v buildkite-agent)":/usr/local/bin/buildkite-agent)
+        fi
+
+        # Install a persistent volume to hold Cargo metadata. We can't
+        # forward the host's `~/.cargo` directly to the container, since
+        # that can forward binaries in `~/.cargo/bin` that override the
+        # version of Cargo installed in the container (!).
+        args+=(--volume "mz-ci-builder-cargo:/cargo")
+
         if [[ "${CI_BUILDER_SCCACHE:-}" ]]; then
             args+=(
                 --env "RUSTC_WRAPPER=sccache"
