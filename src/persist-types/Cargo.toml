@@ -28,7 +28,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.145" }
 timely = "0.25.1"
 tracing = "0.1.43"
-uuid = { version = "1.18.1", features = ["v4"] }
+uuid = { version = "1.19.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

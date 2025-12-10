@@ -74,7 +74,7 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
-insta = { version = "1.43.2", features = ["json"] }
+insta = { version = "1.44.3", features = ["json"] }
 itertools = { version = "0.13.0" }
 libc = { version = "0.2.178", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
@@ -147,7 +147,7 @@ tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
-uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -180,7 +180,7 @@ bytemuck = { version = "1.24.0", default-features = false, features = ["latest_s
 bytes = { version = "1.10.1", features = ["serde"] }
 cc = { version = "1.2.48", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
-clang-sys = { version = "1.3.0", default-features = false, features = ["clang_11_0", "runtime"] }
+clang-sys = { version = "1.8.1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
@@ -214,7 +214,7 @@ hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
 hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
-insta = { version = "1.43.2", features = ["json"] }
+insta = { version = "1.44.3", features = ["json"] }
 itertools = { version = "0.13.0" }
 libc = { version = "0.2.178", features = ["extra_traits", "use_std"] }
 libz-sys = { version = "1.1.23", features = ["static"] }
@@ -290,7 +290,7 @@ tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
-uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }

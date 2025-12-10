@@ -79,7 +79,7 @@ tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.17", features = ["compat"] }
 tonic = "0.12.1"
 url = "2.5.7"
-uuid = "1.18.1"
+uuid = "1.19.0"
 walkdir = "2.5.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

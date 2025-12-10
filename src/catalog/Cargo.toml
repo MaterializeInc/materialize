@@ -67,12 +67,12 @@ thiserror = "2.0.17"
 timely = "0.25.1"
 tokio = { version = "1.48.0" }
 tracing = "0.1.43"
-uuid = "1.18.1"
+uuid = "1.19.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 base64 = "0.22.1"
-insta = "1.43"
+insta = "1.44"
 
 [features]
 default = ["workspace-hack"]

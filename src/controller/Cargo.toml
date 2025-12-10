@@ -39,7 +39,7 @@ serde_json = "1.0.145"
 timely = "0.25.1"
 tokio = "1.48.0"
 tracing = "0.1.43"
-uuid = { version = "1.18.1" }
+uuid = { version = "1.19.0" }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

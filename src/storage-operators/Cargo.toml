@@ -55,7 +55,7 @@ tokio-stream = "0.1.17"
 tokio-util = { version = "0.7.17", features = ["io"] }
 tracing = "0.1.43"
 url = "2.5.7"
-uuid = { version = "1.18.1", features = ["v4"] }
+uuid = { version = "1.19.0", features = ["v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

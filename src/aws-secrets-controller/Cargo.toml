@@ -25,7 +25,7 @@ mz-secrets = { path = "../secrets", default-features = false }
 mz-repr = { path = "../repr", default-features = false }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 tracing = "0.1.43"
-uuid = "1.18.1"
+uuid = "1.19.0"
 
 [features]
 default = ["workspace-hack"]

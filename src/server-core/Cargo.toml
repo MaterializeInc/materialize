@@ -28,7 +28,7 @@ mz-ore = { path = "../ore", default-features = false, features = ["async", "netw
 tokio = "1.48.0"
 tokio-metrics = "0.4.6"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-uuid = { version = "1.18.1", features = ["v4"] }
+uuid = { version = "1.19.0", features = ["v4"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
