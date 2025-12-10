@@ -247,7 +247,7 @@ privately connected to it.
    From the terminal, you can type:
 
    ```sh
-   open https://$(terraform output -raw  nlb_dns_name):8080/materialize
+   open "https://$(terraform output -raw  nlb_dns_name):8080/materialize"
    ```
 
    {{< tip >}}
@@ -283,7 +283,7 @@ privately connected to it.
    - `6875` as the port:
 
    ```sh
-   psql postgres://mz_system@$(terraform output -raw  nlb_dns_name):6875/materialize
+   psql "postgres://mz_system@$(terraform output -raw  nlb_dns_name):6875/materialize"
    ```
 
    When prompted for the password, enter the

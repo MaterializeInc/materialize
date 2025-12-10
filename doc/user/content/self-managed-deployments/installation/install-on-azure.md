@@ -260,7 +260,7 @@ To connect to the Materialize Console, open a browser to
 From the terminal, you can type:
 
 ```sh
-open https://$(terraform output -raw  console_load_balancer_ip):8080/materialize
+open "https://$(terraform output -raw  console_load_balancer_ip):8080/materialize"
 ```
 
 {{< tip >}}
@@ -277,7 +277,7 @@ connect to Materialize via PostgreSQL-compatible clients/drivers, such as
 `psql`:
 
 ```bash
-psql postgres://$(terraform output -raw balancerd_load_balancer_ip):6875/materialize
+psql "postgres://$(terraform output -raw balancerd_load_balancer_ip):6875/materialize"
 ```
 
 
