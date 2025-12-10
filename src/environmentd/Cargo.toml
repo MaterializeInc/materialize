@@ -165,7 +165,7 @@ tokio-postgres = { version = "0.7.15", features = ["with-chrono-0_4"] }
 
 [build-dependencies]
 anyhow = "1.0.100"
-cc = "1.2.48"
+cc = "1.2.49"
 mz-npm = { path = "../npm" }
 
 [features]
