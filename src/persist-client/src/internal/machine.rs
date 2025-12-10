@@ -9,7 +9,7 @@
 
 //! Implementation of the persist state machine.
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -945,22 +945,29 @@ where
         self.applier.verify_listen(as_of)
     }
 
-    pub async fn next_listen_batch(
+    /// Block until the upper is larger than the provided frontier.
+    ///
+    /// This is cancel-safe!
+    pub async fn wait_for_upper_past(
         &self,
         frontier: &Antichain<T>,
         watch: &mut StateWatch<K, V, T, D>,
-        reader_id: Option<&LeasedReaderId>,
-        // If Some, an override for the default listen sleep retry parameters.
-        retry: Option<RetryParameters>,
-    ) -> HollowBatch<T> {
-        let mut seqno = match self.applier.next_listen_batch(frontier) {
-            Ok(b) => return b,
+        log_context: &(dyn Display + Sync),
+        retry: RetryParameters,
+    ) -> Antichain<T> {
+        let mut seqno = match self.applier.upper(|seqno, upper| {
+            if PartialOrder::less_than(frontier, upper) {
+                Ok(upper.clone())
+            } else {
+                Err(seqno)
+            }
+        }) {
+            Ok(upper) => return upper,
             Err(seqno) => seqno,
         };
 
         // The latest state still doesn't have a new frontier for us:
         // watch+sleep in a loop until it does.
-        let retry = retry.unwrap_or_else(|| next_listen_batch_retry_params(&self.applier.cfg));
         let sleeps = self
             .applier
             .metrics
@@ -976,13 +983,13 @@ where
             watch
                 .wait_for_seqno_ge(seqno.next())
                 .map(Wake::Watch)
-                .instrument(trace_span!("snapshot::watch"))
+                .instrument(trace_span!("wait_for_upper_past::sleep"))
         );
         let mut sleep_fut = std::pin::pin!(
             sleeps
                 .sleep()
                 .map(Wake::Sleep)
-                .instrument(trace_span!("snapshot::sleep"))
+                .instrument(trace_span!("wait_for_upper_past::sleep"))
         );
 
         loop {
@@ -1001,8 +1008,8 @@ where
                 }
             }
 
-            seqno = match self.applier.next_listen_batch(frontier) {
-                Ok(b) => {
+            let new_seqno = match self.applier.upper(|seqno, upper| {
+                if PartialOrder::less_than(frontier, upper) {
                     match &wake {
                         Wake::Watch(_) => {
                             self.applier.metrics.watch.listen_resolved_via_watch.inc()
@@ -1010,11 +1017,17 @@ where
                         Wake::Sleep(_) => {
                             self.applier.metrics.watch.listen_resolved_via_sleep.inc()
                         }
-                    }
-                    return b;
+                    };
+                    Ok(upper.clone())
+                } else {
+                    Err(seqno)
                 }
+            }) {
+                Ok(upper) => return upper,
                 Err(seqno) => seqno,
             };
+
+            seqno = new_seqno;
 
             // Wait a bit and try again. Intentionally don't ever log
             // this at info level.
@@ -1024,13 +1037,13 @@ where
                         watch
                             .wait_for_seqno_ge(seqno.next())
                             .map(Wake::Watch)
-                            .instrument(trace_span!("snapshot::watch")),
+                            .instrument(trace_span!("wait_for_upper_past::sleep")),
                     );
                 }
                 Wake::Sleep(sleeps) => {
                     debug!(
-                        "{:?}: {} {} next_listen_batch didn't find new data, retrying in {:?}",
-                        reader_id,
+                        "{}: {} {} wait_for_upper_past didn't find new data, retrying in {:?}",
+                        log_context,
                         self.applier.shard_metrics.name,
                         self.shard_id(),
                         sleeps.next_sleep()
@@ -1039,9 +1052,38 @@ where
                         sleeps
                             .sleep()
                             .map(Wake::Sleep)
-                            .instrument(trace_span!("snapshot::sleep")),
+                            .instrument(trace_span!("wait_for_upper_past::sleep")),
                     );
                 }
+            }
+        }
+    }
+
+    pub async fn next_listen_batch(
+        &self,
+        frontier: &Antichain<T>,
+        watch: &mut StateWatch<K, V, T, D>,
+        reader_id: &LeasedReaderId,
+        // If Some, an override for the default listen sleep retry parameters.
+        retry: Option<RetryParameters>,
+    ) -> HollowBatch<T> {
+        let upper = self
+            .wait_for_upper_past(
+                frontier,
+                watch,
+                reader_id,
+                retry.unwrap_or(next_listen_batch_retry_params(&self.applier.cfg)),
+            )
+            .await;
+
+        match self.applier.next_listen_batch(frontier) {
+            Ok(batch) => batch,
+            Err(seqno) => {
+                panic!(
+                    "{reader_id}: upper {upper:?} is past {frontier:?}, but no batches were available at seqno {seqno}",
+                    upper = &upper[..],
+                    frontier = &frontier[..]
+                );
             }
         }
     }
@@ -1333,7 +1375,7 @@ pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new
     "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
 );
 
-fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
+pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {
     RetryParameters {
         fixed_sleep: NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP.get(cfg),
         initial_backoff: NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF.get(cfg),

@@ -45,7 +45,9 @@ use crate::fetch::{
 };
 use crate::internal::compact::{CompactConfig, Compactor};
 use crate::internal::encoding::{Schemas, assert_code_can_read_data};
-use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
+use crate::internal::machine::{
+    CompareAndAppendRes, ExpireFn, Machine, next_listen_batch_retry_params,
+};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
 use crate::read::ReadHandle;
@@ -974,12 +976,17 @@ where
     /// Blocks until the given `frontier` is less than the upper of the shard.
     pub async fn wait_for_upper_past(&mut self, frontier: &Antichain<T>) {
         let mut watch = self.machine.applier.watch();
-        let batch = self
+        let new_upper = self
             .machine
-            .next_listen_batch(frontier, &mut watch, None, None)
+            .wait_for_upper_past(
+                frontier,
+                &mut watch,
+                &self.writer_id,
+                next_listen_batch_retry_params(&self.machine.applier.cfg),
+            )
             .await;
-        if PartialOrder::less_than(&self.upper, batch.desc.upper()) {
-            self.upper.clone_from(batch.desc.upper());
+        if PartialOrder::less_than(&self.upper, &new_upper) {
+            self.upper = new_upper;
         }
         assert!(PartialOrder::less_than(frontier, &self.upper));
     }

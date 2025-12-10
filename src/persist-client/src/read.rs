@@ -294,7 +294,7 @@ where
             .next_listen_batch(
                 &self.frontier,
                 &mut self.watch,
-                Some(&self.handle.reader_id),
+                &self.handle.reader_id,
                 retry,
             )
             .await;
