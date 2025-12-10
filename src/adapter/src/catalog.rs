@@ -3422,7 +3422,9 @@ mod tests {
         // otherwise ignoring eval errors. We also do various other checks.
         let res = (op.0)(&ecx, scalars, &imp.params, vec![]);
         if let Ok(hir) = res {
-            if let Ok(mut mir) = hir.lower_uncorrelated() {
+            if let Ok(mut mir) =
+                hir.lower_uncorrelated(catalog.system_config().enable_cast_elimination())
+            {
                 // Populate unmaterialized functions.
                 prep_scalar_expr(&mut mir, prep_style.clone()).expect("must succeed");
 

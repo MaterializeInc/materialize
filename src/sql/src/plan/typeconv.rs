@@ -962,7 +962,7 @@ pub fn to_jsonb(ecx: &ExprContext, expr: HirScalarExpr) -> HirScalarExpr {
             // an expression that references the first column in a row.
             let cast_element = to_jsonb(&ecx, HirScalarExpr::column(0));
             let cast_element = cast_element
-                .lower_uncorrelated()
+                .lower_uncorrelated(ecx.catalog().system_vars().enable_cast_elimination())
                 .expect("to_jsonb does not produce correlated expressions on uncorrelated input");
 
             // The `Cast{Array|List}ToJsonb` functions take the element-casting
@@ -1220,7 +1220,7 @@ pub fn plan_hypothetical_cast(
     plan_cast(&ecx, ccx, col_expr, to)
         .ok()?
         // TODO(jkosh44) Support casts that have correlated implementations.
-        .lower_uncorrelated()
+        .lower_uncorrelated(ecx.catalog().system_vars().enable_cast_elimination())
         .ok()
 }
 

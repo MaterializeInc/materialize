@@ -4032,7 +4032,8 @@ fn kafka_sink_builder(
                 CastContext::Assignment,
                 &SqlScalarType::UInt64,
             )?;
-            let expr = expr.lower_uncorrelated()?;
+            let expr =
+                expr.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
 
             Some(expr)
         }
