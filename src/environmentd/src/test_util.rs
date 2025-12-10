@@ -167,6 +167,7 @@ impl Default for TestHarness {
                             internal: false,
                             metrics: false,
                             profiling: false,
+                            mcp: false,
                         },
                     },
                     "internal".to_owned() => HttpListenerConfig {
@@ -182,6 +183,7 @@ impl Default for TestHarness {
                             internal: true,
                             metrics: true,
                             profiling: true,
+                            mcp: false,
                         },
                     },
                 ],
@@ -338,6 +340,7 @@ impl TestHarness {
                         internal: false,
                         metrics: false,
                         profiling: false,
+                        mcp: false,
                     },
                 },
                 "internal".to_owned() => HttpListenerConfig {
@@ -353,6 +356,7 @@ impl TestHarness {
                         internal: true,
                         metrics: true,
                         profiling: true,
+                        mcp: false,
                     },
                 },
             },
@@ -386,6 +390,7 @@ impl TestHarness {
                         internal: true,
                         metrics: false,
                         profiling: true,
+                        mcp: false,
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
@@ -401,6 +406,7 @@ impl TestHarness {
                         internal: false,
                         metrics: true,
                         profiling: false,
+                        mcp: false,
                     },
                 },
             },
@@ -434,6 +440,7 @@ impl TestHarness {
                         internal: true,
                         metrics: false,
                         profiling: true,
+                        mcp: false,
                     },
                 },
                 "metrics".to_owned() => HttpListenerConfig {
@@ -449,6 +456,7 @@ impl TestHarness {
                         internal: false,
                         metrics: true,
                         profiling: false,
+                        mcp: false,
                     },
                 },
             },

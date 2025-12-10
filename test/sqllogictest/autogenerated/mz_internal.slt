@@ -308,6 +308,14 @@ SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object
 3  next_refresh  mz_timestamp
 
 query ITT
+SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_mcp_data_products' ORDER BY position
+----
+1  object_name  text
+2  cluster  text
+3  description  text
+4  schema  jsonb
+
+query ITT
 SELECT position, name, type FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_dependencies' ORDER BY position
 ----
 1  object_id  text
@@ -736,6 +744,7 @@ mz_materialization_dependencies
 mz_materialization_lag
 mz_materialized_view_refresh_strategies
 mz_materialized_view_refreshes
+mz_mcp_data_products
 mz_mysql_source_tables
 mz_network_policies
 mz_network_policy_rules

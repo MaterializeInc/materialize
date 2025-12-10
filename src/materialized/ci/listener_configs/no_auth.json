@@ -24,7 +24,8 @@
         "webhook": true,
         "internal": false,
         "metrics": false,
-        "profiling": false
+        "profiling": false,
+        "mcp": true
       }
     },
     "internal": {
@@ -37,7 +38,8 @@
         "webhook": true,
         "internal": true,
         "metrics": true,
-        "profiling": true
+        "profiling": true,
+        "mcp": true
       }
     }
   }

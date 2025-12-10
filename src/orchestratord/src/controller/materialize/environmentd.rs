@@ -1689,6 +1689,7 @@ fn create_connection_info(
                     internal: false,
                     metrics: false,
                     profiling: false,
+                    mcp: false,
                 }
             },
             "internal".to_owned() => HttpListenerConfig{
@@ -1705,6 +1706,7 @@ fn create_connection_info(
                     internal: true,
                     metrics: true,
                     profiling: true,
+                    mcp: false,
                 }
             },
         },
@@ -1746,6 +1748,7 @@ fn create_connection_info(
                     internal: false,
                     metrics: true,
                     profiling: false,
+                    mcp: false,
                 },
             },
         );
