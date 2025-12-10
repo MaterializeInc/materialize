@@ -907,6 +907,7 @@ impl PeekClient {
 
                 // TODO(peek-seq): statement logging
 
+                // The typ here was generated from the HIR SQL type and simply stored in LIR.
                 let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
 
                 // Warning: Do not bail out from the new peek sequencing after this point, because the

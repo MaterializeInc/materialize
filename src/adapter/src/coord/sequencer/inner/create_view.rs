@@ -391,6 +391,7 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        let typ = raw_expr.top_level_typ();
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -405,7 +406,7 @@ impl Coordinator {
                     create_sql: create_sql.clone(),
                     global_id,
                     raw_expr: raw_expr.into(),
-                    desc: RelationDesc::new(optimized_expr.typ(), column_names.clone()),
+                    desc: RelationDesc::new(typ, column_names.clone()),
                     optimized_expr: optimized_expr.into(),
                     conn_id: if temporary {
                         Some(session.conn_id().clone())
