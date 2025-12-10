@@ -17,7 +17,7 @@ thiserror = "2.0.17"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-datadriven = "0.8.0"
+datadriven = "0.9.0"
 mz-sql-parser = { path = "../sql-parser", features = ["test"] }
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
 

@@ -20,7 +20,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 
 [dev-dependencies]
 anyhow = "1.0.100"
-datadriven = "0.8.0"
+datadriven = "0.9.0"
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]
