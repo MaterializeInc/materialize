@@ -1,5 +1,6 @@
 ---
 source: src/catalog/tests/open.rs
+assertion_line: 518
 expression: test_snapshot
 ---
 Snapshot {
@@ -1479,7 +1480,7 @@ Snapshot {
             ),
             database_id: None,
             schema_id: None,
-            object_type: Type,
+            object_type: 7,
             grantee: Some(
                 RoleId {
                     value: Some(
@@ -1508,36 +1509,7 @@ Snapshot {
             ),
             database_id: None,
             schema_id: None,
-            object_type: Cluster,
-            grantee: Some(
-                RoleId {
-                    value: Some(
-                        System(
-                            2,
-                        ),
-                    ),
-                },
-            ),
-        }: DefaultPrivilegesValue {
-            privileges: Some(
-                AclMode {
-                    bitflags: 256,
-                },
-            ),
-        },
-        DefaultPrivilegesKey {
-            role_id: Some(
-                RoleId {
-                    value: Some(
-                        Public(
-                            Empty,
-                        ),
-                    ),
-                },
-            ),
-            database_id: None,
-            schema_id: None,
-            object_type: Database,
+            object_type: 9,
             grantee: Some(
                 RoleId {
                     value: Some(
@@ -1566,7 +1538,36 @@ Snapshot {
             ),
             database_id: None,
             schema_id: None,
-            object_type: Schema,
+            object_type: 13,
+            grantee: Some(
+                RoleId {
+                    value: Some(
+                        System(
+                            2,
+                        ),
+                    ),
+                },
+            ),
+        }: DefaultPrivilegesValue {
+            privileges: Some(
+                AclMode {
+                    bitflags: 256,
+                },
+            ),
+        },
+        DefaultPrivilegesKey {
+            role_id: Some(
+                RoleId {
+                    value: Some(
+                        Public(
+                            Empty,
+                        ),
+                    ),
+                },
+            ),
+            database_id: None,
+            schema_id: None,
+            object_type: 14,
             grantee: Some(
                 RoleId {
                     value: Some(

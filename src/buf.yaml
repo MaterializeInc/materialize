@@ -15,32 +15,6 @@ breaking:
   use:
     - WIRE
   ignore:
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v67.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v68.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v69.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v70.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v71.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v72.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v73.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v74.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v75.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v76.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v77.proto
-    # reason: does currently not require backward-compatibility
-    - catalog-protos/protos/objects_v78.proto
     # reason: Ignore because plans are currently not persisted.
     - expr/src/scalar.proto
     # reason: we very carefully evolve these protobuf definitions

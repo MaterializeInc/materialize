@@ -16,25 +16,19 @@ mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-sql = { path = "../sql" }
 mz-storage-types = { path = "../storage-types" }
-paste = "1.0.11"
+num_enum = "0.7.4"
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
-prost = "0.13.5"
+proptest-derive = "0.7.0"
 serde = { version = "1.0.219", features = ["derive"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-mz-build-tools = { path = "../build-tools", default-features = false }
 mz-ore = { path = "../ore", features = ["test"] }
-mz-proto = { path = "../proto" }
-proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 similar-asserts = "1.7"
 
 [build-dependencies]
 anyhow = "1.0.100"
 md-5 = "0.10.6"
-mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
 
