@@ -597,7 +597,7 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(NORMALIZE) => self.parse_normalize_expr(),
             Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
-            Token::Keyword(kw) if kw.is_reserved() => {
+            Token::Keyword(kw) if kw.is_always_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
                     format!("expected expression, but found reserved keyword: {kw}"),
@@ -7051,6 +7051,16 @@ impl<'a> Parser<'a> {
                 BOOLEAN => other(ident!("bool")),
                 BYTES => other(ident!("bytea")),
                 JSON => other(ident!("jsonb")),
+
+                // We do not want any reserved keywords to be parsed as data type names,
+                // eg "CASE 'foo' WHEN ... END" should not parse as "CAST 'foo' AS CASE"
+                kw if kw.is_sometimes_reserved() => {
+                    return self.expected(
+                        self.peek_prev_pos(),
+                        "a data type name",
+                        Some(Token::Keyword(kw)),
+                    );
+                }
                 _ => {
                     self.prev_token();
                     RawDataType::Other {
@@ -7774,7 +7784,7 @@ impl<'a> Parser<'a> {
             // An empty target list is permissible to match PostgreSQL, which
             // permits these for symmetry with zero column tables. We need
             // to sniff out `AS` here specially to support `SELECT AS OF ...`.
-            Some(Token::Keyword(kw)) if kw.is_reserved() || kw == AS => vec![],
+            Some(Token::Keyword(kw)) if kw.is_always_reserved() || kw == AS => vec![],
             Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
             _ => {
                 let mut projection = vec![];

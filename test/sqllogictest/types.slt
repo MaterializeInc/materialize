@@ -447,6 +447,13 @@ SELECT '63616665-6630-3064-6465-616462656568'::pg_catalog.uuid
 ----
 63616665-6630-3064-6465-616462656568
 
+# 🔬 CASE 'str_literal' should NOT resolve to CAST('str_literal' AS CASE)
+
+query T
+SELECT CASE 'foo' WHEN 'foo' THEN 'FOO' WHEN 'bar' THEN 'BAR' ELSE 'other' END AS result;
+----
+FOO
+
 # 🔬 Type resolution of list element
 
 query T
