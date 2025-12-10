@@ -397,7 +397,7 @@
     description: |
       WARNING: This function has the potential to produce very large strings and
       may cause queries to run out of memory or crash. Use with caution.
-      
+
       Replaces the first occurrence of `pattern` with `replacement` in `source`.
       No match will return `source` unchanged.
 
