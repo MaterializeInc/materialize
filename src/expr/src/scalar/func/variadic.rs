@@ -801,7 +801,7 @@ fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum
     let text = datums[0].unwrap_str();
     let from = datums[1].unwrap_str();
     let to = datums[2].unwrap_str();
-    let possible_size = (text.len() / from.len()) * to.len();
+    let possible_size = text.len() * to.len();
     if possible_size > MAX_STRING_FUNC_RESULT_BYTES {
         let replacement_count = text.matches(from).count();
         let estimated_size = text.len() + replacement_count * (to.len().saturating_sub(from.len()));
