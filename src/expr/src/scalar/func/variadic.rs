@@ -792,6 +792,12 @@ fn regexp_replace_dynamic<'a>(
 }
 
 fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+    // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
+    // we first check if its possible for the fully replaced string to exceed the limit by assuming that
+    // every possible substring is replaced.
+    //
+    // If that estimate exceeds the limit, we then do a more precise (and expensive) estimate by counting
+    // the actual number of replacements that would occur, and using that to calculate the final size.
     let text = datums[0].unwrap_str();
     let from = datums[1].unwrap_str();
     let to = datums[2].unwrap_str();
