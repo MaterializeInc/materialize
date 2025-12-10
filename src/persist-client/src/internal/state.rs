@@ -106,7 +106,7 @@ pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
 /// We musn't enable this until we are fully deployed on the new version.
 pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
     "persist_rollup_use_active_rollup",
-    false,
+    true,
     "Whether to use the new active rollup tracking mechanism.",
 );
 
