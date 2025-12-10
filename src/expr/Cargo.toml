@@ -73,7 +73,7 @@ smallvec = { version = "1.15.1" }
 [dev-dependencies]
 criterion = { version = "0.6.0" }
 datadriven = "0.8.0"
-insta = "1.43"
+insta = "1.44"
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }
 mz-expr-test-util = { path = "../expr-test-util" }
 mz-ore = { path = "../ore" }
