@@ -100,13 +100,10 @@ e'\x1fg'
 
 # Dollar string literals.
 
-# The 'end' expression here actually is not valid in
-# Postgres, as end is a reserved keyword, and probably
-# shouldn't be valid in MZ either?
 parse-statement roundtrip
 SELECT $$Postgre's SQL$$, $eOf$Postgre's SQL$eOf$, end
 ----
-SELECT 'Postgre''s SQL', 'Postgre''s SQL', "end"
+SELECT 'Postgre''s SQL', 'Postgre''s SQL', end
 
 parse-statement roundtrip
 SELECT $$POST

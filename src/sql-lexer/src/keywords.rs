@@ -76,8 +76,8 @@ impl Keyword {
     // constructs that cannot be used as identifiers without quoting.
     // See https://www.postgresql.org/docs/current/sql-keywords-appendix.html
     // for more details.
-    pub fn is_reserved(self) -> bool {
-        matches!(self, CASE | END | ELSE | WHEN | THEN) || self.is_always_reserved()
+    pub fn is_reserved_in_scalar_expression(self) -> bool {
+        matches!(self, CASE) || self.is_always_reserved()
     }
 
     /// Reports whether this keyword requires quoting when used as a table
@@ -129,7 +129,7 @@ impl Keyword {
         self.is_always_reserved()
             || self.is_reserved_in_table_alias()
             || self.is_reserved_in_column_alias()
-            || self.is_reserved()
+            || self.is_reserved_in_scalar_expression()
     }
 }
 
