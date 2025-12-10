@@ -837,7 +837,7 @@ where
                     debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
                     let write = this
-                        .open_data_handles(
+                        .open_write_handle(
                             &id,
                             metadata.data_shard,
                             metadata.relation_desc.clone(),
@@ -1406,7 +1406,7 @@ where
             .await
             .expect("invalid persist location");
         let write_handle = self
-            .open_data_handles(
+            .open_write_handle(
                 &existing_collection,
                 data_shard,
                 new_desc.clone(),
@@ -3072,14 +3072,8 @@ where
         Ok(())
     }
 
-    /// Opens a write and critical since handles for the given `shard`.
-    ///
-    /// `since` is an optional `since` that the read handle will be forwarded to if it is less than
-    /// its current since.
-    ///
-    /// This will `halt!` the process if we cannot successfully acquire a critical handle with our
-    /// current epoch.
-    async fn open_data_handles(
+    /// Opens a write handle for the given `shard`.
+    async fn open_write_handle(
         &self,
         id: &GlobalId,
         shard: ShardId,
@@ -3091,7 +3085,7 @@ where
             handle_purpose: format!("controller data for {}", id),
         };
 
-        let mut write = persist_client
+        persist_client
             .open_writer(
                 shard,
                 Arc::new(relation_desc),
@@ -3099,19 +3093,7 @@ where
                 diagnostics.clone(),
             )
             .await
-            .expect("invalid persist usage");
-
-        // N.B.
-        // Fetch the most recent upper for the write handle. Otherwise, this may be behind
-        // the since of the since handle. Its vital this happens AFTER we create
-        // the since handle as it needs to be linearized with that operation. It may be true
-        // that creating the write handle after the since handle already ensures this, but we
-        // do this out of an abundance of caution.
-        //
-        // Note that this returns the upper, but also sets it on the handle to be fetched later.
-        write.fetch_recent_upper().await;
-
-        write
+            .expect("invalid persist usage")
     }
 
     /// Registers the given introspection collection and does any preparatory
