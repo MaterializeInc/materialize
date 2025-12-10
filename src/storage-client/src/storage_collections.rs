@@ -30,7 +30,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{CriticalReaderId, SinceHandle};
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -724,17 +724,28 @@ where
             handle_purpose: format!("controller data for {}", id),
         };
 
+        let reader_id = {
+            let (discriminant, value): (u8, u64) = match *id {
+                GlobalId::System(id) => (0, id),
+                GlobalId::IntrospectionSourceIndex(id) => (1, id),
+                GlobalId::User(id) => (2, id),
+                GlobalId::Transient(id) => (3, id),
+                GlobalId::Explain => (4, 0),
+            };
+            let mut bytes = [0u8; 16];
+            bytes[0] = discriminant;
+            bytes[8..16].copy_from_slice(&value.to_be_bytes());
+            CriticalReaderId::from(bytes)
+        };
+        let old_reader_id = PersistClient::CONTROLLER_CRITICAL_SINCE;
+
         // Construct the handle in a separate block to ensure all error paths
         // are diverging
         let since_handle = {
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(
-                    shard,
-                    PersistClient::CONTROLLER_CRITICAL_SINCE,
-                    diagnostics.clone(),
-                )
+                .open_critical_since(shard, reader_id.clone(), diagnostics.clone())
                 .await
                 .expect("invalid persist usage");
 
@@ -773,6 +784,15 @@ where
                 }
             }
         };
+
+        persist_client
+            .expire_critical_reader::<SourceData, (), T, StorageDiff>(
+                shard,
+                old_reader_id,
+                diagnostics,
+            )
+            .await
+            .expect("invalid persist usage");
 
         since_handle
     }
