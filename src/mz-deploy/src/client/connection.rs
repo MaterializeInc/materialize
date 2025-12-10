@@ -10,8 +10,13 @@
 //! - `validation` - Project validation against the database
 
 use crate::client::config::{Profile, ProfilesConfig};
-use crate::client::deployment_ops::{self, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS};
+use crate::client::deployment_ops::{
+    self, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, HydrationStatusUpdate,
+    DEFAULT_ALLOWED_LAG_SECS,
+};
 use crate::client::errors::{ConnectionError, DatabaseValidationError};
+use async_stream::try_stream;
+use futures::Stream;
 use crate::client::introspection;
 use crate::client::models::{
     Cluster, ClusterConfig, ClusterOptions, ConflictRecord, DeploymentDetails,
@@ -549,108 +554,176 @@ impl Client {
 
     /// Subscribe to hydration status changes for a staging deployment.
     ///
-    /// Returns a transaction that has a cursor set up for subscribing to hydration updates.
+    /// Returns a stream of typed `HydrationStatusUpdate` structs. The stream automatically:
+    /// - Iterates through cursor results
+    /// - Parses rows into typed structs
+    /// - Filters out retractions (mz_diff == -1)
+    ///
     /// The subscription includes hydration progress, wallclock lag, and replica health.
-    pub async fn subscribe_deployment_hydration(
+    pub fn subscribe_deployment_hydration(
         &mut self,
         deploy_id: &str,
         allowed_lag_secs: i64,
-    ) -> Result<tokio_postgres::Transaction<'_>, ConnectionError> {
-        let txn = self.client.transaction().await?;
-        let pattern = format!("%_{}", deploy_id);
+    ) -> impl Stream<Item = Result<HydrationStatusUpdate, ConnectionError>> + '_ {
+        let deploy_id = deploy_id.to_string();
 
-        let subscribe_sql = format!(
-            r#"
-            DECLARE c CURSOR FOR SUBSCRIBE (
-                WITH
-                -- Detect problematic replicas: 3+ OOM kills in 24h (subscribe-friendly)
-                problematic_replicas AS (
-                    SELECT replica_id
-                    FROM mz_internal.mz_cluster_replica_status_history
-                    WHERE occurred_at + INTERVAL '24 hours' > mz_now()
-                      AND reason = 'oom-killed'
-                    GROUP BY replica_id
-                    HAVING COUNT(*) >= 3
-                ),
+        try_stream! {
+            let txn = self.client.transaction().await?;
+            let pattern = format!("%_{}", deploy_id);
 
-                -- Cluster health: count total vs problematic replicas
-                cluster_health AS (
+            let subscribe_sql = format!(
+                r#"
+                DECLARE c CURSOR FOR SUBSCRIBE (
+                    WITH
+                    -- Detect problematic replicas: 3+ OOM kills in 24h (subscribe-friendly)
+                    problematic_replicas AS (
+                        SELECT replica_id
+                        FROM mz_internal.mz_cluster_replica_status_history
+                        WHERE occurred_at + INTERVAL '24 hours' > mz_now()
+                          AND reason = 'oom-killed'
+                        GROUP BY replica_id
+                        HAVING COUNT(*) >= 3
+                    ),
+
+                    -- Cluster health: count total vs problematic replicas
+                    cluster_health AS (
+                        SELECT
+                            c.name AS cluster_name,
+                            c.id AS cluster_id,
+                            COUNT(r.id) AS total_replicas,
+                            COUNT(pr.replica_id) AS problematic_replicas
+                        FROM mz_clusters c
+                        LEFT JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                        LEFT JOIN problematic_replicas pr ON r.id = pr.replica_id
+                        WHERE c.name LIKE $1
+                        GROUP BY c.name, c.id
+                    ),
+
+                    -- Hydration counts per cluster (best replica)
+                    hydration_counts AS (
+                        SELECT
+                            c.name AS cluster_name,
+                            r.id AS replica_id,
+                            COUNT(*) FILTER (WHERE mhs.hydrated) AS hydrated,
+                            COUNT(*) AS total
+                        FROM mz_clusters c
+                        JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                        LEFT JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+                        WHERE c.name LIKE $1
+                        GROUP BY c.name, r.id
+                    ),
+
+                    hydration_best AS (
+                        SELECT cluster_name, MAX(hydrated) AS hydrated, MAX(total) AS total
+                        FROM hydration_counts
+                        GROUP BY cluster_name
+                    ),
+
+                    -- Max lag per cluster using mz_wallclock_global_lag
+                    cluster_lag AS (
+                        SELECT
+                            c.name AS cluster_name,
+                            MAX(EXTRACT(EPOCH FROM wgl.lag)) AS max_lag_secs
+                        FROM mz_clusters c
+                        JOIN mz_cluster_replicas r ON c.id = r.cluster_id
+                        JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
+                        JOIN mz_internal.mz_wallclock_global_lag wgl ON wgl.object_id = mhs.object_id
+                        WHERE c.name LIKE $1
+                        GROUP BY c.name
+                    )
+
                     SELECT
-                        c.name AS cluster_name,
-                        c.id AS cluster_id,
-                        COUNT(r.id) AS total_replicas,
-                        COUNT(pr.replica_id) AS problematic_replicas
-                    FROM mz_clusters c
-                    LEFT JOIN mz_cluster_replicas r ON c.id = r.cluster_id
-                    LEFT JOIN problematic_replicas pr ON r.id = pr.replica_id
-                    WHERE c.name LIKE $1
-                    GROUP BY c.name, c.id
-                ),
-
-                -- Hydration counts per cluster (best replica)
-                hydration_counts AS (
-                    SELECT
-                        c.name AS cluster_name,
-                        r.id AS replica_id,
-                        COUNT(*) FILTER (WHERE mhs.hydrated) AS hydrated,
-                        COUNT(*) AS total
-                    FROM mz_clusters c
-                    JOIN mz_cluster_replicas r ON c.id = r.cluster_id
-                    LEFT JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
-                    WHERE c.name LIKE $1
-                    GROUP BY c.name, r.id
-                ),
-
-                hydration_best AS (
-                    SELECT cluster_name, MAX(hydrated) AS hydrated, MAX(total) AS total
-                    FROM hydration_counts
-                    GROUP BY cluster_name
-                ),
-
-                -- Max lag per cluster using mz_wallclock_global_lag
-                cluster_lag AS (
-                    SELECT
-                        c.name AS cluster_name,
-                        MAX(EXTRACT(EPOCH FROM wgl.lag)) AS max_lag_secs
-                    FROM mz_clusters c
-                    JOIN mz_cluster_replicas r ON c.id = r.cluster_id
-                    JOIN mz_internal.mz_hydration_statuses mhs ON mhs.replica_id = r.id
-                    JOIN mz_internal.mz_wallclock_global_lag wgl ON wgl.object_id = mhs.object_id
-                    WHERE c.name LIKE $1
-                    GROUP BY c.name
+                        ch.cluster_name,
+                        ch.cluster_id,
+                        CASE
+                            WHEN ch.total_replicas = 0 THEN 'failing'
+                            WHEN ch.total_replicas = ch.problematic_replicas THEN 'failing'
+                            WHEN COALESCE(hb.hydrated, 0) < COALESCE(hb.total, 0) THEN 'hydrating'
+                            WHEN COALESCE(cl.max_lag_secs, 0) > {allowed_lag_secs} THEN 'lagging'
+                            ELSE 'ready'
+                        END AS status,
+                        CASE
+                            WHEN ch.total_replicas = 0 THEN 'no_replicas'
+                            WHEN ch.total_replicas = ch.problematic_replicas THEN 'all_replicas_problematic'
+                            ELSE NULL
+                        END AS failure_reason,
+                        COALESCE(hb.hydrated, 0) AS hydrated_count,
+                        COALESCE(hb.total, 0) AS total_count,
+                        COALESCE(cl.max_lag_secs, 0)::bigint AS max_lag_secs,
+                        ch.total_replicas,
+                        ch.problematic_replicas
+                    FROM cluster_health ch
+                    LEFT JOIN hydration_best hb ON ch.cluster_name = hb.cluster_name
+                    LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
                 )
+            "#,
+                allowed_lag_secs = allowed_lag_secs
+            );
 
-                SELECT
-                    ch.cluster_name,
-                    ch.cluster_id,
-                    CASE
-                        WHEN ch.total_replicas = 0 THEN 'failing'
-                        WHEN ch.total_replicas = ch.problematic_replicas THEN 'failing'
-                        WHEN COALESCE(hb.hydrated, 0) < COALESCE(hb.total, 0) THEN 'hydrating'
-                        WHEN COALESCE(cl.max_lag_secs, 0) > {allowed_lag_secs} THEN 'lagging'
-                        ELSE 'ready'
-                    END AS status,
-                    CASE
-                        WHEN ch.total_replicas = 0 THEN 'no_replicas'
-                        WHEN ch.total_replicas = ch.problematic_replicas THEN 'all_replicas_problematic'
-                        ELSE NULL
-                    END AS failure_reason,
-                    COALESCE(hb.hydrated, 0) AS hydrated_count,
-                    COALESCE(hb.total, 0) AS total_count,
-                    COALESCE(cl.max_lag_secs, 0)::bigint AS max_lag_secs,
-                    ch.total_replicas,
-                    ch.problematic_replicas
-                FROM cluster_health ch
-                LEFT JOIN hydration_best hb ON ch.cluster_name = hb.cluster_name
-                LEFT JOIN cluster_lag cl ON ch.cluster_name = cl.cluster_name
-            )
-        "#,
-            allowed_lag_secs = allowed_lag_secs
-        );
+            txn.execute(&subscribe_sql, &[&pattern]).await?;
 
-        txn.execute(&subscribe_sql, &[&pattern]).await?;
+            loop {
+                let rows = txn.query("FETCH ALL c", &[]).await?;
 
-        Ok(txn)
+                if rows.is_empty() {
+                    continue;
+                }
+
+                for row in rows {
+                    let mz_diff: i64 = row.get(1);
+
+                    // Skip retractions
+                    if mz_diff == -1 {
+                        continue;
+                    }
+
+                    let status_str: String = row.get(4);
+                    let failure_reason_str: Option<String> = row.get(5);
+                    let hydrated_count: i64 = row.get(6);
+                    let total_count: i64 = row.get(7);
+                    let max_lag_secs: i64 = row.get(8);
+                    let total_replicas: i64 = row.get(9);
+                    let problematic_replicas: i64 = row.get(10);
+
+                    let failure_reason = failure_reason_str.as_deref().map(|s| match s {
+                        "no_replicas" => FailureReason::NoReplicas,
+                        "all_replicas_problematic" => FailureReason::AllReplicasProblematic {
+                            problematic: problematic_replicas,
+                            total: total_replicas,
+                        },
+                        _ => FailureReason::NoReplicas, // default fallback
+                    });
+
+                    let status = match status_str.as_str() {
+                        "ready" => ClusterDeploymentStatus::Ready,
+                        "hydrating" => ClusterDeploymentStatus::Hydrating {
+                            hydrated: hydrated_count,
+                            total: total_count,
+                        },
+                        "lagging" => ClusterDeploymentStatus::Lagging { max_lag_secs },
+                        "failing" => ClusterDeploymentStatus::Failing {
+                            reason: failure_reason.clone().unwrap_or(FailureReason::NoReplicas),
+                        },
+                        // Default to ready for unknown status
+                        _ => ClusterDeploymentStatus::Ready,
+                    };
+
+                    let update = HydrationStatusUpdate {
+                        cluster_name: row.get(2),
+                        cluster_id: row.get(3),
+                        status,
+                        failure_reason,
+                        hydrated_count,
+                        total_count,
+                        max_lag_secs,
+                        total_replicas,
+                        problematic_replicas,
+                    };
+
+                    yield update;
+                }
+            }
+        }
     }
 
     /// Delete cluster records for a staging deployment.

@@ -10,7 +10,9 @@ publish = false
 workspace = true
 
 [dependencies]
+async-stream = "0.3"
 async-trait = "0.1"
+futures = "0.3"
 mz-build-info = { path = "../build-info" }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-sql-parser = { path = "../sql-parser", default-features = false }

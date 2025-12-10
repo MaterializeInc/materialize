@@ -6164,11 +6164,13 @@ dependencies = [
 name = "mz-deploy"
 version = "0.1.0"
 dependencies = [
+ "async-stream",
  "async-trait",
  "chrono",
  "clap",
  "crossterm",
  "dirs 5.0.1",
+ "futures",
  "mz-build-info",
  "mz-ore",
  "mz-sql-parser",
