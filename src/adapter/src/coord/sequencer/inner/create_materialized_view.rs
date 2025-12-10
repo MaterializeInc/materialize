@@ -611,12 +611,8 @@ impl Coordinator {
             &read_holds_owned
         };
 
-        let (dataflow_as_of, storage_as_of, until) = self.select_timestamps(
-            id_bundle,
-            refresh_schedule.as_ref(),
-            read_holds,
-            replacement_target,
-        )?;
+        let (dataflow_as_of, storage_as_of, until) =
+            self.select_timestamps(id_bundle, refresh_schedule.as_ref(), read_holds)?;
 
         tracing::info!(
             dataflow_as_of = ?dataflow_as_of,
@@ -781,7 +777,6 @@ impl Coordinator {
         id_bundle: CollectionIdBundle,
         refresh_schedule: Option<&RefreshSchedule>,
         read_holds: &ReadHolds<mz_repr::Timestamp>,
-        replacement_target: Option<CatalogItemId>,
     ) -> Result<
         (
             Antichain<mz_repr::Timestamp>,
@@ -844,24 +839,6 @@ impl Coordinator {
             .and_then(|s| s.last_refresh())
             .and_then(|r| r.try_step_forward());
         let until = Antichain::from_iter(until_ts);
-
-        // If this is a replacement MV, ensure that `storage_as_of` > the `since` of the target
-        // storage collection. The storage controller requires the `since` of a storage collection
-        // to always be greater than the `since`s of the collections it depends on.
-        if let Some(target_id) = replacement_target {
-            let target_gid = self.catalog().get_entry(&target_id).latest_global_id();
-            let frontiers = self
-                .controller
-                .storage_collections
-                .collection_frontiers(target_gid)
-                .expect("replacement target exists");
-            let lower_bound = frontiers
-                .read_capabilities
-                .iter()
-                .map(|t| t.step_forward())
-                .collect();
-            storage_as_of.join_assign(&lower_bound);
-        }
 
         Ok((dataflow_as_of, storage_as_of, until))
     }

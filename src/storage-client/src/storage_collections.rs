@@ -1874,11 +1874,20 @@ where
                     // somewhere
                     debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
+                    // If this collection has a primary, the primary is responsible for downgrading
+                    // the critical since and it would be an error if we did so here while opening
+                    // the since handle.
+                    let since = if description.primary.is_some() {
+                        None
+                    } else {
+                        description.since.as_ref()
+                    };
+
                     let (write, mut since_handle) = this
                         .open_data_handles(
                             &id,
                             metadata.data_shard,
-                            description.since.as_ref(),
+                            since,
                             metadata.relation_desc.clone(),
                             persist_client,
                         )
