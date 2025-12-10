@@ -1247,14 +1247,11 @@ fn create_environmentd_statefulset_object(
             volume_mounts.push(VolumeMount {
                 name: "system-params".to_string(),
                 // The user must write to the `system-params.json` entry in the config map
-                mount_path: "/system-params.json".to_owned(),
+                mount_path: "/system-params".to_owned(),
                 read_only: Some(true),
                 ..Default::default()
             });
-            args.push(
-                "--config-sync-file-path=/etc/materialize/system-params/system-params.json"
-                    .to_string(),
-            );
+            args.push("--config-sync-file-path=/system-params/system-params.json".to_string());
             args.push("--config-sync-loop-interval=1s".to_string());
         }
     }

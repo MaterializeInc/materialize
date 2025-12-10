@@ -185,7 +185,7 @@ def get_environmentd_data() -> dict[str, Any]:
 
 @contextmanager
 def port_forward_environmentd(
-    local_port: int = 6875,
+    port: int = 6875,
     namespace: str = "materialize-environment",
 ) -> Iterator[int]:
     """
@@ -193,7 +193,7 @@ def port_forward_environmentd(
 
     Usage:
         with port_forward_environmentd() as port:
-            conn = psycopg.connect(f"host=localhost port={port} user=mz_system")
+            conn = psycopg.connect(f"host=localhost port={port} user=materialize")
             # ... use connection ...
     """
     environmentd = get_environmentd_data()
@@ -204,7 +204,7 @@ def port_forward_environmentd(
             "kubectl",
             "port-forward",
             f"pod/{pod_name}",
-            f"{local_port}:6875",
+            f"{port}:{port}",
             "-n",
             namespace,
         ],
@@ -223,7 +223,7 @@ def port_forward_environmentd(
                 f"Port forward failed to start: stdout={stdout.decode()}, stderr={stderr.decode()}"
             )
 
-        yield local_port
+        yield port
     finally:
         process.terminate()
         try:
@@ -841,8 +841,11 @@ class ConsoleReplicas(Modification):
 
 class SystemParamConfigMap(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
-        return [{"max_connections": 1000}]
+    def values(cls, version: MzVersion) -> list[Any]:
+        result: list[Any] = [None]
+        if version >= MzVersion.parse_mz("v26.1.0"):
+            result.append({"max_connections": 1000})
+        return result
 
     @classmethod
     def default(cls) -> Any:
@@ -854,21 +857,19 @@ class SystemParamConfigMap(Modification):
             configmap_name = "system-params-test"
 
             # First create the configmap in the cluster
-            configmap_yaml = yaml.safe_dump(
-                {
-                    "apiVersion": "v1",
-                    "kind": "ConfigMap",
-                    "metadata": {
-                        "name": configmap_name,
-                        "namespace": "materialize-environment",
-                    },
-                    "data": {
-                        "system-params.json": json.dumps(self.value),
-                    },
-                }
-            )
+            configmap = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": configmap_name,
+                    "namespace": "materialize-environment",
+                },
+                "data": {
+                    "system-params.json": json.dumps(self.value),
+                },
+            }
             # Apply the configmap (will be done in init/run)
-            definition["system_params_configmap"] = configmap_yaml
+            definition["system_params_configmap"] = configmap
             # Set the configmap name in the Materialize spec
             definition["materialize"]["spec"][
                 "systemParameterConfigmapName"
@@ -904,8 +905,8 @@ class SystemParamConfigMap(Modification):
             for mount in volume_mounts:
                 if mount.get("name") == "system-params":
                     assert (
-                        mount.get("mountPath") == "/etc/materialize/system-params"
-                    ), f"Expected mount path /etc/materialize/system-params, but found {mount['mountPath']}"
+                        mount.get("mountPath") == "/system-params"
+                    ), f"Expected mount path /system-params, but found {mount['mountPath']}"
                     volume_mount_found = True
                     break
             assert (
@@ -914,18 +915,27 @@ class SystemParamConfigMap(Modification):
 
             # Check that the config-sync-file-path arg is present
             args = environmentd["items"][0]["spec"]["containers"][0]["args"]
-            expected_arg = "--config-sync-file-path=/etc/materialize/system-params/system-params.json"
+            expected_arg = "--config-sync-file-path=/system-params/system-params.json"
             assert any(
                 expected_arg in arg for arg in args
             ), f"Expected {expected_arg} in environmentd args, but only found: {args}"
 
         retry(check, 240)
 
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        auth = mods[AuthenticatorKind]
+        port = (
+            6875
+            if (version >= MzVersion.parse_mz("v0.147.0") and auth == "Password")
+            or (version >= MzVersion.parse_mz("v26.0.0") and auth == "Sasl")
+            else 6877
+        )
+
         # Validate that the system parameters have actually been applied via SQL
         def check_system_params() -> None:
-            with port_forward_environmentd() as port:
+            with port_forward_environmentd(port) as used_port:
                 with psycopg.connect(
-                    f"host=localhost port={port} user=mz_system sslmode=disable"
+                    f"host=localhost port={used_port} user=mz_system password=superpassword sslmode=disable"
                 ) as conn:
                     with conn.cursor() as cur:
                         for param_name, expected_value in self.value.items():
@@ -943,7 +953,7 @@ class SystemParamConfigMap(Modification):
                                 expected_value
                             ), f"Expected {param_name}={expected_value}, but got {actual_value}"
 
-        retry(check_system_params, 120)
+        retry(check_system_params, 240)
 
 
 def validate_cluster_replica_size(
