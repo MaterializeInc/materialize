@@ -59,7 +59,6 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::controller::StorageError;
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
-use serde::Serialize;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
 use uuid::Uuid;
@@ -239,8 +238,8 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
 
         // Destructure `self` here so we don't forget to consider dumping newly added fields.
         let Self {
-            storage_collections: _,
-            storage: _,
+            storage_collections,
+            storage,
             compute,
             clusterd_image: _,
             init_container_image: _,
@@ -261,6 +260,8 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             dyncfg: _,
         } = self;
 
+        let storage_collections = storage_collections.dump()?;
+        let storage = storage.dump()?;
         let compute = compute.dump().await?;
 
         let unfulfilled_watch_sets: BTreeMap<_, _> = unfulfilled_watch_sets
@@ -272,23 +273,16 @@ impl<T: ComputeControllerTimestamp> Controller<T> {
             .map(|watch| format!("{watch:?}"))
             .collect();
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
-        let map = serde_json::Map::from_iter([
-            field("compute", compute)?,
-            field("deploy_generation", deploy_generation)?,
-            field("read_only", read_only)?,
-            field("readiness", format!("{readiness:?}"))?,
-            field("unfulfilled_watch_sets", unfulfilled_watch_sets)?,
-            field("immediate_watch_sets", immediate_watch_sets)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "storage_collections": storage_collections,
+            "storage": storage,
+            "compute": compute,
+            "deploy_generation": deploy_generation,
+            "read_only": read_only,
+            "readiness": format!("{readiness:?}"),
+            "unfulfilled_watch_sets": unfulfilled_watch_sets,
+            "immediate_watch_sets": immediate_watch_sets,
+        }))
     }
 }
 

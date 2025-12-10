@@ -2594,6 +2594,100 @@ where
                 })
         }))
     }
+
+    fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            build_info: _,
+            now: _,
+            read_only,
+            collections,
+            dropped_objects,
+            persist_table_worker: _,
+            txns_read: _,
+            txns_metrics: _,
+            stashed_responses,
+            pending_table_handle_drops_tx: _,
+            pending_table_handle_drops_rx: _,
+            pending_oneshot_ingestions,
+            collection_manager: _,
+            introspection_ids,
+            introspection_tokens: _,
+            source_statistics: _,
+            sink_statistics: _,
+            statistics_interval_sender: _,
+            instances,
+            initialized,
+            config,
+            persist_location,
+            persist: _,
+            metrics: _,
+            recorded_frontiers,
+            recorded_replica_frontiers,
+            wallclock_lag: _,
+            wallclock_lag_last_recorded,
+            storage_collections: _,
+            migrated_storage_collections,
+            maintenance_ticker: _,
+            maintenance_scheduled,
+            instance_response_tx: _,
+            instance_response_rx: _,
+            persist_warm_task: _,
+        } = self;
+
+        let collections: BTreeMap<_, _> = collections
+            .iter()
+            .map(|(id, c)| (id.to_string(), format!("{c:?}")))
+            .collect();
+        let dropped_objects: BTreeMap<_, _> = dropped_objects
+            .iter()
+            .map(|(id, rs)| (id.to_string(), format!("{rs:?}")))
+            .collect();
+        let stashed_responses: Vec<_> =
+            stashed_responses.iter().map(|r| format!("{r:?}")).collect();
+        let pending_oneshot_ingestions: BTreeMap<_, _> = pending_oneshot_ingestions
+            .iter()
+            .map(|(uuid, i)| (uuid.to_string(), format!("{i:?}")))
+            .collect();
+        let introspection_ids: BTreeMap<_, _> = introspection_ids
+            .iter()
+            .map(|(typ, id)| (format!("{typ:?}"), id.to_string()))
+            .collect();
+        let instances: BTreeMap<_, _> = instances
+            .iter()
+            .map(|(id, i)| (id.to_string(), format!("{i:?}")))
+            .collect();
+        let recorded_frontiers: BTreeMap<_, _> = recorded_frontiers
+            .iter()
+            .map(|(id, fs)| (id.to_string(), format!("{fs:?}")))
+            .collect();
+        let recorded_replica_frontiers: Vec<_> = recorded_replica_frontiers
+            .iter()
+            .map(|((gid, rid), f)| (gid.to_string(), rid.to_string(), format!("{f:?}")))
+            .collect();
+        let migrated_storage_collections: Vec<_> = migrated_storage_collections
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        Ok(serde_json::json!({
+            "read_only": read_only,
+            "collections": collections,
+            "dropped_objects": dropped_objects,
+            "stashed_responses": stashed_responses,
+            "pending_oneshot_ingestions": pending_oneshot_ingestions,
+            "introspection_ids": introspection_ids,
+            "instances": instances,
+            "initialized": initialized,
+            "config": format!("{config:?}"),
+            "persist_location": format!("{persist_location:?}"),
+            "recorded_frontiers": recorded_frontiers,
+            "recorded_replica_frontiers": recorded_replica_frontiers,
+            "wallclock_lag_last_recorded": format!("{wallclock_lag_last_recorded:?}"),
+            "migrated_storage_collections": migrated_storage_collections,
+            "maintenance_scheduled": maintenance_scheduled,
+        }))
+    }
 }
 
 /// Seed [`StorageTxn`] with any state required to instantiate a

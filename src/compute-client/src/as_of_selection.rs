@@ -1104,6 +1104,10 @@ mod tests {
         ) -> Result<Option<TimeDependence>, TimeDependenceError> {
             unimplemented!()
         }
+
+        fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+            unimplemented!()
+        }
     }
 
     fn dataflow(

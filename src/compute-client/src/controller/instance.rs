@@ -41,7 +41,6 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
-use serde::Serialize;
 use thiserror::Error;
 use timely::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -1019,14 +1018,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             replica_rx: _,
         } = self;
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
         let replicas: BTreeMap<_, _> = replicas
             .iter()
             .map(|(id, replica)| Ok((id.to_string(), replica.dump()?)))
@@ -1046,18 +1037,17 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
         let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
 
-        let map = serde_json::Map::from_iter([
-            field("initialized", initialized)?,
-            field("read_only", read_only)?,
-            field("workload_class", workload_class)?,
-            field("replicas", replicas)?,
-            field("collections", collections)?,
-            field("peeks", peeks)?,
-            field("subscribes", subscribes)?,
-            field("copy_tos", copy_tos)?,
-            field("wallclock_lag_last_recorded", wallclock_lag_last_recorded)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "initialized": initialized,
+            "read_only": read_only,
+            "workload_class": workload_class,
+            "replicas": replicas,
+            "collections": collections,
+            "peeks": peeks,
+            "subscribes": subscribes,
+            "copy_tos": copy_tos,
+            "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
+        }))
     }
 
     /// Reports the current write frontier for the identified compute collection.
@@ -3148,25 +3138,16 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             collections,
         } = self;
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
         let collections: BTreeMap<_, _> = collections
             .iter()
             .map(|(id, collection)| (id.to_string(), format!("{collection:?}")))
             .collect();
 
-        let map = serde_json::Map::from_iter([
-            field("id", id.to_string())?,
-            field("collections", collections)?,
-            field("epoch", epoch)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "id": id.to_string(),
+            "collections": collections,
+            "epoch": epoch,
+        }))
     }
 }
 

@@ -492,23 +492,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map(|(id, wc)| (id.to_string(), format!("{wc:?}")))
             .collect();
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
-        let map = serde_json::Map::from_iter([
-            field("instances", instances_dump)?,
-            field("instance_workload_classes", instance_workload_classes)?,
-            field("initialized", initialized)?,
-            field("read_only", read_only)?,
-            field("stashed_response", format!("{stashed_response:?}"))?,
-            field("maintenance_scheduled", maintenance_scheduled)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "instances": instances_dump,
+            "instance_workload_classes": instance_workload_classes,
+            "initialized": initialized,
+            "read_only": read_only,
+            "stashed_response": format!("{stashed_response:?}"),
+            "maintenance_scheduled": maintenance_scheduled,
+        }))
     }
 }
 
@@ -1168,20 +1159,11 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             .map(|(id, c)| (id.to_string(), format!("{c:?}")))
             .collect();
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
-        let map = serde_json::Map::from_iter([
-            field("instance", instance)?,
-            field("replicas", replicas)?,
-            field("collections", collections)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "instance": instance,
+            "replicas": replicas,
+            "collections": collections,
+        }))
     }
 }
 
