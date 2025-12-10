@@ -215,7 +215,8 @@ steps:
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 180
+        # TODO: Lower the timeout again once password/sasl auth is performant: https://github.com/MaterializeInc/database-issues/issues/9956
+        timeout_in_minutes: 1440
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -232,9 +233,9 @@ steps:
                 - --workload-group-marker
                 - "ConnectionWorkload"
                 - --exponent-base
-                - "2.5"
+                - "2"
                 - --max-concurrency
-                - "2048"
+                - "512"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64
