@@ -57,6 +57,10 @@ def main() -> None:
         help="the Polar Signals API token",
         default=os.getenv("POLAR_SIGNALS_API_TOKEN"),
     )
+    parser.add_argument(
+        "--build-id",
+        help="directly fetch and upload debug symbols for a specific build ID, skipping docker image resolution",
+    )
     args = parser.parse_intermixed_args()
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
@@ -70,9 +74,38 @@ def main() -> None:
         image_registry="materialize",
     )
 
-    collect_and_upload_debug_data_to_polarsignals(
-        repo, DEBUGINFO_BINS, args.protocol, args.token
+    if args.build_id:
+        upload_debug_data_by_build_id(repo, args.build_id, args.protocol, args.token)
+    else:
+        collect_and_upload_debug_data_to_polarsignals(
+            repo, DEBUGINFO_BINS, args.protocol, args.token
+        )
+
+
+def upload_debug_data_by_build_id(
+    repo: mzbuild.Repository,
+    build_id: str,
+    protocol: str,
+    polar_signals_api_token: str,
+) -> None:
+    """Fetch debug symbols by build ID and upload to Polar Signals."""
+    ui.section(f"Uploading debug data for build ID {build_id} to PolarSignals...")
+
+    if protocol == "s3":
+        bin_path, dbg_path = fetch_debug_symbols_from_s3(build_id)
+    elif protocol == "http":
+        bin_path, dbg_path = fetch_debug_symbols_from_http(build_id)
+    else:
+        raise ValueError(f"Unknown protocol: {protocol}")
+    print(f"Fetched debug symbols for build ID {build_id} from {protocol}")
+
+    upload_completed = upload_debug_data_to_polarsignals(
+        repo, build_id, bin_path, dbg_path, polar_signals_api_token
     )
+    if upload_completed:
+        print(f"Uploaded debug symbols for build ID {build_id} to PolarSignals")
+    else:
+        print(f"Did not upload debug symbols for build ID {build_id} to PolarSignals")
 
 
 def collect_and_upload_debug_data_to_polarsignals(
