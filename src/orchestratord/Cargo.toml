@@ -45,7 +45,7 @@ tokio-postgres = "0.7.15"
 tower-http = "0.6.7"
 tracing = "0.1.43"
 urlencoding = "2.1.3"
-uuid = { version = "1.18", features = ["serde", "v4"] }
+uuid = { version = "1.19", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]

@@ -64,7 +64,7 @@ subtle = "2.6.1"
 tracing = "0.1.43"
 uncased = "0.9.7"
 unicode-normalization = "0.1.25"
-uuid = { version = "1.18.1", features = ["v5"] }
+uuid = { version = "1.19.0", features = ["v5"] }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }

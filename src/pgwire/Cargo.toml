@@ -40,7 +40,7 @@ tokio-util = { version = "0.7.17", features = ["codec"] }
 tokio-metrics = "0.4.6"
 tracing = "0.1.43"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
-uuid = { version = "1.18.1", features = ["v4"] }
+uuid = { version = "1.19.0", features = ["v4"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

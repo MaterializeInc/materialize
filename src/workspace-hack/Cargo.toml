@@ -147,7 +147,7 @@ tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
-uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
@@ -290,7 +290,7 @@ tungstenite = { version = "0.24.0" }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
-uuid = { version = "1.18.1", features = ["serde", "v4", "v5", "v7"] }
+uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }

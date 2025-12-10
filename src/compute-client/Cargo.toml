@@ -39,7 +39,7 @@ thiserror = "2.0.17"
 timely = "0.25.1"
 tokio = "1.48.0"
 tracing = "0.1.43"
-uuid = { version = "1.18.1", features = ["serde", "v4"] }
+uuid = { version = "1.19.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]
