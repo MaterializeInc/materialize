@@ -192,3 +192,11 @@ updates:
   labels: [A-dependencies]
   allow:
     - dependency-name: "pg"
+- package-ecosystem: npm
+  directory: /ci/test/docs-widget
+  schedule:
+    interval: daily
+  cooldown:
+    default-days: 3
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
