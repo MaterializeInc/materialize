@@ -21,7 +21,7 @@ INSERT INTO x VALUES (1), (2), (3)
 query T
 SELECT id FROM mz_catalog.mz_tables WHERE name = 'x'
 ----
-u1
+u2
 
 query I rowsort
 SELECT a FROM x
@@ -31,7 +31,7 @@ SELECT a FROM x
 3
 
 query I rowsort
-SELECT a FROM [u1 AS materialize.public.y]
+SELECT a FROM [u2 AS materialize.public.y]
 ----
 1
 2
@@ -41,11 +41,11 @@ SELECT a FROM [u1 AS materialize.public.y]
 
 # Referring to it by its "true" name should not work.
 statement error column "x.a" does not exist
-SELECT x.a FROM [u1 AS materialize.public.y]
+SELECT x.a FROM [u2 AS materialize.public.y]
 
 # Referring to it by its assigned name should work.
 query I rowsort
-SELECT y.a FROM [u1 AS materialize.public.y]
+SELECT y.a FROM [u2 AS materialize.public.y]
 ----
 1
 2
@@ -78,7 +78,7 @@ statement ok
 DROP VIEW foo;
 
 statement ok
-CREATE VIEW foo AS SELECT * FROM [u1 AS materialize.public.x]
+CREATE VIEW foo AS SELECT * FROM [u2 AS materialize.public.x]
 
 query TT
 SHOW CREATE VIEW foo
@@ -92,10 +92,10 @@ statement ok
 DROP VIEW foo;
 
 statement ok
-CREATE VIEW foo AS SELECT * FROM [u1 AS materialize.public.y]
+CREATE VIEW foo AS SELECT * FROM [u2 AS materialize.public.y]
 
 query TT
 SHOW CREATE VIEW foo
 ----
 materialize.public.foo
-CREATE VIEW materialize.public.foo AS SELECT * FROM [u1 AS materialize.public.y];
+CREATE VIEW materialize.public.foo AS SELECT * FROM [u2 AS materialize.public.y];

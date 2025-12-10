@@ -61,7 +61,7 @@ CREATE TABLE t (i INT)
 query T multiline
 SELECT pretty_sql(create_sql) FROM mz_tables WHERE name = 't'
 ----
-CREATE TABLE materialize.public.t (i [s20 AS pg_catalog.int4]);
+CREATE TABLE materialize.public.t (i [s28 AS pg_catalog.int4]);
 EOF
 
 statement ok
@@ -97,5 +97,5 @@ CREATE TYPE ty AS LIST (ELEMENT TYPE=bool)
 query T multiline
 SELECT pretty_sql(create_sql) FROM mz_types WHERE name = 'ty'
 ----
-CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s6 AS pg_catalog.bool]);
+CREATE TYPE materialize.public.ty AS LIST (ELEMENT TYPE = [s14 AS pg_catalog.bool]);
 EOF

@@ -146,7 +146,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  3  scale=1,workers=1
+u6  foo  true  3  scale=1,workers=1
 
 statement ok
 ALTER CLUSTER foo SET (MANAGED = false)
@@ -164,7 +164,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  false  NULL  NULL
+u6  foo  false  NULL  NULL
 
 statement error db error: ERROR: REPLICATION FACTOR 4 does not match number of replicas \(3\)
 ALTER CLUSTER foo SET (MANAGED, REPLICATION FACTOR 4)
@@ -191,7 +191,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  3  scale=1,workers=1
+u6  foo  true  3  scale=1,workers=1
 
 query TT
 SELECT mz_clusters.name, mz_cluster_replicas.name FROM mz_cluster_replicas JOIN mz_clusters ON mz_cluster_replicas.cluster_id = mz_clusters.id WHERE mz_clusters.name != 'quickstart' ORDER BY 1, 2
@@ -223,7 +223,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  scale=1,workers=1
+u6  foo  true  1  scale=1,workers=1
 
 statement ok
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2)
@@ -240,7 +240,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  2  scale=1,workers=1
+u6  foo  true  2  scale=1,workers=1
 
 statement ok
 ALTER CLUSTER foo RESET (REPLICATION FACTOR)
@@ -256,7 +256,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  scale=1,workers=1
+u6  foo  true  1  scale=1,workers=1
 
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2')
@@ -272,7 +272,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  scale=1,workers=2
+u6  foo  true  1  scale=1,workers=2
 
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
@@ -288,7 +288,7 @@ mz_system  r1  scale=1,workers=2
 query TTTTT rowsort
 SELECT id, name, managed, replication_factor, size FROM mz_clusters WHERE name LIKE 'foo'
 ----
-u5  foo  true  1  scale=1,workers=1
+u6  foo  true  1  scale=1,workers=1
 
 statement error db error: ERROR: cannot drop replica of managed cluster
 DROP CLUSTER REPLICA foo.r1

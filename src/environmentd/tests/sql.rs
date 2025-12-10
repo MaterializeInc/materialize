@@ -1248,13 +1248,13 @@ largest not in advance of upper:<TIMESTAMP>
                        timeline: Some(EpochMilliseconds)
               session wall time:<TIMESTAMP>
 
-source materialize.public.t1 (u1, storage):
+source materialize.public.t1 (u2, storage):
                   read frontier:[<TIMESTAMP>]
                  write frontier:[<TIMESTAMP>]
 
 binding constraints:
 lower:
-  (StorageInput([User(1)])): [<TIMESTAMP>]
+  (StorageInput([User(2)])): [<TIMESTAMP>]
   (IsolationLevel(StrictSerializable)): [<TIMESTAMP>]\n";
 
     let row = client
