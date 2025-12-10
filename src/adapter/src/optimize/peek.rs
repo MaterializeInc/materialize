@@ -138,6 +138,7 @@ pub struct Unresolved;
 #[derive(Clone)]
 pub struct LocalMirPlan<T = Unresolved> {
     expr: MirRelationExpr,
+    typ: SqlRelationType,
     df_meta: DataflowMetainfo,
     context: T,
 }
@@ -175,6 +176,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         trace_plan!(at: "raw", &expr);
 
         // HIR ⇒ MIR lowering and decorrelation
+        let typ = expr.top_level_typ();
         let expr = expr.lower(&self.config, Some(&self.metrics))?;
 
         // MIR ⇒ MIR optimization (local)
@@ -193,6 +195,7 @@ impl Optimize<HirRelationExpr> for Optimizer {
         // Return the (sealed) plan at the end of this optimization step.
         Ok(LocalMirPlan {
             expr,
+            typ,
             df_meta,
             context: Unresolved,
         })
@@ -210,6 +213,7 @@ impl LocalMirPlan<Unresolved> {
     ) -> LocalMirPlan<Resolved<'_>> {
         LocalMirPlan {
             expr: self.expr,
+            typ: self.typ,
             df_meta: self.df_meta,
             context: Resolved {
                 timestamp_ctx,
@@ -228,6 +232,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
 
         let LocalMirPlan {
             expr,
+            typ,
             mut df_meta,
             context:
                 Resolved {
@@ -242,7 +247,6 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         // We create a dataflow and optimize it, to determine if we can avoid building it.
         // This can happen if the result optimizes to a constant, or to a `Get` expression
         // around a maintained arrangement.
-        let typ = expr.typ();
         let key = typ
             .default_key()
             .iter()

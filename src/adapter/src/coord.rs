@@ -3180,8 +3180,10 @@ impl Coordinator {
                                     );
 
                                     // MIR ⇒ MIR optimization (global)
-                                    let global_mir_plan =
-                                        optimizer.optimize(mv.optimized_expr.as_ref().clone())?;
+                                    // We make sure to use the HIR SQL type (since MIR SQL types may not be coherent).
+                                    let typ = mv.raw_expr.top_level_typ();
+                                    let global_mir_plan = optimizer
+                                        .optimize((mv.optimized_expr.as_ref().clone(), typ))?;
                                     let optimized_plan = global_mir_plan.df_desc().clone();
 
                                     // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
