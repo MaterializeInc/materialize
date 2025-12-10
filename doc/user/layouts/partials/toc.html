@@ -56,11 +56,24 @@
 
   function headingOffsets() {
     const SLOP = 100;
-    const headings = $(".content h2, .content h3");
-    let offsets = headings.toArray().map((h) => ({
-      id: h.id,
-      offset: h.offsetTop - 100,  // 75 if banner is displayed (85 if 2 long lines), 65 otherwise
-    }));
+    const headings = $(".content h2, .content h3, .content h4");
+
+    // Filter out headings that are inside inactive tab-panes
+    const visibleHeadings = headings.toArray().filter((h) => {
+      const tabPane = h.closest('.tab-pane');
+      // Include if not in a tab-pane, or if in an active tab-pane
+      return !tabPane || tabPane.classList.contains('active');
+    });
+
+    let offsets = visibleHeadings.map((h) => {
+      // Calculate absolute position from top of document
+      const rect = h.getBoundingClientRect();
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      return {
+        id: h.id,
+        offset: rect.top + scrollTop - 125,  // 65px banner + 60px menubar = 125px total
+      };
+    });
     const cutoff = $(document).height() - $(window).height() - SLOP;
     const firstBad = offsets.findIndex((o) => o.offset > cutoff);
 
@@ -70,6 +83,7 @@
       offsets[i].offset = cutoff + (i - firstBad + 1) * allotment;
     return offsets;
   }
+
 
   // Update the active TOC link on every scroll event.
   $(window).scroll(() => {
@@ -93,18 +107,54 @@
   // Scroll to our massaged offsets on a hashchange event, to override the
   // browser's automatic scroll to the unmassaged offset.
   $(window).on("hashchange", function () {
-   $(window).trigger("scroll");
+    const hash = window.location.hash;
+    if (hash) {
+      const targetId = hash.substring(1);
+      const targetElement = document.getElementById(targetId);
+      if (targetElement) {
+        // Wait a bit for any tab switching to complete
+        setTimeout(() => {
+          const rect = targetElement.getBoundingClientRect();
+          const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+          const targetOffset = rect.top + scrollTop - 125; // 65px banner + 60px menubar = 125px total
+          window.scrollTo({ top: targetOffset, behavior: 'smooth' });
+
+          // Update TOC highlighting after scrolling
+          setTimeout(() => {
+            $(window).trigger('scroll');
+          }, 50);
+        }, 100);
+      }
+    }
   });
 
   // Trigger an initial hash change event to handle scrolling to the page's
   // initial hash.
   $(() => $(window).trigger("hashchange"));
 
-  // Prevent double clicking on a TOC link from scrolling the page if we're
-  // already on that TOC link's section, as we won't get a hashchange event
-  // to fix up the scroll offset.
-  $(".toc a").click(function (e) {
-    console.log($(this).attr("href"), window.location.hash);
-    if ($(this).attr("href") == window.location.hash) e.preventDefault();
+  $(document).on("click", ".toc a", function(e) {
+    const $clickedLink = $(this);
+    const href = $clickedLink.attr("href");
+    if (!href || !href.startsWith("#")) return;
+
+    const targetId = href.substring(1); // Remove the # from href
+    const targetElement = document.getElementById(targetId);
+
+    if (targetElement) {
+        // prevent default and scroll manually
+        e.preventDefault();
+        const rect = targetElement.getBoundingClientRect();
+        const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+        const targetOffset = rect.top + scrollTop - 125; // 65px banner + 60px menubar = 125px total
+        window.scrollTo({ top: targetOffset, behavior: 'smooth' });
+
+        // Update URL hash without triggering hashchange
+        history.pushState(null, null, href);
+
+        // Update TOC highlighting after scrolling
+        setTimeout(() => {
+          $(window).trigger('scroll');
+        }, 50);
+    }
   });
 </script>
