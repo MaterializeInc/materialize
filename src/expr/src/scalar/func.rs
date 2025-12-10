@@ -400,7 +400,7 @@ fn decode<'a>(
 ) -> Result<&'a [u8], EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
-    if (out.len()) > MAX_STRING_FUNC_RESULT_BYTES {
+    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
     Ok(temp_storage.push_bytes(out))
@@ -4735,11 +4735,14 @@ impl fmt::Display for BinaryFunc {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {
+fn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> Result<&'a str, EvalError> {
+    if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
+        return Err(EvalError::LengthTooLarge);
+    }
     let mut buf = String::with_capacity(a.len() + b.len());
     buf.push_str(a);
     buf.push_str(b);
-    temp_storage.push_string(buf)
+    Ok(temp_storage.push_string(buf))
 }
 
 #[sqlfunc(propagates_nulls = true, introduces_nulls = false)]
@@ -4837,13 +4840,14 @@ fn regexp_replace_static<'a>(
     limit: usize,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
+    let mut bounded_limit = limit;
+    if limit == 0 || limit > MAX_STRING_FUNC_RESULT_BYTES {
+        bounded_limit = MAX_STRING_FUNC_RESULT_BYTES;
+    }
+    let replaced = match regexp.replacen(source.unwrap_str(), bounded_limit, replacement.unwrap_str()) {
         Cow::Borrowed(s) => s,
         Cow::Owned(s) => temp_storage.push_string(s),
     };
-    if (replaced.len() > MAX_STRING_FUNC_RESULT_BYTES) {
-        return Err(EvalError::LengthTooLarge);
-    }
     Ok(Datum::String(replaced))
 }
 
