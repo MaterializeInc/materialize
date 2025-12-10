@@ -23,7 +23,7 @@ postgres-types = { version = "0.2.11", features = [
     "with-chrono-0_4",
     "with-uuid-1",
 ] }
-uuid = "1.18.1"
+uuid = "1.19.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [package.metadata.cargo-udeps.ignore]

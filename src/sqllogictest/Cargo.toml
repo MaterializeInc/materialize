@@ -59,7 +59,7 @@ tokio-postgres = { version = "0.7.15", features = [
 ] }
 tokio-stream = { version = "0.1.17", features = ["net"] }
 tower-http = { version = "0.6.7", features = ["cors"] }
-uuid = "1.18.1"
+uuid = "1.19.0"
 walkdir = "2.5.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

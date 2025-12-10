@@ -24,7 +24,7 @@ base64 = { version = "0.22.1", optional = true }
 pem = { version = "3.0.6", optional = true }
 serde_json = { version = "1.0.145", optional = true }
 sha2 = { version = "0.10.9", optional = true }
-uuid = { version = "1.18.1", features = ["v4"], optional = true }
+uuid = { version = "1.19.0", features = ["v4"], optional = true }
 
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 

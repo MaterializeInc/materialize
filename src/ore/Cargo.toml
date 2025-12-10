@@ -74,7 +74,7 @@ tracing-subscriber = { version = "0.3.22", default-features = false, features = 
     "json",
     "tracing-log",
 ], optional = true }
-uuid = { version = "1.18.1", optional = true, features = ["v4", "v7"] }
+uuid = { version = "1.19.0", optional = true, features = ["v4", "v7"] }
 url = { version = "2.5.7", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
