@@ -43,21 +43,21 @@ SELECT * FROM mv
 3 4
 5 6
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster    comment
-mv   quickstart (empty)
-rp   quickstart (empty)
+name cluster    comment replacing
+mv   quickstart (empty) NULL
+rp   quickstart (empty) mv
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster    comment
-mv   quickstart (empty)
+name cluster    comment replacing
+mv   quickstart (empty) NULL
 
 query II
 SELECT * FROM mv
@@ -79,21 +79,21 @@ SELECT * FROM mv
 7  4
 11 6
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster    comment
-mv   quickstart (empty)
-rp   quickstart (empty)
+name cluster    comment replacing
+mv   quickstart (empty) NULL
+rp   quickstart (empty) mv
 
 statement ok
 DROP MATERIALIZED VIEW rp
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster    comment
-mv   quickstart (empty)
+name cluster    comment replacing
+mv   quickstart (empty) NULL
 
 query II
 SELECT * FROM mv
@@ -108,21 +108,21 @@ SELECT * FROM mv
 statement ok
 CREATE MATERIALIZED VIEW rp REPLACING mv IN CLUSTER other AS SELECT a, b FROM t;
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster    comment
-mv   quickstart (empty)
-rp   other      (empty)
+name cluster    comment replacing
+mv   quickstart (empty) NULL
+rp   other      (empty) mv
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster comment
-mv   other   (empty)
+name cluster comment replacing
+mv   other   (empty) NULL
 
 
 # Test: replacement can have the same query
@@ -130,21 +130,21 @@ mv   other   (empty)
 statement ok
 CREATE MATERIALIZED VIEW rp REPLACING mv IN CLUSTER other AS SELECT a, b FROM t;
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster comment
-mv   other   (empty)
-rp   other   (empty)
+name cluster comment replacing
+mv   other   (empty) NULL
+rp   other   (empty) mv
 
 statement ok
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT rp
 
-query TTT colnames,rowsort
+query TTTT colnames,rowsort
 SHOW MATERIALIZED VIEWS
 ----
-name cluster comment
-mv   other   (empty)
+name cluster comment replacing
+mv   other   (empty) NULL
 
 
 # Test: usage errors

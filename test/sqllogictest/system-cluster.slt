@@ -103,7 +103,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SHOW MATERIALIZED VIEWS
 ----
 Explained Query (fast path):
-  Project (#2{name}, #3{cluster}, #5{comment})
+  Project (#2{name}, #3{cluster}, #5{comment}, #6{replacing})
     ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 
 Used Indexes:
@@ -117,7 +117,7 @@ query T multiline
 EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SHOW MATERIALIZED VIEWS IN CLUSTER quickstart
 ----
 Explained Query (fast path):
-  Project (#2{name}, #3{cluster}, #5{comment})
+  Project (#2{name}, #3{cluster}, #5{comment}, #6{replacing})
     Filter (#4{cluster_id} = "u1")
       ReadIndex on=mz_internal.mz_show_materialized_views mz_show_materialized_views_ind=[lookup value=("u3")]
 

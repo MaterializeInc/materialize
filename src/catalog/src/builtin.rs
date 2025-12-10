@@ -5545,6 +5545,28 @@ pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_replacements",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_REPLACEMENTS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("target_id", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "id",
+            "The ID of the replacement object. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "target_id",
+            "The ID of the replacement target. Corresponds to `mz_objects.id`.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -11105,25 +11127,34 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| 
         .with_column("schema_id", SqlScalarType::String.nullable(false))
         .with_column("cluster_id", SqlScalarType::String.nullable(false))
         .with_column("comment", SqlScalarType::String.nullable(false))
+        .with_column("replacing", SqlScalarType::String.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "
-WITH comments AS (
-    SELECT id, comment
-    FROM mz_internal.mz_comments
-    WHERE object_type = 'materialized-view' AND object_sub_id IS NULL
-)
+WITH
+    comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'materialized-view' AND object_sub_id IS NULL
+    ),
+    replacements AS (
+        SELECT r.id, mv.name AS target_name
+        FROM mz_internal.mz_replacements r
+        JOIN mz_materialized_views mv ON r.target_id = mv.id
+    )
 SELECT
     mviews.id as id,
     mviews.name,
     clusters.name AS cluster,
     schema_id,
     cluster_id,
-    COALESCE(comments.comment, '') as comment
+    COALESCE(comments.comment, '') as comment,
+    replacements.target_name as replacing
 FROM
     mz_catalog.mz_materialized_views AS mviews
     JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
-    LEFT JOIN comments ON mviews.id = comments.id",
+    LEFT JOIN comments ON mviews.id = comments.id
+    LEFT JOIN replacements ON mviews.id = replacements.id",
     access: vec![PUBLIC_SELECT],
 });
 
@@ -13839,6 +13870,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_NETWORK_POLICIES),
         Builtin::Table(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
+        Builtin::Table(&MZ_REPLACEMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
