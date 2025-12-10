@@ -40,7 +40,7 @@ tracing-subscriber = "0.3.22"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-insta = "1.43"
+insta = "1.44"
 
 [build-dependencies]
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
