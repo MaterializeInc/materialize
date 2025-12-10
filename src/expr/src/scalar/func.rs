@@ -80,7 +80,7 @@ pub use variadic::VariadicFunc;
 ///
 /// Note: This number appears in our user-facing documentation in the function reference for every
 /// function where it applies.
-const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
+pub const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
 
 pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&'a str> {
     match a {
@@ -4735,7 +4735,11 @@ impl fmt::Display for BinaryFunc {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> Result<&'a str, EvalError> {
+fn text_concat_binary<'a>(
+    a: &str,
+    b: &str,
+    temp_storage: &'a RowArena,
+) -> Result<&'a str, EvalError> {
     if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
@@ -4833,6 +4837,9 @@ pub(crate) fn regexp_replace_parse_flags(flags: &str) -> (usize, Cow<'_, str>) {
     (limit, flags)
 }
 
+/// WARNING: This function has potential OOM risk if used with an inflationary
+/// replacement pattern. It is very difficult to calculate the output size ahead
+/// of time because the replacement pattern may depend on capture groups.
 fn regexp_replace_static<'a>(
     source: Datum<'a>,
     replacement: Datum<'a>,
@@ -4840,11 +4847,7 @@ fn regexp_replace_static<'a>(
     limit: usize,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
-    let mut bounded_limit = limit;
-    if limit == 0 || limit > MAX_STRING_FUNC_RESULT_BYTES {
-        bounded_limit = MAX_STRING_FUNC_RESULT_BYTES;
-    }
-    let replaced = match regexp.replacen(source.unwrap_str(), bounded_limit, replacement.unwrap_str()) {
+    let replaced = match regexp.replacen(source.unwrap_str(), limit, replacement.unwrap_str()) {
         Cow::Borrowed(s) => s,
         Cow::Owned(s) => temp_storage.push_string(s),
     };
