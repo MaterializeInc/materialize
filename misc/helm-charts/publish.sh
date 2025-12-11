@@ -26,8 +26,15 @@ export GIT_PAGER=cat
 : "${BUILDKITE_TAG:=}"
 
 if [[ -z "$BUILDKITE_TAG" ]]; then
-  echo "\$BUILDKITE_TAG has to be set"
-  exit 1
+  echo "\$BUILDKITE_TAG not set, checking for version to publish"
+  BUILDKITE_TAG=$(bin/helm-chart-version-to-publish)
+  if [[ -z "$BUILDKITE_TAG" ]]; then
+    echo "No version to publish, done"
+    exit
+  fi
+  echo "Running for version $BUILDKITE_TAG"
+  git fetch origin "$BUILDKITE_TAG"
+  git checkout "$BUILDKITE_TAG"
 fi
 
 : "${CI_DRY_RUN:=0}"

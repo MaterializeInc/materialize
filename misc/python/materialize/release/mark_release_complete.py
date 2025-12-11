@@ -10,8 +10,9 @@
 """Mark a minor release series as complete."""
 
 import argparse
-import re
 import sys
+
+import frontmatter
 
 from materialize import git, spawn
 from materialize.release.util import doc_file_path
@@ -27,11 +28,12 @@ def main():
 
     print(f"Marking {args.release_version} as released in the docs...")
     release_version_doc_file = doc_file_path(args.release_version)
-    text = release_version_doc_file.read_text().replace(
-        "released: false", f"released: true\npatch: {args.patch}"
-    )
-    text = re.sub(r"^rc: .*$\n?", "", text, flags=re.MULTILINE)
-    release_version_doc_file.write_text(text)
+    metadata = frontmatter.load(release_version_doc_file)
+    metadata["released"] = True
+    metadata["patch"] = int(args.patch)
+    with open(release_version_doc_file, "wb") as f:
+        frontmatter.dump(metadata, f, sort_keys=False)
+
     git.add_file(str(release_version_doc_file))
     git.commit_all_changed(f"release: mark {args.release_version} as released")
 
