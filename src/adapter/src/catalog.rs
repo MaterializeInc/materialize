@@ -1066,7 +1066,8 @@ impl Catalog {
         schema_spec: &SchemaSpecifier,
         conn_id: &ConnectionId,
     ) -> Option<&Schema> {
-        self.state.try_get_schema(database_spec, schema_spec, conn_id)
+        self.state
+            .try_get_schema(database_spec, schema_spec, conn_id)
     }
 
     pub fn get_mz_catalog_schema_id(&self) -> SchemaId {

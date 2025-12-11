@@ -1629,11 +1629,10 @@ impl CatalogState {
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => {
                 self.ambient_schemas_by_id.get(id)
             }
-            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => {
-                self.database_by_id
-                    .get(database_id)
-                    .and_then(|db| db.schemas_by_id.get(schema_id))
-            }
+            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => self
+                .database_by_id
+                .get(database_id)
+                .and_then(|db| db.schemas_by_id.get(schema_id)),
             (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
                 unreachable!("temporary schemas are in the ambient database")
             }

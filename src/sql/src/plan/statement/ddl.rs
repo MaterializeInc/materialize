@@ -6503,8 +6503,7 @@ where
     // schema may not exist yet, but we still need to return the correct error.
     // Check the schema name directly against MZ_TEMP_SCHEMA.
     let normalized_a = normalize::unresolved_schema_name(name_a.clone())?;
-    if normalized_a.database.is_none()
-        && normalized_a.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA
+    if normalized_a.database.is_none() && normalized_a.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA
     {
         sql_bail!("cannot swap schemas that are in the ambient database");
     }
