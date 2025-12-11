@@ -61,6 +61,13 @@ def main() -> None:
         "--build-id",
         help="directly fetch and upload debug symbols for a specific build ID, skipping docker image resolution",
     )
+
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="Use release build",
+        default=os.getenv("CI_LTO"),
+    )
     args = parser.parse_intermixed_args()
 
     coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
@@ -71,6 +78,7 @@ def main() -> None:
         coverage=coverage,
         sanitizer=sanitizer,
         arch=Arch(args.arch),
+        profile=mzbuild.Profile.RELEASE if args.release else mzbuild.Profile.OPTIMIZED,
         image_registry="materialize",
     )
 
