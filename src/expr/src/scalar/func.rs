@@ -4735,7 +4735,7 @@ impl fmt::Display for BinaryFunc {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary<'a>(
+fn text_concat_binary(
     a: &str,
     b: &str,
 ) -> Result<String, EvalError> {
