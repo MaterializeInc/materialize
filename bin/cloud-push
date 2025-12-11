@@ -25,6 +25,9 @@ shift
 additional_build_metadata=$1
 shift
 
+# This script indiscriminately pushes to DockerHub, so it can't use GHCR images as the targets.
+export MZ_GHCR=0
+
 version=$(bin/pyactivate -c "from materialize.mz_version import MzVersion; print(MzVersion.parse_cargo())")
 tag="$version--local.$additional_build_metadata"
 
