@@ -15,6 +15,24 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.2.0
+*Released Cloud: 2025-12-05*
+*Released Self-Managed: 2025-12-09*
+
+This release focuses primarily on bug fixes.
+
+### Bug fixes
+- **Catalog updates**: Fixed a bug where catalog item version updates were incorrectly ignored when the `create_sql` didn't change, which could cause version updates to not be applied properly.
+
+- **Console division by zero**: Fixed a division by zero error in the console, specifically when viewing `mz_console_cluster_utilization_overview`.
+
+- **ALTER SINK improvements**: Fixed `ALTER SINK ... SET FROM` to prevent panics in certain situations.
+
+- **Improved rollout handling**: Fixed an issue where rollouts could leave a pod at their previous configuration.
+
+- **Dependency drop handling**: Fixed panics that could occur when dependencies are dropped during a SELECT or COPY TO. These operations now gracefully return a `ConcurrentDependencyDrop` error.
+
+
 ## v26.1.0
 *Released Self-Managed: 2025-11-26*
 
