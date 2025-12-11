@@ -4022,7 +4022,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -9342,7 +9342,7 @@ checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
 [[package]]
 name = "postgres"
 version = "0.19.12"
-source = "git+https://github.com/MaterializeInc/rust-postgres#6d48e0e1aeabf98fa447f45eaea91af64df8bab0"
+source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
 dependencies = [
  "bytes",
  "fallible-iterator",
@@ -9355,7 +9355,7 @@ dependencies = [
 [[package]]
 name = "postgres-openssl"
 version = "0.5.2"
-source = "git+https://github.com/MaterializeInc/rust-postgres#6d48e0e1aeabf98fa447f45eaea91af64df8bab0"
+source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
 dependencies = [
  "openssl",
  "tokio",
@@ -9366,7 +9366,7 @@ dependencies = [
 [[package]]
 name = "postgres-protocol"
 version = "0.6.9"
-source = "git+https://github.com/MaterializeInc/rust-postgres#6d48e0e1aeabf98fa447f45eaea91af64df8bab0"
+source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
 dependencies = [
  "base64 0.22.1",
  "byteorder",
@@ -9383,7 +9383,7 @@ dependencies = [
 [[package]]
 name = "postgres-replication"
 version = "0.6.7"
-source = "git+https://github.com/MaterializeInc/rust-postgres#6d48e0e1aeabf98fa447f45eaea91af64df8bab0"
+source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
 dependencies = [
  "byteorder",
  "bytes",
@@ -9398,7 +9398,7 @@ dependencies = [
 [[package]]
 name = "postgres-types"
 version = "0.2.11"
-source = "git+https://github.com/MaterializeInc/rust-postgres#6d48e0e1aeabf98fa447f45eaea91af64df8bab0"
+source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
 dependencies = [
  "bytes",
  "chrono",
@@ -11943,7 +11943,7 @@ dependencies = [
 [[package]]
 name = "tokio-postgres"
 version = "0.7.15"
-source = "git+https://github.com/MaterializeInc/rust-postgres#6d48e0e1aeabf98fa447f45eaea91af64df8bab0"
+source = "git+https://github.com/MaterializeInc/rust-postgres#78c1222577bb091d69bc22b1bc7ad01c14675abe"
 dependencies = [
  "async-trait",
  "byteorder",
