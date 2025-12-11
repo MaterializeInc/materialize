@@ -385,8 +385,7 @@ impl Coordinator {
                     new: _new_secret,
                 }) => {
                     // No action needed: altering a secret updates the payload via
-                    // secrets_controller.ensure() without a catalog transaction,
-                    // so we shouldn't see AlterSecret updates here.
+                    // secrets_controller.ensure() without a catalog transaction.
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Dropped(
                     _secret,
