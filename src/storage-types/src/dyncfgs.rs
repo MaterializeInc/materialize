@@ -203,9 +203,9 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
 );
 
 /// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
-/// is to emit a definite error forcing soruce recreation. In cases of HA, the upstream DB may
+/// is to emit a definite error forcing source recreation. In cases of HA, the upstream DB may
 /// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
-/// flag puts the owness on the customer to recreate the source if the upgstream DB changes timeline
+/// flag puts the owness on the customer to recreate the source if the upstream DB changes timeline
 /// in a way that introduces data loss (e.g. manual failover, restore, etc.).
 pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
     "pg_source_validate_timeline",
