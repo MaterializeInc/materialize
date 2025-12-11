@@ -388,6 +388,18 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
                         } else {
                             tracing::debug!("rewinds remaining: {:?}", rewinds);
                         }
+
+                        // Events are emitted in LSN order for a given capture instance, if any
+                        // deferred updates remain when the LSN progresses, it is a bug.
+                        if let Some(((deferred_lsn, _seqval), _row)) = deferred_updates.first_key_value()
+                            && *deferred_lsn < next_lsn
+                        {
+                            panic!(
+                                "deferred update lsn {deferred_lsn} < progress lsn {next_lsn}: {:?}",
+                                deferred_updates.keys()
+                            );
+                        }
+
                         upper_cap_set.downgrade(Antichain::from_elem(next_lsn));
                     }
                     // We've got new data! Let's process it.
@@ -491,17 +503,6 @@ async fn handle_data_event(
     metrics: &SqlServerSourceMetrics,
     deferred_updates: &mut BTreeMap<(Lsn, Lsn), CdcOperation>,
 ) -> Result<(), TransientError> {
-    // Events are emitted in LSN order for a given capture instance. If deferred_updates contains
-    // LSNs that are less than the commit_lsn, it is a bug.
-    if let Some(((deferred_lsn, _seqval), _row)) = deferred_updates.first_key_value()
-        && *deferred_lsn < commit_lsn
-    {
-        panic!(
-            "deferred update lsn {deferred_lsn} < commit lsn {commit_lsn}: {:?}",
-            deferred_updates.keys()
-        );
-    }
-
     let mut mz_row = Row::default();
     let arena = RowArena::default();
 

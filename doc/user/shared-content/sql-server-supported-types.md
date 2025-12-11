@@ -15,8 +15,8 @@ Materialize natively supports the following SQL Server types:
 <li><code>smallmoney</code></li>
 <li><code>char</code></li>
 <li><code>nchar</code></li>
-<li><code>varchar</code></li>
-<li><code>nvarchar</code></li>
+<li><code>varchar</code> (including <code>varchar(max)</code>)</li>
+<li><code>nvarchar</code> (including <code>nvarchar(max)</code>)</li>
 <li><code>sysname</code></li>
 <li><code>binary</code></li>
 <li><code>varbinary</code></li>

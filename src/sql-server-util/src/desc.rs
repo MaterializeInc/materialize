@@ -1057,12 +1057,7 @@ fn tiberius_numeric_to_mz_numeric(val: tiberius::numeric::Numeric) -> Numeric {
 /// The update mask of a CDC event row, returned by `cdc.fn_cdc_get_all_changes_<capture_instance>`
 /// as `__$update_mask`.
 ///
-/// The [`tiberius::Row`] returned by `cdc.fn_cdc_get_all_changes_<capture_instance>` contains
-/// 4 metadata columns used by CDC. [`UpdateMask::data_col_updated()`] will always return false for
-/// the first 4 columns.
-///
 /// See <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/cdc-fn-cdc-get-all-changes-capture-instance-transact-sql?view=sql-server-ver17>
-
 #[derive(Debug)]
 pub struct UpdateMask {
     mask: Vec<u8>,
@@ -1091,19 +1086,32 @@ impl TryFrom<&tiberius::Row> for UpdateMask {
 }
 
 impl UpdateMask {
-    /// Returns true if the data column was updated.
+    /// Returns true if the data column was updated, false otherwise.
+    ///
+    /// This function panics if `col_index` exceeds the mask.
+    ///
+    /// The [`tiberius::Row`] returned by `cdc.fn_cdc_get_all_changes_<capture_instance>` contains
+    /// 4 metadata columns used by CDC:
+    /// - `__$start_lsn`
+    /// - `__$seqval`
+    /// - `__$operation`
+    /// - `__$update_mask`
+    ///
+    /// This function will always return false for the first 4 columns.
     pub fn data_col_updated(&self, col_index: usize) -> bool {
-        if col_index < 4 {
+        const CDC_METADATA_COL_COUNT: usize = 4;
+
+        if col_index < CDC_METADATA_COL_COUNT {
             return false;
         }
-        let adj_col_index = col_index - 4;
-        let byte_offset = adj_col_index / 8;
+        let adj_col_index = col_index - CDC_METADATA_COL_COUNT;
+        let byte_offset = adj_col_index / usize::cast_from(u8::BITS);
         assert!(
             byte_offset < self.mask.len(),
             "byte_offset = {byte_offset} mask_len = {}",
             self.mask.len()
         );
-        let bit_offset = adj_col_index % 8;
+        let bit_offset = adj_col_index % usize::cast_from(u8::BITS);
         (self.mask[self.mask.len() - byte_offset - 1] >> bit_offset) & 1 == 1
     }
 }
