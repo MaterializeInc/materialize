@@ -84,6 +84,7 @@ class Worker:
             cur.execute("SELECT pg_backend_pid()")
             self.exe.pg_pid = cur.fetchall()[0][0]
 
+        self.exe.allow_bad = True
         while time.time() < self.end_time:
             action = self.rng.choices(self.actions, self.weights)[0]
             try:
@@ -128,10 +129,13 @@ class Worker:
                             self.exe.rollback_next = True
                         break
                 else:
-                    thread_name = threading.current_thread().getName()
-                    self.occurred_exception = e
-                    print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
-                    raise
+                    if self.exe.allow_bad:
+                        self.exe.rollback_next = True
+                    else:
+                        thread_name = threading.current_thread().getName()
+                        self.occurred_exception = e
+                        print(f"+++ [{thread_name}] Query failed: {e.query} {e.msg}")
+                        raise
             except Exception as e:
                 self.occurred_exception = e
                 raise e
