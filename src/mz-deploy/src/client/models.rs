@@ -14,6 +14,8 @@ pub enum DeploymentKind {
     Tables,
     /// Full object deployment (stage, apply commands)
     Objects,
+    /// Contains sinks
+    Sinks
 }
 
 impl fmt::Display for DeploymentKind {
@@ -21,6 +23,7 @@ impl fmt::Display for DeploymentKind {
         match self {
             DeploymentKind::Tables => write!(f, "tables"),
             DeploymentKind::Objects => write!(f, "objects"),
+            DeploymentKind::Sinks => write!(f, "sinks"),
         }
     }
 }
@@ -32,6 +35,7 @@ impl FromStr for DeploymentKind {
         match s {
             "tables" => Ok(DeploymentKind::Tables),
             "objects" => Ok(DeploymentKind::Objects),
+            "sinks" => Ok(DeploymentKind::Sinks),
             _ => Err(format!("Invalid deployment kind: {}", s)),
         }
     }
@@ -267,6 +271,51 @@ pub struct DeploymentHistoryEntry {
     pub kind: DeploymentKind,
     /// List of (database, schema) tuples in this deployment
     pub schemas: Vec<(String, String)>,
+}
+
+/// State of an apply operation for resumable apply.
+///
+/// This is determined by checking the existence and comments of the
+/// `_mz_deploy.apply_<deploy_id>_pre` and `_mz_deploy.apply_<deploy_id>_post` schemas.
+/// Comments are set when creating the schemas; the swap transaction exchanges which
+/// schema has which comment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyState {
+    /// No apply state schemas exist - fresh apply or completed.
+    NotStarted,
+    /// State schemas exist but swap hasn't happened yet.
+    /// The `_pre` schema has comment 'swapped=false'.
+    PreSwap,
+    /// Swap has completed.
+    /// After the swap, `_pre` schema has comment 'swapped=true' (it was `_post` before).
+    PostSwap,
+}
+
+/// A pending statement to be executed after the swap.
+///
+/// Used for deferred execution of statements like sinks that cannot
+/// be created in staging (they write to external systems immediately).
+/// Stored in `_mz_deploy.public.pending_statements` table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingStatement {
+    /// Deploy ID this statement belongs to
+    pub deploy_id: String,
+    /// Sequence number for ordering execution
+    pub sequence_num: i32,
+    /// Database containing the object
+    pub database: String,
+    /// Schema containing the object
+    pub schema: String,
+    /// Object name
+    pub object: String,
+    /// Hash of the object definition
+    pub object_hash: String,
+    /// SQL statement to execute
+    pub statement_sql: String,
+    /// Kind of statement (e.g., "sink")
+    pub statement_kind: String,
+    /// When this statement was executed (None if not yet executed)
+    pub executed_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]

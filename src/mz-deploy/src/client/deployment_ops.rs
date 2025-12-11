@@ -6,8 +6,9 @@
 
 use crate::client::errors::ConnectionError;
 use crate::client::models::{
-    ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata,
-    DeploymentObjectRecord, SchemaDeploymentRecord, StagingDeployment,
+    ApplyState, ConflictRecord, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind,
+    DeploymentMetadata, DeploymentObjectRecord, PendingStatement, SchemaDeploymentRecord,
+    StagingDeployment,
 };
 use crate::project::deployment_snapshot::DeploymentSnapshot;
 use crate::project::object_id::ObjectId;
@@ -102,23 +103,24 @@ pub struct HydrationStatusUpdate {
     pub problematic_replicas: i64,
 }
 
-/// Create the deployment tracking schemas and tables.
+/// Create the deployment tracking database and tables.
 ///
 /// This creates:
-/// - `deploy` schema
-/// - `deploy.deployments` table for tracking deployment metadata
-/// - `deploy.objects` table for tracking deployed objects and their hashes
-/// - `deploy.clusters` table for tracking clusters used by deployments
-/// - `deploy.production` view for querying current production state
+/// - `_mz_deploy` database
+/// - `_mz_deploy.public.deployments` table for tracking deployment metadata
+/// - `_mz_deploy.public.objects` table for tracking deployed objects and their hashes
+/// - `_mz_deploy.public.clusters` table for tracking clusters used by deployments
+/// - `_mz_deploy.public.pending_statements` table for deferred statements (sinks)
+/// - `_mz_deploy.public.production` view for querying current production state
 pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError> {
     client
-        .execute("CREATE SCHEMA IF NOT EXISTS deploy;", &[])
+        .execute("CREATE DATABASE IF NOT EXISTS _mz_deploy;", &[])
         .await
         .map_err(ConnectionError::Query)?;
 
     client
         .execute(
-            r#"CREATE TABLE IF NOT EXISTS deploy.deployments (
+            r#"CREATE TABLE IF NOT EXISTS _mz_deploy.public.deployments (
             deploy_id TEXT NOT NULL,
             deployed_at TIMESTAMPTZ NOT NULL,
             promoted_at TIMESTAMPTZ,
@@ -137,7 +139,7 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
 
     client
         .execute(
-            r#"CREATE TABLE IF NOT EXISTS deploy.objects (
+            r#"CREATE TABLE IF NOT EXISTS _mz_deploy.public.objects (
             deploy_id TEXT NOT NULL,
             database TEXT NOT NULL,
             schema   TEXT NOT NULL,
@@ -153,7 +155,7 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
 
     client
         .execute(
-            r#"CREATE TABLE IF NOT EXISTS deploy.clusters (
+            r#"CREATE TABLE IF NOT EXISTS _mz_deploy.public.clusters (
             deploy_id TEXT NOT NULL,
             cluster_id TEXT NOT NULL
         ) WITH (
@@ -166,11 +168,31 @@ pub async fn create_deployments(client: &PgClient) -> Result<(), ConnectionError
 
     client
         .execute(
+            r#"CREATE TABLE IF NOT EXISTS _mz_deploy.public.pending_statements (
+            deploy_id TEXT NOT NULL,
+            sequence_num INT NOT NULL,
+            database TEXT NOT NULL,
+            schema TEXT NOT NULL,
+            object TEXT NOT NULL,
+            object_hash TEXT NOT NULL,
+            statement_sql TEXT NOT NULL,
+            statement_kind TEXT NOT NULL,
+            executed_at TIMESTAMPTZ
+        ) WITH (
+            PARTITION BY (deploy_id)
+        );"#,
+            &[],
+        )
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    client
+        .execute(
             r#"
-        CREATE VIEW IF NOT EXISTS deploy.production AS
+        CREATE VIEW IF NOT EXISTS _mz_deploy.public.production AS
         WITH candidates AS (
             SELECT DISTINCT ON (database, schema) database, schema, deploy_id, promoted_at, commit, kind
-            FROM deploy.deployments
+            FROM _mz_deploy.public.deployments
             WHERE promoted_at IS NOT NULL
             ORDER BY database, schema, promoted_at DESC
         )
@@ -198,7 +220,7 @@ pub async fn insert_schema_deployments(
     }
 
     let insert_sql = r#"
-        INSERT INTO deploy.deployments
+        INSERT INTO _mz_deploy.public.deployments
             (deploy_id, database, schema, deployed_at, deployed_by, promoted_at, commit, kind)
         VALUES
             ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -237,7 +259,7 @@ pub async fn append_deployment_objects(
     }
 
     let insert_sql = r#"
-        INSERT INTO deploy.objects
+        INSERT INTO _mz_deploy.public.objects
             (deploy_id, database, schema, object, hash)
         VALUES
             ($1, $2, $3, $4, $5)
@@ -309,9 +331,9 @@ pub async fn insert_deployment_clusters(
         });
     }
 
-    // Step 2: Insert the cluster IDs into deploy.clusters
+    // Step 2: Insert the cluster IDs into _mz_deploy.public.clusters
     let insert_sql = r#"
-        INSERT INTO deploy.clusters (deploy_id, cluster_id)
+        INSERT INTO _mz_deploy.public.clusters (deploy_id, cluster_id)
         VALUES ($1, $2)
     "#;
 
@@ -329,7 +351,7 @@ pub async fn insert_deployment_clusters(
 /// Get cluster names for a staging deployment.
 ///
 /// Returns cluster names by resolving cluster IDs via JOIN with mz_catalog.mz_clusters.
-/// If a cluster ID exists in deploy.clusters but the cluster was deleted from the catalog,
+/// If a cluster ID exists in _mz_deploy.public.clusters but the cluster was deleted from the catalog,
 /// that cluster will be silently omitted from results.
 pub async fn get_deployment_clusters(
     client: &PgClient,
@@ -337,7 +359,7 @@ pub async fn get_deployment_clusters(
 ) -> Result<Vec<String>, ConnectionError> {
     let query = r#"
         SELECT c.name
-        FROM deploy.clusters dc
+        FROM _mz_deploy.public.clusters dc
         JOIN mz_catalog.mz_clusters c ON dc.cluster_id = c.id
         WHERE dc.deploy_id = $1
         ORDER BY c.name
@@ -353,7 +375,7 @@ pub async fn get_deployment_clusters(
 
 /// Validate that all cluster IDs in a deployment still exist in the catalog.
 ///
-/// Returns an error if any cluster IDs in deploy.clusters cannot be resolved
+/// Returns an error if any cluster IDs in _mz_deploy.public.clusters cannot be resolved
 /// to clusters in mz_catalog.mz_clusters (i.e., clusters were deleted).
 pub async fn validate_deployment_clusters(
     client: &PgClient,
@@ -361,7 +383,7 @@ pub async fn validate_deployment_clusters(
 ) -> Result<(), ConnectionError> {
     let query = r#"
         SELECT dc.cluster_id
-        FROM deploy.clusters dc
+        FROM _mz_deploy.public.clusters dc
         LEFT JOIN mz_catalog.mz_clusters c ON dc.cluster_id = c.id
         WHERE dc.deploy_id = $1 AND c.id IS NULL
     "#;
@@ -397,7 +419,7 @@ pub async fn delete_deployment_clusters(
 ) -> Result<(), ConnectionError> {
     client
         .execute(
-            "DELETE FROM deploy.clusters WHERE deploy_id = $1",
+            "DELETE FROM _mz_deploy.public.clusters WHERE deploy_id = $1",
             &[&deploy_id],
         )
         .await
@@ -408,7 +430,7 @@ pub async fn delete_deployment_clusters(
 /// Update promoted_at timestamp for a staging deployment.
 pub async fn update_promoted_at(client: &PgClient, deploy_id: &str) -> Result<(), ConnectionError> {
     let update_sql = r#"
-        UPDATE deploy.deployments
+        UPDATE _mz_deploy.public.deployments
         SET promoted_at = NOW()
         WHERE deploy_id = $1
     "#;
@@ -424,14 +446,14 @@ pub async fn update_promoted_at(client: &PgClient, deploy_id: &str) -> Result<()
 pub async fn delete_deployment(client: &PgClient, deploy_id: &str) -> Result<(), ConnectionError> {
     client
         .execute(
-            "DELETE FROM deploy.deployments WHERE deploy_id = $1",
+            "DELETE FROM _mz_deploy.public.deployments WHERE deploy_id = $1",
             &[&deploy_id],
         )
         .await
         .map_err(ConnectionError::Query)?;
     client
         .execute(
-            "DELETE FROM deploy.objects WHERE deploy_id = $1",
+            "DELETE FROM _mz_deploy.public.objects WHERE deploy_id = $1",
             &[&deploy_id],
         )
         .await
@@ -452,7 +474,7 @@ pub async fn get_schema_deployments(
                    promoted_at,
                    commit,
                    kind
-            FROM deploy.production
+            FROM _mz_deploy.public.production
             ORDER BY database, schema
         "#
     } else {
@@ -463,7 +485,7 @@ pub async fn get_schema_deployments(
                    promoted_at,
                    commit,
                    kind
-            FROM deploy.deployments
+            FROM _mz_deploy.public.deployments
             WHERE deploy_id = $1
             ORDER BY database, schema
         "#
@@ -519,15 +541,15 @@ pub async fn get_deployment_objects(
     let query = if deploy_id.is_none() {
         r#"
             SELECT o.database, o.schema, o.object, o.hash
-            FROM deploy.objects o
-            JOIN deploy.production p
+            FROM _mz_deploy.public.objects o
+            JOIN _mz_deploy.public.production p
               ON o.database = p.database AND o.schema = p.schema
             WHERE o.deploy_id = p.deploy_id
         "#
     } else {
         r#"
             SELECT database, schema, object, hash
-            FROM deploy.objects
+            FROM _mz_deploy.public.objects
             WHERE deploy_id = $1
         "#
     };
@@ -545,7 +567,7 @@ pub async fn get_deployment_objects(
     };
 
     let mut objects = BTreeMap::new();
-    let mut schemas = BTreeSet::new();
+    let mut schemas = BTreeMap::new();
     for row in rows {
         let database: String = row.get("database");
         let schema: String = row.get("schema");
@@ -558,7 +580,10 @@ pub async fn get_deployment_objects(
             object,
         };
         objects.insert(object_id, object_hash);
-        schemas.insert((database, schema));
+        // Default to Objects kind for snapshots loaded from DB (used for comparison only)
+        schemas
+            .entry((database, schema))
+            .or_insert(DeploymentKind::Objects);
     }
 
     Ok(DeploymentSnapshot { objects, schemas })
@@ -574,7 +599,7 @@ pub async fn get_deployment_metadata(
                promoted_at,
                database,
                schema
-        FROM deploy.deployments
+        FROM _mz_deploy.public.deployments
         WHERE deploy_id = $1
     "#;
 
@@ -621,7 +646,7 @@ pub async fn get_deployment_details(
                kind,
                database,
                schema
-        FROM deploy.deployments
+        FROM _mz_deploy.public.deployments
         WHERE deploy_id = $1
         ORDER BY database, schema
     "#;
@@ -643,7 +668,7 @@ pub async fn get_deployment_details(
     let kind_str: String = first_row.get("kind");
     let kind: DeploymentKind = kind_str
         .parse()
-        .map_err(|e| ConnectionError::Message(e))?;
+        .map_err(ConnectionError::Message)?;
 
     let mut schemas = Vec::new();
     for row in rows {
@@ -676,7 +701,7 @@ pub async fn list_staging_deployments(
                kind,
                database,
                schema
-        FROM deploy.deployments
+        FROM _mz_deploy.public.deployments
         WHERE promoted_at IS NULL
         ORDER BY deploy_id, database, schema
     "#;
@@ -731,7 +756,7 @@ pub async fn list_deployment_history(
             r#"
             WITH unique_deployments AS (
                 SELECT DISTINCT deploy_id, promoted_at, deployed_by, commit, kind
-                FROM deploy.deployments
+                FROM _mz_deploy.public.deployments
                 WHERE promoted_at IS NOT NULL
                 ORDER BY promoted_at DESC
                 LIMIT {}
@@ -743,7 +768,7 @@ pub async fn list_deployment_history(
                    d.kind,
                    d.database,
                    d.schema
-            FROM deploy.deployments d
+            FROM _mz_deploy.public.deployments d
             JOIN unique_deployments u
               ON d.deploy_id = u.deploy_id
               AND d.promoted_at = u.promoted_at
@@ -761,7 +786,7 @@ pub async fn list_deployment_history(
                    kind,
                    database,
                    schema
-            FROM deploy.deployments
+            FROM _mz_deploy.public.deployments
             WHERE promoted_at IS NOT NULL
             ORDER BY promoted_at DESC, database, schema
         "#
@@ -818,8 +843,8 @@ pub async fn check_deployment_conflicts(
 ) -> Result<Vec<ConflictRecord>, ConnectionError> {
     let query = r#"
         SELECT p.database, p.schema, p.deploy_id, p.promoted_at
-        FROM deploy.production p
-        JOIN deploy.deployments d USING (database, schema)
+        FROM _mz_deploy.public.production p
+        JOIN _mz_deploy.public.deployments d USING (database, schema)
         WHERE d.deploy_id = $1 AND p.promoted_at > d.deployed_at
     "#;
 
@@ -850,8 +875,8 @@ pub async fn deployment_table_exists(client: &PgClient) -> Result<bool, Connecti
             JOIN mz_catalog.mz_schemas s ON t.schema_id = s.id
             JOIN mz_catalog.mz_databases d ON s.database_id = d.id
             WHERE t.name = 'deployments'
-                AND s.name = 'deploy'
-                AND d.name = 'materialize'
+                AND s.name = 'public'
+                AND d.name = '_mz_deploy'
         )
     "#;
 
@@ -1025,4 +1050,272 @@ pub async fn get_deployment_hydration_status(
     }
 
     Ok(results)
+}
+
+// =============================================================================
+// Apply State Management
+// =============================================================================
+
+/// Create apply state schemas with comments for tracking apply progress.
+///
+/// Creates two schemas in `_mz_deploy`:
+/// - `apply_<deploy_id>_pre` with comment 'swapped=false'
+/// - `apply_<deploy_id>_post` with comment 'swapped=true'
+///
+/// The schemas are created first (if they don't exist), then comments are set
+/// (if they don't have comments). During the swap transaction, the schemas
+/// exchange names, which effectively moves the 'swapped=true' comment to the
+/// `_pre` schema.
+pub async fn create_apply_state_schemas(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<(), ConnectionError> {
+    let pre_schema = format!("apply_{}_pre", deploy_id);
+    let post_schema = format!("apply_{}_post", deploy_id);
+
+    // Create _pre schema if it doesn't exist
+    let create_pre = format!("CREATE SCHEMA IF NOT EXISTS _mz_deploy.{}", pre_schema);
+    client
+        .execute(&create_pre, &[])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    // Create _post schema if it doesn't exist
+    let create_post = format!("CREATE SCHEMA IF NOT EXISTS _mz_deploy.{}", post_schema);
+    client
+        .execute(&create_post, &[])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    // Query to check if a schema has a comment (using mz_internal.mz_comments)
+    let comment_check_query = r#"
+        SELECT c.comment
+        FROM mz_catalog.mz_schemas s
+        JOIN mz_catalog.mz_databases d ON s.database_id = d.id
+        LEFT JOIN mz_internal.mz_comments c ON s.id = c.id
+        WHERE s.name = $1 AND d.name = '_mz_deploy'
+    "#;
+
+    // Set comment on _pre schema if it doesn't have one
+    let rows = client
+        .query(comment_check_query, &[&pre_schema])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    if !rows.is_empty() {
+        let comment: Option<String> = rows[0].get("comment");
+        if comment.is_none() {
+            let comment_pre = format!(
+                "COMMENT ON SCHEMA _mz_deploy.{} IS 'swapped=false'",
+                pre_schema
+            );
+            client
+                .execute(&comment_pre, &[])
+                .await
+                .map_err(ConnectionError::Query)?;
+        }
+    }
+
+    // Set comment on _post schema if it doesn't have one
+    let rows = client
+        .query(comment_check_query, &[&post_schema])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    if !rows.is_empty() {
+        let comment: Option<String> = rows[0].get("comment");
+        if comment.is_none() {
+            let comment_post = format!(
+                "COMMENT ON SCHEMA _mz_deploy.{} IS 'swapped=true'",
+                post_schema
+            );
+            client
+                .execute(&comment_post, &[])
+                .await
+                .map_err(ConnectionError::Query)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Get the current apply state for a deployment.
+///
+/// Checks for the existence of `_mz_deploy.apply_<deploy_id>_pre` schema
+/// and its comment to determine the state:
+/// - Schema doesn't exist → NotStarted
+/// - Schema exists with comment 'swapped=false' → PreSwap
+/// - Schema exists with comment 'swapped=true' → PostSwap
+pub async fn get_apply_state(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<ApplyState, ConnectionError> {
+    let pre_schema = format!("apply_{}_pre", deploy_id);
+
+    // Query schema existence and comment using mz_internal.mz_comments
+    let query = r#"
+        SELECT c.comment
+        FROM mz_catalog.mz_schemas s
+        JOIN mz_catalog.mz_databases d ON s.database_id = d.id
+        LEFT JOIN mz_internal.mz_comments c ON s.id = c.id
+        WHERE s.name = $1 AND d.name = '_mz_deploy'
+    "#;
+
+    let rows = client
+        .query(query, &[&pre_schema])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    if rows.is_empty() {
+        return Ok(ApplyState::NotStarted);
+    }
+
+    let comment: Option<String> = rows[0].get("comment");
+    match comment.as_deref() {
+        Some("swapped=false") => Ok(ApplyState::PreSwap),
+        Some("swapped=true") => Ok(ApplyState::PostSwap),
+        _ => {
+            // Unexpected comment or no comment - treat as not started
+            Ok(ApplyState::NotStarted)
+        }
+    }
+}
+
+/// Delete apply state schemas after successful completion.
+pub async fn delete_apply_state_schemas(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<(), ConnectionError> {
+    let pre_schema = format!("apply_{}_pre", deploy_id);
+    let post_schema = format!("apply_{}_post", deploy_id);
+
+    // Drop schemas if they exist
+    let drop_pre = format!("DROP SCHEMA IF EXISTS _mz_deploy.{}", pre_schema);
+    client
+        .execute(&drop_pre, &[])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    let drop_post = format!("DROP SCHEMA IF EXISTS _mz_deploy.{}", post_schema);
+    client
+        .execute(&drop_post, &[])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(())
+}
+
+// =============================================================================
+// Pending Statements Management
+// =============================================================================
+
+/// Insert pending statements for deferred execution (e.g., sinks).
+pub async fn insert_pending_statements(
+    client: &PgClient,
+    statements: &[PendingStatement],
+) -> Result<(), ConnectionError> {
+    if statements.is_empty() {
+        return Ok(());
+    }
+
+    let insert_sql = r#"
+        INSERT INTO _mz_deploy.public.pending_statements
+            (deploy_id, sequence_num, database, schema, object, object_hash, statement_sql, statement_kind, executed_at)
+        VALUES
+            ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    "#;
+
+    for stmt in statements {
+        client
+            .execute(
+                insert_sql,
+                &[
+                    &stmt.deploy_id,
+                    &stmt.sequence_num,
+                    &stmt.database,
+                    &stmt.schema,
+                    &stmt.object,
+                    &stmt.object_hash,
+                    &stmt.statement_sql,
+                    &stmt.statement_kind,
+                    &stmt.executed_at,
+                ],
+            )
+            .await
+            .map_err(ConnectionError::Query)?;
+    }
+
+    Ok(())
+}
+
+/// Get pending statements for a deployment that haven't been executed yet.
+pub async fn get_pending_statements(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<Vec<PendingStatement>, ConnectionError> {
+    let query = r#"
+        SELECT deploy_id, sequence_num, database, schema, object, object_hash,
+               statement_sql, statement_kind, executed_at
+        FROM _mz_deploy.public.pending_statements
+        WHERE deploy_id = $1 AND executed_at IS NULL
+        ORDER BY sequence_num
+    "#;
+
+    let rows = client
+        .query(query, &[&deploy_id])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    let mut statements = Vec::new();
+    for row in rows {
+        statements.push(PendingStatement {
+            deploy_id: row.get("deploy_id"),
+            sequence_num: row.get("sequence_num"),
+            database: row.get("database"),
+            schema: row.get("schema"),
+            object: row.get("object"),
+            object_hash: row.get("object_hash"),
+            statement_sql: row.get("statement_sql"),
+            statement_kind: row.get("statement_kind"),
+            executed_at: row.get("executed_at"),
+        });
+    }
+
+    Ok(statements)
+}
+
+/// Mark a pending statement as executed.
+pub async fn mark_statement_executed(
+    client: &PgClient,
+    deploy_id: &str,
+    sequence_num: i32,
+) -> Result<(), ConnectionError> {
+    let update_sql = r#"
+        UPDATE _mz_deploy.public.pending_statements
+        SET executed_at = NOW()
+        WHERE deploy_id = $1 AND sequence_num = $2
+    "#;
+
+    client
+        .execute(update_sql, &[&deploy_id, &sequence_num])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(())
+}
+
+/// Delete all pending statements for a deployment.
+pub async fn delete_pending_statements(
+    client: &PgClient,
+    deploy_id: &str,
+) -> Result<(), ConnectionError> {
+    client
+        .execute(
+            "DELETE FROM _mz_deploy.public.pending_statements WHERE deploy_id = $1",
+            &[&deploy_id],
+        )
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(())
 }

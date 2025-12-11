@@ -26,25 +26,28 @@
 //!
 //! ### Rule Category 2 — Cluster Dirtiness
 //! ```datalog
-//! DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C)   # Clusters of changed statements are dirty
-//! DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C) # Clusters of changed indexes are dirty
+//! DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C), NOT IsSink(O)   # Clusters of changed statements are dirty (excluding sinks)
+//! DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C), NOT IsSink(O) # Clusters of changed indexes are dirty (excluding sinks)
 //! ```
 //!
 //! **Note:** Clusters are only marked dirty when the STATEMENT itself changes,
 //! not when the object is dirty for other reasons (dependencies, schema propagation, etc.).
+//! **Sinks are excluded** because they write to external systems and are created after the swap.
 //!
 //! ### Rule Category 3 — Schema Dirtiness
 //! ```datalog
-//! DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch)  # Dirty objects make their schemas dirty
+//! DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch), NOT IsSink(O)  # Dirty objects make their schemas dirty (excluding sinks)
 //! ```
 //!
-//! **Key Property:** All dirty objects contribute to schema dirtiness, which triggers
-//! schema-level atomic redeployment.
+//! **Key Property:** All dirty objects (except sinks) contribute to schema dirtiness, which triggers
+//! schema-level atomic redeployment. Sinks are excluded because they are created after the swap
+//! during apply and shouldn't cause other objects to be redeployed.
 
-use super::ast::Cluster;
+use super::ast::{Cluster, Statement};
 use super::deployment_snapshot::DeploymentSnapshot;
 use super::planned::{self, Project};
 use crate::project::object_id::ObjectId;
+use crate::verbose;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 
@@ -171,6 +174,9 @@ struct BaseFacts {
 
     /// IndexUsesCluster(object, index_name, cluster_name)
     index_uses_cluster: Vec<(ObjectId, String, String)>,
+
+    /// IsSink(object) - objects that are sinks (should not propagate dirtiness to clusters/schemas)
+    is_sink: BTreeSet<ObjectId>,
 }
 
 /// Find changed objects by comparing snapshot hashes.
@@ -178,31 +184,56 @@ fn find_changed_objects(
     old_snapshot: &DeploymentSnapshot,
     new_snapshot: &DeploymentSnapshot,
 ) -> BTreeSet<ObjectId> {
+    verbose!("[dirty-propagation] Comparing deployment snapshots...");
     let mut changed = BTreeSet::new();
 
     // Objects with different hashes or newly added
     for (object_id, new_hash) in &new_snapshot.objects {
-        if old_snapshot.objects.get(object_id) != Some(new_hash) {
-            changed.insert(object_id.clone());
+        match old_snapshot.objects.get(object_id) {
+            Some(old_hash) if old_hash != new_hash => {
+                verbose!(
+                    "[dirty-propagation]   Changed: {} (hash {} -> {})",
+                    object_id,
+                    &old_hash[..8],
+                    &new_hash[..8]
+                );
+                changed.insert(object_id.clone());
+            }
+            None => {
+                verbose!(
+                    "[dirty-propagation]   New: {} (hash {})",
+                    object_id,
+                    &new_hash[..8]
+                );
+                changed.insert(object_id.clone());
+            }
+            _ => {}
         }
     }
 
     // Deleted objects
     for object_id in old_snapshot.objects.keys() {
         if !new_snapshot.objects.contains_key(object_id) {
+            verbose!("[dirty-propagation]   Deleted: {}", object_id);
             changed.insert(object_id.clone());
         }
     }
 
+    verbose!(
+        "[dirty-propagation] Found {} changed object(s)",
+        changed.len()
+    );
     changed
 }
 
 /// Extract all base facts from the project for Datalog computation.
 fn extract_base_facts(project: &Project) -> BaseFacts {
+    verbose!("[dirty-propagation] Extracting base facts from project...");
     let mut object_in_schema = Vec::new();
     let mut depends_on = Vec::new();
     let mut stmt_uses_cluster = Vec::new();
     let mut index_uses_cluster = Vec::new();
+    let mut is_sink = BTreeSet::new();
 
     // Extract facts from each object in the project
     for db in &project.databases {
@@ -212,6 +243,12 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
 
                 // ObjectInSchema fact
                 object_in_schema.push((obj_id.clone(), db.name.clone(), schema.name.clone()));
+
+                // IsSink fact - sinks should not propagate dirtiness to clusters/schemas
+                if matches!(obj.typed_object.stmt, Statement::CreateSink(_)) {
+                    verbose!("[dirty-propagation]   IsSink: {}", obj_id);
+                    is_sink.insert(obj_id.clone());
+                }
 
                 // DependsOn facts from dependency graph
                 if let Some(deps) = project.dependency_graph.get(&obj_id) {
@@ -249,11 +286,21 @@ fn extract_base_facts(project: &Project) -> BaseFacts {
         }
     }
 
+    verbose!(
+        "[dirty-propagation] Base facts: {} objects, {} dependencies, {} stmt->cluster, {} index->cluster, {} sinks",
+        object_in_schema.len(),
+        depends_on.len(),
+        stmt_uses_cluster.len(),
+        index_uses_cluster.len(),
+        is_sink.len()
+    );
+
     BaseFacts {
         object_in_schema,
         depends_on,
         stmt_uses_cluster,
         index_uses_cluster,
+        is_sink,
     }
 }
 
@@ -317,6 +364,10 @@ impl DatalogIndexes {
 /// Compute dirty objects, clusters, and schemas using fixed-point iteration.
 ///
 /// Implements the Datalog rules defined at the top of this module.
+///
+/// **Important:** Sinks are special - they do NOT propagate dirtiness to clusters or schemas.
+/// Sinks write to external systems and are created after the swap during apply, so they
+/// shouldn't cause other objects to be redeployed.
 fn compute_dirty_datalog(
     changed_stmts: &BTreeSet<ObjectId>,
     base_facts: &BaseFacts,
@@ -325,6 +376,16 @@ fn compute_dirty_datalog(
     BTreeSet<Cluster>,
     BTreeSet<(String, String)>,
 ) {
+    verbose!("[dirty-propagation] Starting fixed-point computation...");
+    verbose!(
+        "[dirty-propagation] Initial changed statements: {:?}",
+        changed_stmts.iter().map(|o| o.to_string()).collect::<Vec<_>>()
+    );
+    verbose!(
+        "[dirty-propagation] Known sinks: {:?}",
+        base_facts.is_sink.iter().map(|o| o.to_string()).collect::<Vec<_>>()
+    );
+
     let indexes = DatalogIndexes::from_base_facts(base_facts);
 
     // Initialize result sets
@@ -333,26 +394,66 @@ fn compute_dirty_datalog(
     let mut dirty_schemas: BTreeSet<(String, String)> = BTreeSet::new();
 
     // Fixed-point iteration: apply rules until no changes
+    let mut iteration = 0;
     loop {
+        iteration += 1;
         let prev_sizes = (dirty_stmts.len(), dirty_clusters.len(), dirty_schemas.len());
+        verbose!(
+            "[dirty-propagation] === Iteration {} (stmts={}, clusters={}, schemas={}) ===",
+            iteration,
+            dirty_stmts.len(),
+            dirty_clusters.len(),
+            dirty_schemas.len()
+        );
 
-        // --- Cluster dirtiness rules (only from changed statements) ---
-        // Rule 1: DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C)
-        // Rule 2: DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C)
+        // --- Cluster dirtiness rules (only from changed statements, excluding sinks) ---
+        // Rule 1: DirtyCluster(C) :- ChangedStmt(O), StmtUsesCluster(O, C), NOT IsSink(O)
+        // Rule 2: DirtyCluster(C) :- ChangedStmt(O), IndexUsesCluster(O, _, C), NOT IsSink(O)
         for obj in changed_stmts {
+            // Sinks should NOT make clusters dirty
+            if base_facts.is_sink.contains(obj) {
+                verbose!(
+                    "[dirty-propagation]   Rule 1/2 SKIP: {} is a sink, not marking clusters dirty",
+                    obj
+                );
+                continue;
+            }
             if let Some(clusters) = indexes.stmt_to_clusters.get(obj) {
-                dirty_clusters.extend(clusters.iter().cloned());
+                for cluster in clusters {
+                    if dirty_clusters.insert(cluster.clone()) {
+                        verbose!(
+                            "[dirty-propagation]   Rule 1: DirtyCluster({}) <- ChangedStmt({}) uses cluster",
+                            cluster,
+                            obj
+                        );
+                    }
+                }
             }
             if let Some(clusters) = indexes.index_to_clusters.get(obj) {
-                dirty_clusters.extend(clusters.iter().cloned());
+                for cluster in clusters {
+                    if dirty_clusters.insert(cluster.clone()) {
+                        verbose!(
+                            "[dirty-propagation]   Rule 2: DirtyCluster({}) <- ChangedStmt({}) has index on cluster",
+                            cluster,
+                            obj
+                        );
+                    }
+                }
             }
         }
 
         // --- Statement dirtiness rules ---
         // Rule 3: DirtyStmt(O) :- StmtUsesCluster(O, C), DirtyCluster(C)
         for (obj, clusters) in &indexes.stmt_to_clusters {
-            if clusters.iter().any(|c| dirty_clusters.contains(c)) {
-                dirty_stmts.insert(obj.clone());
+            for cluster in clusters {
+                if dirty_clusters.contains(cluster) && dirty_stmts.insert(obj.clone()) {
+                    verbose!(
+                        "[dirty-propagation]   Rule 3: DirtyStmt({}) <- uses DirtyCluster({})",
+                        obj,
+                        cluster
+                    );
+                    break;
+                }
             }
         }
 
@@ -360,30 +461,85 @@ fn compute_dirty_datalog(
         let current_dirty: Vec<_> = dirty_stmts.iter().cloned().collect();
         for dirty_obj in current_dirty {
             if let Some(children) = indexes.dependents.get(&dirty_obj) {
-                dirty_stmts.extend(children.iter().cloned());
+                for child in children {
+                    if dirty_stmts.insert(child.clone()) {
+                        verbose!(
+                            "[dirty-propagation]   Rule 4: DirtyStmt({}) <- depends on DirtyStmt({})",
+                            child,
+                            dirty_obj
+                        );
+                    }
+                }
             }
         }
 
-        // --- Schema dirtiness rules ---
-        // Rule 5: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch)
+        // --- Schema dirtiness rules (excluding sinks) ---
+        // Rule 5: DirtySchema(Db, Sch) :- DirtyStmt(O), ObjectInSchema(O, Db, Sch), NOT IsSink(O)
         for obj in &dirty_stmts {
+            // Sinks should NOT make schemas dirty
+            if base_facts.is_sink.contains(obj) {
+                verbose!(
+                    "[dirty-propagation]   Rule 5 SKIP: {} is a sink, not marking schema dirty",
+                    obj
+                );
+                continue;
+            }
             if let Some((db, sch)) = indexes.object_to_schema.get(obj) {
-                dirty_schemas.insert((db.clone(), sch.clone()));
+                if dirty_schemas.insert((db.clone(), sch.clone())) {
+                    verbose!(
+                        "[dirty-propagation]   Rule 5: DirtySchema({}.{}) <- DirtyStmt({}) in schema",
+                        db,
+                        sch,
+                        obj
+                    );
+                }
             }
         }
 
         // Rule 6: DirtyStmt(O) :- DirtySchema(Db, Sch), ObjectInSchema(O, Db, Sch)
         for (obj, (db, sch)) in &indexes.object_to_schema {
             if dirty_schemas.contains(&(db.clone(), sch.clone())) {
-                dirty_stmts.insert(obj.clone());
+                if dirty_stmts.insert(obj.clone()) {
+                    verbose!(
+                        "[dirty-propagation]   Rule 6: DirtyStmt({}) <- in DirtySchema({}.{})",
+                        obj,
+                        db,
+                        sch
+                    );
+                }
             }
         }
 
         // Fixed point reached when no sets grew
         if (dirty_stmts.len(), dirty_clusters.len(), dirty_schemas.len()) == prev_sizes {
+            verbose!(
+                "[dirty-propagation] Fixed point reached after {} iteration(s)",
+                iteration
+            );
             break;
         }
     }
+
+    // Log final results
+    verbose!("[dirty-propagation] === Final Results ===");
+    verbose!(
+        "[dirty-propagation] Dirty statements ({}): {:?}",
+        dirty_stmts.len(),
+        dirty_stmts.iter().map(|o| o.to_string()).collect::<Vec<_>>()
+    );
+    verbose!(
+        "[dirty-propagation] Dirty clusters ({}): {:?}",
+        dirty_clusters.len(),
+        dirty_clusters
+    );
+    verbose!(
+        "[dirty-propagation] Dirty schemas ({}): {:?}",
+        dirty_schemas.len(),
+        dirty_schemas
+            .iter()
+            .map(|(db, sch)| format!("{}.{}", db, sch))
+            .collect::<Vec<_>>()
+    );
 
     // Convert cluster names to Cluster structs
     let dirty_cluster_structs = dirty_clusters.into_iter().map(Cluster::new).collect();
@@ -456,6 +612,7 @@ mod tests {
             depends_on: vec![],
             stmt_uses_cluster: vec![],
             index_uses_cluster: vec![],
+            is_sink: BTreeSet::new(),
         };
 
         // Only obj1 is changed
@@ -532,6 +689,7 @@ mod tests {
                 "idx_item".to_string(),
                 "quickstart".to_string(),
             )],
+            is_sink: BTreeSet::new(),
         };
 
         // Only other_obj is changed
@@ -603,6 +761,7 @@ mod tests {
                 "idx1".to_string(),
                 "index_cluster".to_string(),
             )],
+            is_sink: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();
@@ -690,6 +849,7 @@ mod tests {
                     "quickstart".to_string(),
                 ),
             ],
+            is_sink: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();
@@ -789,6 +949,7 @@ mod tests {
                     "quickstart".to_string(),
                 ),
             ],
+            is_sink: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();
@@ -903,6 +1064,7 @@ mod tests {
                     "quickstart".to_string(),
                 ),
             ],
+            is_sink: BTreeSet::new(),
         };
 
         let mut changed_stmts = BTreeSet::new();

@@ -19,9 +19,9 @@ use async_stream::try_stream;
 use futures::Stream;
 use crate::client::introspection;
 use crate::client::models::{
-    Cluster, ClusterConfig, ClusterOptions, ConflictRecord, DeploymentDetails,
-    DeploymentHistoryEntry, DeploymentMetadata, DeploymentObjectRecord, SchemaDeploymentRecord,
-    StagingDeployment,
+    ApplyState, Cluster, ClusterConfig, ClusterOptions, ConflictRecord, DeploymentDetails,
+    DeploymentHistoryEntry, DeploymentMetadata, DeploymentObjectRecord, PendingStatement,
+    SchemaDeploymentRecord, StagingDeployment,
 };
 use crate::client::validation;
 use crate::project::deployment_snapshot::DeploymentSnapshot;
@@ -29,6 +29,8 @@ use crate::project::object_id::ObjectId;
 use crate::project::planned;
 use crate::types::{ColumnType, Types};
 use crate::utils::sql_utils::quote_identifier;
+use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
+use postgres_openssl::MakeTlsConnector;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use tokio_postgres::types::ToSql;
@@ -76,21 +78,33 @@ impl Client {
     }
 
     /// Connect to the database using a Profile directly.
+    ///
+    /// Tries TLS connection first (required for Materialize Cloud), then falls back
+    /// to NoTls for local connections (e.g., localhost, Docker).
     pub async fn connect_with_profile(profile: Profile) -> Result<Self, ConnectionError> {
         // Build connection string
+        // Values with special characters need to be quoted with single quotes,
+        // and single quotes/backslashes within values need to be escaped
         let mut conn_str = format!("host={} port={}", profile.host, profile.port);
 
         if let Some(ref username) = profile.username {
-            conn_str.push_str(&format!(" user={}", username));
+            conn_str.push_str(&format!(" user='{}'", escape_conn_string_value(username)));
         }
 
         if let Some(ref password) = profile.password {
-            conn_str.push_str(&format!(" password={}", password));
+            conn_str.push_str(&format!(" password='{}'", escape_conn_string_value(password)));
         }
 
-        // Connect to the database
-        let (client, connection) =
-            tokio_postgres::connect(&conn_str, NoTls)
+        // Determine if this is likely a cloud connection (not localhost)
+        let is_local = profile.host == "localhost"
+            || profile.host == "127.0.0.1"
+            || profile.host.starts_with("192.168.")
+            || profile.host.starts_with("10.")
+            || profile.host.starts_with("172.");
+
+        let client = if is_local {
+            // Local connection - use NoTls
+            let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
                 .await
                 .map_err(|source| ConnectionError::Connect {
                     host: profile.host.clone(),
@@ -98,12 +112,69 @@ impl Client {
                     source,
                 })?;
 
-        // Spawn the connection handler
-        mz_ore::task::spawn(|| "mz-deploy-connection", async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+            // Spawn the connection handler
+            mz_ore::task::spawn(|| "mz-deploy-connection", async move {
+                if let Err(e) = connection.await {
+                    eprintln!("connection error: {}", e);
+                }
+            });
+
+            client
+        } else {
+            // Cloud connection - use TLS
+            let mut builder = SslConnector::builder(SslMethod::tls())
+                .map_err(|e| ConnectionError::Message(format!("Failed to create TLS builder: {}", e)))?;
+
+            // Load CA certificates - try platform-specific paths
+            // macOS: Homebrew OpenSSL or system certificates
+            // Linux: Standard system paths
+            let ca_paths = [
+                "/etc/ssl/cert.pem",                          // macOS system
+                "/opt/homebrew/etc/openssl@3/cert.pem",       // macOS Homebrew ARM
+                "/usr/local/etc/openssl@3/cert.pem",          // macOS Homebrew Intel
+                "/opt/homebrew/etc/openssl/cert.pem",         // macOS Homebrew ARM (older)
+                "/usr/local/etc/openssl/cert.pem",            // macOS Homebrew Intel (older)
+                "/etc/ssl/certs/ca-certificates.crt",         // Debian/Ubuntu
+                "/etc/pki/tls/certs/ca-bundle.crt",           // RHEL/CentOS
+                "/etc/ssl/ca-bundle.pem",                     // OpenSUSE
+            ];
+
+            let mut ca_loaded = false;
+            for path in &ca_paths {
+                if std::path::Path::new(path).exists() {
+                    if builder.set_ca_file(path).is_ok() {
+                        ca_loaded = true;
+                        break;
+                    }
+                }
             }
-        });
+
+            if !ca_loaded {
+                // Fall back to default paths as last resort
+                let _ = builder.set_default_verify_paths();
+            }
+
+            builder.set_verify(SslVerifyMode::PEER);
+
+            let connector = MakeTlsConnector::new(builder.build());
+
+            let (client, connection) = tokio_postgres::connect(&conn_str, connector)
+                .await
+                .map_err(|source| ConnectionError::Connect {
+                    host: profile.host.clone(),
+                    port: profile.port,
+                    source,
+                })?;
+
+            // Spawn the connection handler
+            mz_ore::task::spawn(|| "mz-deploy-connection", async move {
+                if let Err(e) = connection.await {
+                    eprintln!("connection error: {}", e);
+                }
+            });
+
+            client
+        };
 
         Ok(Client { client, profile })
     }
@@ -802,6 +873,59 @@ impl Client {
     }
 
     // =========================================================================
+    // Apply State Operations
+    // =========================================================================
+
+    /// Create apply state schemas with comments for tracking apply progress.
+    pub async fn create_apply_state_schemas(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        deployment_ops::create_apply_state_schemas(&self.client, deploy_id).await
+    }
+
+    /// Get the current apply state for a deployment.
+    pub async fn get_apply_state(&self, deploy_id: &str) -> Result<ApplyState, ConnectionError> {
+        deployment_ops::get_apply_state(&self.client, deploy_id).await
+    }
+
+    /// Delete apply state schemas after successful completion.
+    pub async fn delete_apply_state_schemas(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        deployment_ops::delete_apply_state_schemas(&self.client, deploy_id).await
+    }
+
+    // =========================================================================
+    // Pending Statements Operations
+    // =========================================================================
+
+    /// Insert pending statements for deferred execution (e.g., sinks).
+    pub async fn insert_pending_statements(
+        &self,
+        statements: &[PendingStatement],
+    ) -> Result<(), ConnectionError> {
+        deployment_ops::insert_pending_statements(&self.client, statements).await
+    }
+
+    /// Get pending statements for a deployment that haven't been executed yet.
+    pub async fn get_pending_statements(
+        &self,
+        deploy_id: &str,
+    ) -> Result<Vec<PendingStatement>, ConnectionError> {
+        deployment_ops::get_pending_statements(&self.client, deploy_id).await
+    }
+
+    /// Mark a pending statement as executed.
+    pub async fn mark_statement_executed(
+        &self,
+        deploy_id: &str,
+        sequence_num: i32,
+    ) -> Result<(), ConnectionError> {
+        deployment_ops::mark_statement_executed(&self.client, deploy_id, sequence_num).await
+    }
+
+    /// Delete all pending statements for a deployment.
+    pub async fn delete_pending_statements(&self, deploy_id: &str) -> Result<(), ConnectionError> {
+        deployment_ops::delete_pending_statements(&self.client, deploy_id).await
+    }
+
+    // =========================================================================
     // Introspection Operations
     // =========================================================================
 
@@ -922,4 +1046,13 @@ impl Client {
         )
         .await
     }
+}
+
+/// Escape a value for use in a libpq connection string.
+///
+/// In connection strings, values containing special characters must be quoted
+/// with single quotes, and any single quotes or backslashes within the value
+/// must be escaped with a backslash.
+fn escape_conn_string_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('\'', "\\'")
 }

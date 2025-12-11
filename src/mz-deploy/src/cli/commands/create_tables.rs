@@ -139,9 +139,12 @@ pub async fn run(
     println!("\nCreating {} new table(s)...", tables_to_create.len());
 
     // Collect all schemas that contain tables to create
-    let mut table_schemas = BTreeSet::new();
+    let mut table_schemas = BTreeMap::new();
     for (object_id, _) in &tables_to_create {
-        table_schemas.insert((object_id.database.clone(), object_id.schema.clone()));
+        table_schemas.insert(
+            (object_id.database.clone(), object_id.schema.clone()),
+            crate::client::DeploymentKind::Tables,
+        );
     }
 
     // Create executor with dry-run mode
@@ -155,7 +158,7 @@ pub async fn run(
             println!("-- Create schemas --");
         }
 
-        for (database, schema) in &table_schemas {
+        for ((database, schema), _kind) in &table_schemas {
             verbose!("Creating schema {}.{} if not exists", database, schema);
             let create_schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}.{}", database, schema);
             executor.execute_sql(&create_schema_sql).await?;
@@ -169,7 +172,7 @@ pub async fn run(
                     statement,
                 } => {
                     // Check if any schema in this database contains tables
-                    let has_tables = table_schemas.iter().any(|(db, _)| db == database);
+                    let has_tables = table_schemas.keys().any(|(db, _)| db == database);
                     if has_tables {
                         verbose!("Applying database setup for: {}", database);
                         executor.execute_sql(statement).await?;
@@ -180,7 +183,7 @@ pub async fn run(
                     schema,
                     statement,
                 } => {
-                    if table_schemas.contains(&(database.to_string(), schema.to_string())) {
+                    if table_schemas.contains_key(&(database.to_string(), schema.to_string())) {
                         verbose!("Applying schema setup for: {}.{}", database, schema);
                         executor.execute_sql(statement).await?;
                     }
@@ -241,7 +244,6 @@ pub async fn run(
             &deploy_id,
             &metadata,
             Some(now),
-            crate::client::DeploymentKind::Tables,
         )
         .await?;
 
