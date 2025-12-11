@@ -105,4 +105,4 @@ $ kafka-verify-topic topic=testdrive-kafka-progress-${testdrive.seed} topic-conf
   FORMAT JSON
   ENVELOPE UPSERT
 
-$ kafka-verify-topic topic=testdrive-kafka-progress-${testdrive.seed} topic-config={"cleanup.policy": "compact"} replication-factor=1 partition-count=1
+$ kafka-verify-topic topic=testdrive-kafka-progress-${testdrive.seed} topic-config={"cleanup.policy": "compact", "segment.bytes": "134217728"} replication-factor=1 partition-count=1
