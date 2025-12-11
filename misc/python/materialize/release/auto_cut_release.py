@@ -63,10 +63,12 @@ def main():
     if not next_version_doc_file.exists():
         next_version_doc_file.write_text(
             f"""---
-title: "Materialize {args.next_version}"
+title: Materialize {args.next_version}
 date: {args.next_date}
 released: false
+patch: 0
 rc: 1
+publish_helm_chart: true
 _build:
   render: never
 ---

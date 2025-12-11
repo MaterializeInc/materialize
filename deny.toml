@@ -127,8 +127,8 @@ skip = [
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
     { name = "darling", version = "0.20.11" },
-    { name = "typed-builder", version = "0.21.2" },
-    { name = "typed-builder-macro", version = "0.21.2" },
+    { name = "typed-builder", version = "0.20.1" },
+    { name = "typed-builder-macro", version = "0.20.1" },
     # chrono-tz
     { name = "phf", version = "0.11.3" },
     { name = "phf_shared", version = "0.11.3" },

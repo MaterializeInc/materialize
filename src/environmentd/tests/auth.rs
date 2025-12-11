@@ -59,10 +59,10 @@ use postgres::error::SqlState;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::time::sleep;
-use tungstenite::Message;
 use tungstenite::client::ClientRequestBuilder;
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
+use tungstenite::{Message, Utf8Bytes};
 use uuid::Uuid;
 
 // How long, in seconds, a claim is valid for. Increasing this value will decrease some test flakes
@@ -356,7 +356,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 let stream = make_ws_tls(&uri, configure);
                 let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
 
-                ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
+                ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
                     .unwrap();
 
                 ws.send(Message::Text(
@@ -3536,7 +3536,7 @@ async fn test_password_auth_http() {
         .unwrap();
 
     let query = r#"{"query":"SELECT current_user"}"#;
-    let ws_options_msg = Message::Text(r#"{"options": {}}"#.to_owned());
+    let ws_options_msg = Message::Text(r#"{"options": {}}"#.to_owned().into());
 
     let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
         .pool_idle_timeout(Duration::from_secs(10))
@@ -3565,7 +3565,7 @@ async fn test_password_auth_http() {
         ws.read().unwrap(),
         Message::Close(Some(CloseFrame {
             code: CloseCode::Protocol,
-            reason: Cow::Borrowed("unauthorized"),
+            reason: Utf8Bytes::from_static("unauthorized")
         })),
     );
 
@@ -3631,7 +3631,7 @@ async fn test_password_auth_http() {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                 match msg {
                     WebSocketResponse::ReadyForQuery(_) => {
-                        ws.send(Message::Text(query.to_owned())).unwrap();
+                        ws.send(Message::Text(query.to_owned().into())).unwrap();
                     }
                     WebSocketResponse::Row(rows) => {
                         assert_eq!(&rows, &[serde_json::Value::from("mz_system".to_owned())]);
@@ -3712,7 +3712,7 @@ async fn test_password_auth_http_superuser() {
             password: Password(password.to_string()),
             options: BTreeMap::default(),
         };
-        ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
+        ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
             .unwrap();
 
         loop {
@@ -3726,7 +3726,7 @@ async fn test_password_auth_http_superuser() {
         }
 
         ws.send(Message::Text(
-            r#"{"query": "SHOW is_superuser"}"#.to_owned(),
+            r#"{"query": "SHOW is_superuser"}"#.to_owned().into(),
         ))
         .unwrap();
 
@@ -3779,7 +3779,7 @@ async fn test_password_auth_http_superuser() {
             ClientRequestBuilder::new(ws_url.clone()).with_header("Cookie", session_cookie);
         let (mut ws, _resp) = tungstenite::connect(ws_request).unwrap();
 
-        ws.send(Message::Text(r#"{"options": {}}"#.to_owned()))
+        ws.send(Message::Text(r#"{"options": {}}"#.to_owned().into()))
             .unwrap();
 
         loop {
@@ -3793,7 +3793,7 @@ async fn test_password_auth_http_superuser() {
         }
 
         ws.send(Message::Text(
-            r#"{"query": "SHOW is_superuser"}"#.to_owned(),
+            r#"{"query": "SHOW is_superuser"}"#.to_owned().into(),
         ))
         .unwrap();
 

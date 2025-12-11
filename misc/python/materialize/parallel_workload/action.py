@@ -1578,6 +1578,7 @@ class FlipFlagsAction(Action):
             "kafka_retry_backoff_max",
             "kafka_reconnect_backoff",
             "kafka_reconnect_backoff_max",
+            "pg_source_validate_timeline",
         ]
 
     def run(self, exe: Executor) -> bool:

@@ -1597,6 +1597,7 @@ where
                 from_storage_metadata,
                 with_snapshot: new_description.sink.with_snapshot,
                 to_storage_metadata,
+                commit_interval: new_description.sink.commit_interval,
             },
         };
 
@@ -1676,6 +1677,7 @@ where
                     as_of: as_of.to_owned(),
                     from_storage_metadata,
                     to_storage_metadata,
+                    commit_interval: new_export_description.sink.commit_interval,
                 },
             };
 
@@ -3482,6 +3484,7 @@ where
                 from_storage_metadata,
                 with_snapshot,
                 to_storage_metadata,
+                commit_interval: description.sink.commit_interval,
             },
         };
 

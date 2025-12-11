@@ -9,4 +9,5 @@
 
 //! Moving data to external systems
 
+mod iceberg;
 mod kafka;

@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use futures::Future;
 use mz_adapter_types::connection::ConnectionId;
 use mz_compute_types::ComputeInstanceId;
-use mz_ore::instrument;
 use mz_ore::now::{EpochMillis, NowFn, to_datetime};
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_repr::{GlobalId, Timestamp};
 use mz_sql::names::{ResolvedDatabaseSpecifier, SchemaSpecifier};
 use mz_storage_types::sources::Timeline;
@@ -369,6 +369,11 @@ fn upper_bound(now: &mz_repr::Timestamp) -> mz_repr::Timestamp {
 ///
 /// This is a free-standing function that can be called from both the old peek sequencing
 /// and the new frontend peek sequencing.
+///
+/// This function assumes that uses_ids only includes such ids that are the latest versions of each
+/// object. This should be easy to satisfy when calling this function with the ids directly
+/// referenced by a new query, because a new query should not be able to refer to old versions of
+/// objects.
 pub(crate) fn timedomain_for<'a, I>(
     catalog: &Catalog,
     dataflow_builder: &DataflowBuilder,
@@ -380,9 +385,14 @@ pub(crate) fn timedomain_for<'a, I>(
 where
     I: IntoIterator<Item = &'a GlobalId>,
 {
+    // This is just for the assert below.
+    let mut orig_uses_ids = Vec::new();
+
     // Gather all the used schemas.
     let mut schemas = BTreeSet::new();
     for id in uses_ids {
+        orig_uses_ids.push(id.clone());
+
         let entry = catalog.get_entry_by_global_id(id);
         let name = entry.name();
         schemas.insert((name.qualifiers.database_spec, name.qualifiers.schema_spec));
@@ -419,6 +429,19 @@ where
             .values()
             .map(|item_id| catalog.get_entry(item_id).latest_global_id());
         collection_ids.extend(global_ids);
+    }
+
+    {
+        // Assert that we got back a superset of the original ids.
+        // This should be true, because the query is able to directly reference only the latest
+        // version of each object.
+        for id in orig_uses_ids.iter() {
+            soft_assert_or_log!(
+                collection_ids.contains(id),
+                "timedomain_for is about to miss {}",
+                id
+            );
+        }
     }
 
     // Gather the dependencies of those items.

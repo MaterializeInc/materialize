@@ -418,36 +418,40 @@ impl k8s_controller::Context for Context {
                 // replace_status, but this is fine because we already
                 // extracted all of the information we want from the spec
                 // earlier.
-                let mz = self
-                    .update_status(
-                        &mz_api,
-                        mz,
-                        MaterializeStatus {
-                            active_generation,
-                            // don't update the reconciliation id yet,
-                            // because the rollout hasn't yet completed. if
-                            // we fail later on, we want to ensure that the
-                            // rollout gets retried.
-                            last_completed_rollout_request: status.last_completed_rollout_request,
-                            last_completed_rollout_environmentd_image_ref: status
-                                .last_completed_rollout_environmentd_image_ref,
-                            resource_id: status.resource_id,
-                            resources_hash: String::new(),
-                            conditions: vec![Condition {
-                                type_: "UpToDate".into(),
-                                status: "Unknown".into(),
-                                last_transition_time: Time(chrono::offset::Utc::now()),
-                                message: format!(
-                                    "Applying changes for generation {desired_generation}"
-                                ),
-                                observed_generation: mz.meta().generation,
-                                reason: "Applying".into(),
-                            }],
-                        },
-                        active_generation != desired_generation,
-                    )
-                    .await?;
-                let mz = &mz;
+                let mz = if mz.is_ready_to_promote(&resources_hash) {
+                    mz
+                } else {
+                    &self
+                        .update_status(
+                            &mz_api,
+                            mz,
+                            MaterializeStatus {
+                                active_generation,
+                                // don't update the reconciliation id yet,
+                                // because the rollout hasn't yet completed. if
+                                // we fail later on, we want to ensure that the
+                                // rollout gets retried.
+                                last_completed_rollout_request: status
+                                    .last_completed_rollout_request,
+                                last_completed_rollout_environmentd_image_ref: status
+                                    .last_completed_rollout_environmentd_image_ref,
+                                resource_id: status.resource_id,
+                                resources_hash: String::new(),
+                                conditions: vec![Condition {
+                                    type_: "UpToDate".into(),
+                                    status: "Unknown".into(),
+                                    last_transition_time: Time(chrono::offset::Utc::now()),
+                                    message: format!(
+                                        "Applying changes for generation {desired_generation}"
+                                    ),
+                                    observed_generation: mz.meta().generation,
+                                    reason: "Applying".into(),
+                                }],
+                            },
+                            active_generation != desired_generation,
+                        )
+                        .await?
+                };
                 let status = mz.status();
 
                 if !mz.within_upgrade_window() {
@@ -503,6 +507,39 @@ impl k8s_controller::Context for Context {
                         Ok(Some(action))
                     }
                     Ok(None) => {
+                        if mz.spec.rollout_strategy == MaterializeRolloutStrategy::ManuallyPromote
+                            && !mz.should_force_promote()
+                        {
+                            trace!(
+                                "Ready to promote, but not promoting because the instance is configured with ManuallyPromote rollout strategy."
+                            );
+                            self.update_status(
+                                &mz_api,
+                                mz,
+                                MaterializeStatus {
+                                    active_generation,
+                                    last_completed_rollout_request: status
+                                        .last_completed_rollout_request,
+                                    last_completed_rollout_environmentd_image_ref: status
+                                        .last_completed_rollout_environmentd_image_ref,
+                                    resource_id: status.resource_id,
+                                    resources_hash,
+                                    conditions: vec![Condition {
+                                        type_: "UpToDate".into(),
+                                        status: "Unknown".into(),
+                                        last_transition_time: Time(chrono::offset::Utc::now()),
+                                        message: format!(
+                                            "Ready to promote generation {desired_generation}"
+                                        ),
+                                        observed_generation: mz.meta().generation,
+                                        reason: "ReadyToPromote".into(),
+                                    }],
+                                },
+                                active_generation != desired_generation,
+                            )
+                            .await?;
+                            return Ok(None);
+                        }
                         // do this last, so that we keep traffic pointing at
                         // the previous environmentd until the new one is
                         // fully ready

@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import datetime
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -593,9 +594,6 @@ def get_commits_of_accepted_regressions_between_versions(
 class VersionsFromDocs:
     """Materialize versions as listed in doc/user/content/releases
 
-    Only versions that declare `versiond: true` in their
-    frontmatter are considered.
-
     >>> len(VersionsFromDocs(respect_released_tag=True).all_versions()) > 0
     True
 
@@ -609,7 +607,12 @@ class VersionsFromDocs:
     MzVersion(major=0, minor=27, patch=0, prerelease=None, build=None)
     """
 
-    def __init__(self, respect_released_tag: bool) -> None:
+    def __init__(
+        self,
+        respect_released_tag: bool,
+        respect_date: bool = False,
+        only_publish_helm_chart: bool = True,
+    ) -> None:
         files = Path(MZ_ROOT / "doc" / "user" / "content" / "releases").glob("v*.md")
         self.versions = []
         current_version = MzVersion.parse_cargo()
@@ -617,6 +620,11 @@ class VersionsFromDocs:
             base = f.stem
             metadata = frontmatter.load(f)
             if respect_released_tag and not metadata.get("released", False):
+                continue
+            if only_publish_helm_chart and not metadata.get("publish_helm_chart", True):
+                continue
+            date: datetime.date = metadata["date"]
+            if respect_date and date > datetime.date.today():
                 continue
 
             current_patch = metadata.get("patch", 0)

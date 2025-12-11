@@ -45,6 +45,12 @@ pub struct StorageSinkDesc<S, T = mz_repr::Timestamp> {
     pub as_of: Antichain<T>,
     pub from_storage_metadata: S,
     pub to_storage_metadata: S,
+    /// The interval at which to commit data to the sink.
+    /// This isn't universally supported by all sinks
+    /// yet, so it is optional. Even for sinks that might
+    /// support it in the future (ahem, kafka) users might
+    /// not want to set it.
+    pub commit_interval: Option<Duration>,
 }
 
 impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
@@ -76,6 +82,7 @@ impl<S: Debug + PartialEq, T: Debug + PartialEq + PartialOrder> AlterCompatible
             from_storage_metadata,
             with_snapshot,
             to_storage_metadata,
+            commit_interval: _,
         } = self;
 
         let compatibility_checks = [

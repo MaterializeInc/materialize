@@ -1418,6 +1418,7 @@ impl CatalogState {
                 with_snapshot,
                 resolved_ids,
                 cluster_id: in_cluster,
+                commit_interval: sink.commit_interval,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
                 // Even if we don't need the `RelationDesc` here, error out

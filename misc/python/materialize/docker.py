@@ -32,11 +32,11 @@ MZ_GHCR_DEFAULT = "1" if ui.env_is_truthy("CI") else "0"
 VERSION_IN_IMAGE_TAG_PATTERN = re.compile(r"^(v\d+\.\d+\.\d+(-dev)?)")
 
 
-def image_of_release_version_exists(version: MzVersion) -> bool:
+def image_of_release_version_exists(version: MzVersion, quiet: bool = False) -> bool:
     if version.is_dev_version():
         raise ValueError(f"Version {version} is a dev version, not a release version")
 
-    return mz_image_tag_exists(release_version_to_image_tag(version))
+    return mz_image_tag_exists(release_version_to_image_tag(version), quiet=quiet)
 
 
 def image_of_commit_exists(commit_hash: str) -> bool:
@@ -64,17 +64,19 @@ def mz_image_tag_exists_cmdline(image_name: str) -> bool:
         return False
 
 
-def mz_image_tag_exists(image_tag: str) -> bool:
+def mz_image_tag_exists(image_tag: str, quiet: bool = False) -> bool:
     image_name = f"{image_registry()}/materialized:{image_tag}"
 
     if image_name in EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK:
         image_exists = EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name]
-        print(
-            f"Status of image {image_name} known from earlier check: {'exists' if image_exists else 'does not exist'}"
-        )
+        if not quiet:
+            print(
+                f"Status of image {image_name} known from earlier check: {'exists' if image_exists else 'does not exist'}"
+            )
         return image_exists
 
-    print(f"Checking existence of image manifest: {image_name}")
+    if not quiet:
+        print(f"Checking existence of image manifest: {image_name}")
 
     command_local = ["docker", "images", "--quiet", image_name]
 
@@ -105,7 +107,8 @@ def mz_image_tag_exists(image_tag: str) -> bool:
     if "not found" in result.get("message", ""):
         EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK[image_name] = False
         return False
-    print(f"Failed to fetch image info from API: {result}")
+    if not quiet:
+        print(f"Failed to fetch image info from API: {result}")
     # do not cache the result of unknown error messages
     return False
 

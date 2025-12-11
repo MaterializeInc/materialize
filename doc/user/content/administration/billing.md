@@ -11,7 +11,7 @@ Materialize determines billing based on your compute and storage usage.
 Materialize bills per second based on the [cluster(s)](/concepts/clusters/) you
 provision for your workloads. Each cluster is a pool of resources (CPU, memory,
 and scratch disk space) that must stay up and running to continually provide you
-with always-fresh results.
+with always-fresh results. For pricing details, see [Pricing](https://materialize.com/pricing/).
 
 ## Compute
 
@@ -77,9 +77,7 @@ datasets plus the size of any materialized views, with some overhead from
 uncompacted data and system metrics.
 
 Materialize uses cheap, scalable object storage for its storage layer
-(Amazon S3), and primarily passes the cost through to the customer. At a rate
-of 0.0000411 USD per GB/hr, 1 TB stored for one month (730 hrs) equates to 30
-USD.
+(Amazon S3), and primarily passes the cost through to the customer.
 
 Most data in Materialize is continually compacted, with the exception of
 [append-only sources](/sql/create-source/#append-only-envelope). As such, the
@@ -114,7 +112,7 @@ Conditions](https://materialize.com/pdfs/on-demand-terms.pdf).
 
 ## Additional references
 
-- https://materialize.com/pricing/
+- [Pricing](https://materialize.com/pricing/)
 
 - [How Materialize can lower the cost of freshness for data teams](https://materialize.com/promotions/cost-of-freshness/?utm_campaign=General&utm_source=documentation)
 

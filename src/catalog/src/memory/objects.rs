@@ -15,6 +15,7 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, LazyLock};
+use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use mz_adapter_types::compaction::CompactionWindow;
@@ -1294,6 +1295,8 @@ pub struct Sink {
     pub resolved_ids: ResolvedIds,
     /// Cluster this sink runs on.
     pub cluster_id: ClusterId,
+    /// Commit interval for the sink.
+    pub commit_interval: Option<Duration>,
 }
 
 impl Sink {

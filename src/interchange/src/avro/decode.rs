@@ -22,6 +22,7 @@ use mz_repr::adt::numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Row, RowPacker};
 use ordered_float::OrderedFloat;
+use serde::{Deserialize, Serialize};
 use tracing::trace;
 use uuid::Uuid;
 
@@ -445,7 +446,7 @@ impl<'a, 'row> AvroDecode for AvroFlatDecoder<'a, 'row> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DiffPair<T> {
     pub before: Option<T>,
     pub after: Option<T>,
