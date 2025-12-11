@@ -5464,6 +5464,14 @@ fn plan_drop_schema(
     name: &UnresolvedSchemaName,
     cascade: bool,
 ) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
+    // Special case for mz_temp: with lazy temporary schema creation, the temp
+    // schema may not exist yet, but we still need to return the correct error.
+    // Check the schema name directly against MZ_TEMP_SCHEMA.
+    let normalized = normalize::unresolved_schema_name(name.clone())?;
+    if normalized.database.is_none() && normalized.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+        sql_bail!("cannot drop schema {name} because it is a temporary schema",)
+    }
+
     Ok(match resolve_schema(scx, name.clone(), if_exists)? {
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {

@@ -146,3 +146,14 @@ s1  mz_catalog
 s2  pg_catalog
 s4  mz_internal
 s5  information_schema
+
+# Temporary schema drop should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+statement error cannot drop schema mz_temp because it is a temporary schema
+DROP SCHEMA mz_temp
+
+simple conn=mz_system,user=mz_system
+DROP SCHEMA mz_temp
+----
+db error: ERROR: cannot drop schema mz_temp because it is a temporary schema
