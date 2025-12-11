@@ -4735,10 +4735,7 @@ impl fmt::Display for BinaryFunc {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary(
-    a: &str,
-    b: &str,
-) -> Result<String, EvalError> {
+fn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {
     if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
