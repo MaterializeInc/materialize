@@ -221,7 +221,10 @@ cleanup() {
   if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose down --volumes || true
   else
-    mzcompose down --timeout=0 --volumes || true  # Ignore failures, we still want the rest of the cleanup
+    # Ignore failures, we still want the rest of the cleanup
+    mzcompose down --timeout=0 --volumes || true
+    # --timeout=0 can keep some alive, so retry in that case
+    mzcompose rm --force --stop --volumes || true
   fi
 
   echo "Finding core files"
