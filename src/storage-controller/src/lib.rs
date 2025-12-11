@@ -951,14 +951,14 @@ where
                     );
                 }
 
-                // The dependency since cannot be beyond the dependent (our)
-                // upper unless the collection is new. In practice, the
-                // depdenency is the remap shard of a source (export), and if
-                // the since is allowed to "catch up" to the upper, that is
-                // `upper <= since`, a restarting ingestion cannot differentiate
-                // between updates that have already been written out to the
-                // backing persist shard and updates that have yet to be
-                // written. We would write duplicate updates.
+                // If the dependency is between a remap shard and a source (and
+                // not a "primary" dependency), the dependency since cannot be
+                // beyond the dependent (our) upper unless the collection is
+                // new. If the since is allowed to "catch up" to the upper, that
+                // is `upper <= since`, a restarting ingestion cannot
+                // differentiate between updates that have already been written
+                // out to the backing persist shard and updates that have yet to
+                // be written. We would write duplicate updates.
                 //
                 // If this check fails, it means that the read hold installed on
                 // the dependency was probably not upheld –– if it were, the
@@ -968,18 +968,20 @@ where
                 // We don't care about the dependency since when the write
                 // frontier is empty. In that case, no-one can write down any
                 // more updates.
-                mz_ore::soft_assert_or_log!(
-                    write_frontier.elements() == &[T::minimum()]
-                        || write_frontier.is_empty()
-                        || PartialOrder::less_than(&dependency_since, write_frontier),
-                    "dependency since has advanced past dependent ({id}) upper \n
+                if description.primary.is_none() {
+                    mz_ore::soft_assert_or_log!(
+                        write_frontier.elements() == &[T::minimum()]
+                            || write_frontier.is_empty()
+                            || PartialOrder::less_than(&dependency_since, write_frontier),
+                        "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
                             dependency since {:?} \n
                             dependency read holds: {:?}",
-                    write_frontier,
-                    dependency_since,
-                    dependency_read_holds,
-                );
+                        write_frontier,
+                        dependency_since,
+                        dependency_read_holds,
+                    );
+                }
             }
 
             // Perform data source-specific setup.

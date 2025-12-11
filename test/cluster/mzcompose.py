@@ -6101,3 +6101,52 @@ def workflow_test_slow_seqno_hold(c: Composition):
     finally:
         c.up("postgres")
         background_select.join()
+
+
+def workflow_github_9961(c: Composition):
+    """Regression test for database-issues#9961."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=mv_advanced_upper=pause"],
+        ),
+    ):
+        c.up("materialized", "clusterd1")
+
+        c.sql(
+            """
+            CREATE CLUSTER test REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = test;
+
+            CREATE TABLE t (a int);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            """
+        )
+
+        # Wait until the MV's frontiers are equal.
+        for _ in range(3):
+            output = c.sql_query(
+                """
+                SELECT f.read_frontier = f.write_frontier
+                FROM mz_internal.mz_frontiers f
+                JOIN mz_materialized_views mv ON mv.id = f.object_id
+                WHERE mv.name = 'mv'
+                """
+            )
+            if output and output[0][0]:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("MV frontiers didn't become equal")
+
+        # database-issues#9961 causes this command to crash envd.
+        c.sql("CREATE MATERIALIZED VIEW rpl REPLACING mv AS SELECT * FROM t")

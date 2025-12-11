@@ -18,6 +18,7 @@ crossbeam-channel = "0.5.15"
 dec = { version = "0.4.8", features = ["serde"] }
 differential-dataflow = "0.18.0"
 differential-dogs3 = "0.18.0"
+fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
 itertools = "0.14.0"
 lgalloc = "0.6"
