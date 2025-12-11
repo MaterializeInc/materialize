@@ -743,6 +743,25 @@ impl PgwireBalancer {
         mz_stream.write_all(&buf).await?;
         let client_stream = conn.inner_mut();
 
+        // This early return is important in self managed with SASL mode.
+        // The below code specifically looks for cleartext password requests, but in SASL mode
+        // the server will send a different message type (SASLInitialResponse) that we should
+        // not try to interpret or respond to.
+        // "Why not? That code looks like it should fall back fine?" You may ask.
+        // The below block unconditionally reads 9 bytes from the server. If we don't have
+        // a password or the message isn't a cleartext password request, we forward those 9 bytes
+        // to the client. Then we return the stream to the caller, who will continue shuffling bytes.
+        // The problem is that with TLS enabled between balancerd <-> client, flushing the first 9 bytes
+        // before copying bidirectionally will have the side effect of splitting the auth handshake into
+        // two SSL records. Pgbouncer misbehaves in this scenario, and fails the connection.
+        // PGbouncer shouldn't do this! It's a common footgun of protocols over TLS.
+        // So common in fact that PGbouncer already hit and fixed this issue on the bouncer <-> client side:
+        // once before: https://github.com/pgbouncer/pgbouncer/pull/1058.
+        // We will work to upstream a fix, but in the meantime, this early return avoids the issue entirely.
+        if password.is_none() {
+            return Ok(mz_stream);
+        }
+
         // Read a single backend message, which may be a password request. Send ours if so.
         // Otherwise start shuffling bytes. message type (len 1, 'R') + message len (len 4, 8_i32) +
         // auth type (len 4, 3_i32).
