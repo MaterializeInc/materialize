@@ -575,11 +575,11 @@ impl Coordinator {
                         .ensure_vpc_endpoint(connection_id, spec)
                         .await
                     {
-                        tracing::warn!(?err, "failed to ensure vpc endpoint!");
+                        tracing::error!(?err, "failed to ensure vpc endpoint!");
                     }
                 }
             } else {
-                tracing::warn!(
+                tracing::error!(
                     "AWS PrivateLink connections unsupported without cloud_resource_controller"
                 );
             }
