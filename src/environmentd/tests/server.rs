@@ -66,7 +66,7 @@ use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
-use tungstenite::{Error, Message};
+use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
 
 // Allow the use of banned rdkafka methods, because we are just in tests.
@@ -947,8 +947,8 @@ fn test_http_sql() {
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
-                "ws-text" => Message::Text(tc.input.clone()),
-                "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec()),
+                "ws-text" => Message::Text(tc.input.clone().into()),
+                "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec().into()),
                 "http" => {
                     let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
                     let res = Client::new()
@@ -973,9 +973,11 @@ fn test_http_sql() {
                 match resp {
                     Message::Text(mut msg) => {
                         if fixtimestamp {
-                            msg = fixtimestamp_re
-                                .replace_all(&msg, fixtimestamp_replace)
-                                .into();
+                            msg = Utf8Bytes::from(
+                                fixtimestamp_re
+                                    .replace_all(&msg, fixtimestamp_replace)
+                                    .into_owned(),
+                            );
                         }
                         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                         write!(&mut responses, "{}\n", serde_json::to_string(&msg).unwrap())
@@ -1775,7 +1777,7 @@ fn test_max_request_size() {
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.send(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string().into())).unwrap();
 
         // The specific error isn't forwarded to the client, the connection is just closed.
         let err = ws.read().unwrap_err();
@@ -1852,7 +1854,7 @@ fn test_max_statement_batch_size() {
         test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.send(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string().into())).unwrap();
 
         // Discard the CommandStarting message
         let _ = ws.read().unwrap();
@@ -1908,7 +1910,7 @@ fn test_ws_passes_options() {
     // set from the options map we passed with the auth.
     let json = "{\"query\":\"SHOW application_name;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();
@@ -1963,7 +1965,7 @@ fn test_ws_subscribe_no_crash() {
     let query = "SUBSCRIBE (SELECT 1)";
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     // Give the server time to crash, if it's going to.
     std::thread::sleep(Duration::from_secs(1))
@@ -2176,7 +2178,7 @@ fn test_max_connections_on_all_interfaces() {
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     // The specific error isn't forwarded to the client, the connection is just closed.
     match ws.read() {
@@ -2189,11 +2191,11 @@ fn test_max_connections_on_all_interfaces() {
                 ws.read().unwrap(),
                 Message::Text(format!(
                     r#"{{"type":"Rows","payload":{{"columns":[{{"name":"{UNKNOWN_COLUMN_NAME}","type_oid":23,"type_len":4,"type_mod":-1}}]}}}}"#
-                ))
+                ).into())
             );
             assert_eq!(
                 ws.read().unwrap(),
-                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string())
+                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string().into())
             );
             tracing::info!("data: {:?}", ws.read().unwrap());
         }
@@ -2626,7 +2628,11 @@ fn test_internal_ws_auth() {
     // Auth with OptionsOnly
     test_util::auth_with_ws_impl(
         &mut ws,
-        Message::Text(serde_json::to_string(&WebSocketAuth::OptionsOnly { options }).unwrap()),
+        Message::Text(
+            serde_json::to_string(&WebSocketAuth::OptionsOnly { options })
+                .unwrap()
+                .into(),
+        ),
     )
     .unwrap();
 
@@ -2634,7 +2640,7 @@ fn test_internal_ws_auth() {
     // set from the headers passed with the websocket request.
     let json = "{\"query\":\"SELECT current_user;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();
@@ -2801,7 +2807,7 @@ fn test_cancel_ws() {
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     loop {
         let msg = ws.read().unwrap();
@@ -3090,10 +3096,10 @@ fn test_github_20262() {
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-    ws.send(Message::Text(subscribe)).unwrap();
+    ws.send(Message::Text(subscribe.into())).unwrap();
     cancel();
-    ws.send(Message::Text(commit)).unwrap();
-    ws.send(Message::Text(select)).unwrap();
+    ws.send(Message::Text(commit.into())).unwrap();
+    ws.send(Message::Text(select.into())).unwrap();
 
     let mut expect = VecDeque::from([
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#.to_string(),
@@ -4405,7 +4411,7 @@ async fn test_double_encoded_json() {
 
     let json = "{\"query\":\"SELECT a FROM t1 ORDER BY a;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();

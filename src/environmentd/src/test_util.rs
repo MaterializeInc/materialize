@@ -1528,7 +1528,8 @@ pub fn auth_with_ws(
                 password: "".into(),
                 options,
             })
-            .unwrap(),
+            .unwrap()
+            .into(),
         ),
     )
 }
