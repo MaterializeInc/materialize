@@ -6448,6 +6448,17 @@ pub fn plan_alter_schema_rename(
     to_schema_name: Ident,
     if_exists: bool,
 ) -> Result<Plan, PlanError> {
+    // Special case for mz_temp: with lazy temporary schema creation, the temp
+    // schema may not exist yet, but we still need to return the correct error.
+    // Check the schema name directly against MZ_TEMP_SCHEMA.
+    let normalized = normalize::unresolved_schema_name(name.clone())?;
+    if normalized.database.is_none() && normalized.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+        sql_bail!(
+            "cannot rename schemas in the ambient database: {:?}",
+            mz_repr::namespaces::MZ_TEMP_SCHEMA
+        );
+    }
+
     let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
         let object_type = ObjectType::Schema;
         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
@@ -6488,6 +6499,21 @@ pub fn plan_alter_schema_swap<F>(
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
+    // Special case for mz_temp: with lazy temporary schema creation, the temp
+    // schema may not exist yet, but we still need to return the correct error.
+    // Check the schema name directly against MZ_TEMP_SCHEMA.
+    let normalized_a = normalize::unresolved_schema_name(name_a.clone())?;
+    if normalized_a.database.is_none()
+        && normalized_a.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA
+    {
+        sql_bail!("cannot swap schemas that are in the ambient database");
+    }
+    // Also check name_b (the target schema name)
+    let name_b_str = normalize::ident_ref(&name_b);
+    if name_b_str == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+        sql_bail!("cannot swap schemas that are in the ambient database");
+    }
+
     let schema_a = scx.resolve_schema(name_a.clone())?;
 
     let db_spec = schema_a.database().clone();
