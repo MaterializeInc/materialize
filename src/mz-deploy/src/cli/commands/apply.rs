@@ -1,26 +1,24 @@
 //! Apply command - promote staging deployment to production via ALTER SWAP.
 
 use crate::cli::CliError;
-use crate::client::{Client, Profile};
+use crate::client::{ApplyState, Client, DeploymentKind, Profile};
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
 
 /// Promote a staging deployment to production using ALTER SWAP.
 ///
-/// This command:
-/// - Validates the staging deployment exists and hasn't been promoted
-/// - Checks for deployment conflicts (git-merge-style conflict detection)
-/// - Uses ALTER SWAP to atomically promote schemas and clusters
-/// - Updates deployment records with promoted_at timestamp
-/// - Drops old production objects (which have staging suffix after swap)
+/// This command implements a resumable promotion flow:
+/// 1. Check for existing apply state (for resume scenarios)
+/// 2. Create apply state schemas if starting fresh
+/// 3. Execute atomic swap (schemas, clusters, and state schemas in one transaction)
+/// 4. Execute pending sinks (created after swap since they write to external systems)
+/// 5. Clean up old resources and state tracking
 ///
 /// # Arguments
 /// * `profile` - Database profile containing connection information
-/// * `directory` - Project directory
 /// * `deploy_id` - Staging deployment ID
 /// * `force` - Force promotion despite conflicts
-/// * `planned_project` - Compiled project (for cluster dependencies)
 ///
 /// # Returns
 /// Ok(()) if promotion succeeds
@@ -58,19 +56,90 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         }
     }
 
+    // Check apply state for resume scenarios
+    let apply_state = client.get_apply_state(deploy_id).await?;
+    verbose!("Apply state: {:?}", apply_state);
+
     // Load staging deployment state to identify what's deployed in staging
     let staging_snapshot =
         project::deployment_snapshot::load_from_database(&client, Some(deploy_id)).await?;
-
-    if staging_snapshot.objects.is_empty() {
-        return Err(CliError::NoSchemas);
-    }
 
     verbose!(
         "Found {} objects in staging deployment",
         staging_snapshot.objects.len()
     );
 
+    // Only check conflicts and gather resources if we haven't swapped yet
+    let (staging_schemas, staging_clusters, staging_suffix) = if apply_state != ApplyState::PostSwap
+    {
+        gather_resources_and_check_conflicts(&client, deploy_id, force).await?
+    } else {
+        // Post-swap: we don't need these for sink execution
+        verbose!("Resuming post-swap: skipping conflict check and resource gathering");
+        (BTreeSet::new(), BTreeSet::new(), format!("_{}", deploy_id))
+    };
+
+    // Execute based on current state
+    match apply_state {
+        ApplyState::NotStarted => {
+            // Fresh apply: create state schemas and execute swap
+            verbose!("Creating apply state schemas...");
+            client.create_apply_state_schemas(deploy_id).await?;
+
+            verbose!("Executing atomic swap...");
+            execute_atomic_swap(&client, deploy_id, &staging_schemas, &staging_clusters).await?;
+        }
+        ApplyState::PreSwap => {
+            // Resume: state schemas exist but swap didn't complete
+            verbose!("Resuming from pre-swap state...");
+            execute_atomic_swap(&client, deploy_id, &staging_schemas, &staging_clusters).await?;
+        }
+        ApplyState::PostSwap => {
+            // Resume: swap completed, continue to sinks
+            verbose!("Resuming from post-swap state...");
+        }
+    }
+
+    // Execute pending sinks (skip any already executed)
+    execute_pending_sinks(&client, deploy_id).await?;
+
+    // Update promoted_at timestamp
+    verbose!("\nUpdating deployment table...");
+    client
+        .update_promoted_at(deploy_id)
+        .await
+        .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
+
+    // Drop old production resources (now have staging suffix after swap)
+    // Only do this if we have the resource info (i.e., we did the swap in this run)
+    if !staging_schemas.is_empty() || !staging_clusters.is_empty() {
+        println!("\nDropping old production objects...");
+        drop_old_resources(&client, &staging_schemas, &staging_clusters, &staging_suffix).await;
+    }
+
+    // Clean up apply state and pending statements
+    verbose!("Cleaning up apply state...");
+    client.delete_apply_state_schemas(deploy_id).await?;
+    client.delete_pending_statements(deploy_id).await?;
+    client
+        .delete_deployment_clusters(deploy_id)
+        .await
+        .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
+
+    println!("Deployment completed successfully!");
+    println!("Staging deployment '{}' is now in production", deploy_id);
+
+    Ok(())
+}
+
+/// Gather staging resources and check for deployment conflicts.
+///
+/// Returns the staging schemas, clusters, and suffix for the swap operation.
+async fn gather_resources_and_check_conflicts(
+    client: &Client,
+    deploy_id: &str,
+    force: bool,
+) -> Result<(BTreeSet<(String, String)>, BTreeSet<String>, String), CliError> {
     verbose!("Checking for deployment conflicts...");
     let conflicts = client.check_deployment_conflicts(deploy_id).await?;
 
@@ -104,6 +173,16 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     // Get schemas from deploy.deployments table for this deployment
     let deployment_records = client.get_schema_deployments(Some(deploy_id)).await?;
     for record in deployment_records {
+        // Skip sink-only schemas - they don't need swapping
+        // Sinks are created after the swap via pending_statements
+        if record.kind == DeploymentKind::Sinks {
+            verbose!(
+                "Skipping sink-only schema {}.{} (no swap needed)",
+                record.database, record.schema
+            );
+            continue;
+        }
+
         let staging_schema = format!("{}{}", record.schema, staging_suffix);
 
         // Verify staging schema still exists
@@ -136,10 +215,6 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         }
     }
 
-    if staging_schemas.is_empty() && staging_clusters.is_empty() {
-        return Err(CliError::NoSchemas);
-    }
-
     verbose!("\nSchemas to swap:");
     for (database, schema) in &staging_schemas {
         let prod_schema = schema.trim_end_matches(&staging_suffix);
@@ -154,6 +229,23 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         }
     }
 
+    Ok((staging_schemas, staging_clusters, staging_suffix))
+}
+
+/// Execute the atomic swap of schemas, clusters, and state schemas.
+///
+/// This transaction includes:
+/// - Swapping user schemas (production <-> staging)
+/// - Swapping clusters (production <-> staging)
+/// - Swapping apply state schemas (pre <-> post, which moves the 'swapped=true' comment to _pre)
+async fn execute_atomic_swap(
+    client: &Client,
+    deploy_id: &str,
+    staging_schemas: &BTreeSet<(String, String)>,
+    staging_clusters: &BTreeSet<String>,
+) -> Result<(), CliError> {
+    let staging_suffix = format!("_{}", deploy_id);
+
     // Begin transaction for atomic swap
     client
         .execute("BEGIN", &[])
@@ -164,8 +256,9 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         })?;
 
     // Swap schemas
-    for (database, staging_schema) in &staging_schemas {
+    for (database, staging_schema) in staging_schemas {
         let prod_schema = staging_schema.trim_end_matches(&staging_suffix);
+        // Note: second schema name is NOT fully qualified (same database)
         let swap_sql = format!(
             "ALTER SCHEMA \"{}\".\"{}\" SWAP WITH \"{}\";",
             database, prod_schema, staging_schema
@@ -182,7 +275,7 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     }
 
     // Swap clusters
-    for cluster in &staging_clusters {
+    for cluster in staging_clusters {
         let staging_cluster = format!("{}{}", cluster, staging_suffix);
         let swap_sql = format!(
             "ALTER CLUSTER \"{}\" SWAP WITH \"{}\";",
@@ -199,6 +292,25 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
         }
     }
 
+    // Swap the apply state schemas - this atomically marks the swap as complete
+    // After this swap, apply_<id>_pre will have comment 'swapped=true' (it was _post before)
+    let pre_schema = format!("apply_{}_pre", deploy_id);
+    let post_schema = format!("apply_{}_post", deploy_id);
+    // Note: second schema name is NOT fully qualified (same database: _mz_deploy)
+    let state_swap_sql = format!(
+        "ALTER SCHEMA _mz_deploy.\"{}\" SWAP WITH \"{}\";",
+        pre_schema, post_schema
+    );
+
+    verbose!("  {}", state_swap_sql);
+    if let Err(e) = client.execute(&state_swap_sql, &[]).await {
+        let _ = client.execute("ROLLBACK", &[]).await;
+        return Err(CliError::SqlExecutionFailed {
+            statement: state_swap_sql,
+            source: e,
+        });
+    }
+
     // Commit transaction
     client
         .execute("COMMIT", &[])
@@ -208,27 +320,71 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
             source: e,
         })?;
 
-    // Promote staging to production with promoted_at timestamps
-    verbose!("\nUpdating deployment table...");
+    verbose!("Swap completed successfully");
+    Ok(())
+}
 
-    // Promote to production by updating promoted_at timestamp
-    client
-        .update_promoted_at(deploy_id)
-        .await
-        .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
+/// Execute pending sink statements (created after swap).
+///
+/// Sinks are created in production after the swap because they immediately
+/// start writing to external systems. Each sink is marked as executed after
+/// successful creation to support resumability.
+async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), CliError> {
+    let pending = client.get_pending_statements(deploy_id).await?;
 
-    // Clean up cluster tracking records after successful swap
-    verbose!("Cleaning up cluster tracking records...");
-    client
-        .delete_deployment_clusters(deploy_id)
-        .await
-        .map_err(|source| CliError::DeploymentStateWriteFailed { source })?;
+    if pending.is_empty() {
+        verbose!("No pending sinks to execute");
+        return Ok(());
+    }
 
-    println!("\nDropping old production objects...");
+    println!("\nCreating {} sink(s)...", pending.len());
 
+    for stmt in &pending {
+        verbose!(
+            "Creating sink {}.{}.{}...",
+            stmt.database, stmt.schema, stmt.object
+        );
+
+        // Execute the sink creation statement
+        if let Err(e) = client.execute(&stmt.statement_sql, &[]).await {
+            // Log the error - the statement will remain unexecuted for retry
+            eprintln!(
+                "Error creating sink {}.{}.{}: {}",
+                stmt.database, stmt.schema, stmt.object, e
+            );
+            return Err(CliError::SqlExecutionFailed {
+                statement: stmt.statement_sql.clone(),
+                source: e,
+            });
+        }
+
+        // Mark the statement as executed
+        client
+            .mark_statement_executed(deploy_id, stmt.sequence_num)
+            .await?;
+
+        verbose!(
+            "  Created sink {}.{}.{}",
+            stmt.database, stmt.schema, stmt.object
+        );
+    }
+
+    Ok(())
+}
+
+/// Drop old production resources after the swap.
+///
+/// After the swap, old production objects now have the staging suffix.
+/// This function drops them to clean up.
+async fn drop_old_resources(
+    client: &Client,
+    staging_schemas: &BTreeSet<(String, String)>,
+    staging_clusters: &BTreeSet<String>,
+    staging_suffix: &str,
+) {
     // Drop schemas
-    for (database, staging_schema) in &staging_schemas {
-        let prod_schema = staging_schema.trim_end_matches(&staging_suffix);
+    for (database, staging_schema) in staging_schemas {
+        let prod_schema = staging_schema.trim_end_matches(staging_suffix);
         // After swap, the old production schema is now named with the staging suffix
         let old_schema = format!("{}{}", prod_schema, staging_suffix);
         let drop_sql = format!(
@@ -246,7 +402,7 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     }
 
     // Drop clusters
-    for cluster in &staging_clusters {
+    for cluster in staging_clusters {
         // After swap, the old production cluster is now named with the staging suffix
         let old_cluster = format!("{}{}", cluster, staging_suffix);
         let drop_sql = format!("DROP CLUSTER IF EXISTS \"{}\" CASCADE;", old_cluster);
@@ -256,9 +412,4 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
             eprintln!("warning: failed to drop old cluster {}: {}", old_cluster, e);
         }
     }
-
-    println!("Deployment completed successfully!");
-    println!("Staging deployment '{}' is now in production", deploy_id);
-
-    Ok(())
 }

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use clap::CommandFactory;
 use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
 use mz_deploy::cli::CliError;
@@ -432,8 +433,12 @@ async fn run(args: Args) -> Result<(), CliError> {
             cli::commands::ready::run(&profile, &name, snapshot, timeout, allowed_lag).await
         }
         None => {
-            // No command provided, do nothing
+            Args::command().print_help().unwrap();
             Ok(())
         }
     }
+}
+
+fn is_local(cmd: &Command) -> bool {
+    matches!(cmd, Command::Compile { .. } | Command::Test)
 }

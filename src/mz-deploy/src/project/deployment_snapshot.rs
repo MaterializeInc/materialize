@@ -8,13 +8,13 @@
 //! enabling change detection (like git diff but for database objects) and supporting
 //! blue/green deployment workflows.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::client::{Client, ConnectionError};
+use crate::client::{Client, ConnectionError, DeploymentKind, DeploymentObjectRecord, SchemaDeploymentRecord};
 use crate::project::object_id::ObjectId;
 use crate::project::{planned, typed};
 
@@ -59,8 +59,11 @@ impl Hasher for Sha256Hasher {
 pub struct DeploymentSnapshot {
     /// Map of ObjectId to content hash
     pub objects: BTreeMap<ObjectId, String>,
-    /// Set of (database, schema) tuples that were deployed
-    pub schemas: BTreeSet<(String, String)>,
+    /// Map of (database, schema) to deployment kind
+    /// - Objects: Regular schemas containing views/MVs that need swapping
+    /// - Sinks: Schemas containing only sinks (no swap needed, sinks created after swap)
+    /// - Tables: Schemas containing only tables
+    pub schemas: BTreeMap<(String, String), DeploymentKind>,
 }
 
 /// Metadata collected during deployment.
@@ -98,7 +101,7 @@ impl Default for DeploymentSnapshot {
     fn default() -> Self {
         Self {
             objects: BTreeMap::new(),
-            schemas: BTreeSet::new(),
+            schemas: BTreeMap::new(),
         }
     }
 }
@@ -157,7 +160,7 @@ pub fn build_snapshot_from_planned(
     planned_project: &planned::Project,
 ) -> Result<DeploymentSnapshot, DeploymentSnapshotError> {
     let mut objects = BTreeMap::new();
-    let mut schemas = BTreeSet::new();
+    let mut schemas = BTreeMap::new();
 
     // Get all objects in topological order
     let sorted_objects = planned_project
@@ -165,12 +168,15 @@ pub fn build_snapshot_from_planned(
         .map_err(|e| DeploymentSnapshotError::PlannedAccess(e.to_string()))?;
 
     // Compute hash for each object and collect schemas
+    // Default to Objects kind - callers can override for specific schemas
     for (object_id, typed_obj) in sorted_objects {
         let hash = compute_typed_hash(typed_obj);
         objects.insert(object_id.clone(), hash);
 
-        // Track which schema this object belongs to
-        schemas.insert((object_id.database.clone(), object_id.schema.clone()));
+        // Track which schema this object belongs to (default to Objects kind)
+        schemas
+            .entry((object_id.database.clone(), object_id.schema.clone()))
+            .or_insert(DeploymentKind::Objects);
     }
 
     Ok(DeploymentSnapshot { objects, schemas })
@@ -214,26 +220,22 @@ pub async fn load_from_database(
 ///
 /// # Arguments
 /// * `client` - Database client connection
-/// * `snapshot` - The deployment snapshot to write
+/// * `snapshot` - The deployment snapshot to write (includes per-schema deployment kind)
 /// * `deploy_id` - Deploy ID (e.g., "<init>" for direct deploy, "staging" for staged)
 /// * `metadata` - Deployment metadata (user, git commit, etc.)
 /// * `promoted_at` - Optional promoted_at timestamp (Some(now) for direct apply, None for stage)
-/// * `kind` - Type of deployment (Tables or Objects)
 pub async fn write_to_database(
     client: &Client,
     snapshot: &DeploymentSnapshot,
     deploy_id: &str,
     metadata: &DeploymentMetadata,
     promoted_at: Option<DateTime<Utc>>,
-    kind: crate::client::DeploymentKind,
 ) -> Result<(), DeploymentSnapshotError> {
-    use crate::client::{DeploymentObjectRecord, SchemaDeploymentRecord};
-
     let now = Utc::now();
 
-    // Build schema deployment records
+    // Build schema deployment records (kind is now per-schema from the snapshot)
     let mut schema_records = Vec::new();
-    for (database, schema) in &snapshot.schemas {
+    for ((database, schema), kind) in &snapshot.schemas {
         schema_records.push(SchemaDeploymentRecord {
             deploy_id: deploy_id.to_string(),
             database: database.clone(),
@@ -242,7 +244,7 @@ pub async fn write_to_database(
             deployed_by: metadata.deployed_by.clone(),
             promoted_at,
             git_commit: metadata.git_commit.clone(),
-            kind,
+            kind: *kind,
         });
     }
 

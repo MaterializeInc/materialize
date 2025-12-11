@@ -1,7 +1,7 @@
 //! Stage command - deploy to staging environment with renamed schemas and clusters.
 
 use crate::cli::{CliError, helpers};
-use crate::client::{Client, ClusterConfig, Profile};
+use crate::client::{Client, ClusterConfig, DeploymentKind, PendingStatement, Profile};
 use crate::project::ast::Statement;
 use crate::project::changeset::ChangeSet;
 use crate::project::object_id::ObjectId;
@@ -133,25 +133,38 @@ pub async fn run(
         planned_project.get_sorted_objects()?
     };
 
-    // Filter out tables and sinks - use create-tables command for those
+    // Separate tables, sinks, and other objects
+    // - Tables: filter out (use create-tables command for those)
+    // - Sinks: store for deferred execution during apply (they write to external systems)
+    // - Other objects: deploy to staging
     let objects_before_filter = objects.len();
+    let mut sinks: Vec<_> = Vec::new();
     let objects: Vec<_> = objects
         .into_iter()
-        .filter(|(_, typed_obj)| {
-            !matches!(
-                typed_obj.stmt,
-                Statement::CreateTable(_)
-                    | Statement::CreateTableFromSource(_)
-                    | Statement::CreateSink(_)
-            )
+        .filter(|(object_id, typed_obj)| {
+            match &typed_obj.stmt {
+                Statement::CreateTable(_) | Statement::CreateTableFromSource(_) => false,
+                Statement::CreateSink(_) => {
+                    // Collect sinks for deferred execution
+                    sinks.push((object_id.clone(), *typed_obj));
+                    false
+                }
+                _ => true,
+            }
         })
         .collect();
 
-    let filtered_count = objects_before_filter - objects.len();
-    if filtered_count > 0 {
+    let table_count = objects_before_filter - objects.len() - sinks.len();
+    if table_count > 0 {
         verbose!(
-            "Skipped {} table(s)/sink(s) - use 'mz-deploy create-tables' for those",
-            filtered_count
+            "Skipped {} table(s) - use 'mz-deploy create-tables' for those",
+            table_count
+        );
+    }
+    if !sinks.is_empty() {
+        verbose!(
+            "Found {} sink(s) - will be created during apply after swap",
+            sinks.len()
         );
     }
 
@@ -210,15 +223,32 @@ pub async fn run(
         let metadata = helpers::collect_deployment_metadata(&client, directory).await;
 
         // Build a snapshot containing all objects that will be deployed
+        // Objects go to schemas with kind=Objects, sinks go to schemas with kind=Sinks
         let mut staging_snapshot = project::deployment_snapshot::DeploymentSnapshot::default();
+
+        // Add regular objects (views, MVs) - schemas get kind=Objects
         for (object_id, typed_obj) in &objects {
             let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
             staging_snapshot.objects.insert(object_id.clone(), hash);
 
-            // Track which schema this object belongs to
+            // Track which schema this object belongs to (kind=Objects for regular objects)
+            staging_snapshot.schemas.insert(
+                (object_id.database.clone(), object_id.schema.clone()),
+                DeploymentKind::Objects,
+            );
+        }
+
+        // Add sinks - schemas get kind=Sinks (only if not already marked as Objects)
+        // If a schema has both regular objects AND sinks, it stays as Objects
+        for (object_id, typed_obj) in &sinks {
+            let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+            staging_snapshot.objects.insert(object_id.clone(), hash);
+
+            // Only mark as Sinks if the schema doesn't already have regular objects
             staging_snapshot
                 .schemas
-                .insert((object_id.database.clone(), object_id.schema.clone()));
+                .entry((object_id.database.clone(), object_id.schema.clone()))
+                .or_insert(DeploymentKind::Sinks);
         }
 
         // Write deployment state to database BEFORE creating resources
@@ -229,9 +259,56 @@ pub async fn run(
             &stage_name,
             &metadata,
             None,
-            crate::client::DeploymentKind::Objects,
         )
         .await?;
+
+        // Store pending statements for sinks (to be executed during apply after swap)
+        if !sinks.is_empty() {
+            let pending_statements: Vec<PendingStatement> = sinks
+                .iter()
+                .enumerate()
+                .map(|(idx, (object_id, typed_obj))| {
+                    // Create original FQN (without staging suffix)
+                    let original_item_name = mz_sql_parser::ast::UnresolvedItemName(vec![
+                        Ident::new(&object_id.database).expect("valid database"),
+                        Ident::new(&object_id.schema).expect("valid schema"),
+                        Ident::new(&object_id.object).expect("valid object"),
+                    ]);
+                    let original_fqn = FullyQualifiedName::from(original_item_name);
+
+                    // Use fully_qualifying visitor - sinks are created in production schemas
+                    // (no staging suffix needed since they're created after the swap)
+                    let visitor = NormalizingVisitor::fully_qualifying(&original_fqn);
+
+                    // Normalize the sink statement for production
+                    // Note: cluster is not transformed since FullyQualifyingTransformer doesn't
+                    // implement ClusterTransformer - the sink will use the production cluster as-is
+                    let stmt = typed_obj
+                        .stmt
+                        .clone()
+                        .normalize_name_with(&visitor, &original_fqn.to_item_name())
+                        .normalize_dependencies_with(&visitor);
+
+                    let hash = project::deployment_snapshot::compute_typed_hash(typed_obj);
+
+                    #[allow(clippy::as_conversions)]
+                    PendingStatement {
+                        deploy_id: stage_name.clone(),
+                        sequence_num: idx as i32,
+                        database: object_id.database.clone(),
+                        schema: object_id.schema.clone(),
+                        object: object_id.object.clone(),
+                        object_hash: hash,
+                        statement_sql: stmt.to_string(),
+                        statement_kind: "sink".to_string(),
+                        executed_at: None,
+                    }
+                })
+                .collect();
+
+            client.insert_pending_statements(&pending_statements).await?;
+            verbose!("Stored {} pending sink statement(s)", pending_statements.len());
+        }
 
         let metadata_duration = metadata_start.elapsed();
         progress::stage_success("Deployment metadata recorded", metadata_duration);
@@ -675,6 +752,10 @@ async fn rollback_staging_resources(
     verbose!("Deleting deployment records...");
     if let Err(e) = client.delete_deployment_clusters(environment).await {
         verbose!("Warning: Failed to delete cluster records: {}", e);
+    }
+
+    if let Err(e) = client.delete_pending_statements(environment).await {
+        verbose!("Warning: Failed to delete pending statements: {}", e);
     }
 
     if let Err(e) = client.delete_deployment(environment).await {

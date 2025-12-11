@@ -45,6 +45,7 @@ struct ProfileData {
     pub host: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(alias = "user")]
     pub username: Option<String>,
     pub password: Option<String>,
 }
