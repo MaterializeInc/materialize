@@ -2143,6 +2143,14 @@ ALTER SCHEMA mz_catalog OWNER TO mz_system
 ----
 db error: ERROR: cannot alter schema mz_catalog because it is required by the database system
 
+# Temporary schema ownership change should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA mz_temp OWNER TO mz_system
+----
+db error: ERROR: cannot alter schema mz_temp because it is a temporary schema
+
 simple conn=mz_system,user=mz_system
 ALTER VIEW mz_introspection.mz_dataflow_operators OWNER TO mz_system
 ----

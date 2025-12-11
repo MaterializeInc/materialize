@@ -160,6 +160,14 @@ fn plan_alter_schema_owner(
     name: UnresolvedSchemaName,
     new_owner: RoleId,
 ) -> Result<Plan, PlanError> {
+    // Special case for mz_temp: with lazy temporary schema creation, the temp
+    // schema may not exist yet, but we still need to return the correct error.
+    // Check the schema name directly against MZ_TEMP_SCHEMA.
+    let normalized = crate::normalize::unresolved_schema_name(name.clone())?;
+    if normalized.database.is_none() && normalized.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+        sql_bail!("cannot alter schema {name} because it is a temporary schema",)
+    }
+
     match resolve_schema(scx, name.clone(), if_exists)? {
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {
