@@ -6002,3 +6002,102 @@ def workflow_alter_sink_hang(c: Composition) -> None:
         # Cleanup: unblock the ALTER SINK and wait for it to complete.
         c.up("kafka")
         alter_thread.join()
+
+
+def workflow_test_slow_seqno_hold(c: Composition):
+    """
+    Test that a reader periodically downgrades its since hold, even when the upstream
+    frontier is not making progress.
+    """
+
+    c.up("materialized", "postgres")
+
+    # Shorten the reader lease duration, to make the issue take less long to reproduce.
+    c.sql(
+        "ALTER SYSTEM SET persist_reader_lease_duration = '1min';",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Create a postgres source and wait until it's caught up.
+    c.testdrive(
+        dedent(
+            """
+            > CREATE SECRET pgpass AS 'postgres'
+            > CREATE CONNECTION pg TO POSTGRES (
+                HOST postgres,
+                DATABASE postgres,
+                USER postgres,
+                PASSWORD SECRET pgpass
+              )
+            > CREATE CLUSTER test SIZE 'scale=1,workers=1'
+            > SET cluster = test
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER USER postgres WITH replication;
+            DROP SCHEMA IF EXISTS public CASCADE;
+            CREATE SCHEMA public;
+
+            DROP PUBLICATION IF EXISTS mz_source;
+            CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+            CREATE TABLE source1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
+            INSERT INTO source1 VALUES (1, NULL);
+            ALTER TABLE source1 REPLICA IDENTITY FULL;
+            INSERT INTO source1 VALUES (2, NULL);
+
+            > CREATE SOURCE "pg_source"
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE "source1_tbl" FROM SOURCE "pg_source" (REFERENCE "source1");
+
+            > SELECT count(*) FROM source1_tbl;
+            2
+            """
+        )
+    )
+
+    # Down the postgres database, stalling out the source.
+    c.stop("postgres")
+
+    # Start a long-running select in the background, which should be unable to make progress.
+    def select_from_postgres():
+        c.sql("SELECT count(*) FROM source1_tbl")
+
+    background_select = Thread(target=select_from_postgres)
+    background_select.start()
+
+    try:
+        [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
+
+        def get_reader_seqno():
+            [(state_json,)] = c.sql_query(
+                f"INSPECT SHARD '{gid}'", port=6877, user="mz_system"
+            )
+            leased_readers = state_json["leased_readers"]
+            if not leased_readers:
+                return None, None
+            assert len(leased_readers) == 1
+            id, value = leased_readers.popitem()
+            return id, value["seqno"]
+
+        # Show that the seqno is making progress - grab an initial value and then one higher value.
+        reader_id = None
+        initial_seqno = None
+        while initial_seqno is None:
+            reader_id, initial_seqno = get_reader_seqno()
+
+        print(
+            f"{reader_id} has initial seqno {initial_seqno}. Waiting for progress, which may take a minute..."
+        )
+        while True:
+            id, seqno = get_reader_seqno()
+            assert id == reader_id
+            assert seqno is not None
+            if seqno > initial_seqno:
+                break
+            time.sleep(1)
+
+    # Cleanup: unblock the select and wait for it to complete.
+    finally:
+        c.up("postgres")
+        background_select.join()

@@ -288,16 +288,21 @@ where
         // If Some, an override for the default listen sleep retry parameters.
         retry: Option<RetryParameters>,
     ) -> (Vec<LeasedBatchPart<T>>, Antichain<T>) {
-        let batch = self
-            .handle
-            .machine
-            .next_listen_batch(
+        let batch = loop {
+            let min_elapsed = self.handle.heartbeat_duration();
+            let next_batch = self.handle.machine.next_listen_batch(
                 &self.frontier,
                 &mut self.watch,
                 Some(&self.handle.reader_id),
                 retry,
-            )
-            .await;
+            );
+            match tokio::time::timeout(min_elapsed, next_batch).await {
+                Ok(batch) => break batch,
+                Err(_elapsed) => {
+                    self.handle.maybe_downgrade_since(&self.since).await;
+                }
+            }
+        };
 
         // A lot of things across mz have to line up to hold the following
         // invariant and violations only show up as subtle correctness errors,
@@ -708,7 +713,17 @@ where
         &mut self,
         as_of: Antichain<T>,
     ) -> Result<Vec<LeasedBatchPart<T>>, Since<T>> {
-        let batches = self.machine.snapshot(&as_of).await?;
+        let batches = loop {
+            let min_elapsed = self.heartbeat_duration();
+            match tokio::time::timeout(min_elapsed, self.machine.snapshot(&as_of)).await {
+                Ok(Ok(batches)) => break batches,
+                Ok(Err(since)) => return Err(since),
+                Err(_timeout) => {
+                    let since = self.since().clone();
+                    self.maybe_downgrade_since(&since).await;
+                }
+            }
+        };
 
         if !PartialOrder::less_equal(self.since(), &as_of) {
             return Err(Since(self.since().clone()));
@@ -826,13 +841,17 @@ where
         new_reader
     }
 
+    fn heartbeat_duration(&self) -> Duration {
+        READER_LEASE_DURATION.get(&self.cfg) / 4
+    }
+
     /// A rate-limited version of [Self::downgrade_since].
     ///
     /// This is an internally rate limited helper, designed to allow users to
     /// call it as frequently as they like. Call this or [Self::downgrade_since],
     /// on some interval that is "frequent" compared to the read lease duration.
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        let min_elapsed = READER_LEASE_DURATION.get(&self.cfg) / 4;
+        let min_elapsed = self.heartbeat_duration();
         let elapsed_since_last_heartbeat =
             Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
         if elapsed_since_last_heartbeat >= min_elapsed {
