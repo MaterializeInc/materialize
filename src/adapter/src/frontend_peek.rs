@@ -11,13 +11,15 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use itertools::Either;
+use itertools::{Either, Itertools};
 use mz_adapter_types::dyncfgs::CONSTRAINT_BASED_TIMESTAMP_SELECTION;
 use mz_adapter_types::timestamp_selection::ConstraintBasedTimestampSelection;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
@@ -578,6 +580,46 @@ impl PeekClient {
             }
         };
 
+        {
+            // Assert that we have a read hold for all the collections in our `input_id_bundle`.
+            for id in input_id_bundle.iter() {
+                let s = read_holds.storage_holds.contains_key(&id);
+                let c = read_holds
+                    .compute_ids()
+                    .map(|(_instance, coll)| coll)
+                    .contains(&id);
+                soft_assert_or_log!(
+                    s || c,
+                    "missing read hold for collection {} in `input_id_bundle",
+                    id
+                );
+            }
+
+            // Assert that each part of the `input_id_bundle` corresponds to the right part of
+            // `read_holds`.
+            for id in input_id_bundle.storage_ids.iter() {
+                soft_assert_or_log!(
+                    read_holds.storage_holds.contains_key(id),
+                    "missing storage read hold for collection {} in `input_id_bundle",
+                    id
+                );
+            }
+            for id in input_id_bundle
+                .compute_ids
+                .iter()
+                .flat_map(|(_instance, colls)| colls)
+            {
+                soft_assert_or_log!(
+                    read_holds
+                        .compute_ids()
+                        .map(|(_instance, coll)| coll)
+                        .contains(id),
+                    "missing compute read hold for collection {} in `input_id_bundle",
+                    id,
+                );
+            }
+        }
+
         // (TODO(peek-seq): The below TODO is copied from the old peek sequencing. We should resolve
         // this when we decide what to with `AS OF` in transactions.)
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems
@@ -981,6 +1023,65 @@ impl PeekClient {
                         .await?
                     }
                     PeekPlan::SlowPath(dataflow_plan) => {
+                        {
+                            // Assert that we have some read holds for all the imports of the dataflow.
+                            for id in dataflow_plan.desc.source_imports.keys() {
+                                soft_assert_or_log!(
+                                    read_holds.storage_holds.contains_key(id),
+                                    "missing read hold for the source import {}",
+                                    id
+                                );
+                            }
+                            for id in dataflow_plan.desc.index_imports.keys() {
+                                soft_assert_or_log!(
+                                    read_holds
+                                        .compute_ids()
+                                        .map(|(_instance, coll)| coll)
+                                        .contains(id),
+                                    "missing read hold for the index import {}",
+                                    id,
+                                );
+                            }
+
+                            // Also check the holds against the as_of.
+                            for (id, h) in read_holds.storage_holds.iter() {
+                                let as_of = dataflow_plan
+                                    .desc
+                                    .as_of
+                                    .clone()
+                                    .expect("dataflow has an as_of")
+                                    .into_element();
+                                soft_assert_or_log!(
+                                    h.since().less_equal(&as_of),
+                                    "storage read hold at {:?} for collection {} is not enough for as_of {:?}",
+                                    h.since(),
+                                    id,
+                                    as_of
+                                );
+                            }
+                            for ((instance, id), h) in read_holds.compute_holds.iter() {
+                                soft_assert_eq_or_log!(
+                                    *instance,
+                                    target_cluster_id,
+                                    "the read hold on {} is on the wrong cluster",
+                                    id
+                                );
+                                let as_of = dataflow_plan
+                                    .desc
+                                    .as_of
+                                    .clone()
+                                    .expect("dataflow has an as_of")
+                                    .into_element();
+                                soft_assert_or_log!(
+                                    h.since().less_equal(&as_of),
+                                    "compute read hold at {:?} for collection {} is not enough for as_of {:?}",
+                                    h.since(),
+                                    id,
+                                    as_of
+                                );
+                            }
+                        }
+
                         self.call_coordinator(|tx| Command::ExecuteSlowPathPeek {
                             dataflow_plan: Box::new(dataflow_plan),
                             determination,
