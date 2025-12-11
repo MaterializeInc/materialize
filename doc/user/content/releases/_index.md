@@ -16,48 +16,15 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.3.0
+*Released to Materialize Cloud and Self-Managed: 2025-12-12*
 
-### Replacement Materialized Views
-
-Materialize v26.3.0 introduces replacement materialized views, enabling you to modify materialized views with zero downtime. This feature allows you to create a replacement for an existing materialized view, observe its hydration progress, and then apply or discard the replacement based on your needs.
-
-With replacement materialized views, you can test changes to your materialized views without disrupting ongoing queries. The replacement runs alongside the original view, allowing you to validate performance and correctness before committing to the change.
-
-To use this feature:
-
-```sql
--- Create a replacement for an existing materialized view
-CREATE MATERIALIZED VIEW mv_replacement REPLACING mv AS SELECT ...;
-
--- Monitor hydration progress using standard diagnostic queries
-EXPLAIN ANALYZE CLUSTER;
-
--- Apply the replacement when ready
-ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT mv_replacement;
-
--- Or discard it if the change isn't beneficial
-DROP MATERIALIZED VIEW mv_replacement;
-```
-
-This feature provides a safe path for iterating on materialized view definitions in production environments, reducing risk when optimizing your data pipelines.
-
-### Features
-
+### Improvements
 - Added version upgrade window validation for Self-Managed deployments to prevent skipping required intermediate versions during upgrades.
 - Improved activity log throttling to apply across all statement executions, not just initial prepared statement execution, providing more consistent logging behavior.
-- Added downtime measurement workflow for orchestratord testing to better track upgrade reliability.
-- Introduced documentation example tests that run in CI to catch breaking changes before they are merged.
-- Added multiversion tests for PostgreSQL CDC with legacy syntax to improve test coverage.
-- Enabled 100% statement logging by default in tests to improve debugging capabilities.
-- Added histogram metrics for additional coordinator methods to help diagnose performance issues.
-- Improved internal metadata routing for Self-Managed authentication in HTTP and WebSocket handlers.
 
 ### Bug Fixes
-
 - Fixed validation for replica sizes to prevent configurations with zero scale or workers, which previously caused division-by-zero errors and panics.
-- Fixed frontend peek sequencing to gracefully handle collections that are dropped during real-time recent timestamp determination.
-- Fixed busy replication slot test to prevent the WAL reader from advancing the slot forward without Materialize committing changes.
-- Fixed error logging level when peek receiver goes away, downgrading from error to debug to reduce noise.
+- Fixed frontend `SELECT` sequencing to gracefully handle collections that are dropped during real-time recent timestamp determination.
 
 ## v26.1.0
 *Released Self-Managed: 2025-11-26*
