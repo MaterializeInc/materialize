@@ -109,6 +109,9 @@ pub enum AdapterError {
         dependency_kind: &'static str,
         dependency_id: String,
     },
+    CollectionUnreadable {
+        id: String,
+    },
     /// Target cluster has no replicas to service query.
     NoClusterReplicasAvailable {
         name: String,
@@ -451,6 +454,9 @@ impl AdapterError {
                 "Currently, DDL transactions fail when any other DDL happens concurrently, \
                  even on unrelated schemas/clusters.".into()
             ),
+            AdapterError::CollectionUnreadable { .. } => Some(
+                "This could be because the collection has recently been dropped.".into()
+            ),
             _ => None,
         }
     }
@@ -505,6 +511,7 @@ impl AdapterError {
             AdapterError::ConstraintViolation(NotNullViolation(_)) => SqlState::NOT_NULL_VIOLATION,
             AdapterError::ConcurrentClusterDrop => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ConcurrentDependencyDrop { .. } => SqlState::UNDEFINED_OBJECT,
+            AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
             AdapterError::OperationRequiresTransaction(_) => SqlState::NO_ACTIVE_SQL_TRANSACTION,
@@ -764,6 +771,9 @@ impl fmt::Display for AdapterError {
                 dependency_id,
             } => {
                 write!(f, "{dependency_kind} '{dependency_id}' was dropped")
+            }
+            AdapterError::CollectionUnreadable { id } => {
+                write!(f, "collection '{id}' is not readable at any timestamp")
             }
             AdapterError::NoClusterReplicasAvailable { name, .. } => {
                 write!(
