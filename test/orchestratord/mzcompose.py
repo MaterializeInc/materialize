@@ -1425,6 +1425,27 @@ class AuthenticatorKind(Modification):
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
 
 
+class RolloutStrategy(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            "WaitUntilReady",
+            "ManuallyPromote",
+            "ImmediatelyPromoteCausingDowntime",
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "WaitUntilReady"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["rolloutStrategy"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # This is validated in post_run_check
+        return
+
+
 class Properties(Enum):
     Defaults = "defaults"
     Individual = "individual"
@@ -2406,7 +2427,95 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
     except subprocess.CalledProcessError as e:
         print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
         raise
+
+    if definition["materialize"]["spec"].get("rolloutStrategy") == "ManuallyPromote":
+        # First wait for it to become ready to promote, but not yet promoted
+        for _ in range(900):
+            time.sleep(1)
+            if is_ready_to_manually_promote():
+                break
+        else:
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "yaml",
+                ],
+            )
+            raise RuntimeError("Never became ready for manual promotion")
+
+        # Wait to see that it doesn't promote
+        time.sleep(30)
+        if not is_ready_to_manually_promote():
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "yaml",
+                ],
+            )
+            raise RuntimeError(
+                "Stopped being ready for manual promotion before promoting"
+            )
+
+        # Manually promote it
+        mz = json.loads(
+            spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "json",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+        )["items"][0]
+        definition["materialize"]["spec"]["forcePromote"] = mz["spec"]["requestRollout"]
+        try:
+            spawn.runv(
+                ["kubectl", "apply", "-f", "-"],
+                stdin=yaml.dump(definition["materialize"]).encode(),
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
+            raise
+
     post_run_check(definition, expect_fail)
+
+
+def is_ready_to_manually_promote():
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    conditions = data["items"][0].get("status", {}).get("conditions")
+    return (
+        conditions is not None
+        and conditions[0]["type"] == "UpToDate"
+        and conditions[0]["status"] == "Unknown"
+        and conditions[0]["reason"] == "ReadyToPromote"
+    )
 
 
 def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
@@ -2435,9 +2544,8 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             if (
                 not status["conditions"]
                 or status["conditions"][0]["type"] != "UpToDate"
+                or status["conditions"][0]["status"] != "True"
             ):
-                continue
-            if status["conditions"][0]["status"] != "True":
                 continue
             if (
                 status["lastCompletedRolloutRequest"]
