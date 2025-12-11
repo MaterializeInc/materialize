@@ -93,7 +93,7 @@ pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
     "persist_validate_part_bounds_on_read",
-    true,
+    false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch containing that part",
 );
