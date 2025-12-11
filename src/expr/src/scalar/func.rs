@@ -4738,15 +4738,14 @@ impl fmt::Display for BinaryFunc {
 fn text_concat_binary<'a>(
     a: &str,
     b: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a str, EvalError> {
+) -> Result<String, EvalError> {
     if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
     let mut buf = String::with_capacity(a.len() + b.len());
     buf.push_str(a);
     buf.push_str(b);
-    Ok(temp_storage.push_string(buf))
+    Ok(buf)
 }
 
 #[sqlfunc(propagates_nulls = true, introduces_nulls = false)]
@@ -4837,9 +4836,9 @@ pub(crate) fn regexp_replace_parse_flags(flags: &str) -> (usize, Cow<'_, str>) {
     (limit, flags)
 }
 
-/// WARNING: This function has potential OOM risk if used with an inflationary
-/// replacement pattern. It is very difficult to calculate the output size ahead
-/// of time because the replacement pattern may depend on capture groups.
+// WARNING: This function has potential OOM risk if used with an inflationary
+// replacement pattern. It is very difficult to calculate the output size ahead
+// of time because the replacement pattern may depend on capture groups.
 fn regexp_replace_static<'a>(
     source: Datum<'a>,
     replacement: Datum<'a>,

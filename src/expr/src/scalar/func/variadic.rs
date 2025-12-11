@@ -272,9 +272,9 @@ fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     })))
 }
 
-/// WARNING: This function has potential OOM risk!
-/// It is very difficult to calculate the output size ahead of time without knowing how to
-/// calculate the stringified size of each element for all possible datatypes.
+// WARNING: This function has potential OOM risk!
+// It is very difficult to calculate the output size ahead of time without knowing how to
+// calculate the stringified size of each element for all possible datatypes.
 fn array_to_string<'a>(
     datums: &[Datum<'a>],
     elem_type: &SqlScalarType,
