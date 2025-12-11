@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    propagates_nulls = true,\n    is_monotone = (false, true),\n)]\nfn text_concat_binary<'a>(\n    a: &str,\n    b: &str,\n    temp_storage: &'a RowArena,\n) -> Result<&'a str, EvalError> {\n    if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {\n        return Err(EvalError::LengthTooLarge);\n    }\n    let mut buf = String::with_capacity(a.len() + b.len());\n    buf.push_str(a);\n    buf.push_str(b);\n    Ok(temp_storage.push_string(buf))\n}\n"
+expression: "#[sqlfunc(\n    sqlname = \"||\",\n    is_infix_op = true,\n    propagates_nulls = true,\n    is_monotone = (false, true),\n)]\nfn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {\n    if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {\n        return Err(EvalError::LengthTooLarge);\n    }\n    let mut buf = String::with_capacity(a.len() + b.len());\n    buf.push_str(a);\n    buf.push_str(b);\n    Ok(buf)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,14 +19,14 @@ pub struct TextConcatBinary;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TextConcatBinary {
     type Input1 = &'a str;
     type Input2 = &'a str;
-    type Output = Result<&'a str, EvalError>;
+    type Output = Result<String, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        text_concat_binary(a, b, temp_storage)
+        text_concat_binary(a, b)
     }
     fn output_type(
         &self,
@@ -61,16 +61,12 @@ impl std::fmt::Display for TextConcatBinary {
         f.write_str("||")
     }
 }
-fn text_concat_binary<'a>(
-    a: &str,
-    b: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a str, EvalError> {
+fn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {
     if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
     let mut buf = String::with_capacity(a.len() + b.len());
     buf.push_str(a);
     buf.push_str(b);
-    Ok(temp_storage.push_string(buf))
+    Ok(buf)
 }
