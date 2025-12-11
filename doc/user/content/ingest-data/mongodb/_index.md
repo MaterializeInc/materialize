@@ -2,6 +2,7 @@
 title: "MongoDB"
 description: "Connecting Materialize to a MongoDB database for Change Data Capture (CDC)."
 disable_list: true
+mermaid: true
 menu:
   main:
     parent: 'ingest-data'
@@ -9,13 +10,11 @@ menu:
     weight: 17
 ---
 
-This guide outlines how to ingest data from a MongoDB database into Materialize.
+Change Data Capture (CDC) allows you to track and propagate changes from MongoDB
+to downstream consumers. This guide outlines how to ingest data from a MongoDB
+database into Materialize.
 
 ## High-level architecture
-
-Since Materialize is a streaming database, it requires an active stream of data
-changes to maintain real-time views. MongoDB does not natively push changes to
-external systems, so this integration relies on Change Data Capture (CDC).
 
 The architecture consists of four main components working in a pipeline:
 
@@ -55,9 +54,9 @@ flowchart LR
 
     Mongo -- "Reads Oplog" --> Debezium
     Debezium -- "Writes Avro Events" --> Kafka
-    Schema -.- "Validates Schemas" -.- Kafka
+    Schema -. "Validates Schemas" .- Kafka
     Kafka -- "Consumes Topic" --> MZ
-    Schema -.- "Decodes Data" -.- MZ
+    Schema -. "Decodes Data" .- MZ
 ```
 
 ## Prerequisites
