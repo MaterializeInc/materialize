@@ -1046,6 +1046,15 @@ impl CatalogState {
                     privileges,
                     extra_versions,
                 } = temporary_item;
+                // Lazily create the temporary schema if it doesn't exist yet.
+                // We need the conn_id to create the schema, and it should always be Some for temp items.
+                let temp_conn_id = conn_id
+                    .as_ref()
+                    .expect("temporary items must have a connection id");
+                if !self.temporary_schemas.contains_key(temp_conn_id) {
+                    self.create_temporary_schema(temp_conn_id, owner_id)
+                        .expect("failed to create temporary schema");
+                }
                 let schema = self.find_temp_schema(&schema_id);
                 let name = QualifiedItemName {
                     qualifiers: ItemQualifiers {
@@ -1753,6 +1762,14 @@ impl CatalogState {
             self.entry_by_global_id.insert(gid, entry.id());
         }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
+        // Lazily create the temporary schema if this is a temporary item and the schema
+        // doesn't exist yet.
+        if entry.name().qualifiers.schema_spec == SchemaSpecifier::Temporary
+            && !self.temporary_schemas.contains_key(conn_id)
+        {
+            self.create_temporary_schema(conn_id, entry.owner_id)
+                .expect("failed to create temporary schema");
+        }
         let schema = self.get_schema_mut(
             &entry.name().qualifiers.database_spec,
             &entry.name().qualifiers.schema_spec,

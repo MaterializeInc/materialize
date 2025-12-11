@@ -661,12 +661,9 @@ impl Coordinator {
                 }
             }
             Err(e) => {
-                // Error during startup or sending to adapter, cleanup possible state created by
-                // handle_startup_inner. A user may have been created and it can stay; no need to
-                // delete it.
-                self.catalog_mut()
-                    .drop_temporary_schema(&conn_id)
-                    .unwrap_or_terminate("unable to drop temporary schema");
+                // Error during startup or sending to adapter. A user may have been created and
+                // it can stay; no need to delete it.
+                // Note: Temporary schemas are created lazily, so there's nothing to clean up here.
 
                 // Communicate the error back to the client. No need to
                 // handle failures to send the error back; we've already
@@ -680,7 +677,7 @@ impl Coordinator {
     async fn handle_startup_inner(
         &mut self,
         user: &User,
-        conn_id: &ConnectionId,
+        _conn_id: &ConnectionId,
         client_ip: &Option<IpAddr>,
     ) -> Result<(RoleId, BTreeMap<String, OwnedVarInput>), AdapterError> {
         if self.catalog().try_get_role_by_name(&user.name).is_none() {
@@ -782,8 +779,9 @@ impl Coordinator {
             }
         }
 
-        self.catalog_mut()
-            .create_temporary_schema(conn_id, role_id)?;
+        // Temporary schemas are now created lazily when the first temporary object is created,
+        // rather than eagerly on connection startup. This avoids expensive catalog_mut() calls
+        // for the common case where connections never create temporary objects.
 
         Ok((role_id, session_defaults))
     }
@@ -1655,9 +1653,14 @@ impl Coordinator {
         self.clear_connection(&conn_id).await;
 
         self.drop_temp_items(&conn_id).await;
-        self.catalog_mut()
-            .drop_temporary_schema(&conn_id)
-            .unwrap_or_terminate("unable to drop temporary schema");
+        // Only call catalog_mut() if a temporary schema actually exists for this connection.
+        // This avoids an expensive Arc::make_mut clone for the common case where the connection
+        // never created any temporary objects.
+        if self.catalog().state().has_temporary_schema(&conn_id) {
+            self.catalog_mut()
+                .drop_temporary_schema(&conn_id)
+                .unwrap_or_terminate("unable to drop temporary schema");
+        }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());
         self.metrics

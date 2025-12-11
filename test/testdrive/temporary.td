@@ -182,7 +182,7 @@ contains:non-temporary items cannot depend on temporary item
 # Make sure the mz_temp schema is protected
 
 ! DROP SCHEMA mz_temp
-contains:cannot drop schema mz_temp because it is required by the database system
+contains:cannot drop schema mz_temp because it is a temporary schema
 
 ! CREATE TABLE mz_temp.table_in_mz_temp (f1 INTEGER)
 contains:unknown schema 'mz_temp'

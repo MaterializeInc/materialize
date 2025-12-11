@@ -99,6 +99,21 @@ SELECT * FROM this_is_a_schema_with_a_super_long_name_of_exactly_255_characters_
 statement error db error: ERROR: cannot swap schemas that are in the ambient database
 ALTER SCHEMA mz_internal SWAP WITH mz_catalog;
 
+# Temporary schema swap should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+
+statement error db error: ERROR: cannot swap schemas that are in the ambient database
+ALTER SCHEMA mz_temp SWAP WITH blue;
+
+statement error db error: ERROR: cannot swap schemas that are in the ambient database
+ALTER SCHEMA blue SWAP WITH mz_temp;
+
+simple conn=mz_system,user=mz_system
+ALTER SCHEMA mz_temp SWAP WITH green;
+----
+db error: ERROR: cannot swap schemas that are in the ambient database
+
 statement ok
 CREATE DATABASE a;
 

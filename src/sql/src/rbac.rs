@@ -27,7 +27,7 @@ use crate::catalog::{
 };
 use crate::names::{
     CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SystemObjectId,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::plan::{self, PlanKind};
 use crate::plan::{
@@ -1746,6 +1746,16 @@ fn check_object_privileges(
     let mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>> = BTreeMap::new();
     role_memberships.insert(current_role_id, role_membership);
     for (object_id, acl_mode, role_id) in privileges {
+        // Temporary schemas are owned by the connection that created them,
+        // so users implicitly have all privileges on their own temp schema.
+        // The schema may not exist yet (lazy creation), so we skip the check.
+        if matches!(
+            &object_id,
+            SystemObjectId::Object(ObjectId::Schema((_, SchemaSpecifier::Temporary)))
+        ) {
+            continue;
+        }
+
         let role_membership = role_memberships
             .entry(role_id)
             .or_insert_with_key(|role_id| catalog.collect_role_membership(role_id));

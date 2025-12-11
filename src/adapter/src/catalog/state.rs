@@ -698,15 +698,20 @@ impl CatalogState {
                 RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
             }
         };
-        let schema = self
-            .get_schema(
-                &name.qualifiers.database_spec,
-                &name.qualifiers.schema_spec,
-                conn_id,
-            )
-            .name()
-            .schema
-            .clone();
+        // For temporary schemas, we know the name is always MZ_TEMP_SCHEMA,
+        // and the schema may not exist yet if no temporary items have been created.
+        let schema = match &name.qualifiers.schema_spec {
+            SchemaSpecifier::Temporary => MZ_TEMP_SCHEMA.to_string(),
+            _ => self
+                .get_schema(
+                    &name.qualifiers.database_spec,
+                    &name.qualifiers.schema_spec,
+                    conn_id,
+                )
+                .name()
+                .schema
+                .clone(),
+        };
         FullItemName {
             database,
             schema,
@@ -759,11 +764,20 @@ impl CatalogState {
     }
 
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
-        let schema = self
-            .temporary_schemas
+        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        self.temporary_schemas
             .get(conn)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing temporary schema for {conn}"));
-        schema.items.values().copied().map(ObjectId::from)
+            .into_iter()
+            .flat_map(|schema| schema.items.values().copied().map(ObjectId::from))
+    }
+
+    /// Returns true if a temporary schema exists for the given connection.
+    ///
+    /// Temporary schemas are created lazily when the first temporary object is created
+    /// for a connection, so this may return false for connections that haven't created
+    /// any temporary objects.
+    pub fn has_temporary_schema(&self, conn: &ConnectionId) -> bool {
+        self.temporary_schemas.contains_key(conn)
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
@@ -1598,28 +1612,43 @@ impl CatalogState {
         schema.ok_or_else(|| SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
+    /// Try to get a schema, returning `None` if it doesn't exist.
+    ///
+    /// For temporary schemas, returns `None` if the schema hasn't been created yet
+    /// (temporary schemas are created lazily when the first temporary object is created).
+    pub fn try_get_schema(
+        &self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_spec: &SchemaSpecifier,
+        conn_id: &ConnectionId,
+    ) -> Option<&Schema> {
+        // Keep in sync with `get_schema` and `get_schemas_mut`
+        match (database_spec, schema_spec) {
+            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => {
+                self.temporary_schemas.get(conn_id)
+            }
+            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => {
+                self.ambient_schemas_by_id.get(id)
+            }
+            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => self
+                .database_by_id
+                .get(database_id)
+                .and_then(|db| db.schemas_by_id.get(schema_id)),
+            (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
+                unreachable!("temporary schemas are in the ambient database")
+            }
+        }
+    }
+
     pub fn get_schema(
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
         conn_id: &ConnectionId,
     ) -> &Schema {
-        // Keep in sync with `get_schemas_mut`
-        match (database_spec, schema_spec) {
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => {
-                &self.temporary_schemas[conn_id]
-            }
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => {
-                &self.ambient_schemas_by_id[id]
-            }
-
-            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => {
-                &self.database_by_id[database_id].schemas_by_id[schema_id]
-            }
-            (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
-                unreachable!("temporary schemas are in the ambient database")
-            }
-        }
+        // Keep in sync with `try_get_schema` and `get_schemas_mut`
+        self.try_get_schema(database_spec, schema_spec, conn_id)
+            .expect("schema must exist")
     }
 
     pub(super) fn find_non_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
@@ -2058,13 +2087,12 @@ impl CatalogState {
                 }
             }
             None => match self
-                .get_schema(
+                .try_get_schema(
                     &ResolvedDatabaseSpecifier::Ambient,
                     &SchemaSpecifier::Temporary,
                     conn_id,
                 )
-                .items
-                .get(&name.item)
+                .and_then(|schema| schema.items.get(&name.item))
             {
                 Some(id) => return Ok(self.get_entry(id)),
                 None => search_path.to_vec(),
@@ -2072,7 +2100,11 @@ impl CatalogState {
         };
 
         for (database_spec, schema_spec) in &schemas {
-            let schema = self.get_schema(database_spec, schema_spec, conn_id);
+            // Use try_get_schema because the temp schema might not exist yet
+            // (it's created lazily when the first temp object is created).
+            let Some(schema) = self.try_get_schema(database_spec, schema_spec, conn_id) else {
+                continue;
+            };
 
             if let Some(id) = get_schema_entries(schema).get(&name.item) {
                 return Ok(&self.entry_by_id[id]);

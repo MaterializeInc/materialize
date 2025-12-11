@@ -1419,11 +1419,15 @@ impl Coordinator {
             )?;
         }
         for ((database_spec, schema_spec), new_objects) in new_objects_per_schema {
+            // For temporary schemas that don't exist yet (lazy creation),
+            // treat them as having 0 items.
+            let current_items = self
+                .catalog()
+                .try_get_schema(&database_spec, &schema_spec, conn_id)
+                .map(|schema| schema.items.len())
+                .unwrap_or(0);
             self.validate_resource_limit(
-                self.catalog()
-                    .get_schema(&database_spec, &schema_spec, conn_id)
-                    .items
-                    .len(),
+                current_items,
                 new_objects,
                 SystemVars::max_objects_per_schema,
                 "object",

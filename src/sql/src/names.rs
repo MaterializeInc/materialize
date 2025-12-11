@@ -1857,6 +1857,21 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 return ResolvedSchemaName::Error;
             }
         };
+
+        // Special case for mz_temp: with lazy temporary schema creation, the temp
+        // schema may not exist yet. Return a resolved name with SchemaSpecifier::Temporary
+        // so that downstream code can handle it appropriately (e.g., return a proper error).
+        if norm_name.database.is_none() && norm_name.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+            return ResolvedSchemaName::Schema {
+                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                schema_spec: SchemaSpecifier::Temporary,
+                full_name: FullSchemaName {
+                    database: RawDatabaseSpecifier::Ambient,
+                    schema: mz_repr::namespaces::MZ_TEMP_SCHEMA.to_string(),
+                },
+            };
+        }
+
         match self
             .catalog
             .resolve_schema(norm_name.database.as_deref(), norm_name.schema.as_str())

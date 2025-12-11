@@ -1060,6 +1060,16 @@ impl Catalog {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
 
+    pub fn try_get_schema(
+        &self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_spec: &SchemaSpecifier,
+        conn_id: &ConnectionId,
+    ) -> Option<&Schema> {
+        self.state
+            .try_get_schema(database_spec, schema_spec, conn_id)
+    }
+
     pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.state.get_mz_catalog_schema_id()
     }
@@ -1119,9 +1129,12 @@ impl Catalog {
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        self.state.temporary_schemas[conn_id]
-            .items
-            .contains_key(item_name)
+        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        self.state
+            .temporary_schemas
+            .get(conn_id)
+            .map(|schema| schema.items.contains_key(item_name))
+            .unwrap_or(false)
     }
 
     /// Drops schema for connection if it exists. Returns an error if it exists and has items.
@@ -2217,7 +2230,11 @@ impl SessionCatalog for ConnCatalog<'_> {
                 Some(self.get_database(id).privileges())
             }
             SystemObjectId::Object(ObjectId::Schema((database_spec, schema_spec))) => {
-                Some(self.get_schema(database_spec, schema_spec).privileges())
+                // For temporary schemas that haven't been created yet (lazy creation),
+                // we return None - the RBAC check will need to handle this case.
+                self.state
+                    .try_get_schema(database_spec, schema_spec, &self.conn_id)
+                    .map(|schema| schema.privileges())
             }
             SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
