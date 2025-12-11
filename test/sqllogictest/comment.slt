@@ -553,6 +553,17 @@ DROP DATABASE comment_on_db;
 statement ok
 DROP SCHEMA comment_on_schema;
 
+# Temporary schema comment should fail with correct error message.
+# With lazy temporary schema creation, the temp schema may not exist yet,
+# but we still need to return the correct error (not "unknown schema").
+statement error cannot comment on schema mz_temp because it is a temporary schema
+COMMENT ON SCHEMA mz_temp IS 'temp_schema_comment';
+
+simple conn=mz_system,user=mz_system
+COMMENT ON SCHEMA mz_temp IS 'temp_schema_comment';
+----
+db error: ERROR: cannot comment on schema mz_temp because it is a temporary schema
+
 # Test RBAC.
 
 statement ok

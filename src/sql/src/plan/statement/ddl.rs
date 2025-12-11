@@ -7561,10 +7561,21 @@ pub fn plan_comment(
         CommentObjectType::Database { name } => {
             (CommentObjectId::Database(*name.database_id()), None)
         }
-        CommentObjectType::Schema { name } => (
-            CommentObjectId::Schema((*name.database_spec(), *name.schema_spec())),
-            None,
-        ),
+        CommentObjectType::Schema { name } => {
+            // Temporary schemas cannot have comments - they are connection-specific
+            // and transient. With lazy temporary schema creation, the temp schema
+            // may not exist yet, but we still need to return the correct error.
+            if matches!(name.schema_spec(), SchemaSpecifier::Temporary) {
+                sql_bail!(
+                    "cannot comment on schema {} because it is a temporary schema",
+                    mz_repr::namespaces::MZ_TEMP_SCHEMA
+                );
+            }
+            (
+                CommentObjectId::Schema((*name.database_spec(), *name.schema_spec())),
+                None,
+            )
+        }
         CommentObjectType::Cluster { name } => (CommentObjectId::Cluster(name.id), None),
         CommentObjectType::ClusterReplica { name } => {
             let replica = scx.catalog.resolve_cluster_replica(name)?;
