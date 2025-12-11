@@ -627,16 +627,12 @@ impl<'a> StatementContext<'a> {
         &self,
         name: PartialItemName,
     ) -> Result<QualifiedItemName, PlanError> {
-        if let Some(name) = name.schema {
-            if name
-                != self
-                    .get_schema(
-                        &ResolvedDatabaseSpecifier::Ambient,
-                        &SchemaSpecifier::Temporary,
-                    )
-                    .name()
-                    .schema
-            {
+        // Compare against the MZ_TEMP_SCHEMA constant directly instead of calling
+        // get_schema(), because with lazy temporary schema creation, the temp
+        // schema may not exist yet. (This is similar to what `allocate_temporary_full_name` was
+        // doing already before making temporary schemas lazy.)
+        if let Some(schema_name) = name.schema {
+            if schema_name != mz_repr::namespaces::MZ_TEMP_SCHEMA {
                 return Err(PlanError::InvalidTemporarySchema);
             }
         }
