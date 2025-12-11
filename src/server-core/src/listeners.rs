@@ -22,6 +22,8 @@ pub enum AuthenticatorKind {
     Password,
     /// Authenticate users using SASL.
     Sasl,
+    /// Authenticate users using OIDC (JWT tokens).
+    Oidc,
     /// Do not authenticate users. Trust they are who they say they are without verification.
     #[default]
     None,

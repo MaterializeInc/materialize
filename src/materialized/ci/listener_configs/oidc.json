@@ -1,0 +1,38 @@
+{
+  "sql": {
+    "external": {
+      "addr": "0.0.0.0:6875",
+      "authenticator_kind": "Oidc",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false
+    }
+  },
+  "http": {
+    "external": {
+      "addr": "0.0.0.0:6876",
+      "authenticator_kind": "Oidc",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false,
+      "routes": {
+        "base": true,
+        "webhook": true,
+        "internal": true,
+        "metrics": false,
+        "profiling": true
+      }
+    },
+    "metrics": {
+      "addr": "0.0.0.0:6878",
+      "authenticator_kind": "None",
+      "allowed_roles": "NormalAndInternal",
+      "enable_tls": false,
+      "routes": {
+        "base": false,
+        "webhook": false,
+        "internal": false,
+        "metrics": true,
+        "profiling": false
+      }
+    }
+  }
+}
