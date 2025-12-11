@@ -32,6 +32,7 @@ use tokio::time::MissedTickBehavior;
 use tracing::debug;
 use uuid::Uuid;
 use mz_adapter_types::connection::ConnectionId;
+use mz_compute_client::controller::error::CollectionLookupError;
 use crate::coord::{ConnMeta, Coordinator, WatchSetResponse};
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
@@ -1461,7 +1462,7 @@ impl Coordinator {
         conn_id: ConnectionId,
         logging_id: StatementLoggingId,
         ids_to_watch: IdsToWatch,
-    ) {
+    ) -> Result<(), CollectionLookupError> {
         let IdsToWatch {
             timestamp,
             storage_ids,
@@ -1476,7 +1477,7 @@ impl Coordinator {
                 logging_id,
                 StatementLifecycleEvent::StorageDependenciesFinished,
             ),
-        );
+        )?;
         self.install_compute_watch_set(
             conn_id,
             compute_ids,
@@ -1485,6 +1486,7 @@ impl Coordinator {
                 logging_id,
                 StatementLifecycleEvent::ComputeDependenciesFinished,
             ),
-        );
+        )?;
+        Ok(())
     }
 }

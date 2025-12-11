@@ -343,7 +343,7 @@ impl PeekClient {
 
         // Register coordinator tracking of this peek. This has to complete before issuing the peek.
         let ctx_extra = crate::coord::ExecuteContextExtra::new(statement_logging_id);
-        self.coordinator_client.send(Command::RegisterFrontendPeek {
+        self.call_coordinator(|tx| Command::RegisterFrontendPeek {
             uuid,
             conn_id: conn_id.clone(),
             cluster_id: compute_instance.into(),
@@ -351,7 +351,9 @@ impl PeekClient {
             ctx_extra,
             is_fast_path: true,
             ids_to_watch,
-        });
+            tx,
+        })
+        .await?;
 
         // At this stage we don't know column names for the result because we
         // only know the peek's result type as a bare SqlRelationType.

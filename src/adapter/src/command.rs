@@ -240,6 +240,7 @@ pub enum Command {
         is_fast_path: bool,
         /// If statement logging is enabled, contains the info necessary for installing watch sets.
         ids_to_watch: Option<IdsToWatch>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
     },
 
     /// Statement logging event from frontend peek sequencing.

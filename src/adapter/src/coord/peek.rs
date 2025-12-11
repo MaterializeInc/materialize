@@ -56,6 +56,7 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
+use crate::coord::statement_logging::IdsToWatch;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -1211,7 +1212,19 @@ impl crate::coord::Coordinator {
         max_result_size: u64,
         max_query_result_size: Option<u64>,
         mut ctx_extra: ExecuteContextExtra,
+        ids_to_watch: Option<IdsToWatch>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // Install watch sets for statement lifecycle logging if enabled.
+        if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch)
+                .map_err(|e| {
+                    AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                        e,
+                        compute_instance,
+                    )
+                })?;
+        }
+
         let source_arity = intermediate_result_type.arity();
 
         let planned_peek = PlannedPeek {
@@ -1239,8 +1252,8 @@ impl crate::coord::Coordinator {
         .await
     }
 
-    /// Implements a COPY TO command by validating S3 connection, shipping the dataflow,
-    /// and spawning a background task to wait for completion.
+    /// Implements a COPY TO command by installing peek watch sets, validating S3 connection,
+    /// shipping the dataflow, and spawning a background task to wait for completion.
     /// This is called from the command handler for ExecuteCopyTo.
     ///
     /// This method inlines the logic from peek_copy_to_preflight and peek_copy_to_dataflow
@@ -1256,6 +1269,8 @@ impl crate::coord::Coordinator {
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
+        ctx_extra: ExecuteContextExtra,
+        ids_to_watch: Option<IdsToWatch>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     ) {
         // Helper to send error and return early
@@ -1263,6 +1278,22 @@ impl crate::coord::Coordinator {
                         e: AdapterError| {
             let _ = tx.send(Err(e));
         };
+
+        // Install watch sets for statement lifecycle logging if enabled.
+        if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+            if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch) {
+                let err = AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                    e,
+                    compute_instance,
+                );
+                send_err(tx, err);
+                return;
+            }
+        }
+
+        // We retire the execution context immediately, as the coordinator doesn't need
+        // to track the execution for statement logging purposes (the frontend handles that).
+        let _ = ctx_extra.retire();
 
         let sink_id = df_desc.sink_id();
 

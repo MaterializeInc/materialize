@@ -104,7 +104,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
-use mz_compute_client::controller::error::{DataflowCreationError, InstanceMissing};
+use mz_compute_client::controller::error::{CollectionLookupError, DataflowCreationError, InstanceMissing};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -3764,13 +3764,14 @@ impl Coordinator {
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) {
-        let ws_id = self.controller.install_compute_watch_set(objects, t);
+    ) -> Result<(), CollectionLookupError> {
+        let ws_id = self.controller.install_compute_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        Ok(())
     }
 
     /// Install a _watch set_ in the controller that is automatically associated with the given
@@ -3782,13 +3783,14 @@ impl Coordinator {
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) {
-        let ws_id = self.controller.install_storage_watch_set(objects, t);
+    ) -> Result<(), CollectionLookupError> {
+        let ws_id = self.controller.install_storage_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        Ok(())
     }
 
     /// Cancels pending watchsets associated with the provided connection id.

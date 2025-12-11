@@ -851,7 +851,7 @@ impl Coordinator {
                 &id_bundle,
                 determination.timestamp_context.timestamp_or_default(),
             );
-            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch).expect("the old peek sequencing re-verifies the dependencies' existence before installing the new watch sets");
         }
 
         let max_result_size = self.catalog().system_config().max_result_size();

@@ -3301,7 +3301,7 @@ impl Coordinator {
                 plan_validity,
                 read_hold,
             }),
-        );
+        ).expect("plan validity verified above; we are on the coordinator main task, so they couldn't have gone away since then");
     }
 
     #[instrument]

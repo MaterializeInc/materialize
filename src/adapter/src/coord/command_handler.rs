@@ -347,10 +347,6 @@ impl Coordinator {
                     tx,
                 } => {
                     soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
-                    if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
-                        self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
-                    }
-
                     let result = self
                         .implement_slow_path_peek(
                             *dataflow_plan,
@@ -364,9 +360,9 @@ impl Coordinator {
                             max_result_size,
                             max_query_result_size,
                             ctx_extra,
+                            ids_to_watch,
                         )
                         .await;
-
                     let _ = tx.send(result);
                 }
 
@@ -381,15 +377,6 @@ impl Coordinator {
                     tx,
                 } => {
                     soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
-                    if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
-                        // (The old peek sequencing forgot to do this for COPY TO.)
-                        self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
-                    }
-
-                    // We retire the execution context immediately, as the coordinator doesn't need
-                    // to track the execution for statement logging purposes (the frontend handles that).
-                    let _ = ctx_extra.retire();
-
                     // implement_copy_to spawns a background task that sends the response
                     // through tx when the COPY TO completes (or immediately if setup fails).
                     // We just call it and let it handle all response sending.
@@ -399,6 +386,8 @@ impl Coordinator {
                         target_replica,
                         source_ids,
                         conn_id,
+                        ctx_extra,
+                        ids_to_watch,
                         tx,
                     )
                     .await;
@@ -411,6 +400,7 @@ impl Coordinator {
                     ctx_extra,
                     is_fast_path,
                     ids_to_watch,
+                    tx,
                 } => {
                     self.handle_register_frontend_peek(
                         uuid,
@@ -420,6 +410,7 @@ impl Coordinator {
                         ctx_extra,
                         is_fast_path,
                         ids_to_watch,
+                        tx,
                     );
                 }
                 Command::FrontendStatementLogging(event) => {
@@ -1877,10 +1868,14 @@ impl Coordinator {
         ctx_extra: ExecuteContextExtra,
         is_fast_path: bool,
         ids_to_watch: Option<IdsToWatch>,
+        tx: oneshot::Sender<Result<(), AdapterError>>,
     ) {
         soft_assert_eq_or_log!(ctx_extra.contents().is_some(), ids_to_watch.is_some());
         if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
-            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch);
+            if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch) {
+                let _ = tx.send(Err(AdapterError::concurrent_dependency_drop_from_collection_lookup_error(e, cluster_id.into())));
+                return;
+            }
         }
 
         // Store the peek in pending_peeks for later retrieval when results arrive
@@ -1900,5 +1895,7 @@ impl Coordinator {
             .entry(conn_id)
             .or_default()
             .insert(uuid, cluster_id.into());
+
+        let _ = tx.send(Ok(()));
     }
 }

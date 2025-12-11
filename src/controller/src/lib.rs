@@ -62,6 +62,7 @@ use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::mpsc;
 use uuid::Uuid;
+use mz_compute_client::controller::error::CollectionLookupError;
 
 pub mod clusters;
 
@@ -372,15 +373,20 @@ where
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
-    ) -> WatchSetId {
+    ) -> Result<WatchSetId, CollectionLookupError> {
         let ws_id = self.watch_set_id_gen.allocate_id();
 
+        // Collect all frontiers first, returning any errors
+        let frontiers: BTreeMap<GlobalId, _> = objects
+            .iter()
+            .map(|id| {
+                self.compute
+                    .collection_frontiers(*id, None)
+                    .map(|f| (*id, f.write_frontier))
+            })
+            .collect::<Result<_, _>>()?;
         objects.retain(|id| {
-            let frontier = self
-                .compute
-                .collection_frontiers(*id, None)
-                .map(|f| f.write_frontier)
-                .expect("missing compute dependency");
+            let frontier = frontiers.get(id).expect("just collected");
             frontier.less_equal(&t)
         });
         if objects.is_empty() {
@@ -395,7 +401,7 @@ where
             self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
         }
 
-        ws_id
+        Ok(ws_id)
     }
 
     /// Install a _watch set_ in the controller.
@@ -410,13 +416,12 @@ where
         &mut self,
         mut objects: BTreeSet<GlobalId>,
         t: T,
-    ) -> WatchSetId {
+    ) -> Result<WatchSetId, CollectionLookupError> {
         let ws_id = self.watch_set_id_gen.allocate_id();
 
         let uppers = self
             .storage
-            .collections_frontiers(objects.iter().cloned().collect())
-            .expect("missing storage dependencies")
+            .collections_frontiers(objects.iter().cloned().collect())?
             .into_iter()
             .map(|(id, _since, upper)| (id, upper))
             .collect::<BTreeMap<_, _>>();
@@ -436,7 +441,7 @@ where
             }
             self.unfulfilled_watch_sets.insert(ws_id, (objects, t));
         }
-        ws_id
+        Ok(ws_id)
     }
 
     /// Uninstalls a previously installed WatchSetId. The method is a no-op if the watch set has
