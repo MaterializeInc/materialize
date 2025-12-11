@@ -24,7 +24,6 @@ use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AU
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
-use mz_cloud_resources::VpcEndpointConfig;
 use mz_expr::{
     CollectionPlan, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -3639,95 +3638,11 @@ impl Coordinator {
 
         self.catalog_transact(Some(session), ops).await?;
 
-        match connection.details {
-            ConnectionDetails::AwsPrivatelink(ref privatelink) => {
-                let spec = VpcEndpointConfig {
-                    aws_service_name: privatelink.service_name.to_owned(),
-                    availability_zone_ids: privatelink.availability_zones.to_owned(),
-                };
-                self.cloud_resource_controller
-                    .as_ref()
-                    .ok_or(AdapterError::Unsupported("AWS PrivateLink connections"))?
-                    .ensure_vpc_endpoint(id, spec)
-                    .await?;
-            }
-            _ => {}
-        };
-
-        let entry = self.catalog().get_entry(&id);
-
-        let mut connections = VecDeque::new();
-        connections.push_front(entry.id());
-
-        let mut source_connections = BTreeMap::new();
-        let mut sink_connections = BTreeMap::new();
-        let mut source_export_data_configs = BTreeMap::new();
-
-        while let Some(id) = connections.pop_front() {
-            for id in self.catalog.get_entry(&id).used_by() {
-                let entry = self.catalog.get_entry(id);
-                match entry.item() {
-                    CatalogItem::Connection(_) => connections.push_back(*id),
-                    CatalogItem::Source(source) => {
-                        let desc = match &entry.source().expect("known to be source").data_source {
-                            DataSourceDesc::Ingestion { desc, .. }
-                            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
-                                desc.clone().into_inline_connection(self.catalog().state())
-                            }
-                            _ => unreachable!("only ingestions reference connections"),
-                        };
-
-                        source_connections.insert(source.global_id, desc.connection);
-                    }
-                    CatalogItem::Sink(sink) => {
-                        let export = entry.sink().expect("known to be sink");
-                        sink_connections.insert(
-                            sink.global_id,
-                            export
-                                .connection
-                                .clone()
-                                .into_inline_connection(self.catalog().state()),
-                        );
-                    }
-                    CatalogItem::Table(table) => {
-                        // This is a source-fed table that reference a schema registry
-                        // connection as a part of its encoding / data config
-                        if let Some((_, _, _, export_data_config)) = entry.source_export_details() {
-                            let data_config = export_data_config.clone();
-                            source_export_data_configs.insert(
-                                table.global_id_writes(),
-                                data_config.into_inline_connection(self.catalog().state()),
-                            );
-                        }
-                    }
-                    t => unreachable!("connection dependency not expected on {:?}", t),
-                }
-            }
-        }
-
-        if !source_connections.is_empty() {
-            self.controller
-                .storage
-                .alter_ingestion_connections(source_connections)
-                .await
-                .unwrap_or_terminate("cannot fail to alter ingestion connection");
-        }
-
-        if !sink_connections.is_empty() {
-            self.controller
-                .storage
-                .alter_export_connections(sink_connections)
-                .await
-                .unwrap_or_terminate("altering exports after txn must succeed");
-        }
-
-        if !source_export_data_configs.is_empty() {
-            self.controller
-                .storage
-                .alter_ingestion_export_data_configs(source_export_data_configs)
-                .await
-                .unwrap_or_terminate("altering source export data configs after txn must succeed");
-        }
+        // NOTE: The rest of the alter connection logic (updating VPC endpoints
+        // and propagating connection changes to dependent sources, sinks, and
+        // tables) is handled in `apply_catalog_implications` via
+        // `handle_alter_connection`. The catalog transact above triggers that
+        // code path.
 
         Ok(ExecuteResponse::AlteredObject(ObjectType::Connection))
     }
