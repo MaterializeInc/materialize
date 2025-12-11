@@ -1891,6 +1891,17 @@ steps:
             # Don't run with Azurite since it's pretty slow, see https://github.com/MaterializeInc/database-issues/issues/8892 for details
             args: [--replicas=8]
 
+  - id: slow-cluster
+    label: "Slow Cluster tests"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: cluster
+          args: [--slow-only]
+
   - group: "Parallel Workload"
     key: parallel-workload
     steps:
@@ -2029,16 +2040,107 @@ steps:
               composition: parallel-workload
               args: [--runtime=1500, --scenario=0dt-deploy, --threads=8]
 
-  - id: slow-cluster
-    label: "Slow Cluster tests"
-    depends_on: build-aarch64
-    timeout_in_minutes: 30
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: cluster
-          args: [--slow-only]
+  - group: "Parallel Correctness"
+    key: parallel-correctness
+    steps:
+      - id: parallel-correctness-dml
+        label: "Parallel Correctness + DML"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --complexity=dml, --threads=8]
+
+      - id: parallel-correctness-ddl
+        label: "Parallel Correctness + DDL"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --threads=8]
+
+      - id: parallel-correctness-many-threads
+        label: "Parallel Correctness + many threads"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          # Sporadic OoM otherwise
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --threads=8]
+        skip: "Too unstable at the moment"
+
+      - id: parallel-correctness-rename
+        label: "Parallel Correctness + rename"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --scenario=rename, --threads=8]
+
+      - id: parallel-correctness-cancel
+        label: "Parallel Correctness + cancel"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --scenario=cancel, --threads=8]
+
+      - id: parallel-correctness-kill
+        label: "Parallel Correctness + kill"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --scenario=kill, --threads=8]
+
+      - id: parallel-correctness-backup-restore
+        label: "Parallel Correctness + backup & restore"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        skip: "TODO(def-): Properly stop all db actions during backup & restore"
+        agents:
+          queue: hetzner-x86-64-16cpu-32gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --scenario=backup-restore, --naughty-identifiers, --threads=8]
+
+      - id: parallel-correctness-0dt
+        label: "Parallel Correctness + 0dt deploy"
+        depends_on: build-x86_64
+        artifact_paths: [parallel-workload-queries.log.zst]
+        timeout_in_minutes: 90
+        agents:
+          queue: hetzner-x86-64-dedi-16cpu-64gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: parallel-workload
+              args: [--runtime=1500, --correctness, --scenario=0dt-deploy, --threads=8]
 
   - id: balancerd
     label: "Tests for balancerd"

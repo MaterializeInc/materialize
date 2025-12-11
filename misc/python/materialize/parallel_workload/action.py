@@ -9,17 +9,19 @@
 
 import copy
 import datetime
+import decimal
 import json
 import random
 import threading
 import time
 import urllib.parse
 from collections.abc import Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import psycopg
 import requests
 import websocket
+from deepdiff import DeepDiff
 from pg8000.native import identifier
 from psycopg import Connection
 from psycopg.errors import OperationalError
@@ -76,6 +78,7 @@ from materialize.parallel_workload.database import (
     Table,
     View,
     WebhookSource,
+    correctness,
 )
 from materialize.parallel_workload.executor import Executor, Http
 from materialize.parallel_workload.expression import ExprKind, expression
@@ -357,45 +360,50 @@ class FetchAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        self.i += 1
-        # Unsupported via this API
-        # See https://github.com/MaterializeInc/database-issues/issues/6159
-        (
-            exe.rollback(http=Http.NO)
-            if self.rng.choice([True, False])
-            else exe.commit(http=Http.NO)
-        )
-        query = "SUBSCRIBE "
-        if self.rng.choice([True, False]):
-            obj = self.rng.choice(exe.db.db_objects())
-            query += f"{obj}"
-
-            if self.rng.choice([True, False]):
-                envelope = "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
-                columns = self.rng.sample(obj.columns, len(obj.columns))
-                key = ", ".join(column.name(True) for column in columns)
-                query += f" ENVELOPE {envelope} (KEY ({key}))"
+        if correctness():
+            pass  # TODO
         else:
-            query += f"({self.generate_select_query(exe, ExprKind.MATERIALIZABLE)})"
-
-        exe.execute(f"DECLARE c{self.i} CURSOR FOR {query}", http=Http.NO)
-        while True:
-            rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
-            timeout = self.rng.randrange(10)
-            query = f"FETCH {rows} c{self.i} WITH (timeout='{timeout}s')"
-
+            self.i += 1
+            # Unsupported via this API
+            # See https://github.com/MaterializeInc/database-issues/issues/6159
+            (
+                exe.rollback(http=Http.NO)
+                if self.rng.choice([True, False])
+                else exe.commit(http=Http.NO)
+            )
+            query = "SUBSCRIBE "
             if self.rng.choice([True, False]):
-                self.stmt_id += 1
-                self.exe_prepared(query, f"fetch{self.stmt_id}", exe)
+                obj = self.rng.choice(exe.db.db_objects())
+                query += f"{obj}"
+
+                if self.rng.choice([True, False]):
+                    envelope = (
+                        "UPSERT" if self.rng.choice([True, False]) else "DEBEZIUM"
+                    )
+                    columns = self.rng.sample(obj.columns, len(obj.columns))
+                    key = ", ".join(column.name(True) for column in columns)
+                    query += f" ENVELOPE {envelope} (KEY ({key}))"
             else:
-                exe.execute(query, http=Http.NO, fetch=True)
-            if self.rng.choice([True, False]):
-                break
-        (
-            exe.rollback(http=Http.NO)
-            if self.rng.choice([True, False])
-            else exe.commit(http=Http.NO)
-        )
+                query += f"({self.generate_select_query(exe, ExprKind.MATERIALIZABLE)})"
+
+            exe.execute(f"DECLARE c{self.i} CURSOR FOR {query}", http=Http.NO)
+            while True:
+                rows = self.rng.choice(["ALL", self.rng.randrange(1000)])
+                timeout = self.rng.randrange(10)
+                query = f"FETCH {rows} c{self.i} WITH (timeout='{timeout}s')"
+
+                if self.rng.choice([True, False]):
+                    self.stmt_id += 1
+                    self.exe_prepared(query, f"fetch{self.stmt_id}", exe)
+                else:
+                    exe.execute(query, http=Http.NO, fetch=True)
+                if self.rng.choice([True, False]):
+                    break
+            (
+                exe.rollback(http=Http.NO)
+                if self.rng.choice([True, False])
+                else exe.commit(http=Http.NO)
+            )
         return True
 
 
@@ -424,17 +432,60 @@ class SelectAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        query = self.generate_select_query(exe, ExprKind.ALL)
-        rtr = self.rng.choice([True, False])
-        if rtr:
-            exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"select{self.stmt_id}", exe)
+        if correctness():
+            exe.commit()
+            exe.set_isolation("STRICT SERIALIZABLE")
+            exe.execute(
+                "SET REAL_TIME_RECENCY TO TRUE", explainable=False, http=Http.NO
+            )
+            # TODO: Other types than table
+            # TODO: More complex queries
+            table = self.rng.choice(exe.db.tables)
+            query = f"SELECT * FROM {table}"
+
+            def normalize_value(value: Any) -> Any:
+                if isinstance(value, decimal.Decimal) or isinstance(value, float):
+                    return int(round(value))
+                if (
+                    isinstance(value, datetime.date)
+                    or type(value) == int
+                ):
+                    return str(value)
+                if isinstance(value, datetime.time):
+                    return value.strftime("%H:%M:%S")
+                if isinstance(value, datetime.datetime):
+                    return value.strftime("%Y-%m-%d %H:%M:%S")
+                return value
+
+            with table.lock:
+                rows = exe.execute(query, explainable=False, http=Http.NO, fetch=True)
+                assert rows is not None
+                rows = sorted([tuple([normalize_value(v) for v in t]) for t in rows])
+                assert rows is not None
+                table_rows = sorted(
+                    [tuple([normalize_value(v) for v in t]) for t in table.rows]
+                )
+                if rows != table_rows:
+                    diff = DeepDiff(
+                        rows,
+                        table_rows,
+                        ignore_order=False,  # already sorted, so keep order stable
+                        verbose_level=2,  # shows where inside the object things differ
+                    )
+                    assert rows == table_rows, f"Table {table} not matching.\n{diff.pretty()}"
+
         else:
-            exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
-        if rtr:
-            exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
+            query = self.generate_select_query(exe, ExprKind.ALL)
+            rtr = self.rng.choice([True, False])
+            if rtr:
+                exe.execute("SET REAL_TIME_RECENCY TO TRUE", explainable=False)
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"select{self.stmt_id}", exe)
+            else:
+                exe.execute(query, explainable=True, http=Http.RANDOM, fetch=True)
+            if rtr:
+                exe.execute("SET REAL_TIME_RECENCY TO FALSE", explainable=False)
         return True
 
 
@@ -592,21 +643,28 @@ class InsertAction(Action):
             table = self.rng.choice(tables)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
-        column_values = []
+        rows = []
         max_rows = min(100, MAX_ROWS - table.num_rows)
         for i in range(self.rng.randrange(1, max_rows + 1)):
-            column_values.append(
-                ", ".join(column.value(self.rng, True) for column in table.columns)
-            )
-        all_column_values = ", ".join(f"({v})" for v in column_values)
-        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"insert{self.stmt_id}", exe)
-        else:
-            exe.execute(query, http=Http.RANDOM)
-        table.num_rows += len(column_values)
+            rows.append([column.value(self.rng) for column in table.columns])
+        all_rows = ", ".join(f"({', '.join([c.inquery for c in v])})" for v in rows)
+        query = f"INSERT INTO {table} ({column_names}) VALUES {all_rows}"
+        if correctness():
+            table.lock.acquire()
+        try:
+            # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"insert{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            if correctness():
+                exe.commit()
+                table.rows.extend([[c.value for c in v] for v in rows])
+        finally:
+            if correctness():
+                table.lock.release()
+        table.num_rows += len(rows)
         exe.insert_table = table.table_id
         return True
 
@@ -623,127 +681,140 @@ class CopyFromStdinAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        table = None
-        if exe.insert_table is not None:
-            for t in exe.db.tables:
-                if t.table_id == exe.insert_table:
-                    table = t
-                    if table.num_rows >= MAX_ROWS:
-                        (
-                            exe.commit()
-                            if self.rng.choice([True, False])
-                            else exe.rollback()
-                        )
-                        table = None
-                    break
-            else:
-                exe.commit() if self.rng.choice([True, False]) else exe.rollback()
-        if not table:
-            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
-            if not tables:
-                return False
-            table = self.rng.choice(tables)
+        if correctness():
+            pass  # TODO
+        else:
+            table = None
+            if exe.insert_table is not None:
+                for t in exe.db.tables:
+                    if t.table_id == exe.insert_table:
+                        table = t
+                        if table.num_rows >= MAX_ROWS:
+                            (
+                                exe.commit()
+                                if self.rng.choice([True, False])
+                                else exe.rollback()
+                            )
+                            table = None
+                        break
+                else:
+                    exe.commit() if self.rng.choice([True, False]) else exe.rollback()
+            if not table:
+                tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+                if not tables:
+                    return False
+                table = self.rng.choice(tables)
 
-        values = []
-        max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
-            values.append([column.value(self.rng, False) for column in table.columns])
-        query = f"COPY INTO {table} FROM STDIN"
-        exe.copy(query, values)
-        table.num_rows += len(values)
-        exe.insert_table = table.table_id
+            values = []
+            max_rows = min(100, MAX_ROWS - table.num_rows)
+            for i in range(self.rng.randrange(1, max_rows + 1)):
+                values.append(
+                    [column.value(self.rng).value for column in table.columns]
+                )
+            query = f"COPY INTO {table} FROM STDIN"
+            exe.copy(query, values)
+            table.num_rows += len(values)
+            exe.insert_table = table.table_id
         return True
 
 
 class InsertReturningAction(Action):
     def run(self, exe: Executor) -> bool:
-        table = None
-        if exe.insert_table is not None:
-            for t in exe.db.tables:
-                if t.table_id == exe.insert_table:
-                    table = t
-                    if table.num_rows >= MAX_ROWS:
-                        (
-                            exe.commit()
-                            if self.rng.choice([True, False])
-                            else exe.rollback()
-                        )
-                        table = None
-                    break
-            else:
-                exe.commit() if self.rng.choice([True, False]) else exe.rollback()
-        if not table:
-            tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
-            if not tables:
-                return False
-            table = self.rng.choice(tables)
-
-        column_names = ", ".join(column.name(True) for column in table.columns)
-        column_values = []
-        max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
-            column_values.append(
-                ", ".join(column.value(self.rng, True) for column in table.columns)
-            )
-        all_column_values = ", ".join(f"({v})" for v in column_values)
-        query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
-        returning_exprs = []
-        if self.rng.random() < 0.5:
-            returning_exprs += [
-                expression(
-                    self.rng.choice(list(DATA_TYPES)),
-                    table.columns,
-                    self.rng,
-                    kind=ExprKind.WRITE,
-                )
-                for i in range(self.rng.randint(1, 10))
-            ]
-        elif self.rng.choice([True, False]):
-            returning_exprs.append("*")
-        if returning_exprs:
-            query += f" RETURNING {', '.join(returning_exprs)}"
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
+        if correctness():
+            pass  # TODO
         else:
-            exe.execute(query, http=Http.RANDOM)
-        table.num_rows += len(column_values)
-        exe.insert_table = table.table_id
+            table = None
+            if exe.insert_table is not None:
+                for t in exe.db.tables:
+                    if t.table_id == exe.insert_table:
+                        table = t
+                        if table.num_rows >= MAX_ROWS:
+                            (
+                                exe.commit()
+                                if self.rng.choice([True, False])
+                                else exe.rollback()
+                            )
+                            table = None
+                        break
+                else:
+                    exe.commit() if self.rng.choice([True, False]) else exe.rollback()
+            if not table:
+                tables = [table for table in exe.db.tables if table.num_rows < MAX_ROWS]
+                if not tables:
+                    return False
+                table = self.rng.choice(tables)
+
+            column_names = ", ".join(column.name(True) for column in table.columns)
+            column_values = []
+            max_rows = min(100, MAX_ROWS - table.num_rows)
+            for i in range(self.rng.randrange(1, max_rows + 1)):
+                column_values.append(
+                    ", ".join(
+                        column.value(self.rng).inquery for column in table.columns
+                    )
+                )
+            all_column_values = ", ".join(f"({v})" for v in column_values)
+            query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
+            # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
+            returning_exprs = []
+            if self.rng.random() < 0.5:
+                returning_exprs += [
+                    expression(
+                        self.rng.choice(list(DATA_TYPES)),
+                        table.columns,
+                        self.rng,
+                        kind=ExprKind.WRITE,
+                    )
+                    for i in range(self.rng.randint(1, 10))
+                ]
+            elif self.rng.choice([True, False]):
+                returning_exprs.append("*")
+            if returning_exprs:
+                query += f" RETURNING {', '.join(returning_exprs)}"
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            table.num_rows += len(column_values)
+            exe.insert_table = table.table_id
         return True
 
 
 class SourceInsertAction(Action):
     def run(self, exe: Executor) -> bool:
-        with exe.db.lock:
-            sources = [
-                source
-                for source in exe.db.kafka_sources
-                + exe.db.postgres_sources
-                + exe.db.mysql_sources
-                + exe.db.sql_server_sources
-                if source.num_rows < MAX_ROWS
-            ]
-            if not sources:
-                return False
-            source = self.rng.choice(sources)
-        with source.lock:
-            if source not in [
-                *exe.db.kafka_sources,
-                *exe.db.postgres_sources,
-                *exe.db.mysql_sources,
-                *exe.db.sql_server_sources,
-            ]:
-                return False
+        if correctness():
+            pass  # TODO
+        else:
+            with exe.db.lock:
+                sources = [
+                    source
+                    for source in exe.db.kafka_sources
+                    + exe.db.postgres_sources
+                    + exe.db.mysql_sources
+                    + exe.db.sql_server_sources
+                    if source.num_rows < MAX_ROWS
+                ]
+                if not sources:
+                    return False
+                source = self.rng.choice(sources)
+            with source.lock:
+                if source not in [
+                    *exe.db.kafka_sources,
+                    *exe.db.postgres_sources,
+                    *exe.db.mysql_sources,
+                    *exe.db.sql_server_sources,
+                ]:
+                    return False
 
-            transaction = next(source.generator)
-            for row_list in transaction.row_lists:
-                for row in row_list.rows:
-                    if row.operation == Operation.INSERT:
-                        source.num_rows += 1
-                    elif row.operation == Operation.DELETE:
-                        source.num_rows -= 1
-            source.executor.run(transaction, logging_exe=exe)
+                transaction = next(source.generator)
+                for row_list in transaction.row_lists:
+                    for row in row_list.rows:
+                        if row.operation == Operation.INSERT:
+                            source.num_rows += 1
+                        elif row.operation == Operation.DELETE:
+                            source.num_rows -= 1
+                source.executor.run(transaction, logging_exe=exe)
         return True
 
 
@@ -765,24 +836,27 @@ class UpdateAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
-        table = None
-        if exe.insert_table is not None:
-            for t in exe.db.tables:
-                if t.table_id == exe.insert_table:
-                    table = t
-                    break
-        if not table:
-            table = self.rng.choice(exe.db.tables)
-
-        table.columns[0]
-        column2 = self.rng.choice(table.columns)
-        query = f"UPDATE {table} SET {column2.name(True)} = {expression(column2.data_type, table.columns, self.rng, kind=ExprKind.WRITE)} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"update{self.stmt_id}", exe)
+        if correctness():
+            pass  # TODO
         else:
-            exe.execute(query, http=Http.RANDOM)
-        exe.insert_table = table.table_id
+            table = None
+            if exe.insert_table is not None:
+                for t in exe.db.tables:
+                    if t.table_id == exe.insert_table:
+                        table = t
+                        break
+            if not table:
+                table = self.rng.choice(exe.db.tables)
+
+            table.columns[0]
+            column2 = self.rng.choice(table.columns)
+            query = f"UPDATE {table} SET {column2.name(True)} = {expression(column2.data_type, table.columns, self.rng, kind=ExprKind.WRITE)} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"update{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            exe.insert_table = table.table_id
         return True
 
 
@@ -793,18 +867,21 @@ class DeleteAction(Action):
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
-        table = self.rng.choice(exe.db.tables)
-        query = f"DELETE FROM {table}"
-        if self.rng.random() < 0.95:
-            query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
-        if self.rng.choice([True, False]):
-            self.stmt_id += 1
-            self.exe_prepared(query, f"delete{self.stmt_id}", exe)
+        if correctness():
+            pass  # TODO
         else:
-            exe.execute(query, http=Http.RANDOM)
-        exe.commit()
-        result = exe.cur.rowcount
-        table.num_rows -= result
+            table = self.rng.choice(exe.db.tables)
+            query = f"DELETE FROM {table}"
+            if self.rng.random() < 0.95:
+                query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            if self.rng.choice([True, False]):
+                self.stmt_id += 1
+                self.exe_prepared(query, f"delete{self.stmt_id}", exe)
+            else:
+                exe.execute(query, http=Http.RANDOM)
+            exe.commit()
+            result = exe.cur.rowcount
+            table.num_rows -= result
         return True
 
 
@@ -814,9 +891,11 @@ class CommentAction(Action):
 
         if self.rng.choice([True, False]):
             column = self.rng.choice(table.columns)
-            query = f"COMMENT ON COLUMN {column} IS '{Text.random_value(self.rng)}'"
+            query = (
+                f"COMMENT ON COLUMN {column} IS '{Text.random_value(self.rng).value}'"
+            )
         else:
-            query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng)}'"
+            query = f"COMMENT ON TABLE {table} IS '{Text.random_value(self.rng).value}'"
 
         exe.execute(query, http=Http.RANDOM)
         return True
@@ -1692,6 +1771,9 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
+        if correctness():
+            return True  # TODO
+
         # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
         temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
@@ -2822,7 +2904,7 @@ class HttpPostAction(Action):
 
             url = f"http://{exe.db.host}:{exe.db.ports['http' if exe.mz_service == 'materialized' else 'http2']}/api/webhook/{urllib.parse.quote(source.schema.db.name(), safe='')}/{urllib.parse.quote(source.schema.name(), safe='')}/{urllib.parse.quote(source.name(), safe='')}"
 
-            payload = source.body_format.to_data_type().random_value(self.rng)
+            payload = source.body_format.to_data_type().random_value(self.rng).value
 
             header_fields = source.explicit_include_headers
             if source.include_headers:
@@ -2832,7 +2914,7 @@ class HttpPostAction(Action):
                 header: (
                     f"{datetime.datetime.now()}"
                     if header == "timestamp"
-                    else f'"{Text.random_value(self.rng)}"'.encode()
+                    else f'"{Text.random_value(self.rng).value}"'.encode()
                 )
                 for header in self.rng.sample(header_fields, len(header_fields))
             }

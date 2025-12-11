@@ -14,6 +14,7 @@ from pg8000.native import identifier
 
 from materialize.data_ingest.data_type import (
     DataType,
+    DataValue,
 )
 from materialize.util import naughty_strings
 
@@ -44,6 +45,19 @@ def naughtify(name: str) -> str:
     return f"{name}_{strings[index].encode('utf-8')[:16].decode('utf-8', 'ignore')}"
 
 
+CORRECTNESS = False
+
+
+def set_correctness(value: bool) -> None:
+    global CORRECTNESS
+    CORRECTNESS = value
+
+
+def correctness() -> bool:
+    global CORRECTNESS
+    return CORRECTNESS
+
+
 class Column:
     column_id: int
     data_type: type[DataType]
@@ -63,9 +77,7 @@ class Column:
         self.data_type = data_type
         self.db_object = db_object
         self.nullable = rng.choice([True, False])
-        self.default = rng.choice(
-            [None, str(data_type.random_value(rng, in_query=True))]
-        )
+        self.default = rng.choice([None, str(data_type.random_value(rng).inquery)])
         self.raw_name = f"c-{self.column_id}-{self.data_type.name()}"
 
     def name(self, in_query: bool = False) -> str:
@@ -78,8 +90,8 @@ class Column:
     def __str__(self) -> str:
         return f"{self.db_object}.{self.name(True)}"
 
-    def value(self, rng: random.Random, in_query: bool = False) -> str:
-        return str(self.data_type.random_value(rng, in_query=in_query))
+    def value(self, rng: random.Random) -> DataValue:
+        return self.data_type.random_value(rng)
 
     def create(self) -> str:
         result = f"{self.name(True)} {self.data_type.name()}"
