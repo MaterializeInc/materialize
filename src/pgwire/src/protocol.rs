@@ -480,6 +480,73 @@ where
             let auth_session = pending().right_future();
             (session, auth_session)
         }
+        Authenticator::Oidc(oidc) => {
+            tracing::info!("OIDC authentication");
+            // OIDC authentication: JWT sent as password in cleartext flow
+            conn.send(BackendMessage::AuthenticationCleartextPassword)
+                .await?;
+            conn.flush().await?;
+
+            let jwt = match conn.recv().await? {
+                Some(FrontendMessage::RawAuthentication(data)) => {
+                    match decode_password(Cursor::new(&data)).ok() {
+                        Some(FrontendMessage::Password { password }) => password,
+                        _ => {
+                            return conn
+                                .send(ErrorResponse::fatal(
+                                    SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                                    "expected Password message",
+                                ))
+                                .await;
+                        }
+                    }
+                }
+                _ => {
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                            "expected Password message",
+                        ))
+                        .await;
+                }
+            };
+
+            tracing::info!("JWT: {}", jwt);
+
+            // Validate JWT
+            let claims = match oidc.validate_token(&jwt).await {
+                Ok(claims) => claims,
+                Err(e) => {
+                    warn!(?e, "OIDC authentication failed");
+                    return conn
+                        .send(ErrorResponse::fatal(
+                            SqlState::INVALID_PASSWORD,
+                            "invalid token",
+                        ))
+                        .await;
+                }
+            };
+
+            // Use username from claims, or fall back to the user provided in startup
+            let session_user = if user.is_empty() {
+                claims.username().to_string()
+            } else {
+                user
+            };
+
+            let session = adapter_client.new_session(SessionConfig {
+                conn_id: conn.conn_id().clone(),
+                uuid: conn_uuid,
+                user: session_user,
+                client_ip: conn.peer_addr().clone(),
+                external_metadata_rx: None,
+                internal_user_metadata: None,
+                helm_chart_version,
+            });
+            // No session expiry for OIDC - session lasts until connection closes.
+            let auth_session = pending().right_future();
+            (session, auth_session)
+        }
         Authenticator::None => {
             let session = adapter_client.new_session(SessionConfig {
                 conn_id: conn.conn_id().clone(),
