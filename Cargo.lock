@@ -798,28 +798,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aws-sdk-s3tables"
-version = "1.45.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c55851a4b7b0da1e07fcdbd2c013e20ee0dca38734c3e0c6f9ddd745e711248"
-dependencies = [
- "aws-credential-types",
- "aws-runtime",
- "aws-smithy-async",
- "aws-smithy-http",
- "aws-smithy-json",
- "aws-smithy-runtime",
- "aws-smithy-runtime-api",
- "aws-smithy-types",
- "aws-types",
- "bytes",
- "fastrand 2.3.0",
- "http 0.2.9",
- "regex-lite",
- "tracing",
-]
-
-[[package]]
 name = "aws-sdk-secretsmanager"
 version = "1.95.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4138,18 +4116,6 @@ dependencies = [
  "tracing",
  "typed-builder 0.20.1",
  "uuid",
-]
-
-[[package]]
-name = "iceberg-catalog-s3tables"
-version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=cf1e6e0c9de3#cf1e6e0c9de38149e9fe85d5d87b00062d49074b"
-dependencies = [
- "async-trait",
- "aws-config",
- "aws-sdk-s3tables",
- "aws-smithy-types",
- "iceberg",
 ]
 
 [[package]]
@@ -7831,7 +7797,6 @@ dependencies = [
  "futures",
  "humantime",
  "iceberg",
- "iceberg-catalog-s3tables",
  "indexmap 2.11.4",
  "itertools 0.14.0",
  "maplit",
@@ -8032,7 +7997,6 @@ dependencies = [
  "async-trait",
  "aws-config",
  "aws-credential-types",
- "aws-sdk-s3tables",
  "aws-sdk-sts",
  "aws-types",
  "base64 0.22.1",
@@ -8046,7 +8010,6 @@ dependencies = [
  "http 1.2.0",
  "iceberg",
  "iceberg-catalog-rest",
- "iceberg-catalog-s3tables",
  "insta",
  "itertools 0.14.0",
  "mysql_async",
@@ -13558,3 +13521,8 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
+
+[[patch.unused]]
+name = "iceberg-catalog-s3tables"
+version = "0.7.0"
+source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=cf1e6e0c9de3#cf1e6e0c9de38149e9fe85d5d87b00062d49074b"
