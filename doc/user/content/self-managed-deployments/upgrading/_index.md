@@ -23,6 +23,19 @@ name="upgrade-major-version-restriction" >}}
 
 {{< /note >}}
 
+## Upgrade guides
+
+The following upgrade guides are available:
+
+{{% include-from-yaml data="self_managed/upgrades"
+name="upgrade-landing-guides-helm" %}}
+
+{{% include-from-yaml data="self_managed/upgrades"
+name="upgrade-landing-guides-unified" %}}
+
+{{% include-from-yaml data="self_managed/upgrades"
+name="upgrade-landing-guides-legacy" %}}
+
 ## Upgrading the Helm Chart and Materialize Operator
 
 {{< important >}}
@@ -232,19 +245,6 @@ kubectl get materialize -n materialize-environment -w
 # Check the logs of the operator
 kubectl logs -l app.kubernetes.io/name=materialize-operator -n materialize
 ```
-
-## Upgrade guides
-
-The following upgrade guides are available:
-
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-helm" %}}
-
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-unified" %}}
-
-{{% include-from-yaml data="self_managed/upgrades"
-name="upgrade-landing-guides-legacy" %}}
 
 ## Version Specific Upgrade Notes
 
