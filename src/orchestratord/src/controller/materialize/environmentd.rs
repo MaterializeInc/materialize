@@ -1428,10 +1428,7 @@ fn create_environmentd_statefulset_object(
             ..Default::default()
         });
         args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
-        if matches!(
-            mz.spec.authenticator_kind,
-            AuthenticatorKind::Password | AuthenticatorKind::Sasl
-        ) {
+        if mz.spec.authenticator_kind.password_style_self_managed_auth() {
             args.push("--system-parameter-default=enable_password_auth=true".into());
             env.push(EnvVar {
                 name: "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM".to_string(),
@@ -1721,10 +1718,7 @@ fn create_connection_info(
         },
     };
 
-    if matches!(
-        authenticator_kind,
-        AuthenticatorKind::Password | AuthenticatorKind::Sasl
-    ) {
+    if mz.spec.authenticator_kind.password_style_self_managed_auth() {
         listeners_config.sql.remove("internal");
         listeners_config.http.remove("internal");
 
@@ -1777,17 +1771,18 @@ fn create_connection_info(
         },
     };
 
-    let (scheme, leader_api_port, mz_system_secret_name) = match authenticator_kind {
-        AuthenticatorKind::Password | AuthenticatorKind::Sasl => {
+    let (scheme, leader_api_port, mz_system_secret_name) =
+        if mz.spec.authenticator_kind.password_style_self_managed_auth() {
             let scheme = if external_enable_tls { "https" } else { "http" };
             (
                 scheme,
                 config.environmentd_http_port,
                 Some(mz.spec.backend_secret_name.clone()),
             )
-        }
-        _ => ("http", config.environmentd_internal_http_port, None),
-    };
+        } else {
+            ("http", config.environmentd_internal_http_port, None)
+        };
+
     let environmentd_url = format!(
         "{}://{}.{}.svc.cluster.local:{}",
         scheme,
