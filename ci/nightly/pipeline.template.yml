@@ -170,6 +170,9 @@ steps:
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
         depends_on: build-x86_64
         timeout_in_minutes: 240
+        env:
+          # Runs against Dockerhub directly
+          MZ_GHCR: 0
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -190,7 +193,10 @@ steps:
       - id: scalability-benchmark-ddl
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
         depends_on: build-x86_64
-        timeout_in_minutes: 1200
+        timeout_in_minutes: 240
+        env:
+          # Runs against Dockerhub directly
+          MZ_GHCR: 0
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -215,8 +221,10 @@ steps:
       - id: scalability-benchmark-connection
         label: "Scalability benchmark (connection) against merge base or 'latest'"
         depends_on: build-x86_64
-        # TODO: Lower the timeout again once password/sasl auth is performant: https://github.com/MaterializeInc/database-issues/issues/9956
-        timeout_in_minutes: 1440
+        timeout_in_minutes: 240
+        env:
+          # Runs against Dockerhub directly
+          MZ_GHCR: 0
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
@@ -234,9 +242,8 @@ steps:
                 - "ConnectionWorkload"
                 - --exponent-base
                 - "2"
-                # TODO: Increase max concurrency when https://github.com/MaterializeInc/database-issues/issues/9957
                 - --max-concurrency
-                - "256"
+                - "1024"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64

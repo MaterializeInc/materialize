@@ -212,6 +212,13 @@ class MaterializeContainer(MaterializeNonRemote):
         ):
             self.composition.up("materialized")
             self.composition.verify_build_profile()
+            # Mostly causes load on the client, not server, has to be run before creating the role
+            self.composition.sql(
+                "ALTER SYSTEM SET scram_iterations = 2;",
+                user="mz_system",
+                password="materialize",
+                port=6877,
+            )
             self.composition.sql(
                 "create role \"user1\" with login password 'password';"
             )

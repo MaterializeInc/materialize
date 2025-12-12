@@ -81,7 +81,7 @@ from materialize.version_list import (
 SERVICES = [
     Cockroach(setup_materialize=True, in_memory=True),
     Materialized(
-        image="{image_registry()}/materialized:latest",
+        image=f"{image_registry()}/materialized:latest",
         sanity_restart=False,
         additional_system_parameter_defaults=ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS,
         external_metadata_store=True,
@@ -338,7 +338,7 @@ def get_baseline_and_other_endpoints(
                 resolved_target=resolved_target,
                 use_balancerd=use_balancerd,
                 image=f"{image_registry()}/materialized:{resolved_target}",
-                alternative_image="{image_registry()}/materialized:latest",
+                alternative_image=f"{image_registry()}/materialized:latest",
             )
         assert endpoint is not None
 
