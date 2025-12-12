@@ -15,8 +15,8 @@ from enum import Enum
 from pg8000.native import identifier, literal
 
 from materialize.data_ingest.data_type import (
-    DATA_TYPES,
     DATA_TYPES_FOR_AVRO,
+    DATA_TYPES_FOR_COLUMNS,
     DATA_TYPES_FOR_KEY,
     DATA_TYPES_FOR_MYSQL,
     DATA_TYPES_FOR_SQL_SERVER,
@@ -174,7 +174,7 @@ class Table(DBObject):
         self.table_id = table_id
         self.schema = schema
         self.columns = [
-            Column(rng, i, rng.choice(DATA_TYPES), self)
+            Column(rng, i, rng.choice(DATA_TYPES_FOR_COLUMNS), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
         self.num_rows = 0
@@ -225,7 +225,8 @@ class View(DBObject):
             list(base_object2.columns) if base_object2 else []
         )
         self.data_types = [
-            rng.choice(list(DATA_TYPES)) for i in range(rng.randint(1, MAX_COLUMNS))
+            rng.choice(list(DATA_TYPES_FOR_COLUMNS))
+            for i in range(rng.randint(1, MAX_COLUMNS))
         ]
         self.expressions = [
             expression(data_type, all_columns, rng, kind=ExprKind.MATERIALIZABLE)
