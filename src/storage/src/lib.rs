@@ -10,6 +10,9 @@
 //! Materialize's storage layer.
 
 #![warn(missing_docs)]
+// cargo clippy complains:
+//   overflow evaluating the requirement `&itertools::ChunkBy<_, _, _>: std::iter::IntoIterator`
+#![recursion_limit = "512"]
 
 pub mod decode;
 pub mod internal_control;
