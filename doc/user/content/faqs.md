@@ -1,11 +1,15 @@
 ---
-title: "Free trial FAQs"
-description: "Answers to frequently asked questions about Materialize Cloud free trials"
+title: "General FAQs"
+description: "Answers to frequently asked questions about Materialize in general"
 menu:
   main:
     parent: "about"
     weight: 20
+aliases:
+  - /free-trial-faqs
 ---
+
+## FAQ: Free trials
 
 When you [sign up for Materialize Cloud](https://materialize.com/register/), you
 get a free trial account so you can explore the product and start building! This
@@ -15,7 +19,7 @@ page answers some frequently asked questions about free trials.
 For help getting started with your data or other questions about Materialize, you can schedule a [free guided trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
 {{< /tip >}}
 
-## What are the limits of a free trial?
+### What are the limits of a free trial?
 
 In Materialize, [clusters](/concepts/clusters/) are the pools of
 compute resources for running your workloads. The size and replication factor
@@ -36,7 +40,7 @@ Cluster     | Size      | Replication factor | Credits per hour
 In this case, your credit consumption rate would be 1.75 credits per hour, which
 is under the rate limit of 4 credits per hour.
 
-## How long does a free trial last?
+### How long does a free trial last?
 
 7 days. If you need additional time, please [chat with our team](https://materialize.com/convert-account/?utm_campaign=General&utm_source=documentation).
 
@@ -45,7 +49,7 @@ plan](https://materialize.com/pdfs/on-demand-terms.pdf) from the billing section
 of the [Materialize console](/console/). Otherwise,
 Materialize will delete your resources and data at the end of the trial period.
 
-## How do I monitor my credit consumption rate?
+### How do I monitor my credit consumption rate?
 
 To see your current credit consumption rate, measured in credits per hour, run
 the following query against Materialize:
@@ -67,7 +71,7 @@ or if you otherwise only use the pre-installed `quickstart` cluster
 (1 row)
 ```
 
-## Can I go over the credit rate limit?
+### Can I go over the credit rate limit?
 
 No, you cannot go over the rate limit of 4 credits per hour at any time during
 your free trial. If you try to add a replica that puts you over the limit,
@@ -80,7 +84,14 @@ Hint: Drop an existing cluster replica or contact support to request a limit inc
 
 If you need additional resources during your trial, [chat with our team](http://materialize.com/convert-account/?utm_campaign=General&utm_source=documentation).
 
-## How do I get help during my trial?
+### How do I get help during my trial?
 
 If you have questions about Materialize or need support, reach out to us in our
 [Community Slack](https://materialize.com/s/chat).
+
+## FedRam/FIPS
+
+### Does Materialize support FedRAMP or FIPS 140 requirements?
+
+If your organization has FedRAMP or FIPS 140 requirements, please [contact
+us](https://materialize.com/docs/support/).
