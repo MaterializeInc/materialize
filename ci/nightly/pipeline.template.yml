@@ -234,9 +234,8 @@ steps:
                 - "ConnectionWorkload"
                 - --exponent-base
                 - "2"
-                # TODO: Increase max concurrency when https://github.com/MaterializeInc/database-issues/issues/9957
                 - --max-concurrency
-                - "256"
+                - "1024"
       - id: parallel-benchmark
         label: "Parallel Benchmark"
         depends_on: build-x86_64
