@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use mz_compute_types::config::ComputeReplicaLogging;
 use mz_controller_types::ReplicaId;
-use mz_proto::{IntoRustIfSome, ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
+use mz_proto::{ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
@@ -56,25 +56,20 @@ impl RustType<crate::objects::Duration> for Duration {
 
 impl RustType<crate::objects::RoleId> for RoleId {
     fn into_proto(&self) -> crate::objects::RoleId {
-        let value = match self {
-            RoleId::User(id) => crate::objects::role_id::Value::User(*id),
-            RoleId::System(id) => crate::objects::role_id::Value::System(*id),
-            RoleId::Predefined(id) => crate::objects::role_id::Value::Predefined(*id),
-            RoleId::Public => crate::objects::role_id::Value::Public(Default::default()),
-        };
-
-        crate::objects::RoleId { value: Some(value) }
+        match self {
+            RoleId::User(id) => crate::objects::RoleId::User(*id),
+            RoleId::System(id) => crate::objects::RoleId::System(*id),
+            RoleId::Predefined(id) => crate::objects::RoleId::Predefined(*id),
+            RoleId::Public => crate::objects::RoleId::Public(Default::default()),
+        }
     }
 
     fn from_proto(proto: crate::objects::RoleId) -> Result<Self, TryFromProtoError> {
-        let value = proto
-            .value
-            .ok_or_else(|| TryFromProtoError::missing_field("RoleId::value"))?;
-        let id = match value {
-            crate::objects::role_id::Value::User(id) => RoleId::User(id),
-            crate::objects::role_id::Value::System(id) => RoleId::System(id),
-            crate::objects::role_id::Value::Predefined(id) => RoleId::Predefined(id),
-            crate::objects::role_id::Value::Public(_) => RoleId::Public,
+        let id = match proto {
+            crate::objects::RoleId::User(id) => RoleId::User(id),
+            crate::objects::RoleId::System(id) => RoleId::System(id),
+            crate::objects::RoleId::Predefined(id) => RoleId::Predefined(id),
+            crate::objects::RoleId::Public(_) => RoleId::Public,
         };
         Ok(id)
     }
@@ -97,17 +92,17 @@ impl RustType<crate::objects::AclMode> for AclMode {
 impl RustType<crate::objects::MzAclItem> for MzAclItem {
     fn into_proto(&self) -> crate::objects::MzAclItem {
         crate::objects::MzAclItem {
-            grantee: Some(self.grantee.into_proto()),
-            grantor: Some(self.grantor.into_proto()),
-            acl_mode: Some(self.acl_mode.into_proto()),
+            grantee: self.grantee.into_proto(),
+            grantor: self.grantor.into_proto(),
+            acl_mode: self.acl_mode.into_proto(),
         }
     }
 
     fn from_proto(proto: crate::objects::MzAclItem) -> Result<Self, TryFromProtoError> {
         Ok(MzAclItem {
-            grantee: proto.grantee.into_rust_if_some("MzAclItem::grantee")?,
-            grantor: proto.grantor.into_rust_if_some("MzAclItem::grantor")?,
-            acl_mode: proto.acl_mode.into_rust_if_some("MzAclItem::acl_mode")?,
+            grantee: proto.grantee.into_rust()?,
+            grantor: proto.grantor.into_rust()?,
+            acl_mode: proto.acl_mode.into_rust()?,
         })
     }
 }
@@ -132,24 +127,18 @@ impl RustType<crate::objects::RoleAttributes> for RoleAttributes {
     }
 }
 
-impl RustType<crate::objects::role_vars::entry::Val> for OwnedVarInput {
-    fn into_proto(&self) -> crate::objects::role_vars::entry::Val {
+impl RustType<crate::objects::RoleVar> for OwnedVarInput {
+    fn into_proto(&self) -> crate::objects::RoleVar {
         match self.clone() {
-            OwnedVarInput::Flat(v) => crate::objects::role_vars::entry::Val::Flat(v),
-            OwnedVarInput::SqlSet(entries) => {
-                crate::objects::role_vars::entry::Val::SqlSet(crate::objects::role_vars::SqlSet {
-                    entries,
-                })
-            }
+            OwnedVarInput::Flat(v) => crate::objects::RoleVar::Flat(v),
+            OwnedVarInput::SqlSet(entries) => crate::objects::RoleVar::SqlSet(entries),
         }
     }
 
-    fn from_proto(proto: crate::objects::role_vars::entry::Val) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: crate::objects::RoleVar) -> Result<Self, TryFromProtoError> {
         let result = match proto {
-            crate::objects::role_vars::entry::Val::Flat(v) => OwnedVarInput::Flat(v),
-            crate::objects::role_vars::entry::Val::SqlSet(crate::objects::role_vars::SqlSet {
-                entries,
-            }) => OwnedVarInput::SqlSet(entries),
+            crate::objects::RoleVar::Flat(v) => OwnedVarInput::Flat(v),
+            crate::objects::RoleVar::SqlSet(entries) => OwnedVarInput::SqlSet(entries),
         };
         Ok(result)
     }
@@ -161,9 +150,9 @@ impl RustType<crate::objects::RoleVars> for RoleVars {
             .map
             .clone()
             .into_iter()
-            .map(|(key, val)| crate::objects::role_vars::Entry {
+            .map(|(key, val)| crate::objects::RoleVarsEntry {
                 key,
-                val: Some(val.into_proto()),
+                val: val.into_proto(),
             })
             .collect();
 
@@ -175,7 +164,7 @@ impl RustType<crate::objects::RoleVars> for RoleVars {
             .entries
             .into_iter()
             .map(|entry| {
-                let val = entry.val.into_rust_if_some("role_vars::Entry::Val")?;
+                let val = entry.val.into_rust()?;
                 Ok::<_, TryFromProtoError>((entry.key, val))
             })
             .collect::<Result<_, _>>()?;
@@ -186,21 +175,16 @@ impl RustType<crate::objects::RoleVars> for RoleVars {
 
 impl RustType<crate::objects::NetworkPolicyId> for NetworkPolicyId {
     fn into_proto(&self) -> crate::objects::NetworkPolicyId {
-        let value = match self {
-            NetworkPolicyId::User(id) => crate::objects::network_policy_id::Value::User(*id),
-            NetworkPolicyId::System(id) => crate::objects::network_policy_id::Value::System(*id),
-        };
-
-        crate::objects::NetworkPolicyId { value: Some(value) }
+        match self {
+            NetworkPolicyId::User(id) => crate::objects::NetworkPolicyId::User(*id),
+            NetworkPolicyId::System(id) => crate::objects::NetworkPolicyId::System(*id),
+        }
     }
 
     fn from_proto(proto: crate::objects::NetworkPolicyId) -> Result<Self, TryFromProtoError> {
-        let value = proto
-            .value
-            .ok_or_else(|| TryFromProtoError::missing_field("NetworkPolicyId::value"))?;
-        let id = match value {
-            crate::objects::network_policy_id::Value::User(id) => NetworkPolicyId::User(id),
-            crate::objects::network_policy_id::Value::System(id) => NetworkPolicyId::System(id),
+        let id = match proto {
+            crate::objects::NetworkPolicyId::User(id) => NetworkPolicyId::User(id),
+            crate::objects::NetworkPolicyId::System(id) => NetworkPolicyId::System(id),
         };
         Ok(id)
     }
@@ -299,9 +283,9 @@ impl RustType<crate::objects::RoleMembership> for RoleMembership {
             map: self
                 .map
                 .iter()
-                .map(|(key, val)| crate::objects::role_membership::Entry {
-                    key: Some(key.into_proto()),
-                    value: Some(val.into_proto()),
+                .map(|(key, val)| crate::objects::RoleMembershipEntry {
+                    key: key.into_proto(),
+                    value: val.into_proto(),
                 })
                 .collect(),
         }
@@ -313,8 +297,8 @@ impl RustType<crate::objects::RoleMembership> for RoleMembership {
                 .map
                 .into_iter()
                 .map(|e| {
-                    let key = e.key.into_rust_if_some("RoleMembership::Entry::key")?;
-                    let val = e.value.into_rust_if_some("RoleMembership::Entry::value")?;
+                    let key = e.key.into_rust()?;
+                    let val = e.value.into_rust()?;
 
                     Ok((key, val))
                 })
@@ -325,28 +309,24 @@ impl RustType<crate::objects::RoleMembership> for RoleMembership {
 
 impl RustType<crate::objects::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpecifier {
     fn into_proto(&self) -> crate::objects::ResolvedDatabaseSpecifier {
-        let spec = match self {
+        match self {
             ResolvedDatabaseSpecifier::Ambient => {
-                crate::objects::resolved_database_specifier::Spec::Ambient(Default::default())
+                crate::objects::ResolvedDatabaseSpecifier::Ambient(Default::default())
             }
             ResolvedDatabaseSpecifier::Id(database_id) => {
-                crate::objects::resolved_database_specifier::Spec::Id(database_id.into_proto())
+                crate::objects::ResolvedDatabaseSpecifier::Id(database_id.into_proto())
             }
-        };
-        crate::objects::ResolvedDatabaseSpecifier { spec: Some(spec) }
+        }
     }
 
     fn from_proto(
         proto: crate::objects::ResolvedDatabaseSpecifier,
     ) -> Result<Self, TryFromProtoError> {
-        let spec = proto
-            .spec
-            .ok_or_else(|| TryFromProtoError::missing_field("ResolvedDatabaseSpecifier::spec"))?;
-        let spec = match spec {
-            crate::objects::resolved_database_specifier::Spec::Ambient(_) => {
+        let spec = match proto {
+            crate::objects::ResolvedDatabaseSpecifier::Ambient(_) => {
                 ResolvedDatabaseSpecifier::Ambient
             }
-            crate::objects::resolved_database_specifier::Spec::Id(database_id) => {
+            crate::objects::ResolvedDatabaseSpecifier::Id(database_id) => {
                 ResolvedDatabaseSpecifier::Id(database_id.into_rust()?)
             }
         };
@@ -356,24 +336,20 @@ impl RustType<crate::objects::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpe
 
 impl RustType<crate::objects::SchemaSpecifier> for SchemaSpecifier {
     fn into_proto(&self) -> crate::objects::SchemaSpecifier {
-        let spec = match self {
+        match self {
             SchemaSpecifier::Temporary => {
-                crate::objects::schema_specifier::Spec::Temporary(Default::default())
+                crate::objects::SchemaSpecifier::Temporary(Default::default())
             }
             SchemaSpecifier::Id(schema_id) => {
-                crate::objects::schema_specifier::Spec::Id(schema_id.into_proto())
+                crate::objects::SchemaSpecifier::Id(schema_id.into_proto())
             }
-        };
-        crate::objects::SchemaSpecifier { spec: Some(spec) }
+        }
     }
 
     fn from_proto(proto: crate::objects::SchemaSpecifier) -> Result<Self, TryFromProtoError> {
-        let spec = proto
-            .spec
-            .ok_or_else(|| TryFromProtoError::missing_field("SchemaSpecifier::spec"))?;
-        let spec = match spec {
-            crate::objects::schema_specifier::Spec::Temporary(_) => SchemaSpecifier::Temporary,
-            crate::objects::schema_specifier::Spec::Id(schema_id) => {
+        let spec = match proto {
+            crate::objects::SchemaSpecifier::Temporary(_) => SchemaSpecifier::Temporary,
+            crate::objects::SchemaSpecifier::Id(schema_id) => {
                 SchemaSpecifier::Id(schema_id.into_rust()?)
             }
         };
@@ -383,21 +359,16 @@ impl RustType<crate::objects::SchemaSpecifier> for SchemaSpecifier {
 
 impl RustType<crate::objects::SchemaId> for SchemaId {
     fn into_proto(&self) -> crate::objects::SchemaId {
-        let value = match self {
-            SchemaId::User(id) => crate::objects::schema_id::Value::User(*id),
-            SchemaId::System(id) => crate::objects::schema_id::Value::System(*id),
-        };
-
-        crate::objects::SchemaId { value: Some(value) }
+        match self {
+            SchemaId::User(id) => crate::objects::SchemaId::User(*id),
+            SchemaId::System(id) => crate::objects::SchemaId::System(*id),
+        }
     }
 
     fn from_proto(proto: crate::objects::SchemaId) -> Result<Self, TryFromProtoError> {
-        let value = proto
-            .value
-            .ok_or_else(|| TryFromProtoError::missing_field("SchemaId::value"))?;
-        let id = match value {
-            crate::objects::schema_id::Value::User(id) => SchemaId::User(id),
-            crate::objects::schema_id::Value::System(id) => SchemaId::System(id),
+        let id = match proto {
+            crate::objects::SchemaId::User(id) => SchemaId::User(id),
+            crate::objects::SchemaId::System(id) => SchemaId::System(id),
         };
         Ok(id)
     }
@@ -405,150 +376,139 @@ impl RustType<crate::objects::SchemaId> for SchemaId {
 
 impl RustType<crate::objects::DatabaseId> for DatabaseId {
     fn into_proto(&self) -> crate::objects::DatabaseId {
-        let value = match self {
-            DatabaseId::User(id) => crate::objects::database_id::Value::User(*id),
-            DatabaseId::System(id) => crate::objects::database_id::Value::System(*id),
-        };
-
-        crate::objects::DatabaseId { value: Some(value) }
+        match self {
+            DatabaseId::User(id) => crate::objects::DatabaseId::User(*id),
+            DatabaseId::System(id) => crate::objects::DatabaseId::System(*id),
+        }
     }
 
     fn from_proto(proto: crate::objects::DatabaseId) -> Result<Self, TryFromProtoError> {
-        match proto.value {
-            Some(crate::objects::database_id::Value::User(id)) => Ok(DatabaseId::User(id)),
-            Some(crate::objects::database_id::Value::System(id)) => Ok(DatabaseId::System(id)),
-            None => Err(TryFromProtoError::missing_field("DatabaseId::value")),
+        match proto {
+            crate::objects::DatabaseId::User(id) => Ok(DatabaseId::User(id)),
+            crate::objects::DatabaseId::System(id) => Ok(DatabaseId::System(id)),
         }
     }
 }
 
-impl RustType<crate::objects::comment_key::Object> for CommentObjectId {
-    fn into_proto(&self) -> crate::objects::comment_key::Object {
+impl RustType<crate::objects::CommentObject> for CommentObjectId {
+    fn into_proto(&self) -> crate::objects::CommentObject {
         match self {
             CommentObjectId::Table(global_id) => {
-                crate::objects::comment_key::Object::Table(global_id.into_proto())
+                crate::objects::CommentObject::Table(global_id.into_proto())
             }
             CommentObjectId::View(global_id) => {
-                crate::objects::comment_key::Object::View(global_id.into_proto())
+                crate::objects::CommentObject::View(global_id.into_proto())
             }
             CommentObjectId::MaterializedView(global_id) => {
-                crate::objects::comment_key::Object::MaterializedView(global_id.into_proto())
+                crate::objects::CommentObject::MaterializedView(global_id.into_proto())
             }
             CommentObjectId::Source(global_id) => {
-                crate::objects::comment_key::Object::Source(global_id.into_proto())
+                crate::objects::CommentObject::Source(global_id.into_proto())
             }
             CommentObjectId::Sink(global_id) => {
-                crate::objects::comment_key::Object::Sink(global_id.into_proto())
+                crate::objects::CommentObject::Sink(global_id.into_proto())
             }
             CommentObjectId::Index(global_id) => {
-                crate::objects::comment_key::Object::Index(global_id.into_proto())
+                crate::objects::CommentObject::Index(global_id.into_proto())
             }
             CommentObjectId::Func(global_id) => {
-                crate::objects::comment_key::Object::Func(global_id.into_proto())
+                crate::objects::CommentObject::Func(global_id.into_proto())
             }
             CommentObjectId::Connection(global_id) => {
-                crate::objects::comment_key::Object::Connection(global_id.into_proto())
+                crate::objects::CommentObject::Connection(global_id.into_proto())
             }
             CommentObjectId::Type(global_id) => {
-                crate::objects::comment_key::Object::Type(global_id.into_proto())
+                crate::objects::CommentObject::Type(global_id.into_proto())
             }
             CommentObjectId::Secret(global_id) => {
-                crate::objects::comment_key::Object::Secret(global_id.into_proto())
+                crate::objects::CommentObject::Secret(global_id.into_proto())
             }
             CommentObjectId::Role(role_id) => {
-                crate::objects::comment_key::Object::Role(role_id.into_proto())
+                crate::objects::CommentObject::Role(role_id.into_proto())
             }
             CommentObjectId::Database(database_id) => {
-                crate::objects::comment_key::Object::Database(database_id.into_proto())
+                crate::objects::CommentObject::Database(database_id.into_proto())
             }
             CommentObjectId::ContinualTask(global_id) => {
-                crate::objects::comment_key::Object::ContinualTask(global_id.into_proto())
+                crate::objects::CommentObject::ContinualTask(global_id.into_proto())
             }
             CommentObjectId::NetworkPolicy(network_policy_id) => {
-                crate::objects::comment_key::Object::NetworkPolicy(network_policy_id.into_proto())
+                crate::objects::CommentObject::NetworkPolicy(network_policy_id.into_proto())
             }
             CommentObjectId::Schema((database, schema)) => {
-                crate::objects::comment_key::Object::Schema(crate::objects::ResolvedSchema {
-                    database: Some(database.into_proto()),
-                    schema: Some(schema.into_proto()),
+                crate::objects::CommentObject::Schema(crate::objects::ResolvedSchema {
+                    database: database.into_proto(),
+                    schema: schema.into_proto(),
                 })
             }
             CommentObjectId::Cluster(cluster_id) => {
-                crate::objects::comment_key::Object::Cluster(cluster_id.into_proto())
+                crate::objects::CommentObject::Cluster(cluster_id.into_proto())
             }
             CommentObjectId::ClusterReplica((cluster_id, replica_id)) => {
                 let cluster_replica_id = crate::objects::ClusterReplicaId {
-                    cluster_id: Some(cluster_id.into_proto()),
-                    replica_id: Some(replica_id.into_proto()),
+                    cluster_id: cluster_id.into_proto(),
+                    replica_id: replica_id.into_proto(),
                 };
-                crate::objects::comment_key::Object::ClusterReplica(cluster_replica_id)
+                crate::objects::CommentObject::ClusterReplica(cluster_replica_id)
             }
         }
     }
 
-    fn from_proto(proto: crate::objects::comment_key::Object) -> Result<Self, TryFromProtoError> {
+    fn from_proto(proto: crate::objects::CommentObject) -> Result<Self, TryFromProtoError> {
         let id = match proto {
-            crate::objects::comment_key::Object::Table(item_id) => {
+            crate::objects::CommentObject::Table(item_id) => {
                 CommentObjectId::Table(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::View(item_id) => {
+            crate::objects::CommentObject::View(item_id) => {
                 CommentObjectId::View(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::MaterializedView(item_id) => {
+            crate::objects::CommentObject::MaterializedView(item_id) => {
                 CommentObjectId::MaterializedView(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Source(item_id) => {
+            crate::objects::CommentObject::Source(item_id) => {
                 CommentObjectId::Source(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Sink(item_id) => {
+            crate::objects::CommentObject::Sink(item_id) => {
                 CommentObjectId::Sink(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Index(item_id) => {
+            crate::objects::CommentObject::Index(item_id) => {
                 CommentObjectId::Index(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Func(item_id) => {
+            crate::objects::CommentObject::Func(item_id) => {
                 CommentObjectId::Func(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Connection(item_id) => {
+            crate::objects::CommentObject::Connection(item_id) => {
                 CommentObjectId::Connection(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Type(item_id) => {
+            crate::objects::CommentObject::Type(item_id) => {
                 CommentObjectId::Type(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Secret(item_id) => {
+            crate::objects::CommentObject::Secret(item_id) => {
                 CommentObjectId::Secret(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::ContinualTask(item_id) => {
+            crate::objects::CommentObject::ContinualTask(item_id) => {
                 CommentObjectId::ContinualTask(item_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::NetworkPolicy(global_id) => {
+            crate::objects::CommentObject::NetworkPolicy(global_id) => {
                 CommentObjectId::NetworkPolicy(global_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Role(role_id) => {
+            crate::objects::CommentObject::Role(role_id) => {
                 CommentObjectId::Role(role_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Database(database_id) => {
+            crate::objects::CommentObject::Database(database_id) => {
                 CommentObjectId::Database(database_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::Schema(resolved_schema) => {
-                let database = resolved_schema
-                    .database
-                    .into_rust_if_some("ResolvedSchema::database")?;
-                let schema = resolved_schema
-                    .schema
-                    .into_rust_if_some("ResolvedSchema::schema")?;
+            crate::objects::CommentObject::Schema(resolved_schema) => {
+                let database = resolved_schema.database.into_rust()?;
+                let schema = resolved_schema.schema.into_rust()?;
                 CommentObjectId::Schema((database, schema))
             }
-            crate::objects::comment_key::Object::Cluster(cluster_id) => {
+            crate::objects::CommentObject::Cluster(cluster_id) => {
                 CommentObjectId::Cluster(cluster_id.into_rust()?)
             }
-            crate::objects::comment_key::Object::ClusterReplica(cluster_replica_id) => {
-                let cluster_id = cluster_replica_id
-                    .cluster_id
-                    .into_rust_if_some("ClusterReplicaId::cluster_id")?;
-                let replica_id = cluster_replica_id
-                    .replica_id
-                    .into_rust_if_some("ClusterReplicaId::replica_id")?;
+            crate::objects::CommentObject::ClusterReplica(cluster_replica_id) => {
+                let cluster_id = cluster_replica_id.cluster_id.into_rust()?;
+                let replica_id = cluster_replica_id.replica_id.into_rust()?;
                 CommentObjectId::ClusterReplica((cluster_id, replica_id))
             }
         };
@@ -580,92 +540,78 @@ impl RustType<crate::objects::Timestamp> for Timestamp {
 
 impl RustType<crate::objects::CatalogItemId> for CatalogItemId {
     fn into_proto(&self) -> crate::objects::CatalogItemId {
-        crate::objects::CatalogItemId {
-            value: Some(match self {
-                CatalogItemId::System(x) => crate::objects::catalog_item_id::Value::System(*x),
-                CatalogItemId::IntrospectionSourceIndex(x) => {
-                    crate::objects::catalog_item_id::Value::IntrospectionSourceIndex(*x)
-                }
-                CatalogItemId::User(x) => crate::objects::catalog_item_id::Value::User(*x),
-                CatalogItemId::Transient(x) => {
-                    crate::objects::catalog_item_id::Value::Transient(*x)
-                }
-            }),
+        match self {
+            CatalogItemId::System(x) => crate::objects::CatalogItemId::System(*x),
+            CatalogItemId::IntrospectionSourceIndex(x) => {
+                crate::objects::CatalogItemId::IntrospectionSourceIndex(*x)
+            }
+            CatalogItemId::User(x) => crate::objects::CatalogItemId::User(*x),
+            CatalogItemId::Transient(x) => crate::objects::CatalogItemId::Transient(*x),
         }
     }
 
     fn from_proto(proto: crate::objects::CatalogItemId) -> Result<Self, TryFromProtoError> {
-        match proto.value {
-            Some(crate::objects::catalog_item_id::Value::System(x)) => Ok(CatalogItemId::System(x)),
-            Some(crate::objects::catalog_item_id::Value::IntrospectionSourceIndex(x)) => {
+        match proto {
+            crate::objects::CatalogItemId::System(x) => Ok(CatalogItemId::System(x)),
+            crate::objects::CatalogItemId::IntrospectionSourceIndex(x) => {
                 Ok(CatalogItemId::IntrospectionSourceIndex(x))
             }
-            Some(crate::objects::catalog_item_id::Value::User(x)) => Ok(CatalogItemId::User(x)),
-            Some(crate::objects::catalog_item_id::Value::Transient(x)) => {
-                Ok(CatalogItemId::Transient(x))
-            }
-            None => Err(TryFromProtoError::missing_field("CatalogItemId::kind")),
+            crate::objects::CatalogItemId::User(x) => Ok(CatalogItemId::User(x)),
+            crate::objects::CatalogItemId::Transient(x) => Ok(CatalogItemId::Transient(x)),
         }
     }
 }
 
 impl RustType<crate::objects::GlobalId> for GlobalId {
     fn into_proto(&self) -> crate::objects::GlobalId {
-        crate::objects::GlobalId {
-            value: Some(match self {
-                GlobalId::System(x) => crate::objects::global_id::Value::System(*x),
-                GlobalId::IntrospectionSourceIndex(x) => {
-                    crate::objects::global_id::Value::IntrospectionSourceIndex(*x)
-                }
-                GlobalId::User(x) => crate::objects::global_id::Value::User(*x),
-                GlobalId::Transient(x) => crate::objects::global_id::Value::Transient(*x),
-                GlobalId::Explain => crate::objects::global_id::Value::Explain(Default::default()),
-            }),
+        match self {
+            GlobalId::System(x) => crate::objects::GlobalId::System(*x),
+            GlobalId::IntrospectionSourceIndex(x) => {
+                crate::objects::GlobalId::IntrospectionSourceIndex(*x)
+            }
+            GlobalId::User(x) => crate::objects::GlobalId::User(*x),
+            GlobalId::Transient(x) => crate::objects::GlobalId::Transient(*x),
+            GlobalId::Explain => crate::objects::GlobalId::Explain(Default::default()),
         }
     }
 
     fn from_proto(proto: crate::objects::GlobalId) -> Result<Self, TryFromProtoError> {
-        match proto.value {
-            Some(crate::objects::global_id::Value::System(x)) => Ok(GlobalId::System(x)),
-            Some(crate::objects::global_id::Value::IntrospectionSourceIndex(x)) => {
+        match proto {
+            crate::objects::GlobalId::System(x) => Ok(GlobalId::System(x)),
+            crate::objects::GlobalId::IntrospectionSourceIndex(x) => {
                 Ok(GlobalId::IntrospectionSourceIndex(x))
             }
-            Some(crate::objects::global_id::Value::User(x)) => Ok(GlobalId::User(x)),
-            Some(crate::objects::global_id::Value::Transient(x)) => Ok(GlobalId::Transient(x)),
-            Some(crate::objects::global_id::Value::Explain(_)) => Ok(GlobalId::Explain),
-            None => Err(TryFromProtoError::missing_field("GlobalId::kind")),
+            crate::objects::GlobalId::User(x) => Ok(GlobalId::User(x)),
+            crate::objects::GlobalId::Transient(x) => Ok(GlobalId::Transient(x)),
+            crate::objects::GlobalId::Explain(_) => Ok(GlobalId::Explain),
         }
     }
 }
 
 impl RustType<crate::objects::ClusterId> for StorageInstanceId {
     fn into_proto(&self) -> crate::objects::ClusterId {
-        let value = match self {
-            StorageInstanceId::User(id) => crate::objects::cluster_id::Value::User(*id),
-            StorageInstanceId::System(id) => crate::objects::cluster_id::Value::System(*id),
-        };
-
-        crate::objects::ClusterId { value: Some(value) }
+        match self {
+            StorageInstanceId::User(id) => crate::objects::ClusterId::User(*id),
+            StorageInstanceId::System(id) => crate::objects::ClusterId::System(*id),
+        }
     }
 
     fn from_proto(proto: crate::objects::ClusterId) -> Result<Self, TryFromProtoError> {
-        let value = proto
-            .value
-            .ok_or_else(|| TryFromProtoError::missing_field("ClusterId::value"))?;
-        let id = match value {
-            crate::objects::cluster_id::Value::User(id) => {
+        let id = match proto {
+            crate::objects::ClusterId::User(id) => {
                 StorageInstanceId::user(id).ok_or_else(|| {
                     TryFromProtoError::InvalidPersistState(format!(
                         "{id} is not a valid StorageInstanceId"
                     ))
                 })?
             }
-            crate::objects::cluster_id::Value::System(id) => StorageInstanceId::system(id)
-                .ok_or_else(|| {
+            crate::objects::ClusterId::System(id) => {
+                StorageInstanceId::system(id).ok_or_else(|| {
                     TryFromProtoError::InvalidPersistState(format!(
                         "{id} is not a valid StorageInstanceId"
                     ))
-                })?,
+                })?
+            }
         };
         Ok(id)
     }
@@ -673,21 +619,16 @@ impl RustType<crate::objects::ClusterId> for StorageInstanceId {
 
 impl RustType<crate::objects::ReplicaId> for ReplicaId {
     fn into_proto(&self) -> crate::objects::ReplicaId {
-        use crate::objects::replica_id::Value::*;
-        crate::objects::ReplicaId {
-            value: Some(match self {
-                Self::System(id) => System(*id),
-                Self::User(id) => User(*id),
-            }),
+        match self {
+            Self::System(id) => crate::objects::ReplicaId::System(*id),
+            Self::User(id) => crate::objects::ReplicaId::User(*id),
         }
     }
 
     fn from_proto(proto: crate::objects::ReplicaId) -> Result<Self, TryFromProtoError> {
-        use crate::objects::replica_id::Value::*;
-        match proto.value {
-            Some(System(id)) => Ok(Self::System(id)),
-            Some(User(id)) => Ok(Self::User(id)),
-            None => Err(TryFromProtoError::missing_field("ReplicaId::value")),
+        match proto {
+            crate::objects::ReplicaId::System(id) => Ok(Self::System(id)),
+            crate::objects::ReplicaId::User(id) => Ok(Self::User(id)),
         }
     }
 }
@@ -708,34 +649,23 @@ impl ProtoMapEntry<String, String> for crate::objects::OptimizerFeatureOverride 
 impl RustType<crate::objects::ClusterSchedule> for ClusterSchedule {
     fn into_proto(&self) -> crate::objects::ClusterSchedule {
         match self {
-            ClusterSchedule::Manual => crate::objects::ClusterSchedule {
-                value: Some(crate::objects::cluster_schedule::Value::Manual(Empty {})),
-            },
+            ClusterSchedule::Manual => crate::objects::ClusterSchedule::Manual(Empty {}),
             ClusterSchedule::Refresh {
                 hydration_time_estimate,
-            } => crate::objects::ClusterSchedule {
-                value: Some(crate::objects::cluster_schedule::Value::Refresh(
-                    crate::objects::ClusterScheduleRefreshOptions {
-                        rehydration_time_estimate: Some(hydration_time_estimate.into_proto()),
-                    },
-                )),
-            },
+            } => crate::objects::ClusterSchedule::Refresh(
+                crate::objects::ClusterScheduleRefreshOptions {
+                    rehydration_time_estimate: hydration_time_estimate.into_proto(),
+                },
+            ),
         }
     }
 
     fn from_proto(proto: crate::objects::ClusterSchedule) -> Result<Self, TryFromProtoError> {
-        match proto.value {
-            None => Ok(Default::default()),
-            Some(crate::objects::cluster_schedule::Value::Manual(Empty {})) => {
-                Ok(ClusterSchedule::Manual)
-            }
-            Some(crate::objects::cluster_schedule::Value::Refresh(csro)) => {
-                Ok(ClusterSchedule::Refresh {
-                    hydration_time_estimate: csro
-                        .rehydration_time_estimate
-                        .into_rust_if_some("rehydration_time_estimate")?,
-                })
-            }
+        match proto {
+            crate::objects::ClusterSchedule::Manual(Empty {}) => Ok(ClusterSchedule::Manual),
+            crate::objects::ClusterSchedule::Refresh(csro) => Ok(ClusterSchedule::Refresh {
+                hydration_time_estimate: csro.rehydration_time_estimate.into_rust()?,
+            }),
         }
     }
 }
@@ -770,35 +700,33 @@ impl RustType<crate::objects::Version> for RelationVersion {
 
 impl RustType<crate::objects::NetworkPolicyRule> for NetworkPolicyRule {
     fn into_proto(&self) -> crate::objects::NetworkPolicyRule {
-        use crate::objects::network_policy_rule::{Action, Direction};
         crate::objects::NetworkPolicyRule {
             name: self.name.clone(),
             action: match self.action {
-                NetworkPolicyRuleAction::Allow => Some(Action::Allow(Empty {})),
+                NetworkPolicyRuleAction::Allow => {
+                    crate::objects::NetworkPolicyRuleAction::Allow(Empty {})
+                }
             },
             direction: match self.direction {
-                NetworkPolicyRuleDirection::Ingress => Some(Direction::Ingress(Empty {})),
+                NetworkPolicyRuleDirection::Ingress => {
+                    crate::objects::NetworkPolicyRuleDirection::Ingress(Empty {})
+                }
             },
             address: self.address.clone().to_string(),
         }
     }
 
     fn from_proto(proto: crate::objects::NetworkPolicyRule) -> Result<Self, TryFromProtoError> {
-        use crate::objects::network_policy_rule::{Action, Direction};
         Ok(NetworkPolicyRule {
             name: proto.name,
-            action: match proto
-                .action
-                .ok_or_else(|| TryFromProtoError::missing_field("NetworkPolicyRule::action"))?
-            {
-                Action::Allow(_) => NetworkPolicyRuleAction::Allow,
+            action: match proto.action {
+                crate::objects::NetworkPolicyRuleAction::Allow(_) => NetworkPolicyRuleAction::Allow,
             },
             address: PolicyAddress::from(proto.address),
-            direction: match proto
-                .direction
-                .ok_or_else(|| TryFromProtoError::missing_field("NetworkPolicyRule::direction"))?
-            {
-                Direction::Ingress(_) => NetworkPolicyRuleDirection::Ingress,
+            direction: match proto.direction {
+                crate::objects::NetworkPolicyRuleDirection::Ingress(_) => {
+                    NetworkPolicyRuleDirection::Ingress
+                }
             },
         })
     }
