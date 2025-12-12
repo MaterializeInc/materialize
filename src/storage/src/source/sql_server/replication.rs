@@ -25,7 +25,10 @@ use mz_repr::{Diff, GlobalId, Row, RowArena};
 use mz_sql_server_util::SqlServerCdcMetrics;
 use mz_sql_server_util::cdc::{CdcEvent, Lsn, Operation as CdcOperation};
 use mz_sql_server_util::desc::SqlServerRowDecoder;
-use mz_sql_server_util::inspect::get_latest_restore_history_id;
+use mz_sql_server_util::inspect::{
+    ensure_database_cdc_enabled, ensure_sql_server_agent_running, get_latest_restore_history_id,
+};
+use mz_storage_types::dyncfgs::SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY;
 use mz_storage_types::errors::{DataflowError, DecodeError, DecodeErrorKind};
 use mz_storage_types::sources::SqlServerSourceConnection;
 use mz_storage_types::sources::sql_server::{
@@ -159,22 +162,35 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // validate that the restore_history_id hasn't changed
             let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
             if current_restore_history_id != source.extras.restore_history_id {
-                let definite_error = DefiniteError::RestoreHistoryChanged(
-                    source.extras.restore_history_id.clone(),
-                    current_restore_history_id.clone()
-                );
-                tracing::warn!(?definite_error, "Restore detected, exiting");
+                if SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY.get(config.config.config_set()) {
+                    let definite_error = DefiniteError::RestoreHistoryChanged(
+                        source.extras.restore_history_id.clone(),
+                        current_restore_history_id.clone()
+                    );
+                    tracing::warn!(?definite_error, "Restore detected, exiting");
 
-                return_definite_error(
-                        definite_error,
-                        capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
-                        data_output,
-                        data_cap_set,
-                        definite_error_handle,
-                        definite_error_cap_set,
-                    ).await;
-                return Ok(());
+                    return_definite_error(
+                            definite_error,
+                            capture_instances.values().flat_map(|indexes| indexes.iter().copied()),
+                            data_output,
+                            data_cap_set,
+                            definite_error_handle,
+                            definite_error_cap_set,
+                        ).await;
+                    return Ok(());
+                } else {
+                    tracing::warn!(
+                        "Restore history mismatch ignored: expected={expected:?} actual={actual:?}",
+                        expected=source.extras.restore_history_id,
+                        actual=current_restore_history_id
+                    );
+                }
             }
+
+            // For AOAG, it's possible that the dataflow restarted and is now connected to a
+            // different SQL Server, which may not have CDC enabled correctly.
+            ensure_database_cdc_enabled(&mut client).await?;
+            ensure_sql_server_agent_running(&mut client).await?;
 
             // We first calculate all the total rows we need to fetch across all tables. Since this
             // happens outside the snapshot transaction the totals might be off, so we won't assert

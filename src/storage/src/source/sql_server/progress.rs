@@ -32,6 +32,7 @@ use mz_repr::GlobalId;
 use mz_sql_server_util::cdc::Lsn;
 use mz_sql_server_util::inspect::get_latest_restore_history_id;
 use mz_storage_types::connections::SqlServerConnectionDetails;
+use mz_storage_types::dyncfgs::SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY;
 use mz_storage_types::sources::SqlServerSourceExtras;
 use mz_storage_types::sources::sql_server::{
     CDC_CLEANUP_CHANGE_TABLE, CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES, OFFSET_KNOWN_INTERVAL,
@@ -99,7 +100,8 @@ pub(crate) fn render<G: Scope<Timestamp = Lsn>>(
             // wait in reclock as the server LSN will always be less than the LSN of the definite
             // error.
             let current_restore_history_id = get_latest_restore_history_id(&mut client).await?;
-            if current_restore_history_id != extras.restore_history_id {
+            if current_restore_history_id != extras.restore_history_id
+                && SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY.get(config.config.config_set()) {
                 tracing::warn!("Restore detected, exiting");
                 return Ok(());
              }

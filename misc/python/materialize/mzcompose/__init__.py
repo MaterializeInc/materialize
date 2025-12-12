@@ -557,6 +557,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
     "pg_source_validate_timeline",
+    "sql_server_source_validate_restore_history",
     "storage_enforce_external_addresses",
     "storage_upsert_prevent_snapshot_buffering",
     "storage_rocksdb_use_merge_operator",
