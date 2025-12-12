@@ -1,6 +1,6 @@
 ---
 title: "Upgrade on Azure"
-description: "Upgrade Materialize on Azure using the Unified Terraform module."
+description: "Upgrade Materialize on Azure using the new Terraform module."
 menu:
   main:
     parent: "upgrading"

@@ -76,11 +76,11 @@ significantly degrade performance and is not supported.
 ### Swap support
 
 {{< tabs >}}
-{{< tab "New Unified Terraform" >}}
+{{< tab "New Terraform" >}}
 
-#### New Unified Terraform
+#### New Terraform
 
-The unified Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp/examples/simple) supports configuring swap out of the box.
+The Materialize [Terraform module](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp/examples/simple) supports configuring swap out of the box.
 
 {{< /tab >}}
 {{< tab "Legacy Terraform" >}}

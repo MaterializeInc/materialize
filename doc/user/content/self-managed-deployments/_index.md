@@ -296,7 +296,7 @@ components work together:
 1. **Run your workloads**: Create sources, materialized views, indexes, and
    sinks on your clusters.
 
-## Terraform Modules
+## Available Terraform Modules
 
 To help you get started, Materialize provides Terraform modules.
 
@@ -314,11 +314,11 @@ your own production deployment, either:
 {{</ important >}}
 
 {{< tabs >}}
-{{< tab "Unified Terraform Modules  (New!)" >}}
-### Unified Terraform Modules
+{{< tab "Terraform Modules (New!)" >}}
+### Terraform Modules
 
-Materialize provides a [**unified Terraform
-module**](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main?tab=readme-ov-file#materialize-self-managed-terraform-modules),
+Materialize provides [**Terraform
+modules**](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main?tab=readme-ov-file#materialize-self-managed-terraform-modules),
 which provides concrete examples and an opinionated model for deploying Materialize.
 
 {{< yaml-table data="self_managed/terraform_list" >}}

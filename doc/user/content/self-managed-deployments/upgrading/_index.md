@@ -23,7 +23,9 @@ name="upgrade-major-version-restriction" >}}
 
 {{< /note >}}
 
-## Upgrade guides
+## Upgrade
+
+### Upgrade guides
 
 The following upgrade guides are available:
 
@@ -36,7 +38,7 @@ name="upgrade-landing-guides-unified" %}}
 {{% include-from-yaml data="self_managed/upgrades"
 name="upgrade-landing-guides-legacy" %}}
 
-## Upgrading the Helm Chart and Materialize Operator
+### Upgrading the Helm Chart and Materialize Operator
 
 {{< important >}}
 
@@ -45,7 +47,7 @@ Operator first.
 
 {{</ important >}}
 
-### Update the Helm Chart repository
+#### Update the Helm Chart repository
 
 To update your Materialize Helm Chart repository:
 
@@ -59,7 +61,7 @@ View the available chart versions:
 helm search repo materialize/materialize-operator --versions
 ```
 
-### Upgrade your Materialize Operator
+#### Upgrade your Materialize Operator
 
 The Materialize Kubernetes Operator is deployed via Helm and can be updated
 through standard `helm upgrade` command:
@@ -90,7 +92,7 @@ helm upgrade -n materialize my-demo materialize/operator \
   --version {{< self-managed/versions/get-latest-version >}}
 ```
 
-## Upgrading Materialize Instances
+### Upgrading Materialize Instances
 
 **After** you have upgraded your Materialize Operator, upgrade your Materialize
 instance(s) to the **APP Version** of the Operator. To find the version of your
@@ -118,7 +120,7 @@ periods for your application, the upgrade process involves two steps:
 
 - Second, roll out the changes by specifying a new UUID for `requestRollout`.
 
-### Stage the Materialize instance version change
+#### Stage the Materialize instance version change
 
 To stage the Materialize instances version upgrade, update the
 `environmentdImageRef` field in the Materialize custom resource spec to the
@@ -140,7 +142,7 @@ does not roll out the changes.
 {{< /note >}}
 
 
-### Applying the changes via `requestRollout`
+#### Applying the changes via `requestRollout`
 
 To apply chang Materialize instance upgrade, you must update the `requestRollout` field in the Materialize custom resource spec to a new UUID.
 Be sure to consult the [Rollout Configurations](#rollout-configuration) to ensure you've selected the correct rollout behavior.
@@ -152,7 +154,7 @@ kubectl patch materialize <instance-name> \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
-### Staging and applying in a single command
+#### Staging and applying in a single command
 
 Although separating the staging and rollout of the changes into two steps can
 minimize unexpected downtime and avoid connection drops at critical periods, you
@@ -165,7 +167,7 @@ kubectl patch materialize <instance-name> \
   -p "{\"spec\": {\"environmentdImageRef\": \"docker.io/materialize/environmentd:{{< self-managed/versions/get-latest-version >}}\", \"requestRollout\": \"$(uuidgen)\"}}"
 ```
 
-#### Using YAML Definition
+##### Using YAML Definition
 
 Alternatively, you can update your Materialize custom resource definition directly:
 
@@ -190,9 +192,9 @@ Apply the updated definition:
 kubectl apply -f materialize.yaml
 ```
 
-## Rollout Configuration
+### Rollout Configuration
 
-### `requestRollout`
+#### `requestRollout`
 
 Specify a new `UUID` value for the `requestRollout` to roll out the changes to
 the Materialize instance.
@@ -224,7 +226,7 @@ kubectl patch materialize <instance-name> \
   -p "{\"spec\": {\"requestRollout\": \"$(uuidgen)\", \"forceRollout\": \"$(uuidgen)\"}}"
 ```
 
-### Rollout strategies
+#### Rollout strategies
 
 The behavior of the new version rollout follows your `rolloutStrategy` setting:
 

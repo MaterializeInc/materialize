@@ -43,13 +43,13 @@
 
 - name: upgrade-landing-guides-unified
   content: |
-    ### Upgrade using Unified Terraform Modules
+    ### Upgrade using the new Terraform Modules
 
     |  Guide         | Description  |
     | -------------  | ----------- |
-    | [Upgrade on AWS (Unified Terraform)](/self-managed-deployments/upgrading/upgrade-on-aws/) | Uses Unified Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
-    | [Upgrade on Azure (Unified Terraform)](/self-managed-deployments/upgrading/upgrade-on-azure/) | Uses Unified Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
-    | [Upgrade on GCP (Unified Terraform)](/self-managed-deployments/upgrading/upgrade-on-gcp/) | Uses Unified Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
+    | [Upgrade on AWS (Terraform)](/self-managed-deployments/upgrading/upgrade-on-aws/) | Uses the new Terraform module to deploy Materialize to AWS Elastic Kubernetes Service (EKS).
+    | [Upgrade on Azure (Terraform)](/self-managed-deployments/upgrading/upgrade-on-azure/) | Uses the new Terraform module to deploy Materialize to Azure Kubernetes Service (AKS).
+    | [Upgrade on GCP (Terraform)](/self-managed-deployments/upgrading/upgrade-on-gcp/) | Uses the new Terraform module to deploy Materialize to Google Kubernetes Engine (GKE).
 
 - name: upgrade-landing-guides-legacy
   content: |

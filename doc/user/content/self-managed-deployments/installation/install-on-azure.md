@@ -1,6 +1,6 @@
 ---
 title: "Install on Azure"
-description: "Install Materialize on Azure using the Unified Terraform module."
+description: "Install Materialize on Azure using the new Terraform module."
 menu:
   main:
     parent: "installation"

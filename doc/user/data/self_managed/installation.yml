@@ -27,7 +27,7 @@
 
 - name: installation-landing-guides-unified
   content: |
-    ### Install using Unified Terraform Modules
+    ### Install using Terraform Modules
 
 
     |  Guide         | Description  |
