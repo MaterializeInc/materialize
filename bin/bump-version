@@ -74,7 +74,7 @@ if $console_bump; then
     done
     echo "$console_image found on DockerHub"
     sed -i.bak \
-        "s/FROM materialize/console:.* AS console/FROM $console_image AS console/" \
+        "s#FROM materialize/console:.* AS console#FROM $console_image AS console#" \
         misc/images/materialized-base/Dockerfile
     sed -i.bak \
         "s/\"--console-image-tag-default=[^\"]*\"/\"--console-image-tag-default=$console_version\"/" \
