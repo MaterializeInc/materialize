@@ -68,6 +68,7 @@ from materialize.parallel_workload.database import (
     KafkaSink,
     KafkaSource,
     MySqlSource,
+    MzTempSchema,
     PostgresSource,
     Role,
     Schema,
@@ -174,6 +175,7 @@ class Action:
                     "another session modified the catalog while this DDL transaction was open",
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
+                    "non-temporary items cannot depend on temporary item",  # TODO(def-): Fix?
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
@@ -864,23 +866,33 @@ class DropIndexAction(Action):
 
 class CreateTableAction(Action):
     def run(self, exe: Executor) -> bool:
-        if len(exe.db.tables) >= MAX_TABLES:
+        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
+        if (
+            not temp
+            and len([table for table in exe.db.tables if not table.temp]) >= MAX_TABLES
+        ):
             return False
         table_id = exe.db.table_id
         exe.db.table_id += 1
-        try:
-            schema = self.rng.choice(exe.db.schemas)
-        except IndexError:
-            # We mostly prevent index errors, but we don't want to lock too
-            # much since that would reduce our chance of finding race
-            # conditions in production code, so ignore the rare case where
-            # we accidentally removed all objects.
-            return False
-        with schema.lock:
-            if schema not in exe.db.schemas:
-                return False
-            table = Table(self.rng, table_id, schema)
+        if temp:
+            schema = MzTempSchema(self.rng.choice(exe.db.dbs))
+            table = Table(self.rng, table_id, schema, temp=True)
             table.create(exe)
+        else:
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+            with schema.lock:
+                if schema not in exe.db.schemas:
+                    return False
+                table = Table(self.rng, table_id, schema)
+                table.create(exe)
         exe.db.tables.append(table)
         return True
 
@@ -893,14 +905,20 @@ class DropTableAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if len(exe.db.tables) <= 2:
+            tables = [table for table in exe.db.tables if not table.temp]
+            if not tables:
                 return False
-            table = self.rng.choice(exe.db.tables)
+            table = self.rng.choice(tables)
+            if (
+                not table.temp
+                and len([table for table in exe.db.tables if not table.temp]) <= 2
+            ):
+                return False
         with table.lock:
             # Was dropped while we were acquiring lock
             if table not in exe.db.tables:
                 return False
-            if len(exe.db.tables) <= 2:
+            if len([table for table in exe.db.tables if not table.temp]) <= 2:
                 return False
 
             query = f"DROP TABLE {table}"
@@ -1646,6 +1664,8 @@ class CreateViewAction(Action):
         return errors
 
     def run(self, exe: Executor) -> bool:
+        # TODO: Also in rename when database-issues#9975 and database-issues#9976 are fixed
+        temp = exe.db.scenario != Scenario.Rename and self.rng.choice([True, False])
         with exe.db.lock:
             if len(exe.db.views) >= MAX_VIEWS:
                 return False
@@ -1659,25 +1679,37 @@ class CreateViewAction(Action):
         )
         if self.rng.choice([True, False]) or base_object2 == base_object:
             base_object2 = None
-        try:
-            schema = self.rng.choice(exe.db.schemas)
-        except IndexError:
-            # We mostly prevent index errors, but we don't want to lock too
-            # much since that would reduce our chance of finding race
-            # conditions in production code, so ignore the rare case where
-            # we accidentally removed all objects.
-            return False
-        with schema.lock:
-            if schema not in exe.db.schemas:
-                return False
+        if temp:
+            schema = MzTempSchema(self.rng.choice(exe.db.dbs))
             view = View(
                 self.rng,
                 view_id,
                 base_object,
                 base_object2,
                 schema,
+                temp=True,
             )
             view.create(exe)
+        else:
+            try:
+                schema = self.rng.choice(exe.db.schemas)
+            except IndexError:
+                # We mostly prevent index errors, but we don't want to lock too
+                # much since that would reduce our chance of finding race
+                # conditions in production code, so ignore the rare case where
+                # we accidentally removed all objects.
+                return False
+            with schema.lock:
+                if schema not in exe.db.schemas:
+                    return False
+                view = View(
+                    self.rng,
+                    view_id,
+                    base_object,
+                    base_object2,
+                    schema,
+                )
+                view.create(exe)
         exe.db.views.append(view)
         return True
 
@@ -1690,9 +1722,10 @@ class DropViewAction(Action):
 
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            if not exe.db.views:
+            views = [view for view in exe.db.views if not view.temp]
+            if not views:
                 return False
-            view = self.rng.choice(exe.db.views)
+            view = self.rng.choice(views)
         with view.lock:
             # Was dropped while we were acquiring lock
             if view not in exe.db.views:
