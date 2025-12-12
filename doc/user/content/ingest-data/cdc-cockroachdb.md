@@ -133,7 +133,7 @@ guidance.
     );
     ```
 
-## 3. Start ingesting data
+### 3. Start ingesting data
 
 1. Use the [`CREATE SOURCE`](/sql/create-source/) command to connect Materialize
    to your Kafka broker and start ingesting data from the target topic:
