@@ -5821,6 +5821,7 @@ dependencies = [
  "dec",
  "differential-dataflow",
  "differential-dogs3",
+ "fail",
  "futures",
  "itertools 0.14.0",
  "lgalloc",

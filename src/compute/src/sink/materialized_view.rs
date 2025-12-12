@@ -1328,6 +1328,10 @@ mod append {
                     Ok(()) => return Ok(upper),
                     Err(mismatch) if PartialOrder::less_than(&mismatch.current, &lower) => {
                         advance_shard_upper(&mut self.persist_writer, lower.clone()).await;
+
+                        // At this point the shard's since and upper are likely the same, a state
+                        // that is likely to hit edge-cases in logic reasoning about frontiers.
+                        fail::fail_point!("mv_advanced_upper");
                     }
                     Err(mismatch) => return Err(mismatch.current),
                 }
