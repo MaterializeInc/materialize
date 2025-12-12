@@ -190,24 +190,24 @@ Materialize to use the `UPSERT` envelope.
    - `capture.target`: Only needed if `capture.scope` is `"database"`.
    - `transforms` and `transforms.unwrap.type`: You can omit or customize.
 
-      {{< tip >}}
 
-      When using the `unwrap` transform of type `ExtractNewDocumentState` with
-      MongoDB and Avro serialization, the Avro schema is inferred from the first
-      document processed. Because MongoDB allows the same field to have
-      different BSON types across documents, ensure that same field uses a
-      consistent BSON type across the collection to avoid schema inference
-      errors.
+   {{< tip >}}
+   When using the `unwrap` transform of type `ExtractNewDocumentState` with
+   MongoDB and Avro serialization, the Avro schema is inferred from the first
+   document processed. Because MongoDB allows the same field to have
+   different BSON types across documents, ensure that same field uses a
+   consistent BSON type across the collection to avoid schema inference
+   errors.
 
-      For example, if the first document has `price: 40`, the registered Avro
-      schema infers the `price` field type to be `int`. If a subsequent document
-      has `price: 2.25` (a decimal value), it will cause a schema mismatch
-      error. To avoid this, explicitly specify the BSON type in your documents
-      using `NumberDecimal()`, e.g., `price: NumberDecimal("40.00")` and `price:
-      NumberDecimal("2.25")`.
+   For example, if the first document has `price: 40`, the registered Avro
+   schema infers the `price` field type to be `int`. If a subsequent document
+   has `price: 2.25` (a decimal value), it will cause a schema mismatch error.
+   To avoid this, explicitly specify the BSON type in your documents using
+   `NumberDecimal()`, e.g., `price: NumberDecimal("40.00")` and `price:
+   NumberDecimal("2.25")`.
 
-      If you cannot enforce a consistent BSON type, you can omit the unwrap.
-      {{< /tip >}}
+   If you cannot enforce a consistent BSON type, you can omit the unwrap.
+   {{< /tip >}}
 
 2. Register the connector with Kafka Connect:
 
@@ -318,13 +318,14 @@ Query the data using standard SQL.
   693c608a8de2a41c2ba365d2 | 693c608a8de2a41c2ba365d2 |        2 | 2025-12-12 18:20:54.648 | brownie               |       20 | Pending
   ```
 
-{{< tip >}}
+  {{< tip >}}
 
-If you did not use the `unwrap` transform, the document is stored as a JSON
-string in the `after` field in `mdb_orders`. You can create a [parsing
-view](/sql/types/jsonb/#parsing) to map the individual document fields to columns instead.
+  If you did not use the `unwrap` transform, the document is stored as a JSON
+  string in the `after` field in `mdb_orders`. You can create a [parsing
+  view](/sql/types/jsonb/#parsing) to map the individual document fields to
+  columns instead.
 
-{{< /tip >}}
+  {{< /tip >}}
 
 ## Troubleshooting
 
