@@ -17,7 +17,8 @@ use http::HeaderValue;
 use k8s_openapi::{
     api::{
         apps::v1::Deployment,
-        core::v1::{Affinity, ResourceRequirements, Service, Toleration},
+        core::v1::{Affinity, ConfigMap, ResourceRequirements, Service, Toleration},
+        networking::v1::NetworkPolicy,
     },
     apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition,
 };
@@ -335,14 +336,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     clusterd_node_selector: args.clusterd_node_selector,
                     clusterd_affinity: args.clusterd_affinity,
                     clusterd_tolerations: args.clusterd_tolerations,
-                    console_node_selector: args.console_node_selector,
-                    console_affinity: args.console_affinity,
-                    console_tolerations: args.console_tolerations,
-                    console_default_resources: args.console_default_resources,
                     image_pull_policy: args.image_pull_policy,
                     network_policies_internal_enabled: args.network_policies_internal_enabled,
                     network_policies_ingress_enabled: args.network_policies_ingress_enabled,
-                    network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
+                    network_policies_ingress_cidrs: args.network_policies_ingress_cidrs.clone(),
                     network_policies_egress_enabled: args.network_policies_egress_enabled,
                     network_policies_egress_cidrs: args.network_policies_egress_cidrs,
                     environmentd_cluster_replica_sizes: args.environmentd_cluster_replica_sizes,
@@ -374,8 +371,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     environmentd_internal_http_port: args.environmentd_internal_http_port,
                     environmentd_internal_persist_pubsub_port: args
                         .environmentd_internal_persist_pubsub_port,
-                    balancerd_http_port: args.balancerd_http_port,
-                    console_http_port: args.console_http_port,
                     default_certificate_specs: args.default_certificate_specs.clone(),
                     disable_license_key_checks: args.disable_license_key_checks,
                     tracing: args.tracing,
@@ -399,12 +394,12 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     enable_security_context: args.enable_security_context,
                     enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
                     image_pull_policy: args.image_pull_policy,
-                    scheduler_name: args.scheduler_name,
+                    scheduler_name: args.scheduler_name.clone(),
                     balancerd_node_selector: args.balancerd_node_selector,
                     balancerd_affinity: args.balancerd_affinity,
                     balancerd_tolerations: args.balancerd_tolerations,
                     balancerd_default_resources: args.balancerd_default_resources,
-                    default_certificate_specs: args.default_certificate_specs,
+                    default_certificate_specs: args.default_certificate_specs.clone(),
                     environmentd_sql_port: args.environmentd_sql_port,
                     environmentd_http_port: args.environmentd_http_port,
                     balancerd_sql_port: args.balancerd_sql_port,
@@ -432,6 +427,67 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                 )
                 .owns(
                     Api::<Certificate>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+        })
+        .run(),
+    );
+
+    mz_ore::task::spawn(
+        || "console controller",
+        k8s_controller::Controller::namespaced_all(
+            client.clone(),
+            controller::console::Context::new(
+                controller::console::Config {
+                    enable_security_context: args.enable_security_context,
+                    enable_prometheus_scrape_annotations: args.enable_prometheus_scrape_annotations,
+                    image_pull_policy: args.image_pull_policy,
+                    scheduler_name: args.scheduler_name,
+                    console_node_selector: args.console_node_selector,
+                    console_affinity: args.console_affinity,
+                    console_tolerations: args.console_tolerations,
+                    console_default_resources: args.console_default_resources,
+                    network_policies_ingress_enabled: args.network_policies_ingress_enabled,
+                    network_policies_ingress_cidrs: args.network_policies_ingress_cidrs,
+                    default_certificate_specs: args.default_certificate_specs,
+                    console_http_port: args.console_http_port,
+                    balancerd_http_port: args.balancerd_http_port,
+                },
+                client.clone(),
+            )
+            .await,
+            watcher::Config::default().timeout(29),
+        )
+        .with_controller(|controller| {
+            controller
+                .owns(
+                    Api::<Deployment>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<Service>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<Certificate>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<NetworkPolicy>::all(client.clone()),
+                    watcher::Config::default()
+                        .labels("materialize.cloud/mz-resource-id")
+                        .timeout(29),
+                )
+                .owns(
+                    Api::<ConfigMap>::all(client.clone()),
                     watcher::Config::default()
                         .labels("materialize.cloud/mz-resource-id")
                         .timeout(29),
