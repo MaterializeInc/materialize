@@ -2269,7 +2269,21 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     /// Returns a [`PartialItemName`] with the minimum amount of qualifiers to unambiguously resolve
     /// the object.
+    ///
+    /// Warning: This is broken for temporary objects. Don't use this function for serious stuff,
+    /// i.e., don't expect that what you get back is a thing you can resolve. Current usages are
+    /// only for error msgs and other humanizations.
     fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
+        if qualified_name.qualifiers.schema_spec.is_temporary() {
+            // All bets are off. Just give up and return the qualified name as is.
+            // TODO: Figure out what's going on with temporary objects.
+            // See e.g. `temporary_objects.slt` fail if you comment this out, which has the repro
+            // from https://github.com/MaterializeInc/database-issues/issues/9973#issuecomment-3646382143
+            // There is also https://github.com/MaterializeInc/database-issues/issues/9974, for
+            // which we don't have a simple repro.
+            return qualified_name.item.clone().into();
+        }
+
         let database_id = match &qualified_name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => None,
             ResolvedDatabaseSpecifier::Id(id)
