@@ -163,7 +163,7 @@ Materialize to use the `UPSERT` envelope.
       "name": "mongodb-connector",
       "config": {
         "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
-        "mongodb.connection.string": "mongodb://debezium_materialize_user:dbz_password@mongodb-primary:27017/?replicaSet=rs0&authSource=test",
+        "mongodb.connection.string": "mongodb://debezium_materialize_user:<associated_pwd>@mongodb-primary:27017/?replicaSet=rs0&authSource=test",
         "topic.prefix": "mdb-prod-rs0.",
         "collection.include.list": "test.orders,test.items",
         "capture.mode": "change_streams_update_full",
