@@ -15,6 +15,17 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.3.0
+*Released to Materialize Cloud and Self-Managed: 2025-12-12*
+
+### Improvements
+- For Self-Managed: added version upgrade window validation, to prevent skipping required intermediate versions during upgrades.
+- Improved activity log throttling to apply across all statement executions, not just initial prepared statement execution, providing more consistent logging behavior.
+
+### Bug Fixes
+- Fixed validation for replica sizes to prevent configurations with zero scale or workers, which previously caused division-by-zero errors and panics.
+- Fixed frontend `SELECT` sequencing to gracefully handle collections that are dropped during real-time recent timestamp determination.
+
 ## v26.2.0
 *Released Cloud: 2025-12-05*
 *Released Self-Managed: 2025-12-09*
