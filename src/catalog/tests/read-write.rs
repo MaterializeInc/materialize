@@ -403,7 +403,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         let roles = writer_state.snapshot().await.unwrap().roles;
         let role = roles
             .get(&proto::RoleKey {
-                id: Some(role_id.into_proto()),
+                id: role_id.into_proto(),
             })
             .unwrap();
         assert_eq!(role_name, &role.name);
@@ -432,16 +432,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // writes from writer catalogs, so it should not see the new role.
         let roles = snapshot.roles;
         let role = roles.get(&proto::RoleKey {
-            id: Some(role_id.into_proto()),
+            id: role_id.into_proto(),
         });
         assert_eq!(None, role);
 
         let dbs = snapshot.databases;
         let db = dbs
             .get(&proto::DatabaseKey {
-                id: Some(proto::DatabaseId {
-                    value: Some(proto::database_id::Value::User(db_id)),
-                }),
+                id: proto::DatabaseId::User(db_id),
             })
             .unwrap();
         assert_eq!(db_name, &db.name);
