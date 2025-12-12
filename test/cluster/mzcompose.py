@@ -91,20 +91,33 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument("--slow-only", action="store_true")
+    args = parser.parse_args()
+
+    slow_tests = [
+        "crash-on-replica-expiration-index",
+        "test-incident-70",
+        "test-refresh-mv-restart",
+        "test-slow-seqno-hold",
+    ]
+
     def process(name: str) -> None:
-        # incident-70, crash-on-replica-expiration-index and refresh-mv-restart
-        # are slow, run in separate CI step
+        # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
+        # and slow-seqno-hold are slow, run in separate CI step
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
-            "crash-on-replica-expiration-index",
-            "test-incident-70",
             "test-concurrent-connections",
-            "test-refresh-mv-restart",
             "test-memory-limiter",
         ):
             return
+
+        if (args.slow_only and name not in slow_tests) or (
+            not args.slow_only and name in slow_tests
+        ):
+            return
+
         with c.test_case(name):
             c.workflow(name)
             c.down()
