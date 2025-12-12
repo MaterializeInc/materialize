@@ -580,12 +580,9 @@ where
             leased_seqnos: BTreeMap::new(),
             unexpired_state: Some(UnexpiredReadHandleState {
                 expire_fn,
-                _heartbeat_tasks: machine
-                    .start_reader_heartbeat_tasks(reader_id, gc)
-                    .await
-                    .into_iter()
-                    .map(JoinHandle::abort_on_drop)
-                    .collect(),
+                _heartbeat_tasks: JoinHandle::abort_on_drop(
+                    machine.start_reader_heartbeat_task(reader_id, gc),
+                ),
             }),
         }
     }
@@ -894,7 +891,7 @@ where
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
     expire_fn: ExpireFn,
-    pub(crate) _heartbeat_tasks: Vec<AbortOnDropHandle<()>>,
+    pub(crate) _heartbeat_tasks: AbortOnDropHandle<()>,
 }
 
 /// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
