@@ -228,7 +228,7 @@ def run_one_scenario(
             print(
                 f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
-            mz_image = "{image_registry()}/materialized:latest"
+            mz_image = f"{image_registry()}/materialized:latest"
             # TODO: Better azurite support detection
             mz = create_mz_service(
                 mz_image,
