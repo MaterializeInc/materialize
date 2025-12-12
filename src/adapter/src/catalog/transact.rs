@@ -63,6 +63,7 @@ use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{info, trace};
 
 use crate::AdapterError;
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
     BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
     catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
@@ -598,17 +599,19 @@ impl Catalog {
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
             op_updates.extend(temporary_item_updates);
             if !op_updates.is_empty() {
-                let (_op_builtin_table_updates, _op_catalog_updates) =
-                    preliminary_state
-                        .to_mut()
-                        .apply_updates(op_updates.clone())?;
+                let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
+                    .to_mut()
+                    .apply_updates(op_updates.clone(), &mut LocalExpressionCache::Closed)
+                    .await;
             }
             updates.append(&mut op_updates);
         }
 
         if !updates.is_empty() {
-            let (op_builtin_table_updates, op_catalog_updates) =
-                state.to_mut().apply_updates(updates.clone())?;
+            let (op_builtin_table_updates, op_catalog_updates) = state
+                .to_mut()
+                .apply_updates(updates.clone(), &mut LocalExpressionCache::Closed)
+                .await;
             let op_builtin_table_updates = state
                 .to_mut()
                 .resolve_builtin_table_updates(op_builtin_table_updates);
@@ -630,8 +633,10 @@ impl Catalog {
 
             let updates = tx.get_and_commit_op_updates();
             if !updates.is_empty() {
-                let (op_builtin_table_updates, op_catalog_updates) =
-                    state.to_mut().apply_updates(updates.clone())?;
+                let (op_builtin_table_updates, op_catalog_updates) = state
+                    .to_mut()
+                    .apply_updates(updates.clone(), &mut LocalExpressionCache::Closed)
+                    .await;
                 let op_builtin_table_updates = state
                     .to_mut()
                     .resolve_builtin_table_updates(op_builtin_table_updates);

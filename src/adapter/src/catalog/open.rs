@@ -314,7 +314,7 @@ impl Catalog {
         }
 
         let (builtin_table_update, _catalog_updates) = state
-            .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
+            .apply_updates(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
@@ -416,7 +416,7 @@ impl Catalog {
         // and return and use the updates from here. But that's at the very
         // least future work.
         let (builtin_table_update, _catalog_updates) = state
-            .apply_updates_for_bootstrap(system_item_updates, &mut local_expr_cache)
+            .apply_updates(system_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
@@ -467,7 +467,7 @@ impl Catalog {
             )
         } else {
             state
-                .apply_updates_for_bootstrap(item_updates, &mut local_expr_cache)
+                .apply_updates(item_updates, &mut local_expr_cache)
                 .await
         };
         builtin_table_updates.extend(builtin_table_update);
@@ -481,7 +481,7 @@ impl Catalog {
             })
             .collect();
         let (builtin_table_update, _catalog_updates) = state
-            .apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache)
+            .apply_updates(post_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
@@ -511,7 +511,7 @@ impl Catalog {
         // and return and use the updates from here. But that's at the very
         // least future work.
         let (table_updates, _catalog_updates) = state
-            .apply_updates_for_bootstrap(state_updates, &mut local_expr_cache)
+            .apply_updates(state_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(table_updates);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
@@ -656,7 +656,9 @@ impl Catalog {
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
         let updates = txn.get_and_commit_op_updates();
-        let (builtin_updates, catalog_updates) = state.apply_updates(updates)?;
+        let (builtin_updates, catalog_updates) = state
+            .apply_updates(updates, &mut LocalExpressionCache::Closed)
+            .await;
         assert!(
             builtin_updates.is_empty(),
             "storage is not allowed to generate catalog changes that would cause changes to builtin tables"
