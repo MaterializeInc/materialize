@@ -60,7 +60,7 @@ resource "azurerm_resource_group" "materialize" {
 }
 
 module "materialize" {
-  source              = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.8.2"
+  source              = "git::https://github.com/MaterializeInc/terraform-azurerm-materialize.git?ref=v0.8.4"
   resource_group_name = azurerm_resource_group.materialize.name
   location            = "eastus2"
   prefix              = "mz-tf-test"
