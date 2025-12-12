@@ -240,7 +240,7 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
     \"Notes\": \"\"
   }] + .rows" $OPERATOR_COMPAT_YAML_PATH
 
-  git add $VERSIONS_YAML_PATH
+  git add $VERSIONS_YAML_PATH $OPERATOR_COMPAT_YAML_PATH
   git commit -m "docs: Bump self-managed to $BUILDKITE_TAG"
   git --no-pager diff HEAD~
   run_if_not_dry git push origin "HEAD:$DOCS_BRANCH"
