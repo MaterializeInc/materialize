@@ -68,8 +68,8 @@ if $console_bump; then
         if docker manifest inspect "$console_image" >/dev/null 2>&1; then
             break
         fi
-        echo "$console_image not yet on DockerHub, sleeping 5 min"
-        sleep 300
+        echo "$console_image not yet on DockerHub, sleeping 1 min"
+        sleep 60
     done
     echo "$console_image found on DockerHub"
     sed -i.bak \
