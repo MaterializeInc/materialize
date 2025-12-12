@@ -24,6 +24,11 @@ if TYPE_CHECKING:
 NAUGHTY_IDENTIFIERS = False
 
 
+def set_naughty_identifiers(value: bool) -> None:
+    global NAUGHTY_IDENTIFIERS
+    NAUGHTY_IDENTIFIERS = value
+
+
 def naughtify(name: str) -> str:
     """Makes a string into a naughty identifier, always returns the same
     identifier when called with the same input."""
