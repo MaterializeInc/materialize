@@ -313,9 +313,7 @@ deployment
 guide](/self-managed-deployments/deployment-guidelines/gcp-deployment-guidelines/).
 
 {{< note >}}
-**GCP Storage Authentication Limitation:** Materialize currently only supports HMAC key authentication for GCS access (S3-compatible API).
-Current State: The modules configure both HMAC keys and Workload Identity, but Materialize uses HMAC keys for actual storage access.
-Future: Native GCS access via Workload Identity Federation or Kubernetes service account impersonation will be supported in a future release, eliminating the need for static credentials.
+**GCP Storage Authentication Limitation:** Materialize currently only supports HMAC key authentication for GCS access (S3-compatible API). While the modules configure both HMAC keys and Workload Identity, Materialize uses HMAC keys for actual storage access.
 {{< /note >}}
 
 See also:
