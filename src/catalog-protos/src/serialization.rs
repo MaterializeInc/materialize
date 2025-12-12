@@ -33,8 +33,6 @@ use mz_sql::plan::{
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
 
-use crate::objects::Empty;
-
 impl From<String> for crate::objects::StringWrapper {
     fn from(value: String) -> Self {
         crate::objects::StringWrapper { inner: value }
@@ -60,7 +58,7 @@ impl RustType<crate::objects::RoleId> for RoleId {
             RoleId::User(id) => crate::objects::RoleId::User(*id),
             RoleId::System(id) => crate::objects::RoleId::System(*id),
             RoleId::Predefined(id) => crate::objects::RoleId::Predefined(*id),
-            RoleId::Public => crate::objects::RoleId::Public(Default::default()),
+            RoleId::Public => crate::objects::RoleId::Public,
         }
     }
 
@@ -69,7 +67,7 @@ impl RustType<crate::objects::RoleId> for RoleId {
             crate::objects::RoleId::User(id) => RoleId::User(id),
             crate::objects::RoleId::System(id) => RoleId::System(id),
             crate::objects::RoleId::Predefined(id) => RoleId::Predefined(id),
-            crate::objects::RoleId::Public(_) => RoleId::Public,
+            crate::objects::RoleId::Public => RoleId::Public,
         };
         Ok(id)
     }
@@ -311,7 +309,7 @@ impl RustType<crate::objects::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpe
     fn into_proto(&self) -> crate::objects::ResolvedDatabaseSpecifier {
         match self {
             ResolvedDatabaseSpecifier::Ambient => {
-                crate::objects::ResolvedDatabaseSpecifier::Ambient(Default::default())
+                crate::objects::ResolvedDatabaseSpecifier::Ambient
             }
             ResolvedDatabaseSpecifier::Id(database_id) => {
                 crate::objects::ResolvedDatabaseSpecifier::Id(database_id.into_proto())
@@ -323,7 +321,7 @@ impl RustType<crate::objects::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpe
         proto: crate::objects::ResolvedDatabaseSpecifier,
     ) -> Result<Self, TryFromProtoError> {
         let spec = match proto {
-            crate::objects::ResolvedDatabaseSpecifier::Ambient(_) => {
+            crate::objects::ResolvedDatabaseSpecifier::Ambient => {
                 ResolvedDatabaseSpecifier::Ambient
             }
             crate::objects::ResolvedDatabaseSpecifier::Id(database_id) => {
@@ -337,9 +335,7 @@ impl RustType<crate::objects::ResolvedDatabaseSpecifier> for ResolvedDatabaseSpe
 impl RustType<crate::objects::SchemaSpecifier> for SchemaSpecifier {
     fn into_proto(&self) -> crate::objects::SchemaSpecifier {
         match self {
-            SchemaSpecifier::Temporary => {
-                crate::objects::SchemaSpecifier::Temporary(Default::default())
-            }
+            SchemaSpecifier::Temporary => crate::objects::SchemaSpecifier::Temporary,
             SchemaSpecifier::Id(schema_id) => {
                 crate::objects::SchemaSpecifier::Id(schema_id.into_proto())
             }
@@ -348,7 +344,7 @@ impl RustType<crate::objects::SchemaSpecifier> for SchemaSpecifier {
 
     fn from_proto(proto: crate::objects::SchemaSpecifier) -> Result<Self, TryFromProtoError> {
         let spec = match proto {
-            crate::objects::SchemaSpecifier::Temporary(_) => SchemaSpecifier::Temporary,
+            crate::objects::SchemaSpecifier::Temporary => SchemaSpecifier::Temporary,
             crate::objects::SchemaSpecifier::Id(schema_id) => {
                 SchemaSpecifier::Id(schema_id.into_rust()?)
             }
@@ -571,7 +567,7 @@ impl RustType<crate::objects::GlobalId> for GlobalId {
             }
             GlobalId::User(x) => crate::objects::GlobalId::User(*x),
             GlobalId::Transient(x) => crate::objects::GlobalId::Transient(*x),
-            GlobalId::Explain => crate::objects::GlobalId::Explain(Default::default()),
+            GlobalId::Explain => crate::objects::GlobalId::Explain,
         }
     }
 
@@ -583,7 +579,7 @@ impl RustType<crate::objects::GlobalId> for GlobalId {
             }
             crate::objects::GlobalId::User(x) => Ok(GlobalId::User(x)),
             crate::objects::GlobalId::Transient(x) => Ok(GlobalId::Transient(x)),
-            crate::objects::GlobalId::Explain(_) => Ok(GlobalId::Explain),
+            crate::objects::GlobalId::Explain => Ok(GlobalId::Explain),
         }
     }
 }
@@ -649,7 +645,7 @@ impl ProtoMapEntry<String, String> for crate::objects::OptimizerFeatureOverride 
 impl RustType<crate::objects::ClusterSchedule> for ClusterSchedule {
     fn into_proto(&self) -> crate::objects::ClusterSchedule {
         match self {
-            ClusterSchedule::Manual => crate::objects::ClusterSchedule::Manual(Empty {}),
+            ClusterSchedule::Manual => crate::objects::ClusterSchedule::Manual,
             ClusterSchedule::Refresh {
                 hydration_time_estimate,
             } => crate::objects::ClusterSchedule::Refresh(
@@ -662,7 +658,7 @@ impl RustType<crate::objects::ClusterSchedule> for ClusterSchedule {
 
     fn from_proto(proto: crate::objects::ClusterSchedule) -> Result<Self, TryFromProtoError> {
         match proto {
-            crate::objects::ClusterSchedule::Manual(Empty {}) => Ok(ClusterSchedule::Manual),
+            crate::objects::ClusterSchedule::Manual => Ok(ClusterSchedule::Manual),
             crate::objects::ClusterSchedule::Refresh(csro) => Ok(ClusterSchedule::Refresh {
                 hydration_time_estimate: csro.rehydration_time_estimate.into_rust()?,
             }),
@@ -703,13 +699,11 @@ impl RustType<crate::objects::NetworkPolicyRule> for NetworkPolicyRule {
         crate::objects::NetworkPolicyRule {
             name: self.name.clone(),
             action: match self.action {
-                NetworkPolicyRuleAction::Allow => {
-                    crate::objects::NetworkPolicyRuleAction::Allow(Empty {})
-                }
+                NetworkPolicyRuleAction::Allow => crate::objects::NetworkPolicyRuleAction::Allow,
             },
             direction: match self.direction {
                 NetworkPolicyRuleDirection::Ingress => {
-                    crate::objects::NetworkPolicyRuleDirection::Ingress(Empty {})
+                    crate::objects::NetworkPolicyRuleDirection::Ingress
                 }
             },
             address: self.address.clone().to_string(),
@@ -720,11 +714,11 @@ impl RustType<crate::objects::NetworkPolicyRule> for NetworkPolicyRule {
         Ok(NetworkPolicyRule {
             name: proto.name,
             action: match proto.action {
-                crate::objects::NetworkPolicyRuleAction::Allow(_) => NetworkPolicyRuleAction::Allow,
+                crate::objects::NetworkPolicyRuleAction::Allow => NetworkPolicyRuleAction::Allow,
             },
             address: PolicyAddress::from(proto.address),
             direction: match proto.direction {
-                crate::objects::NetworkPolicyRuleDirection::Ingress(_) => {
+                crate::objects::NetworkPolicyRuleDirection::Ingress => {
                     NetworkPolicyRuleDirection::Ingress
                 }
             },

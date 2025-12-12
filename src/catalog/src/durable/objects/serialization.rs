@@ -83,13 +83,13 @@ impl RustType<proto::ClusterVariant> for ClusterVariant {
                 optimizer_feature_overrides: optimizer_feature_overrides.into_proto(),
                 schedule: schedule.into_proto(),
             }),
-            ClusterVariant::Unmanaged => proto::ClusterVariant::Unmanaged(proto::Empty {}),
+            ClusterVariant::Unmanaged => proto::ClusterVariant::Unmanaged,
         }
     }
 
     fn from_proto(proto: proto::ClusterVariant) -> Result<Self, TryFromProtoError> {
         match proto {
-            proto::ClusterVariant::Unmanaged(_) => Ok(Self::Unmanaged),
+            proto::ClusterVariant::Unmanaged => Ok(Self::Unmanaged),
             proto::ClusterVariant::Managed(managed) => Ok(Self::Managed(ClusterVariantManaged {
                 size: managed.size,
                 availability_zones: managed.availability_zones,

@@ -28,8 +28,6 @@ use mz_audit_log::{
 };
 use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
-use crate::objects::Empty;
-
 impl RustType<crate::objects::AuditLogEvent> for VersionedEvent {
     fn into_proto(&self) -> crate::objects::AuditLogEvent {
         match self {
@@ -561,19 +559,13 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1 {
         match self {
             CreateOrDropClusterReplicaReasonV1::Manual => {
-                crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Manual(
-                    Empty {},
-                )
+                crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Manual
             }
             CreateOrDropClusterReplicaReasonV1::Schedule => {
-                crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Schedule(
-                    Empty {},
-                )
+                crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Schedule
             }
             CreateOrDropClusterReplicaReasonV1::System => {
-                crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::System(
-                    Empty {},
-                )
+                crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::System
             }
         }
     }
@@ -582,15 +574,15 @@ impl RustType<crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReas
         proto: crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1,
     ) -> Result<Self, TryFromProtoError> {
         match proto {
-            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Manual(
-                Empty {},
-            ) => Ok(CreateOrDropClusterReplicaReasonV1::Manual),
-            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Schedule(
-                Empty {},
-            ) => Ok(CreateOrDropClusterReplicaReasonV1::Schedule),
-            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::System(
-                Empty {},
-            ) => Ok(CreateOrDropClusterReplicaReasonV1::System),
+            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Manual => {
+                Ok(CreateOrDropClusterReplicaReasonV1::Manual)
+            }
+            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::Schedule => {
+                Ok(CreateOrDropClusterReplicaReasonV1::Schedule)
+            }
+            crate::objects::audit_log_event_v1::CreateOrDropClusterReplicaReasonV1::System => {
+                Ok(CreateOrDropClusterReplicaReasonV1::System)
+            }
         }
     }
 }
@@ -636,12 +628,8 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1>
 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1 {
         let decision = match &self.decision {
-            SchedulingDecisionV1::On => {
-                crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {})
-            }
-            SchedulingDecisionV1::Off => {
-                crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {})
-            }
+            SchedulingDecisionV1::On => crate::objects::audit_log_event_v1::RefreshDecision::On,
+            SchedulingDecisionV1::Off => crate::objects::audit_log_event_v1::RefreshDecision::Off,
         };
         crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1 {
             decision,
@@ -654,12 +642,8 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1>
         proto: crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV1,
     ) -> Result<Self, TryFromProtoError> {
         let decision = match proto.decision {
-            crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {}) => {
-                SchedulingDecisionV1::On
-            }
-            crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {}) => {
-                SchedulingDecisionV1::Off
-            }
+            crate::objects::audit_log_event_v1::RefreshDecision::On => SchedulingDecisionV1::On,
+            crate::objects::audit_log_event_v1::RefreshDecision::Off => SchedulingDecisionV1::Off,
         };
         Ok(RefreshDecisionWithReasonV1 {
             decision,
@@ -674,12 +658,8 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2>
 {
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2 {
         let decision = match &self.decision {
-            SchedulingDecisionV1::On => {
-                crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {})
-            }
-            SchedulingDecisionV1::Off => {
-                crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {})
-            }
+            SchedulingDecisionV1::On => crate::objects::audit_log_event_v1::RefreshDecision::On,
+            SchedulingDecisionV1::Off => crate::objects::audit_log_event_v1::RefreshDecision::Off,
         };
         crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2 {
             decision,
@@ -693,12 +673,8 @@ impl RustType<crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2>
         proto: crate::objects::audit_log_event_v1::RefreshDecisionWithReasonV2,
     ) -> Result<Self, TryFromProtoError> {
         let decision = match proto.decision {
-            crate::objects::audit_log_event_v1::RefreshDecision::On(Empty {}) => {
-                SchedulingDecisionV1::On
-            }
-            crate::objects::audit_log_event_v1::RefreshDecision::Off(Empty {}) => {
-                SchedulingDecisionV1::Off
-            }
+            crate::objects::audit_log_event_v1::RefreshDecision::On => SchedulingDecisionV1::On,
+            crate::objects::audit_log_event_v1::RefreshDecision::Off => SchedulingDecisionV1::Off,
         };
         Ok(RefreshDecisionWithReasonV2 {
             decision,
@@ -1307,7 +1283,7 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             EventDetails::ToNewIdV1(details) => ToNewIdV1(details.into_proto()),
             EventDetails::FromPreviousIdV1(details) => FromPreviousIdV1(details.into_proto()),
             EventDetails::SetV1(details) => SetV1(details.into_proto()),
-            EventDetails::ResetAllV1 => ResetAllV1(Empty {}),
+            EventDetails::ResetAllV1 => ResetAllV1,
             EventDetails::RotateKeysV1(details) => RotateKeysV1(details.into_proto()),
         }
     }
@@ -1383,7 +1359,7 @@ impl RustType<crate::objects::audit_log_event_v1::Details> for EventDetails {
             ToNewIdV1(details) => Ok(EventDetails::ToNewIdV1(details.into_rust()?)),
             FromPreviousIdV1(details) => Ok(EventDetails::FromPreviousIdV1(details.into_rust()?)),
             SetV1(details) => Ok(EventDetails::SetV1(details.into_rust()?)),
-            ResetAllV1(Empty {}) => Ok(EventDetails::ResetAllV1),
+            ResetAllV1 => Ok(EventDetails::ResetAllV1),
             RotateKeysV1(details) => Ok(EventDetails::RotateKeysV1(details.into_rust()?)),
         }
     }

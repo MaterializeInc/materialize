@@ -278,11 +278,6 @@ pub struct TxnWalShardValue {
     pub shard: String,
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
-)]
-pub struct Empty {}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct StringWrapper {
     pub inner: String,
@@ -342,7 +337,7 @@ pub enum GlobalId {
     System(u64),
     User(u64),
     Transient(u64),
-    Explain(Empty),
+    Explain,
     IntrospectionSourceIndex(u64),
 }
 
@@ -370,7 +365,7 @@ pub enum DatabaseId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum ResolvedDatabaseSpecifier {
-    Ambient(Empty),
+    Ambient,
     Id(DatabaseId),
 }
 
@@ -382,7 +377,7 @@ pub enum SchemaId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum SchemaSpecifier {
-    Temporary(Empty),
+    Temporary,
     Id(SchemaId),
 }
 
@@ -429,7 +424,7 @@ pub struct ClusterScheduleRefreshOptions {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum ClusterSchedule {
-    Manual(Empty),
+    Manual,
     Refresh(ClusterScheduleRefreshOptions),
 }
 
@@ -441,7 +436,7 @@ pub struct ClusterConfig {
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum ClusterVariant {
-    Unmanaged(Empty),
+    Unmanaged,
     Managed(ManagedCluster),
 }
 
@@ -486,7 +481,7 @@ pub enum ReplicaLocation {
 pub enum RoleId {
     System(u64),
     User(u64),
-    Public(Empty),
+    Public,
     Predefined(u64),
 }
 
@@ -535,12 +530,12 @@ pub struct NetworkPolicyRule {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum NetworkPolicyRuleAction {
-    Allow(Empty),
+    Allow,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum NetworkPolicyRuleDirection {
-    Ingress(Empty),
+    Ingress,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -719,9 +714,9 @@ pub mod audit_log_event_v1 {
         Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary,
     )]
     pub enum CreateOrDropClusterReplicaReasonV1 {
-        Manual(Empty),
-        Schedule(Empty),
-        System(Empty),
+        Manual,
+        Schedule,
+        System,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -736,8 +731,8 @@ pub mod audit_log_event_v1 {
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
     pub enum RefreshDecision {
-        On(Empty),
-        Off(Empty),
+        On,
+        Off,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -1021,7 +1016,7 @@ pub mod audit_log_event_v1 {
         ToNewIdV1(ToNewIdV1),
         FromPreviousIdV1(FromPreviousIdV1),
         SetV1(SetV1),
-        ResetAllV1(Empty),
+        ResetAllV1,
         RotateKeysV1(RotateKeysV1),
         CreateSourceSinkV4(CreateSourceSinkV4),
         CreateIndexV1(CreateIndexV1),
