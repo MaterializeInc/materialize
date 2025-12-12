@@ -78,8 +78,6 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 base64 = "0.22.1"
 iceberg = "0.7.0"
 iceberg-catalog-rest = "0.7.0"
-iceberg-catalog-s3tables = "0.7.0"
-aws-sdk-s3tables = {version = "1.28.0", default-features = false, features = ["rt-tokio"] }
 
 [dev-dependencies]
 criterion = { version = "0.6.0" }

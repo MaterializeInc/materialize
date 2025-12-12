@@ -33,7 +33,6 @@ differential-dataflow = "0.18.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
 iceberg = "0.7.0"
-iceberg-catalog-s3tables = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools = { version = "0.14.0" }
 maplit = "1.0.2"
