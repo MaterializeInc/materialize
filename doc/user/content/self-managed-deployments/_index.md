@@ -13,6 +13,10 @@ menu:
 
 ## Overview
 
+Whereas Materialize Cloud gives you a fully managed service for Materialize,
+Self-Managed Materialize allows you to deploy Materialize in your own
+infrastructure,
+
 Self-Managed Materialize deployments on Kubernetes consist of several layers of
 components that work together to provide a fully functional database
 environment. Understanding these components and how they interact is essential
@@ -326,20 +330,6 @@ which provides concrete examples and an opinionated model for deploying Material
 {{< yaml-table data="self_managed/terraform_list_legacy" >}}
 {{< /tab >}}
 {{< /tabs >}}
-
-## Relationship to Materialize concepts
-
-Self-managed deployments implement the same core Materialize concepts as the Cloud offering:
-
-- [**Clusters**](/concepts/clusters/): Identical behavior, but backed by Kubernetes StatefulSets
-- [**Sources**](/concepts/sources/): Same functionality for ingesting data
-- [**Views**](/concepts/views/): Same query semantics and incremental maintenance
-- [**Indexes**](/concepts/indexes/): Same in-memory query acceleration
-- [**Sinks**](/concepts/sinks/): Same data egress capabilities
-
-The Self-Managed deployment model adds the Kubernetes infrastructure layer (Helm
-chart and operator) but does not change how you interact with Materialize at the
-SQL level.
 
 ## Related pages
 
