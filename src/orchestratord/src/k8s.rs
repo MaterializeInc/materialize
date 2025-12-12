@@ -35,18 +35,18 @@ where
     }
 }
 
-pub async fn apply_resource<K>(api: &Api<K>, resource: &K) -> Result<(), anyhow::Error>
+pub async fn apply_resource<K>(api: &Api<K>, resource: &K) -> Result<K, anyhow::Error>
 where
     K: Resource + Clone + Send + DeserializeOwned + Serialize + std::fmt::Debug + 'static,
     <K as Resource>::DynamicType: Default,
 {
-    api.patch(
-        &resource.name_unchecked(),
-        &PatchParams::apply(FIELD_MANAGER).force(),
-        &Patch::Apply(resource),
-    )
-    .await?;
-    Ok(())
+    Ok(api
+        .patch(
+            &resource.name_unchecked(),
+            &PatchParams::apply(FIELD_MANAGER).force(),
+            &Patch::Apply(resource),
+        )
+        .await?)
 }
 
 pub async fn delete_resource<K>(api: &Api<K>, name: &str) -> Result<(), anyhow::Error>
@@ -92,6 +92,10 @@ pub async fn register_crds(
             vec![
                 VersionedCrd {
                     crds: vec![mz_crd],
+                    stored_version: String::from("v1alpha1"),
+                },
+                VersionedCrd {
+                    crds: vec![crd::balancer::v1alpha1::Balancer::crd()],
                     stored_version: String::from("v1alpha1"),
                 },
                 VersionedCrd {

@@ -1941,6 +1941,29 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
     assert not test_failed
 
 
+def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+    definition = setup(c, args)
+    init(definition)
+    run_balancer(definition, False)
+
+
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--recreate-cluster",
@@ -2259,6 +2282,8 @@ def setup(c: Composition, args) -> dict[str, Any]:
         definition["namespace"] = materialize_setup[0]
         definition["secret"] = materialize_setup[1]
         definition["materialize"] = materialize_setup[2]
+    with open(MZ_ROOT / "misc" / "helm-charts" / "testing" / "balancer.yaml") as f:
+        definition["balancer"] = yaml.load(f, Loader=yaml.Loader)
 
     get_version(args.tag)
     if args.orchestratord_override:
@@ -2280,6 +2305,17 @@ def setup(c: Composition, args) -> dict[str, Any]:
     definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
         c.compose["services"]["environmentd"]["image"], args.tag
     )
+    definition["balancer"]["spec"]["balancerdImageRef"] = get_image(
+        c.compose["services"]["balancerd"]["image"], args.tag
+    )
+    # this is just a hack to get balancerd to start up, sending requests
+    # won't actually work
+    definition["balancer"]["spec"]["staticRouting"][
+        "environmentdNamespace"
+    ] = "materialize"
+    definition["balancer"]["spec"]["staticRouting"][
+        "environmentdServiceName"
+    ] = "postgres"
     # kubectl get endpoints mzel5y3f42l6-cluster-u1-replica-u1-gen-1 -n materialize-environment -o json
     # more than one address
     return definition
@@ -2619,6 +2655,124 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                 "pod",
                 "-l",
                 "app=environmentd",
+                "-n",
+                "materialize-environment",
+            ]
+        )
+        raise ValueError("Never completed")
+
+
+def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
+    defs = [
+        definition["namespace"],
+        definition["balancer"],
+    ]
+    try:
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            stdin=yaml.dump_all(defs).encode(),
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
+        raise
+    post_run_check_balancer(definition, expect_fail)
+
+
+def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
+    for i in range(60):
+        time.sleep(1)
+        try:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "balancers",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+            )
+            status = data["items"][0].get("status")
+            if not status:
+                continue
+            if expect_fail:
+                break
+            if not status["conditions"] or status["conditions"][0]["type"] != "Ready":
+                continue
+            if status["conditions"][0]["status"] == "True":
+                break
+        except subprocess.CalledProcessError:
+            pass
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "balancers",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "yaml",
+            ],
+        )
+        raise ValueError("Never completed")
+
+    for i in range(120):
+        print("kubectl get balancer pods")
+        try:
+            status = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=balancerd",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "jsonpath={.items[0].status.phase}",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            if status in ["Running", "Error", "CrashLoopBackOff"]:
+                assert not expect_fail
+                break
+        except subprocess.CalledProcessError:
+            if expect_fail:
+                try:
+                    logs = spawn.capture(
+                        [
+                            "kubectl",
+                            "logs",
+                            "-l",
+                            "app.kubernetes.io/instance=operator",
+                            "-n",
+                            "materialize",
+                        ],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if (
+                        f"ERROR k8s_controller::controller: Balancer reconciliation error. err=reconciler for object Balancer.v1alpha1.materialize.cloud/{definition['balancer']['metadata']['name']}.materialize-environment failed"
+                        in logs
+                    ):
+                        break
+                except subprocess.CalledProcessError:
+                    pass
+
+        time.sleep(1)
+    else:
+        # Helps to debug
+        spawn.runv(
+            [
+                "kubectl",
+                "describe",
+                "pod",
+                "-l",
+                "app=balancerd",
                 "-n",
                 "materialize-environment",
             ]

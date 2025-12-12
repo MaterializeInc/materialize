@@ -503,7 +503,18 @@ fn create_environmentd_network_policies(
         // TODO (Alex) filter to just clusterd and environmentd,
         // once we get a consistent set of labels for both.
         let all_pods_label_selector = LabelSelector {
-            match_labels: Some(mz.default_labels()),
+            // TODO: can't use default_labels() here because it needs to be
+            // consistent between balancer and materialize resources, and
+            // materialize resources have additional labels - we should
+            // figure out something better here (probably balancers should
+            // install their own network policies)
+            match_labels: Some(
+                [(
+                    "materialize.cloud/mz-resource-id".to_owned(),
+                    mz.resource_id().to_owned(),
+                )]
+                .into(),
+            ),
             ..Default::default()
         };
         network_policies.extend([
