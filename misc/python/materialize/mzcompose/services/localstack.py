@@ -17,7 +17,7 @@ class Localstack(Service):
     def __init__(
         self,
         name: str = "localstack",
-        image: str = "localstack/localstack:3.0.2",
+        image: str = "localstack/localstack:4.12.0",
         port: int = 4566,
         environment: list[str] = ["LOCALSTACK_HOST=localstack"],
         volumes: list[str] = ["/var/run/docker.sock:/var/run/docker.sock"],
@@ -31,7 +31,7 @@ class Localstack(Service):
                 "environment": environment,
                 "volumes": volumes,
                 "healthcheck": {
-                    "test": ["CMD", "curl", "-f", "localhost:4566/health"],
+                    "test": ["CMD", "curl", "-f", "localhost:4566/_localstack/health"],
                     "interval": "1s",
                     "start_period": "120s",
                 },
