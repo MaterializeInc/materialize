@@ -1202,54 +1202,18 @@ where
     T: Timestamp + Lattice + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
 {
-    #[allow(clippy::unused_async)]
-    pub async fn start_reader_heartbeat_tasks(
+    pub fn start_reader_heartbeat_task(
         self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
-    ) -> Vec<JoinHandle<()>> {
-        let mut ret = Vec::new();
+    ) -> JoinHandle<()> {
         let metrics = Arc::clone(&self.applier.metrics);
-
-        // TODO: In response to a production incident, this runs the heartbeat
-        // task on both the in-context tokio runtime and persist's isolated
-        // runtime. We think we were seeing tasks (including this one) get stuck
-        // indefinitely in tokio while waiting for a runtime worker. This could
-        // happen if some other task in that runtime never yields. It's possible
-        // that one of the two runtimes is healthy while the other isn't (this
-        // was inconclusive in the incident debugging), and the heartbeat task
-        // is fairly lightweight, so run a copy in each in case that helps.
-        //
-        // The real fix here is to find the misbehaving task and fix it. Remove
-        // this duplication when that happens.
         let name = format!("persist::heartbeat_read({},{})", self.shard_id(), reader_id);
-        ret.push(mz_ore::task::spawn(|| name, {
-            let machine = self.clone();
-            let reader_id = reader_id.clone();
-            let gc = gc.clone();
-            metrics
-                .tasks
-                .heartbeat_read
-                .instrument_task(Self::reader_heartbeat_task(machine, reader_id, gc))
-        }));
-
-        let isolated_runtime = Arc::clone(&self.isolated_runtime);
-        let name = format!(
-            "persist::heartbeat_read_isolated({},{})",
-            self.shard_id(),
-            reader_id
-        );
-        ret.push(
-            isolated_runtime.spawn_named(
-                || name,
-                metrics
-                    .tasks
-                    .heartbeat_read
-                    .instrument_task(Self::reader_heartbeat_task(self, reader_id, gc)),
-            ),
-        );
-
-        ret
+        mz_ore::task::spawn(|| name, {
+            metrics.tasks.heartbeat_read.instrument_task(async move {
+                Self::reader_heartbeat_task(self, reader_id, gc).await
+            })
+        })
     }
 
     async fn reader_heartbeat_task(
