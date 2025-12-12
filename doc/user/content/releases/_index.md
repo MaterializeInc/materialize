@@ -19,7 +19,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud and Self-Managed: 2025-12-12*
 
 ### Improvements
-- Added version upgrade window validation for Self-Managed deployments to prevent skipping required intermediate versions during upgrades.
+- For Self-Managed: added version upgrade window validation, to prevent skipping required intermediate versions during upgrades.
 - Improved activity log throttling to apply across all statement executions, not just initial prepared statement execution, providing more consistent logging behavior.
 
 ### Bug Fixes
