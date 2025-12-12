@@ -11,7 +11,7 @@ apiVersion: v2
 name: materialize-operator
 description: Materialize Kubernetes Operator Helm Chart
 type: application
-version: v26.4.0-dev.0
-appVersion: v26.4.0-dev.0
+version: v26.5.0-dev.0
+appVersion: v26.5.0-dev.0
 icon: https://materialize.com/favicon.ico
 home: https://materialize.com
