@@ -122,6 +122,18 @@ impl fmt::Display for MapLength {
     }
 }
 
+impl MapLength {
+    fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: "map_length",
+            category: "Map",
+            signature: "map_length(m: mapany)",
+            description: "Returns the number of elements in `m`.",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
+
 #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
 pub struct MapBuildFromRecordList {
     pub value_type: SqlScalarType,

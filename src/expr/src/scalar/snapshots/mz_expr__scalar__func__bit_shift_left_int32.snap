@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<<\", propagates_nulls = true)]\n#[allow(clippy::as_conversions)]\nfn bit_shift_left_int32(lhs: i32, rhs: i32) -> i32 {\n    let rhs = rhs as u32;\n    lhs.wrapping_shl(rhs)\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<<\")]\n#[allow(clippy::as_conversions)]\nfn bit_shift_left_int32(lhs: i32, rhs: i32) -> i32 {\n    let rhs = rhs as u32;\n    lhs.wrapping_shl(rhs)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftLeftInt32 {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for BitShiftLeftInt32 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("<<")
+    }
+}
+impl BitShiftLeftInt32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_shift_left_int32),
+            category: "Uncategorized",
+            signature: "int4 << int4 -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 #[allow(clippy::as_conversions)]

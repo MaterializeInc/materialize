@@ -58,6 +58,17 @@ impl std::fmt::Display for LikeEscape {
         f.write_str(stringify!(like_escape))
     }
 }
+impl LikeEscape {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(like_escape),
+            category: "Uncategorized",
+            signature: "like_escape(pattern text, b text) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn like_escape<'a>(
     pattern: &str,
     b: &str,

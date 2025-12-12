@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<@\", propagates_nulls = true)]\nfn range_contains_date_rev<'a>(a: Range<Datum<'a>>, elem: Date) -> bool {\n    a.contains_elem(&elem)\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"<@\")]\nfn range_contains_date_rev<'a>(a: Range<Datum<'a>>, elem: Date) -> bool {\n    a.contains_elem(&elem)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for RangeContainsDateRev {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for RangeContainsDateRev {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("<@")
+    }
+}
+impl RangeContainsDateRev {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(range_contains_date_rev),
+            category: "Uncategorized",
+            signature: "anyrange <@ date -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn range_contains_date_rev<'a>(a: Range<Datum<'a>>, elem: Date) -> bool {

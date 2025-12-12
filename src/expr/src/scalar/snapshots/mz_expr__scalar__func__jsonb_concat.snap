@@ -55,6 +55,17 @@ impl std::fmt::Display for JsonbConcat {
         f.write_str("||")
     }
 }
+impl JsonbConcat {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_concat),
+            category: "Uncategorized",
+            signature: "jsonb || jsonb -> jsonb?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_concat<'a>(
     a: JsonbRef<'a>,
     b: JsonbRef<'a>,

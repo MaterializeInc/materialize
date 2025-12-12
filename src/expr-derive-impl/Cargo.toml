@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 darling = "0.20.11"
 insta = { version = "1.45", optional = true, features = ["serde"] }
+itertools = "0.14.0"
 prettyplease = { version = "0.2", optional = true }
 proc-macro2 = "1.0"
 quote = "1.0"

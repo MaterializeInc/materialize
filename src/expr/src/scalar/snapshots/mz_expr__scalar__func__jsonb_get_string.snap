@@ -55,6 +55,17 @@ impl std::fmt::Display for JsonbGetString {
         f.write_str("->")
     }
 }
+impl JsonbGetString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_get_string),
+            category: "Uncategorized",
+            signature: "jsonb -> text -> jsonb?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_get_string<'a>(a: JsonbRef<'a>, k: &str) -> Option<JsonbRef<'a>> {
     let dict = DatumMap::try_from_result(Ok::<_, ()>(a.into_datum())).ok()?;
     let v = dict.iter().find(|(k2, _v)| k == *k2).map(|(_k, v)| v)?;

@@ -55,6 +55,17 @@ impl std::fmt::Display for Infallible1 {
         f.write_str("INFALLIBLE")
     }
 }
+impl Infallible1 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(infallible1),
+            category: "Uncategorized",
+            signature: "float4 INFALLIBLE float4 -> float4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(dead_code)]
 fn infallible1(a: f32, b: f32) -> f32 {
     a + b

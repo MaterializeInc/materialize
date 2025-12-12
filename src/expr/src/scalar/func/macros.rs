@@ -145,7 +145,8 @@ mod test {
 /// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
 macro_rules! derive_unary {
     ($($name:ident),*) => {
-        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect, enum_kinds::EnumKind)]
+        #[enum_kind(UnaryFuncKind)]
         pub enum UnaryFunc {
             $($name($name),)*
         }
@@ -199,6 +200,14 @@ macro_rules! derive_unary {
             }
         }
 
+        impl UnaryFuncKind {
+            // fn func_doc(&self) -> &'static crate::func::FuncDoc {
+            //     match self {
+            //         // $(Self::$name => $name::func_doc(),)*
+            //     }
+            // }
+        }
+
         impl fmt::Display for UnaryFunc {
             fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
                 match self {
@@ -219,11 +228,28 @@ macro_rules! derive_unary {
 
 /// This is not complete yet, pending conversion of all binary funcs to an implementation of
 /// `LazyBinaryFunc`.
-macro_rules! derive_binary_from {
+macro_rules! derive_binary_func_partial {
     ($($name:ident $( ( $variant:ident ) )?),* $(,)?) => {
         $(
-            derive_binary_from!(from @ $name $( ( $variant ) )?);
+            derive_binary_func_partial!(from @ $name $( ( $variant ) )?);
         )*
+
+        impl crate::func::BinaryFuncKind {
+            /// Returns the function documentation, if available.
+            pub fn func_doc(&self) -> Option<crate::func::FuncDoc> {
+                match self {
+                    $(Self::$name => derive_binary_func_partial!(func_doc @ $name $($variant)?),)*
+                    _ => None,
+                }
+            }
+
+            /// Returns all known kinds.
+            pub fn kinds() -> &'static [Self] {
+                &[
+                    $(Self::$name,)*
+                ]
+            }
+        }
     };
     (from @ $name:ident ( $variant:ident ) ) => {
         impl From<$variant> for crate::BinaryFunc {
@@ -233,6 +259,12 @@ macro_rules! derive_binary_from {
         }
     };
     (from @ $name:ident) => {
-        derive_binary_from!(from @ $name ( $name ) );
+        derive_binary_func_partial!(from @ $name ( $name ) );
+    };
+    (func_doc @ $name:ident $variant:ident) => {
+        Some($variant::func_doc())
+    };
+    (func_doc @ $name:ident) => {
+        derive_binary_func_partial!(func_doc @ $name $name )
     };
 }
