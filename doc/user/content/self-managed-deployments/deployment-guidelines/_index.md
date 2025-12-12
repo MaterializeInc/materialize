@@ -15,7 +15,7 @@ aliases:
 
 ## Available deployment guidelines
 
-The following provides guidelines for cloud-specific deployments:
+The following guides outline recommended configurations for deploying Materialize across different cloud environments.
 
 - [AWS Deployment
   Guidelines](/self-managed-deployments/deployment-guidelines/aws-deployment-guidelines/)
