@@ -11,6 +11,7 @@
 // source code is subject to the terms of the PostgreSQL license, a copy of
 // which can be found in the LICENSE file at the root of this repository.
 
+use enum_kinds::EnumKind;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
@@ -30,7 +31,6 @@ use mz_ore::cast::{self, CastFrom};
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
-use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
@@ -74,6 +74,49 @@ pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;
 pub use variadic::VariadicFunc;
 
+/// Documentation for a function.
+#[derive(Debug, Serialize, Ord, PartialOrd, Clone, PartialEq, Eq, Hash)]
+pub struct FuncDoc {
+    /// A unique name of the function, not intended to be used by end users.
+    pub unique_name: &'static str,
+    /// The category of the function. Used to group functions for documentation purposes.
+    pub category: &'static str,
+    /// The signature of the function. Should follow the `func(arg type, ...) -> type)` pattern,
+    /// or `type operator type -> type` pattern for infix operators.
+    pub signature: &'static str,
+    /// Human-readable description of the function's behavior.
+    pub description: &'static str,
+    /// `true` if the function is unmaterializable, i.e., not usable in maintained objects.
+    pub unmaterializable: bool,
+    /// Optional URL relative to the documentation for further details.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<&'static str>,
+    /// Human-readable version identifier when this function was added.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version_added: Option<&'static str>,
+    /// Whether explicit time zone casts are necessary.
+    pub known_time_zone_limitation_cast: bool,
+    /// Whether the function has side effects.
+    pub side_effects: bool,
+}
+
+impl FuncDoc {
+    /// Default, but without the trait to enable `const`.
+    const fn default() -> Self {
+        Self {
+            unique_name: "",
+            category: "",
+            signature: "",
+            description: "",
+            unmaterializable: false,
+            url: None,
+            version_added: None,
+            known_time_zone_limitation_cast: false,
+            side_effects: false,
+        }
+    }
+}
+
 /// The maximum size of the result strings of certain string functions, such as `repeat` and `lpad`.
 /// Chosen to be the smallest number to keep our tests passing without changing. 100MiB is probably
 /// higher than what we want, but it's better than no limit.
@@ -93,75 +136,46 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&
     }
 }
 
+/// Adds two int2 values and returns a int2 value. Errors on overflow.
 #[sqlfunc(
     is_monotone = "(true, true)",
     is_infix_op = true,
     sqlname = "+",
-    propagates_nulls = true
+    category = "Numbers"
 )]
 fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -171,12 +185,7 @@ fn add_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -186,36 +195,26 @@ fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_timestamp_interval<'a>(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     add_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_timestamp_tz_interval<'a>(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     add_timestamplike_interval(a, b)
 }
 
 fn add_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<CheckedTimestamp<T>, EvalError>
 where
     T: TimestampLike,
 {
@@ -224,7 +223,7 @@ where
     let dt = dt
         .checked_add_signed(b.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    T::from_date_time(dt).try_into().err_into()
+    Ok(CheckedTimestamp::from_timestamplike(T::from_date_time(dt))?)
 }
 
 #[sqlfunc(
@@ -236,61 +235,50 @@ where
 fn sub_timestamp_interval<'a>(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     sub_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "-"
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_timestamp_tz_interval<'a>(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     sub_timestamplike_interval(a, b)
 }
 
 fn sub_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<CheckedTimestamp<T>, EvalError>
 where
     T: TimestampLike,
 {
     neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
-fn add_date_time<'a>(date: Date, time: chrono::NaiveTime) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+fn add_date_time<'a>(
+    date: Date,
+    time: chrono::NaiveTime,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     let dt = NaiveDate::from(date)
         .and_hms_nano_opt(time.hour(), time.minute(), time.second(), time.nanosecond())
         .unwrap();
-    Ok(dt.try_into()?)
+    Ok(CheckedTimestamp::from_timestamplike(dt)?)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
-fn add_date_interval<'a>(date: Date, interval: Interval) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+fn add_date_interval<'a>(
+    date: Date,
+    interval: Interval,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
     let dt = add_timestamp_months(&dt, interval.months)?;
     let dt = dt
         .checked_add_signed(interval.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    Ok(dt.try_into()?)
+    Ok(CheckedTimestamp::from_timestamplike(dt)?)
 }
 
 #[sqlfunc(
@@ -298,7 +286,6 @@ fn add_date_interval<'a>(date: Date, interval: Interval) -> Result<Datum<'a>, Ev
     is_monotone = "(false, false)",
     is_infix_op = true,
     sqlname = "+",
-    propagates_nulls = true
 )]
 fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {
     let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());
@@ -308,8 +295,7 @@ fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::Nai
 #[sqlfunc(
     is_monotone = "(true, false)",
     output_type = "Numeric",
-    sqlname = "round",
-    propagates_nulls = true
+    sqlname = "round"
 )]
 fn round_numeric_binary(a: OrderedDecimal<Numeric>, mut b: i32) -> Result<Numeric, EvalError> {
     let mut a = a.0;
@@ -358,7 +344,7 @@ fn round_numeric_binary(a: OrderedDecimal<Numeric>, mut b: i32) -> Result<Numeri
     }
 }
 
-#[sqlfunc(sqlname = "convert_from", propagates_nulls = true)]
+#[sqlfunc(sqlname = "convert_from")]
 fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
@@ -381,32 +367,29 @@ fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
     }
 }
 
-#[sqlfunc(propagates_nulls = true)]
-fn encode<'a>(
-    bytes: &[u8],
-    format: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a str, EvalError> {
+/// Encode `bytes` using the specified textual representation. Errors if the
+/// format is not recognized.
+#[sqlfunc(category = "String", url = "/sql/functions/encode")]
+fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
     let format = encoding::lookup_format(format)?;
-    let out = format.encode(bytes);
-    Ok(temp_storage.push_string(out))
+    Ok(format.encode(bytes))
 }
 
-#[sqlfunc(propagates_nulls = true)]
-fn decode<'a>(
-    string: &str,
-    format: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a [u8], EvalError> {
+/// Decode `text` using the specified textual representation. Errors if the
+/// text is not a valid representation in the specified format, or if the
+/// format is not recognized.
+#[sqlfunc(category = "String", url = "/sql/functions/decode")]
+fn decode(text: &str, format: &str) -> Result<Vec<u8>, EvalError> {
     let format = encoding::lookup_format(format)?;
-    let out = format.decode(string)?;
+    let out = format.decode(text)?;
     if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
-        return Err(EvalError::LengthTooLarge);
+        Err(EvalError::LengthTooLarge)
+    } else {
+        Ok(out)
     }
-    Ok(temp_storage.push_bytes(out))
 }
 
-#[sqlfunc(sqlname = "length", propagates_nulls = true)]
+#[sqlfunc(sqlname = "length")]
 fn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {
     // Convert PostgreSQL-style encoding names[1] to WHATWG-style encoding names[2],
     // which the encoding library uses[3].
@@ -485,12 +468,7 @@ pub fn add_timestamp_months<T: TimestampLike>(
     Ok(CheckedTimestamp::from_timestamplike(new_dt)?)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_numeric(
     a: OrderedDecimal<Numeric>,
     b: OrderedDecimal<Numeric>,
@@ -505,18 +483,13 @@ fn add_numeric(
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {
     a.checked_add(&b)
         .ok_or_else(|| EvalError::IntervalOutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(is_infix_op = true, sqlname = "&", propagates_nulls = true)]
+#[sqlfunc(is_infix_op = true, sqlname = "&")]
 fn bit_and_int16(a: i16, b: i16) -> i16 {
     a & b
 }
@@ -1563,17 +1536,12 @@ macro_rules! range_fn {
         paste::paste! {
 
             #[sqlfunc(
-                output_type = "bool",
                 is_infix_op = true,
                 sqlname = $sqlname,
-                propagates_nulls = true
             )]
-            fn [< range_ $fn >]<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
+            fn [< range_ $fn >]<'a>(l: Range<Datum<'a>>, r: Range<Datum<'a>>) -> bool
             {
-                if a.is_null() || b.is_null() { return Datum::Null }
-                let l = a.unwrap_range();
-                let r = b.unwrap_range();
-                Datum::from(Range::<Datum<'a>>::$range_fn(&l, &r))
+                Range::<Datum<'a>>::$range_fn(&l, &r)
             }
         }
     };
@@ -1688,6 +1656,7 @@ fn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a >= b
 }
 
+/// Converts a timestamp into a string using the specified format
 #[sqlfunc(sqlname = "tocharts", propagates_nulls = true)]
 fn to_char_timestamp_format(ts: CheckedTimestamp<chrono::NaiveDateTime>, format: &str) -> String {
     let fmt = DateTimeFormat::compile(format);
@@ -2434,7 +2403,10 @@ fn starts_with(a: &str, b: &str) -> bool {
     a.starts_with(b)
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect, EnumKind,
+)]
+#[enum_kind(BinaryFuncKind)]
 pub enum BinaryFunc {
     AddInt16(AddInt16),
     AddInt32(AddInt32),
@@ -2988,8 +2960,8 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             }),
-            BinaryFunc::RangeContainsRange { rev: false } => Ok(range_contains_range(a, b)),
-            BinaryFunc::RangeContainsRange { rev: true } => Ok(range_contains_range_rev(a, b)),
+            // BinaryFunc::RangeContainsRange { rev: false } => Ok(range_contains_range(a, b)),
+            // BinaryFunc::RangeContainsRange { rev: true } => Ok(range_contains_range_rev(a, b)),
             BinaryFunc::RegexpReplace { regex, limit } => {
                 regexp_replace_static(a, b, regex, *limit, temp_storage)
             }
@@ -5083,12 +5055,7 @@ fn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {
     a.trim_end_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(
-    is_infix_op = true,
-    sqlname = "array_length",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc]
 fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     let i = match usize::try_from(b) {
         Ok(0) | Err(_) => return Ok(None),
@@ -5104,13 +5071,7 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     })
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_lower",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
@@ -5155,13 +5116,7 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_upper",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
@@ -5326,17 +5281,22 @@ fn array_array_concat<'a>(
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    if a.is_null() {
-        return b;
-    } else if b.is_null() {
-        return a;
+fn list_list_concat<'a>(
+    a: Option<DatumList<'a>>,
+    b: Option<DatumList<'a>>,
+    temp_storage: &'a RowArena,
+) -> Option<DatumList<'a>> {
+    match (a, b) {
+        (None, b) => b,
+        (a, None) => a,
+        (Some(a), Some(b)) => {
+            let a = a.iter();
+            let b = b.iter();
+
+            let datum = temp_storage.make_datum(|packer| packer.push_list(a.chain(b)));
+            Some(datum.unwrap_list())
+        }
     }
-
-    let a = a.unwrap_list().iter();
-    let b = b.unwrap_list().iter();
-
-    temp_storage.make_datum(|packer| packer.push_list(a.chain(b)))
 }
 
 #[sqlfunc(
@@ -5346,11 +5306,15 @@ fn list_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) 
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn list_element_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn list_element_concat<'a>(
+    a: Option<DatumList<'a>>,
+    b: Datum<'a>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
-            if !a.is_null() {
-                for elem in a.unwrap_list().iter() {
+            if let Some(a) = a {
+                for elem in a.iter() {
                     packer.push(elem);
                 }
             }
@@ -5366,12 +5330,16 @@ fn list_element_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
+fn element_list_concat<'a>(
+    a: Datum<'a>,
+    b: Option<DatumList<'a>>,
+    temp_storage: &'a RowArena,
+) -> Datum<'a> {
     temp_storage.make_datum(|packer| {
         packer.push_list_with(|packer| {
             packer.push(a);
-            if !b.is_null() {
-                for elem in b.unwrap_list().iter() {
+            if let Some(b) = b {
+                for elem in b.iter() {
                     packer.push(elem);
                 }
             }
@@ -5385,57 +5353,43 @@ fn element_list_concat<'a>(a: Datum<'a>, b: Datum<'a>, temp_storage: &'a RowAren
     propagates_nulls = false,
     introduces_nulls = false
 )]
-fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| {
-        packer.push_list_with(|packer| {
-            for elem in a.iter() {
-                if elem != b {
-                    packer.push(elem);
+fn list_remove<'a>(a: DatumList<'a>, b: Datum<'a>, temp_storage: &'a RowArena) -> DatumList<'a> {
+    temp_storage
+        .make_datum(|packer| {
+            packer.push_list_with(|packer| {
+                for elem in a.iter() {
+                    if elem != b {
+                        packer.push(elem);
+                    }
                 }
-            }
+            })
         })
-    })
+        .unwrap_list()
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_string<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a.as_bytes();
-    digest_inner(to_digest, b, temp_storage)
+#[sqlfunc(sqlname = "digest")]
+fn digest_string(string: &str, function: &str) -> Result<Vec<u8>, EvalError> {
+    digest_inner(string.as_bytes(), function)
 }
 
-#[sqlfunc(
-    output_type = "Vec<u8>",
-    sqlname = "digest",
-    propagates_nulls = true,
-    introduces_nulls = false
-)]
-fn digest_bytes<'a>(a: &[u8], b: &str, temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a;
-    digest_inner(to_digest, b, temp_storage)
+#[sqlfunc(sqlname = "digest")]
+fn digest_bytes(bytes: &[u8], function: &str) -> Result<Vec<u8>, EvalError> {
+    digest_inner(bytes, function)
 }
 
-fn digest_inner<'a>(
-    bytes: &[u8],
-    digest_fn: &str,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let bytes = match digest_fn {
-        "md5" => Md5::digest(bytes).to_vec(),
-        "sha1" => Sha1::digest(bytes).to_vec(),
-        "sha224" => Sha224::digest(bytes).to_vec(),
-        "sha256" => Sha256::digest(bytes).to_vec(),
-        "sha384" => Sha384::digest(bytes).to_vec(),
-        "sha512" => Sha512::digest(bytes).to_vec(),
+fn digest_inner<'a>(bytes: &[u8], digest_fn: &str) -> Result<Vec<u8>, EvalError> {
+    match digest_fn {
+        "md5" => Ok(Md5::digest(bytes).to_vec()),
+        "sha1" => Ok(Sha1::digest(bytes).to_vec()),
+        "sha224" => Ok(Sha224::digest(bytes).to_vec()),
+        "sha256" => Ok(Sha256::digest(bytes).to_vec()),
+        "sha384" => Ok(Sha384::digest(bytes).to_vec()),
+        "sha512" => Ok(Sha512::digest(bytes).to_vec()),
         other => return Err(EvalError::InvalidHashAlgorithm(other.into())),
-    };
-    Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
+    }
 }
 
+/// Test
 #[sqlfunc(
     output_type = "String",
     sqlname = "mz_render_typmod",

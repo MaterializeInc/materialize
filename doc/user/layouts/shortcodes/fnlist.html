@@ -5,13 +5,18 @@
   {{$releasedVersions = merge $releasedVersions (dict .File.ContentBaseName .) }}
 {{end}}
 
-{{ range $.Site.Data.sql_funcs }}
+{{ $data := append $.Site.Data.sql_funcs .Site.Data.sql_funcs_old }}
+{{ range $data }}
 
 {{ if not (isset $.Params 0) }}
 
 ### {{.type}} functions
 
-<p>{{ if .description }} {{ .description | $.Page.RenderString }} {{ end }}</p>
+{{ if .description }}
+<p>{{ .description | $.Page.RenderString }}</p>
+{{ else }}
+<p>{{ index $.Site.Data.sql_funcs_types .type | $.Page.RenderString }}</p>
+{{ end }}
 
 {{end}}
 

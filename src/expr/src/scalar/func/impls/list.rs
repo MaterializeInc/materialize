@@ -13,6 +13,7 @@ use mz_lowertest::MzReflect;
 use mz_repr::{AsColumnType, Datum, DatumList, Row, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
+use crate::func::FuncDoc;
 use crate::func::binary::EagerBinaryFunc;
 use crate::scalar::func::{LazyUnaryFunc, stringify_datum};
 use crate::{EvalError, MirScalarExpr};
@@ -309,5 +310,18 @@ impl<'a> EagerBinaryFunc<'a> for ListLengthMax {
 impl fmt::Display for ListLengthMax {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("list_length_max")
+    }
+}
+
+impl ListLengthMax {
+    pub fn func_doc() -> FuncDoc {
+        FuncDoc {
+            unique_name: "list_length_max",
+            category: "List",
+            signature: "list_length_max(list anylist, layer int8) -> int4?",
+            description: "The length of list at the n-th layer, if it exists. Returns an error if the layer is \
+        past the list's dimension, or the length does not fit in an int4.",
+            ..FuncDoc::default()
+        }
     }
 }

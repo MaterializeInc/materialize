@@ -1,0 +1,68 @@
+Generic: Generic functions can typically take arguments of any type.
+Aggregate: Aggregate functions take one or more of the same element type as arguments.
+List: List functions take [`list`](../types/list) arguments, and are [polymorphic](../types/list/#polymorphism).
+Map: Map functions take [`map`](../types/map) arguments, and are [polymorphic](../types/#polymorphism).
+Numbers: Number functions take number-like arguments, e.g. [`int`](../types/int),
+  [`float`](../types/float), [`numeric`](../types/numeric), unless otherwise specified.
+Trigonometric: Trigonometric functions take and return `double precision` values.
+String:
+Scalar: Scalar functions take a list of scalar expressions
+Subquery: Subquery functions take a query, e.g. [`SELECT`](/sql/select)
+Date and time: Time functions take or produce a time-like type, e.g. [`date`](../types/date),
+  [`timestamp`](../types/timestamp), [`timestamp with time zone`](../types/timestamptz).
+UUID:
+JSON:
+Table: |
+  Table functions evaluate to a collection of rows rather than a single row. You can use the `WITH ORDINALITY` and
+  `ROWS FROM` clauses together with table functions. For more details, see [Table functions](/sql/functions/table-functions).
+Array:
+Hash:
+Window: |
+  {{< tip >}}
+
+  For some window function query patterns, rewriting your query to not use
+  window functions can yield better performance.  See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/) for details.
+
+  {{</ tip >}}
+
+  Window functions compute values across sets of rows related to the current row.
+  For example, you can use a window aggregation to smooth measurement data by computing the average of the last 5
+  measurements before every row as follows:
+
+  ```
+  SELECT
+    avg(measurement) OVER (ORDER BY time ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
+  FROM measurements;
+  ```
+
+  Window functions always need an `OVER` clause. For the `OVER` clause, Materialize supports the same
+  [syntax as
+  PostgreSQL](https://www.postgresql.org/docs/current/tutorial-window.html),
+  but supports only the following frame modes:
+
+  - the `ROWS` frame mode.
+
+  - the default frame, which is `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT
+  ROW`.
+
+  {{< note >}}
+  {{% idiomatic-sql/materialize-window-functions %}}
+
+  See [Idiomatic Materialize SQL](/transform-data/idiomatic-materialize-sql/)
+  for examples of rewriting window functions.
+
+  {{</ note >}}
+
+  In addition to the below window functions, you can use the `OVER` clause with any [aggregation function](#aggregate-functions)
+  (e.g., `sum`, `avg`) as well. Using an aggregation with an `OVER` clause is called a _window aggregation_. A
+  window aggregation computes the aggregate not on the groups specified by the `GROUP BY` clause, but on the frames
+  specified inside the `OVER` clause. (Note that a window aggregation produces exactly one output value _for each input
+  row_. This is different from a standard aggregation, which produces one output value for each _group_ specified by
+  the `GROUP BY` clause.)
+System information: Functions that return information about the system.
+PostgreSQL compatibility: |
+  Functions whose primary purpose is to facilitate compatibility with PostgreSQL tools.
+  These functions may have suboptimal performance characteristics.
+Access privilege inquiry: |
+  Functions that allow querying object access privileges. None of the following functions consider
+  whether the provided role is a _superuser_ or not.
