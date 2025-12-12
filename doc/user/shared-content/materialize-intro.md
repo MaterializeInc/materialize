@@ -17,7 +17,7 @@ Materialize is available as:
 - **Materialize Self-Managed**. Deploy and operate Materialize in your
   Kubernetes environment. Whereas Materialize Cloud gives you a fully managed
   service, Materialize Self-Managed allows you to deploy Materialize in your own
-  infrastructure. 
+  infrastructure.
 
   {{< include-md file="shared-content/self-managed/editions-available.md" >}}
 

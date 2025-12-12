@@ -15,7 +15,7 @@ menu:
 
 Whereas Materialize Cloud gives you a fully managed service for Materialize,
 Self-Managed Materialize allows you to deploy Materialize in your own
-infrastructure,
+infrastructure.
 
 Self-Managed Materialize deployments on Kubernetes consist of several layers of
 components that work together to provide a fully functional database
