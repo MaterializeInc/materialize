@@ -10,8 +10,9 @@
 use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
+use serde::Serialize;
 use syn::spanned::Spanned;
-use syn::{Expr, Lifetime, Lit};
+use syn::{Expr, Lifetime, Lit, Meta};
 
 /// Modifiers passed as key-value pairs to the `#[sqlfunc]` macro.
 #[derive(Debug, Default, darling::FromMeta)]
@@ -41,6 +42,8 @@ pub(crate) struct Modifiers {
     propagates_nulls: Option<Expr>,
     /// Whether the function introduces nulls. Applies to all functions.
     introduces_nulls: Option<Expr>,
+    /// Function category for documentation purposes.
+    category: Option<String>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -93,7 +96,7 @@ pub fn sqlfunc(
     let modifiers = Modifiers::from_list(&attr_args).unwrap();
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
-    let tokens = match determine_parameters_arena(&func) {
+    let (tokens, fn_doc) = match determine_parameters_arena(&func) {
         (1, false) => unary_func(&func, modifiers),
         (1, true) => Err(darling::Error::custom(
             "Unary functions do not yet support RowArena.",
@@ -105,12 +108,44 @@ pub fn sqlfunc(
         ))),
     }?;
 
+    if let Some(doc) = fn_doc {
+        write_doc(&doc);
+    }
+
     let test = include_test.then(|| generate_test(attr, item, &func.sig.ident));
 
     Ok(quote! {
         #tokens
         #test
     })
+}
+
+fn write_doc(doc: &FnDoc) {
+    use std::env;
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
+
+    // 2. Define the path for the temporary collection file
+    // The macro will append data to this file.
+    let temp_collection_path = out_dir.join("macro_docs_temp");
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&temp_collection_path).expect("Unable to create output directory");
+    let temp_collection_path = temp_collection_path.join(format!("{}.json", doc.unique_name));
+
+    // 3. Open the file in append mode
+    let mut file = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(&temp_collection_path)
+        .expect("Unable to open or create macro docs temp file");
+
+    // 4. Write the documentation to the file as json uing serde_json
+    let json_string = serde_json::to_string(doc).expect("Failed to serialize doc to YAML");
+    file.write_all(json_string.as_bytes())
+        .expect("Unable to write macro doc to temp file");
 }
 
 #[cfg(any(feature = "test", test))]
@@ -174,6 +209,23 @@ fn camel_case(ident: &Ident) -> Ident {
     Ident::new(&result, ident.span())
 }
 
+/// Determines the argument name of the nth argument of the function.
+///
+/// Panics if the function has fewer than `nth` arguments. Returns an error if
+/// the parameter is a `self` receiver.
+fn arg_name(arg: &syn::ItemFn, nth: usize) -> Result<String, syn::Error> {
+    match &arg.sig.inputs[nth] {
+        syn::FnArg::Typed(pat_ty) => {
+            let pat = &pat_ty.pat;
+            Ok(quote! { #pat }.to_string())
+        }
+        _ => Err(syn::Error::new(
+            arg.sig.inputs[nth].span(),
+            "Unsupported argument name",
+        )),
+    }
+}
+
 /// Determines the argument type of the nth argument of the function.
 ///
 /// Adds a lifetime `'a` to the argument type if it is a reference type.
@@ -214,12 +266,51 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
     }
 }
 
+fn documentation_string(func: &syn::ItemFn) -> String {
+    let mut doc_lines = Vec::new();
+
+    for attr in &func.attrs {
+        if attr.path().is_ident("doc") {
+            // 2. Ensure it is a NameValue (e.g., #[doc = "..."])
+            //    We ignore #[doc(hidden)] or #[doc(alias = ...)] which are Meta::List
+            if let Meta::NameValue(meta_nv) = &attr.meta {
+                if let Expr::Lit(expr_lit) = &meta_nv.value {
+                    if let Lit::Str(lit_str) = &expr_lit.lit {
+                        let trimmed = lit_str.value().trim().to_string();
+                        doc_lines.push(trimmed);
+                    } else {
+                        panic!("Invalid doc string literal: :{:?}", expr_lit.lit);
+                    }
+                } else {
+                    panic!("Invalid doc string literal: {:?}", meta_nv.value);
+                }
+            }
+        }
+    }
+
+    // Join lines with a newline to reconstruct the full block
+    doc_lines.join("\n")
+}
+
 /// Produce a `EagerUnaryFunc` implementation.
-fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
+fn unary_func(
+    func: &syn::ItemFn,
+    modifiers: Modifiers,
+) -> darling::Result<(TokenStream, Option<FnDoc>)> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input_ty = arg_type(func, 0)?;
     let output_ty = output_type(func)?;
+
+    let doc = compose_fn_doc(
+        fn_name.to_string(),
+        &func,
+        &[&input_ty],
+        &[&arg_name(func, 0)?],
+        output_ty.clone(),
+        &modifiers,
+    );
+
     let Modifiers {
         is_monotone,
         sqlname,
@@ -232,6 +323,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
         could_error,
         propagates_nulls,
         introduces_nulls,
+        category: _,
     } = modifiers;
 
     if is_infix_op.is_some() {
@@ -348,7 +440,7 @@ fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<Token
 
         #func
     };
-    Ok(result)
+    Ok((result, Some(doc)))
 }
 
 /// Produce a `EagerBinaryFunc` implementation.
@@ -356,12 +448,21 @@ fn binary_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
     arena: bool,
-) -> darling::Result<TokenStream> {
+) -> darling::Result<(TokenStream, Option<FnDoc>)> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input1_ty = arg_type(func, 0)?;
     let input2_ty = arg_type(func, 1)?;
     let output_ty = output_type(func)?;
+
+    let doc = compose_fn_doc(
+        fn_name.to_string(),
+        &func,
+        &[&input1_ty, &input2_ty],
+        &[&arg_name(func, 0)?, &arg_name(func, 1)?],
+        output_ty.clone(),
+        &modifiers,
+    );
 
     let Modifiers {
         is_monotone,
@@ -375,6 +476,7 @@ fn binary_func(
         could_error,
         propagates_nulls,
         introduces_nulls,
+        category: _,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {
@@ -512,5 +614,152 @@ fn binary_func(
         #func
 
     };
-    Ok(result)
+
+    Ok((result, Some(doc)))
+}
+
+#[derive(Serialize)]
+struct FnDoc {
+    unique_name: String,
+    category: String,
+    signature: String,
+    description: String,
+}
+
+fn type_to_sqldoc(ty: &syn::Type) -> String {
+    fn remap_ty(ty: &str) -> &str {
+        match ty {
+            "AclItem" => "aclitem",
+            "Array" => "anyarray",
+            "Char" => "character",
+            "Date" => "date",
+            "DateTime" => "timestamptz",
+            "Datum" => "any",
+            "DatumList" => "anylist",
+            "DatumMap" => "anymap",
+            "Decimal" => "numeric",
+            "Interval" => "interval",
+            "Jsonb" | "JsonbRef" => "jsonb",
+            "MzAclItem" => "mz_acl_item",
+            "NaiveDateTime" => "timestamp",
+            "Numeric" => "numeric",
+            "Oid" => "oid",
+            "PgLegacyChar" => "character",
+            "PgLegacyName" => "name",
+            "Range" => "anyrange",
+            "RegClass" => "regclass",
+            "RegProc" => "regprocedure",
+            "RegType" => "regtype",
+            "String" => "text",
+            "str" => "text",
+            "Timestamp" => "mz_timestamp",
+            "NaiveTime" => "time",
+            "Uuid" => "uuid",
+            "VarChar" => "varchar",
+            "Vec<u8>" => "bytea",
+            "[u8]" => "bytea",
+            "bool" => "boolean",
+            "f32" => "float4",
+            "f64" => "float8",
+            "i16" => "int2",
+            "i32" => "int4",
+            "i64" => "int8",
+            "i8" => "int2",
+            "u16" => "uint2",
+            "u32" => "uint4",
+            "u64" => "uint8",
+            "u8" => "uint2",
+            _ => panic!("Unknown type for sqldoc: {}", ty),
+        }
+    }
+
+    match ty {
+        syn::Type::Path(type_path) => {
+            let seg = type_path.path.segments.last().expect("Path with segments");
+
+            if seg.ident == "Option" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return format!("{}?", type_to_sqldoc(inner_ty));
+                    }
+                }
+                panic!("Option function should return AngleBracketed types");
+            } else if seg.ident == "ExcludeNull"
+                || seg.ident == "Result"
+                || seg.ident == "CheckedTimestamp"
+                || seg.ident == "OrderedDecimal"
+            {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return type_to_sqldoc(inner_ty);
+                    }
+                }
+                panic!("Wrapper types should return AngleBracketed types");
+            } else if seg.ident == "ArrayRustType" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return format!("{}[]", type_to_sqldoc(inner_ty));
+                    }
+                }
+                panic!("ArrayRustType function should return AngleBracketed types");
+            } else if seg.ident == "Vec" {
+                if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first() {
+                        return format!("[{}]", type_to_sqldoc(inner_ty));
+                    }
+                }
+                panic!("Vec function should return AngleBracketed types");
+            } else {
+                remap_ty(&seg.ident.to_string()).to_string()
+            }
+        }
+        syn::Type::Reference(type_ref) => type_to_sqldoc(&type_ref.elem),
+        syn::Type::Group(group_ref) => type_to_sqldoc(&group_ref.elem),
+        syn::Type::Slice(slice_ref) => format!("[{}]", type_to_sqldoc(&slice_ref.elem)),
+        _ => panic!("Unsupported type: {ty:?}"),
+    }
+}
+
+fn compose_fn_doc(
+    name: String,
+    func: &syn::ItemFn,
+    arg_types: &[&syn::Type],
+    arg_names: &[&str],
+    return_type: syn::Type,
+    modifiers: &Modifiers,
+) -> FnDoc {
+    let sqlname = if let Some(sqlname) = &modifiers.sqlname {
+        format!("{}", quote! { #sqlname })
+    } else {
+        name.clone()
+    }
+    .replace('"', "");
+
+    let category = modifiers
+        .category
+        .as_deref()
+        .unwrap_or("Uncategorized")
+        .to_string();
+
+    let doc = documentation_string(func);
+
+    let return_type = type_to_sqldoc(&return_type);
+
+    let signature = if modifiers.is_infix_op.is_some() {
+        let args: Vec<String> = arg_types.iter().copied().map(type_to_sqldoc).collect();
+        format!("{} {sqlname} {} -> {return_type}", args[0], args[1],)
+    } else {
+        let args: Vec<String> = arg_names
+            .iter()
+            .zip(arg_types.iter().copied().map(type_to_sqldoc))
+            .map(|(name, ty)| format!("{name}: {ty}"))
+            .collect();
+        format!("{}({}) -> {return_type}", sqlname, args.join(", "),)
+    };
+    FnDoc {
+        unique_name: name.to_string(),
+        category,
+        signature,
+        description: doc.to_string(),
+    }
 }

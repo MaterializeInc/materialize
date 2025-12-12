@@ -11,6 +11,7 @@
 // source code is subject to the terms of the PostgreSQL license, a copy of
 // which can be found in the LICENSE file at the root of this repository.
 
+use enum_kinds::EnumKind;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::convert::{TryFrom, TryInto};
@@ -30,7 +31,6 @@ use mz_ore::cast::{self, CastFrom};
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
-use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
@@ -74,6 +74,16 @@ pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;
 pub use variadic::VariadicFunc;
 
+trait FuncDoc {
+    fn category() -> &'static str;
+    fn signature() -> &'static str;
+    fn doc() -> &'static str;
+    fn unmaterializable() -> bool;
+    fn url() -> &'static str;
+    fn version_added() -> &'static str;
+    fn known_time_zone_limitation_cast() -> bool;
+}
+
 /// The maximum size of the result strings of certain string functions, such as `repeat` and `lpad`.
 /// Chosen to be the smallest number to keep our tests passing without changing. 100MiB is probably
 /// higher than what we want, but it's better than no limit.
@@ -93,75 +103,40 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_int32(a: i32, b: i32) -> Result<i32, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_int64(a: i64, b: i64) -> Result<i64, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint16(a: u16, b: u16) -> Result<u16, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt16OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint32(a: u32, b: u32) -> Result<u32, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt32OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_uint64(a: u64, b: u64) -> Result<u64, EvalError> {
     a.checked_add(b)
         .ok_or_else(|| EvalError::UInt64OutOfRange(format!("{a} + {b}").into()))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -171,12 +146,7 @@ fn add_float32(a: f32, b: f32) -> Result<f32, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     let sum = a + b;
     if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {
@@ -186,36 +156,26 @@ fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_timestamp_interval<'a>(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     add_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
 fn add_timestamp_tz_interval<'a>(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     add_timestamplike_interval(a, b)
 }
 
 fn add_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<CheckedTimestamp<T>, EvalError>
 where
     T: TimestampLike,
 {
@@ -224,7 +184,7 @@ where
     let dt = dt
         .checked_add_signed(b.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    T::from_date_time(dt).try_into().err_into()
+    Ok(CheckedTimestamp::from_timestamplike(T::from_date_time(dt))?)
 }
 
 #[sqlfunc(
@@ -236,27 +196,22 @@ where
 fn sub_timestamp_interval<'a>(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     sub_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "-"
-)]
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_timestamp_tz_interval<'a>(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     sub_timestamplike_interval(a, b)
 }
 
 fn sub_timestamplike_interval<'a, T>(
     a: CheckedTimestamp<T>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<CheckedTimestamp<T>, EvalError>
 where
     T: TimestampLike,
 {
@@ -1560,17 +1515,12 @@ macro_rules! range_fn {
         paste::paste! {
 
             #[sqlfunc(
-                output_type = "bool",
                 is_infix_op = true,
                 sqlname = $sqlname,
-                propagates_nulls = true
             )]
-            fn [< range_ $fn >]<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a>
+            fn [< range_ $fn >]<'a>(l: Range<Datum<'a>>, r: Range<Datum<'a>>) -> bool
             {
-                if a.is_null() || b.is_null() { return Datum::Null }
-                let l = a.unwrap_range();
-                let r = b.unwrap_range();
-                Datum::from(Range::<Datum<'a>>::$range_fn(&l, &r))
+                Range::<Datum<'a>>::$range_fn(&l, &r)
             }
         }
     };
@@ -1685,6 +1635,7 @@ fn gte<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
     a >= b
 }
 
+/// Converts a timestamp into a string using the specified format
 #[sqlfunc(sqlname = "tocharts", propagates_nulls = true)]
 fn to_char_timestamp_format(ts: CheckedTimestamp<chrono::NaiveDateTime>, format: &str) -> String {
     let fmt = DateTimeFormat::compile(format);
@@ -2431,7 +2382,10 @@ fn starts_with(a: &str, b: &str) -> bool {
     a.starts_with(b)
 }
 
-#[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect)]
+#[derive(
+    Ord, PartialOrd, Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, MzReflect, EnumKind,
+)]
+#[enum_kind(BinaryFuncKind)]
 pub enum BinaryFunc {
     AddInt16(AddInt16),
     AddInt32(AddInt32),
@@ -2985,8 +2939,8 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             }),
-            BinaryFunc::RangeContainsRange { rev: false } => Ok(range_contains_range(a, b)),
-            BinaryFunc::RangeContainsRange { rev: true } => Ok(range_contains_range_rev(a, b)),
+            // BinaryFunc::RangeContainsRange { rev: false } => Ok(range_contains_range(a, b)),
+            // BinaryFunc::RangeContainsRange { rev: true } => Ok(range_contains_range_rev(a, b)),
             BinaryFunc::RegexpReplace { regex, limit } => {
                 regexp_replace_static(a, b, regex, *limit, temp_storage)
             }
@@ -5074,12 +5028,7 @@ fn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {
     a.trim_end_matches(|c| trim_chars.contains(c))
 }
 
-#[sqlfunc(
-    is_infix_op = true,
-    sqlname = "array_length",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc]
 fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     let i = match usize::try_from(b) {
         Ok(0) | Err(_) => return Ok(None),
@@ -5095,13 +5044,7 @@ fn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {
     })
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_lower",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {
@@ -5146,13 +5089,7 @@ fn array_remove<'a>(
     Ok(temp_storage.try_make_datum(|packer| packer.try_push_array(&dims, elems))?)
 }
 
-#[sqlfunc(
-    output_type = "Option<i32>",
-    is_infix_op = true,
-    sqlname = "array_upper",
-    propagates_nulls = true,
-    introduces_nulls = true
-)]
+#[sqlfunc]
 // TODO(benesch): remove potentially dangerous usage of `as`.
 #[allow(clippy::as_conversions)]
 fn array_upper<'a>(a: Array<'a>, i: i64) -> Result<Option<i32>, EvalError> {
@@ -5427,6 +5364,7 @@ fn digest_inner<'a>(
     Ok(Datum::Bytes(temp_storage.push_bytes(bytes)))
 }
 
+/// Test
 #[sqlfunc(
     output_type = "String",
     sqlname = "mz_render_typmod",

@@ -1,0 +1,3673 @@
+[
+  {
+    "type": "Uncategorized",
+    "description": "",
+    "functions": [
+      {
+        "signature": "-(a: float4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "-(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "-(a: int2) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "-(a: int4) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "-(a: int8) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "-(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "-(i: interval) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "NOT(a: boolean) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "\\char\\_to_char(a: character) -> character",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "\\char\\_to_integer(a: character) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "\\char\\_to_text(a: character) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "\\char\\_to_varchar(a: character) -> varchar",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "abs(a: float4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "abs(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "abs(a: int2) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "abs(a: int4) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "abs(a: int8) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "abs(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "aclitem_grantee(acl_item: aclitem) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "aclitem_grantor(acl_item: aclitem) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "aclitem_privileges(acl_item: aclitem) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "age(a: timestamp, b: timestamp) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "age(a: timestamptz, b: timestamptz) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any != any -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any - int8 -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any - text -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any < any -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any <= any -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any = any -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any > any -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any >= any -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any ? text -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any array_contains anyarray -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any || any -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any || any -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any || any -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "any || any -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyarray <@ anyarray -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyarray @> anyarray -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anylist <@ anylist -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anylist @> anylist -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anymap -> text -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anymap ? text -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anymap ?& anyarray -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anymap ?| anyarray -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anymap @> anymap -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange && anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange &< anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange &> anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange * anyrange -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange + anyrange -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange - anyrange -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange -|- anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange << anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange <@ anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange <@ date -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange <@ int4 -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange <@ int8 -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange <@ numeric -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange <@ timestamp -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange <@ timestamptz -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange >> anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange @> anyrange -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange @> date -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange @> int4 -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange @> int8 -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange @> numeric -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange @> timestamp -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "anyrange @> timestamptz -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "array_length(a: anyarray, b: int8) -> int4?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "array_lower(a: anyarray, i: int8) -> int4?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "array_remove(arr: anyarray, b: any) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "array_upper(a: anyarray, i: int8) -> int4?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "ascii(a: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_boolean(a: int8) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_double(a: int8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_integer(a: int8) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_mz_timestamp(a: int8) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_oid(a: int8) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_real(a: int8) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_smallint(a: int8) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_text(a: int8) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_uint2(a: int8) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_uint4(a: int8) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bigint_to_uint8(a: int8) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bin_unix_epoch_timestamp(stride: interval, source: timestamp) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bin_unix_epoch_timestamptz(stride: interval, source: timestamptz) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bit_count(a: [uint2]) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bit_length(a: [uint2]) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bit_length(a: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "boolean_to_bigint(a: boolean) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "boolean_to_integer(a: boolean) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "boolean_to_nonstandard_text(a: boolean) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "boolean_to_text(a: boolean) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "btrim(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "btrim(a: text, trim_chars: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "bytea_to_text(a: [uint2]) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "cbrtf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "ceilf32(a: float4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "ceilf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "ceilnumeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "char_length(a: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "char_to_text(a: character) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "constant_time_compare_bytes(a: [uint2], b: [uint2]) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "constant_time_compare_strings(a: text, b: text) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "convert_from(a: [uint2], b: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "crc32_bytes(a: [uint2]) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "crc32_string(a: text) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date + interval -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date + time -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date - date -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date - interval -> timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_partiv(units: text, b: interval) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_partt(units: text, b: time) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_partts(units: text, ts: timestamp) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_parttstz(units: text, ts: timestamptz) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_to_mz_timestamp(a: date) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_to_text(a: date) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_trunciv(units: text, mut interval: interval) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_truncts(units: text, ts: timestamp) -> timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "date_trunctstz(units: text, ts: timestamptz) -> timestamptz",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "decode(string: text, format: text) -> [uint2]",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "digest(a: [uint2], b: text) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "digest(a: text, b: text) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "double_to_integer(a: float8) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "double_to_real(a: float8) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "double_to_smallint(a: float8) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "double_to_text(a: float8) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "double_to_uint2(a: float8) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "double_to_uint4(a: float8) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "double_to_uint8(a: float8) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "encode(bytes: [uint2], format: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "expf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "expnumeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "extractd(units: text, b: date) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "extractiv(units: text, b: interval) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "extractt(units: text, b: time) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "extractts(units: text, ts: timestamp) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "extracttstz(units: text, ts: timestamptz) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "f64toi64(a: float8) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float4 % float4 -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float4 * float4 -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float4 + float4 -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float4 - float4 -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float4 / float4 -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float8 % float8 -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float8 * float8 -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float8 + float8 -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float8 - float8 -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "float8 / float8 -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "floorf32(a: float4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "floorf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "floornumeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "get_bit(bytes: [uint2], index: int4) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "get_byte(bytes: [uint2], index: int4) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "initcap(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 # int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 % int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 & int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 * int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 + int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 - int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 / int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 << int4 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 >> int4 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int2 | int2 -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 # int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 % int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 & int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 * int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 + int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 - int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 / int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 << int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 >> int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int4 | int4 -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 # int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 % int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 & int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 * int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 + int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 - int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 / int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 << int4 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 >> int4 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "int8 | int8 -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_\\char\\(a: int4) -> character",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_bigint(a: int4) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_boolean(a: int4) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_double(a: int4) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_mz_timestamp(a: int4) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_oid(a: int4) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_real(a: int4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_smallint(a: int4) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_text(a: int4) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_uint2(a: int4) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_uint4(a: int4) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "integer_to_uint8(a: int4) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "interval * float8 -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "interval + interval -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "interval - interval -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "interval / float8 -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "interval_to_text(a: interval) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "interval_to_time(i: interval) -> time",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "isfalse(a: any) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "isnull(a: any) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "istrue(a: any) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb #> anyarray -> jsonb?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb #>> anyarray -> text?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb -> int8 -> jsonb?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb -> text -> jsonb?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb ->> int8 -> text?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb ->> text -> text?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb @> jsonb -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb || jsonb -> jsonb?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb_to_bigint(a: jsonb) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb_to_boolean(a: jsonb) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb_to_double(a: jsonb) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb_to_integer(a: jsonb) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb_to_real(a: jsonb) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb_to_smallint(a: jsonb) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonb_to_text(a: jsonb) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "jsonbable_to_jsonb(a: jsonb) -> jsonb",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "justify_days(i: interval) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "justify_hours(i: interval) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "justify_interval(i: interval) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "kafka_murmur2_bytes(a: [uint2]) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "kafka_murmur2_string(a: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "left(string: text, b: int4) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "length(a: [uint2], b: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "like_escape(pattern: text, b: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "list_remove(a: anylist, b: any) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "lnf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "lnnumeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "log(mut a: numeric, mut b: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "log10f64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "log10numeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "ltrim(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "ltrim(a: text, trim_chars: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_aclitem_contains_privilege(mz_acl_item: mz_acl_item, privileges: text) -> boolean",
+        "description": "Determines if an mz_aclitem contains one of the specified privileges. This will return true if\nany of the listed privileges are contained in the mz_aclitem.",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_aclitem_grantee(mz_acl_item: mz_acl_item) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_aclitem_grantor(mz_acl_item: mz_acl_item) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_aclitem_privileges(mz_acl_item: mz_acl_item) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_format_privileges(privileges: text) -> text[]",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_panic(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_render_typmod(oid: uint4, typmod: int4) -> any",
+        "description": "Test",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_sleep(a: float8) -> timestamptz?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_timestamp_to_text(a: mz_timestamp) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_timestamp_to_timestamp(a: mz_timestamp) -> timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_timestamp_to_timestamp_tz(a: mz_timestamp) -> timestamptz",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_validate_privileges(privileges: text) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "mz_validate_role_privilege(privilege: text) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric % numeric -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric * numeric -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric + numeric -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric - numeric -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric / numeric -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_bigint(a: numeric) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_double(a: numeric) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_integer(a: numeric) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_mz_timestamp(a: numeric) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_real(a: numeric) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_smallint(a: numeric) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_text(a: numeric) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_uint2(a: numeric) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_uint4(a: numeric) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "numeric_to_uint8(a: numeric) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "octet_length(a: [uint2]) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "octet_length(a: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "oid_to_bigint(a: oid) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "oid_to_integer(a: oid) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "oid_to_text(a: oid) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "oidtoregclass(a: oid) -> regclass",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "oidtoregproc(a: oid) -> regprocedure",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "oidtoregtype(a: oid) -> regtype",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "parse_ident(ident: text, strict: boolean) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "pg_size_pretty(a: numeric) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "position(substring: text, string: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "power(a: float8, b: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "power_numeric(mut a: numeric, b: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "pretty_sql(sql: text, width: int4) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "range_empty(a: anyrange) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "range_lower_inc(a: anyrange) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "range_lower_inf(a: anyrange) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "range_upper_inc(a: anyrange) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "range_upper_inf(a: anyrange) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_bigint(a: float4) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_double(a: float4) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_integer(a: float4) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_smallint(a: float4) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_text(a: float4) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_uint2(a: float4) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_uint4(a: float4) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "real_to_uint8(a: float4) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "regclasstooid(a: regclass) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "regproctooid(a: regprocedure) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "regtypetooid(a: regtype) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "reverse(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "right(string: text, n: int4) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "round(a: numeric, mut b: int4) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "roundf32(a: float4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "roundf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "roundnumeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "rtrim(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "rtrim(a: text, trim_chars: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "seahash_bytes(a: [uint2]) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "seahash_string(a: text) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_bigint(a: int2) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_double(a: int2) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_integer(a: int2) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_real(a: int2) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_text(a: int2) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_uint2(a: int2) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_uint4(a: int2) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "smallint_to_uint8(a: int2) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "sqrtf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "sqrtnumeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "starts_with(a: text, b: text) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "step_mz_timestamp(a: mz_timestamp) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (acos)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (acosh)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (asin)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (asinh)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (atan)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (atanh)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (chr)(a: int4) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (cos)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (cosh)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (cot)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (degrees)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (jsonb_array_length)(a: jsonb) -> int4?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (jsonb_pretty)(a: jsonb) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (jsonb_strip_nulls)(a: jsonb) -> jsonb",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (jsonb_typeof)(a: jsonb) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (lower)(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (mz_row_size)(a: anylist) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (mz_type_name)(oid: oid) -> text?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (pg_column_size)(a: any) -> int4?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (radians)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (sin)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (sinh)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (tan)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (tanh)(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "stringify! (upper)(a: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text ilike text -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text like text -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text || text -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_\\char\\(a: text) -> character",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_bigint(a: text) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_boolean(a: text) -> boolean",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_bytea(a: text) -> [uint2]",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_date(a: text) -> date",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_double(a: text) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_integer(a: text) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_interval(a: text) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_jsonb(a: text) -> jsonb",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_mz_timestamp(a: text) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_name(a: text) -> name",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_oid(a: text) -> oid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_real(a: text) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_smallint(a: text) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_time(a: text) -> time",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_uint2(a: text) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_uint4(a: text) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_uint8(a: text) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "text_to_uuid(a: text) -> uuid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "time + interval -> time",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "time - interval -> time",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "time - time -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "time_to_interval(t: time) -> interval",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "time_to_text(a: time) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp + interval -> timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp - interval -> timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp - timestamp -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_to_date(a: timestamp) -> date",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_to_mz_timestamp(a: timestamp) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_to_text(a: timestamp) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_to_time(a: timestamp) -> time",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_tz_to_mz_timestamp(a: timestamptz) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_with_time_zone_to_date(a: timestamptz) -> date",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_with_time_zone_to_text(a: timestamptz) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamp_with_time_zone_to_time(a: timestamptz) -> time",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamptz + interval -> timestamptz",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamptz - interval -> timestamptz",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timestamptz - timestamptz -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "timezone_offset(tz_str: text, b: timestamptz) -> any",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "tocharts(ts: timestamp, format: text) -> text",
+        "description": "Converts a timestamp into a string using the specified format",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "tochartstz(ts: timestamptz, format: text) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "tots(f: float8) -> timestamptz",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "truncf32(a: float4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "truncf64(a: float8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "truncnumeric(a: numeric) -> numeric",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "try_parse_monotonic_iso8601_timestamp(a: text) -> timestamp?",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 # uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 % uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 & uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 * uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 + uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 - uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 / uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 << uint4 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 >> uint4 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2 | uint2 -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_bigint(a: uint2) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_double(a: uint2) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_integer(a: uint2) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_real(a: uint2) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_smallint(a: uint2) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_text(a: uint2) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_uint4(a: uint2) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint2_to_uint8(a: uint2) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 # uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 % uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 & uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 * uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 + uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 - uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 / uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 << uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 >> uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4 | uint4 -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_bigint(a: uint4) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_double(a: uint4) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_integer(a: uint4) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_mz_timestamp(a: uint4) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_real(a: uint4) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_smallint(a: uint4) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_text(a: uint4) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_uint2(a: uint4) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint4_to_uint8(a: uint4) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 # uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 % uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 & uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 * uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 + uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 - uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 / uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 << uint4 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 >> uint4 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8 | uint8 -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_bigint(a: uint8) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_double(a: uint8) -> float8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_integer(a: uint8) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_mz_timestamp(a: uint8) -> mz_timestamp",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_real(a: uint8) -> float4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_smallint(a: uint8) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_text(a: uint8) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_uint2(a: uint8) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uint8_to_uint4(a: uint8) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uuid_generate_v5(a: uuid, b: text) -> uuid",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "uuid_to_text(u: uuid) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "varchar_to_text(a: varchar) -> text",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "~(a: int2) -> int2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "~(a: int4) -> int4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "~(a: int8) -> int8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "~(a: uint2) -> uint2",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "~(a: uint4) -> uint4",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      },
+      {
+        "signature": "~(a: uint8) -> uint8",
+        "description": "",
+        "url": "",
+        "version_added": "",
+        "unmaterializable": false,
+        "known_time_zone_limitation_cast": false
+      }
+    ]
+  }
+]
+

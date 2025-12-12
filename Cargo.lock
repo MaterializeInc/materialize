@@ -6252,6 +6252,7 @@ dependencies = [
  "differential-dataflow",
  "encoding",
  "enum-iterator",
+ "enum-kinds",
  "fallible-iterator",
  "hex",
  "hmac",
@@ -6316,6 +6317,8 @@ dependencies = [
  "prettyplease",
  "proc-macro2",
  "quote",
+ "serde",
+ "serde_json",
  "syn 2.0.111",
  "workspace-hack",
 ]
