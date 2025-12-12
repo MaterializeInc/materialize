@@ -364,7 +364,7 @@ impl PersistClient {
             Arc::clone(&self.blob),
             reader_id,
             schemas,
-            reader_state.since,
+            reader_state,
             heartbeat_ts,
         )
         .await;

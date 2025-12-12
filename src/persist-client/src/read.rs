@@ -10,17 +10,15 @@
 //! Read capabilities and handles
 
 use async_stream::stream;
-use std::backtrace::Backtrace;
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Formatter};
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use differential_dataflow::consolidation::consolidate_updates;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::Description;
 use futures::Stream;
 use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
@@ -37,6 +35,7 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
+use tokio::sync::Notify;
 use tracing::{Instrument, debug_span, warn};
 use uuid::Uuid;
 
@@ -47,7 +46,7 @@ use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_
 use crate::internal::encoding::Schemas;
 use crate::internal::machine::{ExpireFn, Machine};
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
-use crate::internal::state::{BatchPart, HollowBatch};
+use crate::internal::state::{HollowBatch, LeasedReaderState};
 use crate::internal::watch::StateWatch;
 use crate::iter::{Consolidator, StructuredSort};
 use crate::schema::SchemaCache;
@@ -501,6 +500,104 @@ where
     }
 }
 
+pub(crate) struct AwaitableState<T> {
+    state: Arc<RwLock<T>>,
+    /// NB: we can't wrap the [Notify] in the lock since the signature of [Notify::notified]
+    /// doesn't allow it, but this is only accessed while holding the lock.
+    notify: Arc<Notify>,
+}
+
+impl<T: Debug> Debug for AwaitableState<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        self.state.read().fmt(f)
+    }
+}
+
+impl<T> Clone for AwaitableState<T> {
+    fn clone(&self) -> Self {
+        Self {
+            state: Arc::clone(&self.state),
+            notify: Arc::clone(&self.notify),
+        }
+    }
+}
+
+impl<T> AwaitableState<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            state: Arc::new(RwLock::new(value)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    pub fn read<A>(&self, read_fn: impl FnOnce(&T) -> A) -> A {
+        let guard = self.state.read().expect("not poisoned");
+        let state = &*guard;
+        read_fn(state)
+    }
+
+    pub fn modify<A>(&self, write_fn: impl FnOnce(&mut T) -> A) -> A {
+        let mut guard = self.state.write().expect("not poisoned");
+        let state = &mut *guard;
+        let result = write_fn(state);
+        // Notify everyone while holding the guard. This guarantees that all waiters will observe
+        // the just-updated state.
+        self.notify.notify_waiters();
+        result
+    }
+
+    pub async fn wait_for<A>(&self, mut wait_fn: impl FnMut(&T) -> Option<A>) -> A {
+        loop {
+            let notified = {
+                let guard = self.state.read().expect("not poisoned");
+                let state = &*guard;
+                if let Some(result) = wait_fn(state) {
+                    return result;
+                }
+                // Grab the notified future while holding the guard. This ensures that we will see any
+                // future modifications to this state, even if they happen before the first poll.
+                self.notify.notified()
+            };
+
+            notified.await;
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct LeaseMetadata {
+    recent_seqno: SeqNo,
+    /// The set of active leases. We hold back the seqno to the minimum lease or
+    /// the recent_seqno, whichever is earlier.
+    leases: BTreeMap<SeqNo, Lease>,
+}
+
+impl LeaseMetadata {
+    pub fn observe_seqno(&mut self, seqno: SeqNo) {
+        self.recent_seqno = seqno.max(self.recent_seqno);
+    }
+
+    pub fn lease_seqno(&mut self) -> Lease {
+        let seqno = self.recent_seqno;
+        let lease = self
+            .leases
+            .entry(seqno)
+            .or_insert_with(|| Lease::new(seqno));
+        lease.clone()
+    }
+
+    pub fn outstanding_seqno(&mut self) -> Option<SeqNo> {
+        while let Some(first) = self.leases.first_entry() {
+            if first.get().count() <= 1 {
+                first.remove();
+            } else {
+                return Some(*first.key());
+            }
+        }
+        None
+    }
+}
+
 /// A "capability" granting the ability to read the state of some shard at times
 /// greater or equal to `self.since()`.
 ///
@@ -534,7 +631,7 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
-    pub(crate) leased_seqnos: BTreeMap<SeqNo, Lease>,
+    pub(crate) leased_seqnos: AwaitableState<LeaseMetadata>,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
 
@@ -561,11 +658,15 @@ where
         blob: Arc<dyn Blob>,
         reader_id: LeasedReaderId,
         read_schemas: Schemas<K, V>,
-        since: Antichain<T>,
+        state: LeasedReaderState<T>,
         last_heartbeat: EpochMillis,
     ) -> Self {
         let schema_cache = machine.applier.schema_cache();
         let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
+        let leased_seqnos = AwaitableState::new(LeaseMetadata {
+            recent_seqno: state.seqno,
+            leases: Default::default(),
+        });
         ReadHandle {
             cfg,
             metrics: Arc::clone(&metrics),
@@ -575,9 +676,9 @@ where
             reader_id: reader_id.clone(),
             read_schemas,
             schema_cache,
-            since,
+            since: state.since,
             last_heartbeat,
-            leased_seqnos: BTreeMap::new(),
+            leased_seqnos: leased_seqnos.clone(),
             unexpired_state: Some(UnexpiredReadHandleState {
                 expire_fn,
                 _heartbeat_tasks: JoinHandle::abort_on_drop(
@@ -600,14 +701,7 @@ where
     }
 
     fn outstanding_seqno(&mut self) -> Option<SeqNo> {
-        while let Some(first) = self.leased_seqnos.first_entry() {
-            if first.get().count() <= 1 {
-                first.remove();
-            } else {
-                return Some(*first.key());
-            }
-        }
-        None
+        self.leased_seqnos.modify(|s| s.outstanding_seqno())
     }
 
     /// Forwards the since frontier of this handle, giving up the ability to
@@ -630,27 +724,6 @@ where
             .machine
             .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
             .await;
-
-        // Debugging for database-issues#4590.
-        if let Some(outstanding_seqno) = outstanding_seqno {
-            let seqnos_held = _seqno.0.saturating_sub(outstanding_seqno.0);
-            // We get just over 1 seqno-per-second on average for a shard in
-            // prod, so this is about an hour.
-            const SEQNOS_HELD_THRESHOLD: u64 = 60 * 60;
-            if seqnos_held >= SEQNOS_HELD_THRESHOLD {
-                tracing::info!(
-                    "{} reader {} holding an unexpected number of seqnos {} vs {}: {:?}. bt: {:?}",
-                    self.machine.shard_id(),
-                    self.reader_id,
-                    outstanding_seqno,
-                    _seqno,
-                    self.leased_seqnos.keys().take(10).collect::<Vec<_>>(),
-                    // The Debug impl of backtrace is less aesthetic, but will put the trace
-                    // on a single line and play more nicely with our Honeycomb quota
-                    Backtrace::force_capture(),
-                );
-            }
-        }
 
         self.since = current_reader_since.0;
         // A heartbeat is just any downgrade_since traffic, so update the
@@ -745,23 +818,6 @@ where
         Ok(Subscribe::new(snapshot_parts, listen))
     }
 
-    fn lease_batch_part(
-        &mut self,
-        desc: Description<T>,
-        part: BatchPart<T>,
-        filter: FetchBatchFilter<T>,
-    ) -> LeasedBatchPart<T> {
-        LeasedBatchPart {
-            metrics: Arc::clone(&self.metrics),
-            shard_id: self.machine.shard_id(),
-            filter,
-            desc,
-            part,
-            lease: self.lease_seqno(),
-            filter_pushdown_audit: false,
-        }
-    }
-
     fn lease_batch_parts(
         &mut self,
         batch: HollowBatch<T>,
@@ -771,8 +827,17 @@ where
             let blob = Arc::clone(&self.blob);
             let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
+            let lease = self.lease_seqno();
             for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
-                yield self.lease_batch_part(desc.clone(), part.expect("leased part").into_owned(), filter.clone())
+                yield LeasedBatchPart {
+                    metrics: Arc::clone(&self.metrics),
+                    shard_id: self.machine.shard_id(),
+                    filter: filter.clone(),
+                    desc: desc.clone(),
+                    part: part.expect("leased part").into_owned(),
+                    lease: lease.clone(),
+                    filter_pushdown_audit: false,
+                }
             }
         }
     }
@@ -781,12 +846,11 @@ where
     /// "leased out" to a `LeasedBatchPart`, and cannot be garbage
     /// collected until its lease has been returned.
     fn lease_seqno(&mut self) -> Lease {
-        let seqno = self.machine.seqno();
-        let lease = self
-            .leased_seqnos
-            .entry(seqno)
-            .or_insert_with(|| Lease::new(seqno));
-        lease.clone()
+        let current_seqno = self.machine.seqno();
+        self.leased_seqnos.modify(|s| {
+            s.observe_seqno(current_seqno);
+            s.lease_seqno()
+        })
     }
 
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
@@ -819,7 +883,7 @@ where
             Arc::clone(&self.blob),
             new_reader_id,
             self.read_schemas.clone(),
-            reader_state.since,
+            reader_state,
             heartbeat_ts,
         )
         .await;
