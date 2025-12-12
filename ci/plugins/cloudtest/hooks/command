@@ -72,7 +72,6 @@ NO_COLOR=1 bin/ci-builder run stable --detach --name "kail" kail --context "$K8S
 TEST_CMD="bin/pytest ${run_args[*]}"
 
 ci_uncollapsed_heading "cloudtest: Running \`$TEST_CMD\`"
-TEST_RESULT=0
 
 cleanup() {
   # Don't run the cleanup function twice
@@ -193,8 +192,11 @@ cleanup() {
 
 trap cleanup EXIT SIGTERM SIGINT
 
+# When cancelled, always count as failed!
+TEST_RESULT=1
 # sed command to filter out ANSI command codes in run.log, while keeping them in Buildkite's view
-{ stdbuf --output=L --error=L bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee >(sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g" > run.log); } || TEST_RESULT=$?
+{ stdbuf --output=L --error=L bin/ci-builder run stable bin/pytest "${run_args[@]}" |& tee >(sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g" > run.log); }
+TEST_RESULT=${PIPESTATUS[0]:-1}
 if [ "$TEST_RESULT" != "0" ]; then
     # Give the logs some time to log panics, otherwise they might be missing later
     sleep 10
