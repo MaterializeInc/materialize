@@ -1,15 +1,15 @@
 ---
-title: "Install Self-Managed Materialize"
-description: "Install Self-Managed Materialize."
+title: "Installation"
+description: "Installation guides for Self-Managed Materialize."
 disable_list: true
 menu:
   main:
-    parent: get-started
-    identifier: "install"
-    weight: 20
+    parent: "sm-deployments"
+    identifier: "installation"
+    weight: 5
 aliases:
-  - /get-started/key-concepts/#indexes
-  - /self-managed/v25.1/get-started/install/
+  - /self-managed/v25.1/installation/
+  - /installation/
 ---
 
 {{% include-from-yaml data="self_managed/installation"
