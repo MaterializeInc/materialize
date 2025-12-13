@@ -334,6 +334,7 @@ impl ConnectionOptionExtracted {
                         }).transpose()?,
                         topic_config: btreemap! {
                             "cleanup.policy".to_string() => "compact".to_string(),
+                            "segment.bytes".to_string() => "134217728".to_string(), // 128 MB
                         },
                     },
                     options: BTreeMap::new(),
