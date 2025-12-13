@@ -28,7 +28,7 @@ use crate::coord::{
     AlterSecret, Coordinator, CreateSecretEnsure, CreateSecretFinish, Message, PlanValidity,
     RotateKeysSecretEnsure, RotateKeysSecretFinish, SecretStage, StageResult, Staged,
 };
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
+use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, ExprPrepStyleOneShot};
 use crate::session::Session;
 use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, catalog};
 
@@ -145,14 +145,12 @@ impl Coordinator {
         secret_as: &mut MirScalarExpr,
     ) -> Result<Vec<u8>, AdapterError> {
         let temp_storage = RowArena::new();
-        prep_scalar_expr(
-            secret_as,
-            ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
-                session,
-                catalog_state: self.catalog().state(),
-            },
-        )?;
+        let style = ExprPrepStyleOneShot {
+            logical_time: EvalTime::NotAvailable,
+            session,
+            catalog_state: self.catalog().state(),
+        };
+        style.prep_scalar_expr(secret_as)?;
         let evaled = secret_as.eval(&[], &temp_storage)?;
 
         if evaled == Datum::Null {

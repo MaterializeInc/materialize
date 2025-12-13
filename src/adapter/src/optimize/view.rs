@@ -10,8 +10,8 @@
 //! An Optimizer that
 //! 1. Optimistically calls `optimize_mir_constant`.
 //! 2. Then, if we haven't arrived at a constant, it does real optimization:
-//!    - calls `prep_relation_expr` an `ExprPrepStyle` was given.
-//!    - calls `optimize_mir_local`, i.e., the logical optimizer.
+//!    - applies a [`ExprPrepStyle`].
+//!    - calls [`optimize_mir_local`], i.e., the logical optimizer.
 //!
 //! This is used for `CREATE VIEW` statements and in various other situations where no physical
 //! optimization is needed, such as for `INSERT` statements.
@@ -30,58 +30,63 @@ use mz_transform::reprtypecheck::{
     SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
 };
 
-use crate::optimize::dataflows::{ExprPrepStyle, prep_relation_expr};
+use crate::optimize::dataflows::{ExprPrepStyle, NoopExprPrepStyle};
 use crate::optimize::{
     Optimize, OptimizerConfig, OptimizerError, optimize_mir_constant, optimize_mir_local,
     trace_plan,
 };
 
-pub struct Optimizer<'a> {
+pub struct Optimizer<S> {
     /// A representation typechecking context to use throughout the optimizer pipeline.
     repr_typecheck_ctx: ReprTypecheckContext,
     /// Optimizer config.
     config: OptimizerConfig,
     /// Optimizer metrics.
     ///
-    /// Allowed to be `None` for cases where view optimization is invoked outside of the
-    /// coordinator context and the metrics are not available.
+    /// Allowed to be `None` for cases where view optimization is invoked outside the
+    /// coordinator context, and the metrics are not available.
     metrics: Option<OptimizerMetrics>,
-    /// If present, the optimizer will call `prep_relation_expr` using the given `ExprPrepStyle`.
-    expr_prep_style: Option<ExprPrepStyle<'a>>,
+    /// Expression preparation style to use. Can be `NoopExprPrepStyle` to skip expression
+    /// preparation.
+    expr_prep_style: S,
     /// Whether to call `FoldConstants` with a size limit, or try to fold constants of any size.
     fold_constants_limit: bool,
 }
 
-impl<'a> Optimizer<'a> {
+impl Optimizer<NoopExprPrepStyle> {
+    /// Creates an optimizer instance that does not perform any expression
+    /// preparation. Additionally, this instance calls constant folding with a size limit.
     pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
         Self {
             repr_typecheck_ctx: empty_repr_context(),
             config,
             metrics,
-            expr_prep_style: None,
+            expr_prep_style: NoopExprPrepStyle,
             fold_constants_limit: true,
         }
     }
+}
 
-    /// Creates an optimizer instance that also calls `prep_relation_expr` with the given
-    /// `ExprPrepStyle`, so that unmaterializable functions are resolved.
-    /// Additionally, this instance calls constant folding without a size limit.
+impl<S> Optimizer<S> {
+    /// Creates an optimizer instance that takes a [`ExprPrepStyle`] to handle
+    /// unmaterializable functions. Additionally, this instance calls constant
+    /// folding without a size limit.
     pub fn new_with_prep_no_limit(
         config: OptimizerConfig,
         metrics: Option<OptimizerMetrics>,
-        expr_prep_style: ExprPrepStyle<'a>,
-    ) -> Optimizer<'a> {
+        expr_prep_style: S,
+    ) -> Optimizer<S> {
         Self {
             repr_typecheck_ctx: empty_repr_context(),
             config,
             metrics,
-            expr_prep_style: Some(expr_prep_style),
+            expr_prep_style,
             fold_constants_limit: false,
         }
     }
 }
 
-impl Optimize<HirRelationExpr> for Optimizer<'_> {
+impl<S: ExprPrepStyle> Optimize<HirRelationExpr> for Optimizer<S> {
     type To = OptimizedMirRelationExpr;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
@@ -113,12 +118,10 @@ impl Optimize<HirRelationExpr> for Optimizer<'_> {
             trace_plan!(at: "local", &expr);
             OptimizedMirRelationExpr(expr)
         } else {
-            // Do the real optimization (starting with `prep_relation_expr` if needed).
-            if let Some(expr_prep_style) = &self.expr_prep_style {
-                let mut opt_expr = OptimizedMirRelationExpr(expr);
-                prep_relation_expr(&mut opt_expr, expr_prep_style.clone())?;
-                expr = opt_expr.into_inner();
-            }
+            // Do the real optimization (starting with `expr_prep_style`).
+            let mut opt_expr = OptimizedMirRelationExpr(expr);
+            self.expr_prep_style.prep_relation_expr(&mut opt_expr)?;
+            expr = opt_expr.into_inner();
             optimize_mir_local(expr, &mut transform_ctx)?
         };
 
