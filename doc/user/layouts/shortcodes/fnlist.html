@@ -11,7 +11,12 @@
 
 ### {{.type}} functions
 
-<p>{{ if .description }} {{ .description | $.Page.RenderString }} {{ end }}</p>
+<p>
+  {{ if .description }}
+    {{ .description | $.Page.RenderString }}
+  {{ else }}
+   {{ index $.Site.Data.sql_funcs_types .type }}
+  {{ end }}</p>
 
 {{end}}
 

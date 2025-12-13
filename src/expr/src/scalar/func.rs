@@ -74,14 +74,42 @@ pub use unary::{EagerUnaryFunc, LazyUnaryFunc, UnaryFunc};
 pub use unmaterializable::UnmaterializableFunc;
 pub use variadic::VariadicFunc;
 
-trait FuncDoc {
-    fn category() -> &'static str;
-    fn signature() -> &'static str;
-    fn doc() -> &'static str;
-    fn unmaterializable() -> bool;
-    fn url() -> &'static str;
-    fn version_added() -> &'static str;
-    fn known_time_zone_limitation_cast() -> bool;
+/// Documentation for a function.
+#[derive(Debug)]
+pub struct FuncDoc {
+    /// The category of the function. Used to group functions for documentation purposes.
+    pub category: &'static str,
+    /// The signature of the function. Should follow the `func(arg: type) -> type)` pattern,
+    /// or `type operator type -> type` pattern for infix operators.
+    pub signature: &'static str,
+    /// Human-readable description of the function's behavior.
+    pub description: &'static str,
+    /// `true` if the function is unmaterializable, i.e., not usable in maintained objects.
+    pub unmaterializable: bool,
+    /// Optional URL relative to the documentation for further details.
+    pub url: Option<&'static str>,
+    /// Human-readable version identifier when this function was added.
+    pub version_added: Option<&'static str>,
+    /// Whether explicit time zone casts are necessary.
+    pub known_time_zone_limitation_cast: bool,
+    /// Whether the function has side effects.
+    pub side_effects: bool,
+}
+
+impl FuncDoc {
+    /// Default, but without the trait to enable `const`.
+    const fn default() -> Self {
+        Self {
+            category: "",
+            signature: "",
+            description: "",
+            unmaterializable: false,
+            url: None,
+            version_added: None,
+            known_time_zone_limitation_cast: false,
+            side_effects: false,
+        }
+    }
 }
 
 /// The maximum size of the result strings of certain string functions, such as `repeat` and `lpad`.
@@ -103,7 +131,13 @@ pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&
     }
 }
 
-#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+/// Adds two int2 values and returns a int2 value. Errors on overflow.
+#[sqlfunc(
+    is_monotone = "(true, true)",
+    is_infix_op = true,
+    sqlname = "+",
+    category = "Numbers"
+)]
 fn add_int16(a: i16, b: i16) -> Result<i16, EvalError> {
     a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)
 }

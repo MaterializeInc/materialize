@@ -9,51 +9,31 @@
 
 //! Generate function documentation from macros.
 
-use differential_dataflow::trace::Description;
-use mz_sql_parser::ast::Expr;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::env;
-use std::path::PathBuf;
+
+use mz_expr::func::{AddInt16, BinaryFuncKind, FuncDoc, ListLengthMax};
+use serde::Serialize;
 
 fn main() {
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-
-    // 2. Define the path for the temporary collection file
-    // The macro will append data to this file.
-    let temp_collection_path = out_dir.join("macro_docs_temp");
-
-    // 3. List all files in the temporary collection directory and combine into a single file
-    // Group the entries by `category` and sort each group by name.
-
-    // List all files in `temp_collection_path`
-    let mut entries = vec![];
-    for entry in std::fs::read_dir(&temp_collection_path).unwrap() {
-        let entry = entry.unwrap();
-        let path = entry.path();
-        if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("json") {
-            entries.push(path);
-        }
-    }
-
     let mut categories: BTreeMap<String, Category> = BTreeMap::default();
 
-    for path in entries {
-        // Read contents into string
-        let json_string = std::fs::read_to_string(path).expect("can read");
-        let doc = serde_json::from_str::<FnDoc>(&json_string).expect("can parse");
+    for func in binary_func_kinds() {
+        let Some(doc) = binary_func_doc_for(func) else {
+            continue;
+        };
         let function = Function {
-            signature: doc.signature,
-            description: doc.description,
-            url: "".to_string(),
-            version_added: "".to_string(),
+            signature: doc.signature.to_string(),
+            description: doc.description.to_string(),
+            url: None,
+            version_added: None,
             unmaterializable: false,
             known_time_zone_limitation_cast: false,
+            side_effecting: false,
         };
         categories
-            .entry(doc.category.clone())
+            .entry(doc.category.to_string())
             .or_insert_with(|| Category {
-                r#type: doc.category,
+                r#type: doc.category.to_string(),
                 description: "".to_string(),
                 functions: Default::default(),
             })
@@ -71,15 +51,6 @@ fn main() {
     println!("{json}\n");
 }
 
-/// Struct from `mz-expr-derive-impl`, copied here to avoid dependency.
-#[derive(Debug, Deserialize)]
-struct FnDoc {
-    unique_name: String,
-    category: String,
-    signature: String,
-    description: String,
-}
-
 #[derive(Debug, Serialize, Ord, PartialOrd, Eq, PartialEq)]
 struct Category {
     r#type: String,
@@ -91,8 +62,418 @@ struct Category {
 struct Function {
     signature: String,
     description: String,
-    url: String,
-    version_added: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version_added: Option<String>,
     unmaterializable: bool,
     known_time_zone_limitation_cast: bool,
+    side_effecting: bool,
+}
+
+fn binary_func_doc_for(func: &BinaryFuncKind) -> Option<FuncDoc> {
+    match func {
+        BinaryFuncKind::AddInt16 => return Some(AddInt16::func_doc()),
+        BinaryFuncKind::AddInt32 => {}
+        BinaryFuncKind::AddInt64 => {}
+        BinaryFuncKind::AddUint16 => {}
+        BinaryFuncKind::AddUint32 => {}
+        BinaryFuncKind::AddUint64 => {}
+        BinaryFuncKind::AddFloat32 => {}
+        BinaryFuncKind::AddFloat64 => {}
+        BinaryFuncKind::AddInterval => {}
+        BinaryFuncKind::AddTimestampInterval => {}
+        BinaryFuncKind::AddTimestampTzInterval => {}
+        BinaryFuncKind::AddDateInterval => {}
+        BinaryFuncKind::AddDateTime => {}
+        BinaryFuncKind::AddTimeInterval => {}
+        BinaryFuncKind::AddNumeric => {}
+        BinaryFuncKind::AgeTimestamp => {}
+        BinaryFuncKind::AgeTimestampTz => {}
+        BinaryFuncKind::BitAndInt16 => {}
+        BinaryFuncKind::BitAndInt32 => {}
+        BinaryFuncKind::BitAndInt64 => {}
+        BinaryFuncKind::BitAndUint16 => {}
+        BinaryFuncKind::BitAndUint32 => {}
+        BinaryFuncKind::BitAndUint64 => {}
+        BinaryFuncKind::BitOrInt16 => {}
+        BinaryFuncKind::BitOrInt32 => {}
+        BinaryFuncKind::BitOrInt64 => {}
+        BinaryFuncKind::BitOrUint16 => {}
+        BinaryFuncKind::BitOrUint32 => {}
+        BinaryFuncKind::BitOrUint64 => {}
+        BinaryFuncKind::BitXorInt16 => {}
+        BinaryFuncKind::BitXorInt32 => {}
+        BinaryFuncKind::BitXorInt64 => {}
+        BinaryFuncKind::BitXorUint16 => {}
+        BinaryFuncKind::BitXorUint32 => {}
+        BinaryFuncKind::BitXorUint64 => {}
+        BinaryFuncKind::BitShiftLeftInt16 => {}
+        BinaryFuncKind::BitShiftLeftInt32 => {}
+        BinaryFuncKind::BitShiftLeftInt64 => {}
+        BinaryFuncKind::BitShiftLeftUint16 => {}
+        BinaryFuncKind::BitShiftLeftUint32 => {}
+        BinaryFuncKind::BitShiftLeftUint64 => {}
+        BinaryFuncKind::BitShiftRightInt16 => {}
+        BinaryFuncKind::BitShiftRightInt32 => {}
+        BinaryFuncKind::BitShiftRightInt64 => {}
+        BinaryFuncKind::BitShiftRightUint16 => {}
+        BinaryFuncKind::BitShiftRightUint32 => {}
+        BinaryFuncKind::BitShiftRightUint64 => {}
+        BinaryFuncKind::SubInt16 => {}
+        BinaryFuncKind::SubInt32 => {}
+        BinaryFuncKind::SubInt64 => {}
+        BinaryFuncKind::SubUint16 => {}
+        BinaryFuncKind::SubUint32 => {}
+        BinaryFuncKind::SubUint64 => {}
+        BinaryFuncKind::SubFloat32 => {}
+        BinaryFuncKind::SubFloat64 => {}
+        BinaryFuncKind::SubInterval => {}
+        BinaryFuncKind::SubTimestamp => {}
+        BinaryFuncKind::SubTimestampTz => {}
+        BinaryFuncKind::SubTimestampInterval => {}
+        BinaryFuncKind::SubTimestampTzInterval => {}
+        BinaryFuncKind::SubDate => {}
+        BinaryFuncKind::SubDateInterval => {}
+        BinaryFuncKind::SubTime => {}
+        BinaryFuncKind::SubTimeInterval => {}
+        BinaryFuncKind::SubNumeric => {}
+        BinaryFuncKind::MulInt16 => {}
+        BinaryFuncKind::MulInt32 => {}
+        BinaryFuncKind::MulInt64 => {}
+        BinaryFuncKind::MulUint16 => {}
+        BinaryFuncKind::MulUint32 => {}
+        BinaryFuncKind::MulUint64 => {}
+        BinaryFuncKind::MulFloat32 => {}
+        BinaryFuncKind::MulFloat64 => {}
+        BinaryFuncKind::MulNumeric => {}
+        BinaryFuncKind::MulInterval => {}
+        BinaryFuncKind::DivInt16 => {}
+        BinaryFuncKind::DivInt32 => {}
+        BinaryFuncKind::DivInt64 => {}
+        BinaryFuncKind::DivUint16 => {}
+        BinaryFuncKind::DivUint32 => {}
+        BinaryFuncKind::DivUint64 => {}
+        BinaryFuncKind::DivFloat32 => {}
+        BinaryFuncKind::DivFloat64 => {}
+        BinaryFuncKind::DivNumeric => {}
+        BinaryFuncKind::DivInterval => {}
+        BinaryFuncKind::ModInt16 => {}
+        BinaryFuncKind::ModInt32 => {}
+        BinaryFuncKind::ModInt64 => {}
+        BinaryFuncKind::ModUint16 => {}
+        BinaryFuncKind::ModUint32 => {}
+        BinaryFuncKind::ModUint64 => {}
+        BinaryFuncKind::ModFloat32 => {}
+        BinaryFuncKind::ModFloat64 => {}
+        BinaryFuncKind::ModNumeric => {}
+        BinaryFuncKind::RoundNumeric => {}
+        BinaryFuncKind::Eq => {}
+        BinaryFuncKind::NotEq => {}
+        BinaryFuncKind::Lt => {}
+        BinaryFuncKind::Lte => {}
+        BinaryFuncKind::Gt => {}
+        BinaryFuncKind::Gte => {}
+        BinaryFuncKind::LikeEscape => {}
+        BinaryFuncKind::IsLikeMatchCaseInsensitive => {}
+        BinaryFuncKind::IsLikeMatchCaseSensitive => {}
+        BinaryFuncKind::IsRegexpMatch => {}
+        BinaryFuncKind::ToCharTimestamp => {}
+        BinaryFuncKind::ToCharTimestampTz => {}
+        BinaryFuncKind::DateBinTimestamp => {}
+        BinaryFuncKind::DateBinTimestampTz => {}
+        BinaryFuncKind::ExtractInterval => {}
+        BinaryFuncKind::ExtractTime => {}
+        BinaryFuncKind::ExtractTimestamp => {}
+        BinaryFuncKind::ExtractTimestampTz => {}
+        BinaryFuncKind::ExtractDate => {}
+        BinaryFuncKind::DatePartInterval => {}
+        BinaryFuncKind::DatePartTime => {}
+        BinaryFuncKind::DatePartTimestamp => {}
+        BinaryFuncKind::DatePartTimestampTz => {}
+        BinaryFuncKind::DateTruncTimestamp => {}
+        BinaryFuncKind::DateTruncTimestampTz => {}
+        BinaryFuncKind::DateTruncInterval => {}
+        BinaryFuncKind::TimezoneTimestamp => {}
+        BinaryFuncKind::TimezoneTimestampTz => {}
+        BinaryFuncKind::TimezoneIntervalTimestamp => {}
+        BinaryFuncKind::TimezoneIntervalTimestampTz => {}
+        BinaryFuncKind::TimezoneIntervalTime => {}
+        BinaryFuncKind::TimezoneOffset => {}
+        BinaryFuncKind::TextConcat => {}
+        BinaryFuncKind::JsonbGetInt64 => {}
+        BinaryFuncKind::JsonbGetInt64Stringify => {}
+        BinaryFuncKind::JsonbGetString => {}
+        BinaryFuncKind::JsonbGetStringStringify => {}
+        BinaryFuncKind::JsonbGetPath => {}
+        BinaryFuncKind::JsonbGetPathStringify => {}
+        BinaryFuncKind::JsonbContainsString => {}
+        BinaryFuncKind::JsonbConcat => {}
+        BinaryFuncKind::JsonbContainsJsonb => {}
+        BinaryFuncKind::JsonbDeleteInt64 => {}
+        BinaryFuncKind::JsonbDeleteString => {}
+        BinaryFuncKind::MapContainsKey => {}
+        BinaryFuncKind::MapGetValue => {}
+        BinaryFuncKind::MapContainsAllKeys => {}
+        BinaryFuncKind::MapContainsAnyKeys => {}
+        BinaryFuncKind::MapContainsMap => {}
+        BinaryFuncKind::ConvertFrom => {}
+        BinaryFuncKind::Left => {}
+        BinaryFuncKind::Position => {}
+        BinaryFuncKind::Right => {}
+        BinaryFuncKind::RepeatString => {}
+        BinaryFuncKind::Normalize => {}
+        BinaryFuncKind::Trim => {}
+        BinaryFuncKind::TrimLeading => {}
+        BinaryFuncKind::TrimTrailing => {}
+        BinaryFuncKind::EncodedBytesCharLength => {}
+        BinaryFuncKind::ListLengthMax => return Some(ListLengthMax::func_doc()),
+        BinaryFuncKind::ArrayContains => {}
+        BinaryFuncKind::ArrayContainsArray => {}
+        BinaryFuncKind::ArrayContainsArrayRev => {}
+        BinaryFuncKind::ArrayLength => {}
+        BinaryFuncKind::ArrayLower => {}
+        BinaryFuncKind::ArrayRemove => {}
+        BinaryFuncKind::ArrayUpper => {}
+        BinaryFuncKind::ArrayArrayConcat => {}
+        BinaryFuncKind::ListListConcat => {}
+        BinaryFuncKind::ListElementConcat => {}
+        BinaryFuncKind::ElementListConcat => {}
+        BinaryFuncKind::ListRemove => {}
+        BinaryFuncKind::ListContainsList => {}
+        BinaryFuncKind::ListContainsListRev => {}
+        BinaryFuncKind::DigestString => {}
+        BinaryFuncKind::DigestBytes => {}
+        BinaryFuncKind::MzRenderTypmod => {}
+        BinaryFuncKind::Encode => {}
+        BinaryFuncKind::Decode => {}
+        BinaryFuncKind::LogNumeric => {}
+        BinaryFuncKind::Power => {}
+        BinaryFuncKind::PowerNumeric => {}
+        BinaryFuncKind::GetBit => {}
+        BinaryFuncKind::GetByte => {}
+        BinaryFuncKind::ConstantTimeEqBytes => {}
+        BinaryFuncKind::ConstantTimeEqString => {}
+        BinaryFuncKind::RangeContainsElem => {}
+        BinaryFuncKind::RangeContainsRange => {}
+        BinaryFuncKind::RangeOverlaps => {}
+        BinaryFuncKind::RangeAfter => {}
+        BinaryFuncKind::RangeBefore => {}
+        BinaryFuncKind::RangeOverleft => {}
+        BinaryFuncKind::RangeOverright => {}
+        BinaryFuncKind::RangeAdjacent => {}
+        BinaryFuncKind::RangeUnion => {}
+        BinaryFuncKind::RangeIntersection => {}
+        BinaryFuncKind::RangeDifference => {}
+        BinaryFuncKind::UuidGenerateV5 => {}
+        BinaryFuncKind::MzAclItemContainsPrivilege => {}
+        BinaryFuncKind::ParseIdent => {}
+        BinaryFuncKind::PrettySql => {}
+        BinaryFuncKind::RegexpReplace => {}
+        BinaryFuncKind::StartsWith => {}
+    }
+    None
+}
+
+fn binary_func_kinds() -> &'static [BinaryFuncKind] {
+    &[
+        BinaryFuncKind::AddInt16,
+        BinaryFuncKind::AddInt32,
+        BinaryFuncKind::AddInt64,
+        BinaryFuncKind::AddUint16,
+        BinaryFuncKind::AddUint32,
+        BinaryFuncKind::AddUint64,
+        BinaryFuncKind::AddFloat32,
+        BinaryFuncKind::AddFloat64,
+        BinaryFuncKind::AddInterval,
+        BinaryFuncKind::AddTimestampInterval,
+        BinaryFuncKind::AddTimestampTzInterval,
+        BinaryFuncKind::AddDateInterval,
+        BinaryFuncKind::AddDateTime,
+        BinaryFuncKind::AddTimeInterval,
+        BinaryFuncKind::AddNumeric,
+        BinaryFuncKind::AgeTimestamp,
+        BinaryFuncKind::AgeTimestampTz,
+        BinaryFuncKind::BitAndInt16,
+        BinaryFuncKind::BitAndInt32,
+        BinaryFuncKind::BitAndInt64,
+        BinaryFuncKind::BitAndUint16,
+        BinaryFuncKind::BitAndUint32,
+        BinaryFuncKind::BitAndUint64,
+        BinaryFuncKind::BitOrInt16,
+        BinaryFuncKind::BitOrInt32,
+        BinaryFuncKind::BitOrInt64,
+        BinaryFuncKind::BitOrUint16,
+        BinaryFuncKind::BitOrUint32,
+        BinaryFuncKind::BitOrUint64,
+        BinaryFuncKind::BitXorInt16,
+        BinaryFuncKind::BitXorInt32,
+        BinaryFuncKind::BitXorInt64,
+        BinaryFuncKind::BitXorUint16,
+        BinaryFuncKind::BitXorUint32,
+        BinaryFuncKind::BitXorUint64,
+        BinaryFuncKind::BitShiftLeftInt16,
+        BinaryFuncKind::BitShiftLeftInt32,
+        BinaryFuncKind::BitShiftLeftInt64,
+        BinaryFuncKind::BitShiftLeftUint16,
+        BinaryFuncKind::BitShiftLeftUint32,
+        BinaryFuncKind::BitShiftLeftUint64,
+        BinaryFuncKind::BitShiftRightInt16,
+        BinaryFuncKind::BitShiftRightInt32,
+        BinaryFuncKind::BitShiftRightInt64,
+        BinaryFuncKind::BitShiftRightUint16,
+        BinaryFuncKind::BitShiftRightUint32,
+        BinaryFuncKind::BitShiftRightUint64,
+        BinaryFuncKind::SubInt16,
+        BinaryFuncKind::SubInt32,
+        BinaryFuncKind::SubInt64,
+        BinaryFuncKind::SubUint16,
+        BinaryFuncKind::SubUint32,
+        BinaryFuncKind::SubUint64,
+        BinaryFuncKind::SubFloat32,
+        BinaryFuncKind::SubFloat64,
+        BinaryFuncKind::SubInterval,
+        BinaryFuncKind::SubTimestamp,
+        BinaryFuncKind::SubTimestampTz,
+        BinaryFuncKind::SubTimestampInterval,
+        BinaryFuncKind::SubTimestampTzInterval,
+        BinaryFuncKind::SubDate,
+        BinaryFuncKind::SubDateInterval,
+        BinaryFuncKind::SubTime,
+        BinaryFuncKind::SubTimeInterval,
+        BinaryFuncKind::SubNumeric,
+        BinaryFuncKind::MulInt16,
+        BinaryFuncKind::MulInt32,
+        BinaryFuncKind::MulInt64,
+        BinaryFuncKind::MulUint16,
+        BinaryFuncKind::MulUint32,
+        BinaryFuncKind::MulUint64,
+        BinaryFuncKind::MulFloat32,
+        BinaryFuncKind::MulFloat64,
+        BinaryFuncKind::MulNumeric,
+        BinaryFuncKind::MulInterval,
+        BinaryFuncKind::DivInt16,
+        BinaryFuncKind::DivInt32,
+        BinaryFuncKind::DivInt64,
+        BinaryFuncKind::DivUint16,
+        BinaryFuncKind::DivUint32,
+        BinaryFuncKind::DivUint64,
+        BinaryFuncKind::DivFloat32,
+        BinaryFuncKind::DivFloat64,
+        BinaryFuncKind::DivNumeric,
+        BinaryFuncKind::DivInterval,
+        BinaryFuncKind::ModInt16,
+        BinaryFuncKind::ModInt32,
+        BinaryFuncKind::ModInt64,
+        BinaryFuncKind::ModUint16,
+        BinaryFuncKind::ModUint32,
+        BinaryFuncKind::ModUint64,
+        BinaryFuncKind::ModFloat32,
+        BinaryFuncKind::ModFloat64,
+        BinaryFuncKind::ModNumeric,
+        BinaryFuncKind::RoundNumeric,
+        BinaryFuncKind::Eq,
+        BinaryFuncKind::NotEq,
+        BinaryFuncKind::Lt,
+        BinaryFuncKind::Lte,
+        BinaryFuncKind::Gt,
+        BinaryFuncKind::Gte,
+        BinaryFuncKind::LikeEscape,
+        BinaryFuncKind::IsLikeMatchCaseInsensitive,
+        BinaryFuncKind::IsLikeMatchCaseSensitive,
+        BinaryFuncKind::IsRegexpMatch,
+        BinaryFuncKind::ToCharTimestamp,
+        BinaryFuncKind::ToCharTimestampTz,
+        BinaryFuncKind::DateBinTimestamp,
+        BinaryFuncKind::DateBinTimestampTz,
+        BinaryFuncKind::ExtractInterval,
+        BinaryFuncKind::ExtractTime,
+        BinaryFuncKind::ExtractTimestamp,
+        BinaryFuncKind::ExtractTimestampTz,
+        BinaryFuncKind::ExtractDate,
+        BinaryFuncKind::DatePartInterval,
+        BinaryFuncKind::DatePartTime,
+        BinaryFuncKind::DatePartTimestamp,
+        BinaryFuncKind::DatePartTimestampTz,
+        BinaryFuncKind::DateTruncTimestamp,
+        BinaryFuncKind::DateTruncTimestampTz,
+        BinaryFuncKind::DateTruncInterval,
+        BinaryFuncKind::TimezoneTimestamp,
+        BinaryFuncKind::TimezoneTimestampTz,
+        BinaryFuncKind::TimezoneIntervalTimestamp,
+        BinaryFuncKind::TimezoneIntervalTimestampTz,
+        BinaryFuncKind::TimezoneIntervalTime,
+        BinaryFuncKind::TimezoneOffset,
+        BinaryFuncKind::TextConcat,
+        BinaryFuncKind::JsonbGetInt64,
+        BinaryFuncKind::JsonbGetInt64,
+        BinaryFuncKind::JsonbGetString,
+        BinaryFuncKind::JsonbGetStringStringify,
+        BinaryFuncKind::JsonbGetPath,
+        BinaryFuncKind::JsonbGetPathStringify,
+        BinaryFuncKind::JsonbContainsString,
+        BinaryFuncKind::JsonbConcat,
+        BinaryFuncKind::JsonbContainsJsonb,
+        BinaryFuncKind::JsonbDeleteInt64,
+        BinaryFuncKind::JsonbDeleteString,
+        BinaryFuncKind::MapContainsKey,
+        BinaryFuncKind::MapGetValue,
+        BinaryFuncKind::MapContainsAllKeys,
+        BinaryFuncKind::MapContainsAnyKeys,
+        BinaryFuncKind::MapContainsMap,
+        BinaryFuncKind::ConvertFrom,
+        BinaryFuncKind::Left,
+        BinaryFuncKind::Position,
+        BinaryFuncKind::Right,
+        BinaryFuncKind::RepeatString,
+        BinaryFuncKind::Normalize,
+        BinaryFuncKind::Trim,
+        BinaryFuncKind::TrimLeading,
+        BinaryFuncKind::TrimTrailing,
+        BinaryFuncKind::EncodedBytesCharLength,
+        BinaryFuncKind::ListLengthMax,
+        BinaryFuncKind::ArrayContains,
+        BinaryFuncKind::ArrayContainsArray,
+        BinaryFuncKind::ArrayContainsArrayRev,
+        BinaryFuncKind::ArrayLength,
+        BinaryFuncKind::ArrayLower,
+        BinaryFuncKind::ArrayRemove,
+        BinaryFuncKind::ArrayUpper,
+        BinaryFuncKind::ArrayArrayConcat,
+        BinaryFuncKind::ListListConcat,
+        BinaryFuncKind::ListElementConcat,
+        BinaryFuncKind::ElementListConcat,
+        BinaryFuncKind::ListRemove,
+        BinaryFuncKind::ListContainsList,
+        BinaryFuncKind::ListContainsListRev,
+        BinaryFuncKind::DigestString,
+        BinaryFuncKind::DigestBytes,
+        BinaryFuncKind::MzRenderTypmod,
+        BinaryFuncKind::Encode,
+        BinaryFuncKind::Decode,
+        BinaryFuncKind::LogNumeric,
+        BinaryFuncKind::Power,
+        BinaryFuncKind::PowerNumeric,
+        BinaryFuncKind::GetBit,
+        BinaryFuncKind::GetByte,
+        BinaryFuncKind::ConstantTimeEqBytes,
+        BinaryFuncKind::ConstantTimeEqString,
+        BinaryFuncKind::RangeContainsElem,
+        BinaryFuncKind::RangeContainsRange,
+        BinaryFuncKind::RangeOverlaps,
+        BinaryFuncKind::RangeAfter,
+        BinaryFuncKind::RangeBefore,
+        BinaryFuncKind::RangeOverleft,
+        BinaryFuncKind::RangeOverright,
+        BinaryFuncKind::RangeAdjacent,
+        BinaryFuncKind::RangeUnion,
+        BinaryFuncKind::RangeIntersection,
+        BinaryFuncKind::RangeDifference,
+        BinaryFuncKind::UuidGenerateV5,
+        BinaryFuncKind::MzAclItemContainsPrivilege,
+        BinaryFuncKind::ParseIdent,
+        BinaryFuncKind::PrettySql,
+        BinaryFuncKind::RegexpReplace,
+        BinaryFuncKind::StartsWith,
+    ]
 }

@@ -350,7 +350,8 @@ mod test {
 /// Once everything is handled by this macro we can remove it and replace it with `enum_dispatch`
 macro_rules! derive_unary {
     ($($name:ident),*) => {
-        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect)]
+        #[derive(Ord, PartialOrd, Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize, Hash, mz_lowertest::MzReflect, enum_kinds::EnumKind)]
+        #[enum_kind(UnaryFuncKind)]
         pub enum UnaryFunc {
             $($name($name),)*
         }
@@ -402,6 +403,14 @@ macro_rules! derive_unary {
                     $(Self::$name(f) => LazyUnaryFunc::could_error(f),)*
                 }
             }
+        }
+
+        impl UnaryFuncKind {
+            // fn func_doc(&self) -> &'static crate::func::FuncDoc {
+            //     match self {
+            //         // $(Self::$name => $name::func_doc(),)*
+            //     }
+            // }
         }
 
         impl fmt::Display for UnaryFunc {

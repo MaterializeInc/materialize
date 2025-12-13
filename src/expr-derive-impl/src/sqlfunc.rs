@@ -10,7 +10,6 @@
 use darling::FromMeta;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
-use serde::Serialize;
 use syn::spanned::Spanned;
 use syn::{Expr, Lifetime, Lit, Meta};
 
@@ -44,6 +43,16 @@ pub(crate) struct Modifiers {
     introduces_nulls: Option<Expr>,
     /// Function category for documentation purposes.
     category: Option<String>,
+    /// Optional URL to link in the documentation.
+    url: Option<String>,
+    /// Optional string describing the version the function was added.
+    version_added: Option<String>,
+    /// Optional boolean expression to indicate the function is unmaterializable.
+    unmaterializable: Option<Expr>,
+    /// Optional boolean expression to indicate that the functions needs special time zone casts.
+    known_time_zone_limitation_cast: Option<Expr>,
+    /// Optional boolean expression to indicate that the function is side effecting.
+    side_effecting: Option<Expr>,
 }
 
 /// A name for the SQL function. It can be either a literal or a macro, thus we
@@ -96,7 +105,7 @@ pub fn sqlfunc(
     let modifiers = Modifiers::from_list(&attr_args).unwrap();
     let func = syn::parse2::<syn::ItemFn>(item.clone())?;
 
-    let (tokens, fn_doc) = match determine_parameters_arena(&func) {
+    let tokens = match determine_parameters_arena(&func) {
         (1, false) => unary_func(&func, modifiers),
         (1, true) => Err(darling::Error::custom(
             "Unary functions do not yet support RowArena.",
@@ -108,44 +117,12 @@ pub fn sqlfunc(
         ))),
     }?;
 
-    if let Some(doc) = fn_doc {
-        write_doc(&doc);
-    }
-
     let test = include_test.then(|| generate_test(attr, item, &func.sig.ident));
 
     Ok(quote! {
         #tokens
         #test
     })
-}
-
-fn write_doc(doc: &FnDoc) {
-    use std::env;
-    use std::fs::OpenOptions;
-    use std::io::Write;
-    use std::path::PathBuf;
-
-    let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
-
-    // 2. Define the path for the temporary collection file
-    // The macro will append data to this file.
-    let temp_collection_path = out_dir.join("macro_docs_temp");
-    // Create directory if it doesn't exist
-    std::fs::create_dir_all(&temp_collection_path).expect("Unable to create output directory");
-    let temp_collection_path = temp_collection_path.join(format!("{}.json", doc.unique_name));
-
-    // 3. Open the file in append mode
-    let mut file = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .open(&temp_collection_path)
-        .expect("Unable to open or create macro docs temp file");
-
-    // 4. Write the documentation to the file as json uing serde_json
-    let json_string = serde_json::to_string(doc).expect("Failed to serialize doc to YAML");
-    file.write_all(json_string.as_bytes())
-        .expect("Unable to write macro doc to temp file");
 }
 
 #[cfg(any(feature = "test", test))]
@@ -293,18 +270,16 @@ fn documentation_string(func: &syn::ItemFn) -> String {
 }
 
 /// Produce a `EagerUnaryFunc` implementation.
-fn unary_func(
-    func: &syn::ItemFn,
-    modifiers: Modifiers,
-) -> darling::Result<(TokenStream, Option<FnDoc>)> {
+fn unary_func(func: &syn::ItemFn, modifiers: Modifiers) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input_ty = arg_type(func, 0)?;
     let output_ty = output_type(func)?;
 
-    let doc = compose_fn_doc(
+    let func_doc = generate_function_doc(
         fn_name.to_string(),
         &func,
+        &struct_name,
         &[&input_ty],
         &[&arg_name(func, 0)?],
         output_ty.clone(),
@@ -324,6 +299,11 @@ fn unary_func(
         propagates_nulls,
         introduces_nulls,
         category: _,
+        url: _,
+        version_added: _,
+        unmaterializable: _,
+        known_time_zone_limitation_cast: _,
+        side_effecting: _,
     } = modifiers;
 
     if is_infix_op.is_some() {
@@ -438,9 +418,11 @@ fn unary_func(
             }
         }
 
+        #func_doc
+
         #func
     };
-    Ok((result, Some(doc)))
+    Ok(result)
 }
 
 /// Produce a `EagerBinaryFunc` implementation.
@@ -448,16 +430,17 @@ fn binary_func(
     func: &syn::ItemFn,
     modifiers: Modifiers,
     arena: bool,
-) -> darling::Result<(TokenStream, Option<FnDoc>)> {
+) -> darling::Result<TokenStream> {
     let fn_name = &func.sig.ident;
     let struct_name = camel_case(&func.sig.ident);
     let input1_ty = arg_type(func, 0)?;
     let input2_ty = arg_type(func, 1)?;
     let output_ty = output_type(func)?;
 
-    let doc = compose_fn_doc(
+    let func_doc = generate_function_doc(
         fn_name.to_string(),
         &func,
+        &struct_name,
         &[&input1_ty, &input2_ty],
         &[&arg_name(func, 0)?, &arg_name(func, 1)?],
         output_ty.clone(),
@@ -477,6 +460,11 @@ fn binary_func(
         propagates_nulls,
         introduces_nulls,
         category: _,
+        url: _,
+        version_added: _,
+        unmaterializable: _,
+        known_time_zone_limitation_cast: _,
+        side_effecting: _,
     } = modifiers;
 
     if preserves_uniqueness.is_some() {
@@ -611,19 +599,13 @@ fn binary_func(
             }
         }
 
+        #func_doc
+
         #func
 
     };
 
-    Ok((result, Some(doc)))
-}
-
-#[derive(Serialize)]
-struct FnDoc {
-    unique_name: String,
-    category: String,
-    signature: String,
-    description: String,
+    Ok(result)
 }
 
 fn type_to_sqldoc(ty: &syn::Type) -> String {
@@ -720,14 +702,15 @@ fn type_to_sqldoc(ty: &syn::Type) -> String {
     }
 }
 
-fn compose_fn_doc(
+fn generate_function_doc(
     name: String,
     func: &syn::ItemFn,
+    struct_name: &Ident,
     arg_types: &[&syn::Type],
     arg_names: &[&str],
     return_type: syn::Type,
     modifiers: &Modifiers,
-) -> FnDoc {
+) -> TokenStream {
     let sqlname = if let Some(sqlname) = &modifiers.sqlname {
         format!("{}", quote! { #sqlname })
     } else {
@@ -735,13 +718,33 @@ fn compose_fn_doc(
     }
     .replace('"', "");
 
+    let url = modifiers.url.as_ref().map(|expr| {
+        quote! { url: #expr, }
+    });
+    let version_added = modifiers.version_added.as_ref().map(|expr| {
+        quote! { version_added: #expr, }
+    });
+    let unmaterializable = modifiers.unmaterializable.as_ref().map(|expr| {
+        quote! { unmaterializable: #expr, }
+    });
+    let known_time_zone_limitation_cast =
+        modifiers
+            .known_time_zone_limitation_cast
+            .as_ref()
+            .map(|expr| {
+                quote! { known_time_zone_limitation_cast: #expr, }
+            });
+    let side_effecting = modifiers.side_effecting.as_ref().map(|expr| {
+        quote! { side_effecting: #expr, }
+    });
+
     let category = modifiers
         .category
         .as_deref()
         .unwrap_or("Uncategorized")
         .to_string();
 
-    let doc = documentation_string(func);
+    let description = documentation_string(func);
 
     let return_type = type_to_sqldoc(&return_type);
 
@@ -756,10 +759,21 @@ fn compose_fn_doc(
             .collect();
         format!("{}({}) -> {return_type}", sqlname, args.join(", "),)
     };
-    FnDoc {
-        unique_name: name.to_string(),
-        category,
-        signature,
-        description: doc.to_string(),
+    quote! {
+        impl #struct_name {
+            pub const fn func_doc() -> crate::func::FuncDoc {
+                crate::func::FuncDoc {
+                    category: #category,
+                    signature: #signature,
+                    description: #description,
+                    #url
+                    #version_added
+                    #unmaterializable
+                    #known_time_zone_limitation_cast
+                    #side_effecting
+                    ..crate::func::FuncDoc::default()
+                }
+            }
+        }
     }
 }
