@@ -270,12 +270,10 @@ impl CatalogState {
                     builtin_supers.contains(&role.id) || matches
                 };
 
-                let rolsuper = if self_managed_auth_enabled {
-                    Datum::from(role.attributes.superuser.unwrap_or(false))
-                } else if builtin_supers.contains(&role.id) {
+                let rolsuper = if builtin_supers.contains(&role.id) {
                     Datum::from(true)
                 } else {
-                    Datum::Null
+                    Datum::from(role.attributes.superuser.unwrap_or(false))
                 };
 
                 let role_update = BuiltinTableUpdate::row(

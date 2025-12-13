@@ -19,6 +19,24 @@ pub struct ExternalUserMetadata {
     pub admin: bool,
 }
 
+/// Represents changes to external user metadata properties.
+#[derive(Debug, Clone, Default)]
+pub struct ExternalUserMetadataDiff {
+    pub user_id: Option<Uuid>,
+    pub admin: Option<bool>,
+}
+
+impl ExternalUserMetadataDiff {
+    pub fn new(previous: Option<&ExternalUserMetadata>, new: &ExternalUserMetadata) -> Self {
+        let previous_user_id = previous.map(|m| m.user_id);
+        let previous_admin = previous.map(|m| m.admin);
+        ExternalUserMetadataDiff {
+            user_id: (previous_user_id != Some(new.user_id)).then_some(new.user_id),
+            admin: (previous_admin != Some(new.admin)).then_some(new.admin),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalUserMetadata {
     pub superuser: bool,
