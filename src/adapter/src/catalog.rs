@@ -1532,7 +1532,10 @@ impl Catalog {
         CatalogError,
     > {
         let updates = self.storage().await.sync_to_current_updates().await?;
-        let (builtin_table_updates, catalog_updates) = self.state.apply_updates(updates)?;
+        let (builtin_table_updates, catalog_updates) = self
+            .state
+            .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
+            .await;
         Ok((builtin_table_updates, catalog_updates))
     }
 }

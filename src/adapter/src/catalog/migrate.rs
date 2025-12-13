@@ -194,9 +194,8 @@ pub(crate) async fn migrate(
             .expect("known parameter");
     }
 
-    let (mut ast_builtin_table_updates, mut ast_catalog_updates) = state
-        .apply_updates_for_bootstrap(item_updates, local_expr_cache)
-        .await;
+    let (mut ast_builtin_table_updates, mut ast_catalog_updates) =
+        state.apply_updates(item_updates, local_expr_cache).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
@@ -240,9 +239,8 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     let op_item_updates = tx.get_and_commit_op_updates();
-    let (item_builtin_table_updates, item_catalog_updates) = state
-        .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
-        .await;
+    let (item_builtin_table_updates, item_catalog_updates) =
+        state.apply_updates(op_item_updates, local_expr_cache).await;
 
     ast_builtin_table_updates.extend(item_builtin_table_updates);
     ast_catalog_updates.extend(item_catalog_updates);

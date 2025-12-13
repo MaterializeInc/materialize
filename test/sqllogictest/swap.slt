@@ -154,6 +154,28 @@ SELECT name FROM mz_clusters JOIN ( SELECT cluster_id FROM mz_indexes WHERE name
 ----
 bar
 
+
+# Ensure item parsing during applying a schema swap gracefully handles persisted
+# SQL that depends on disabled feature flags.
+# Regression test for database-issues#9971.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_load_generator_counter TO true;
+----
+COMPLETE 0
+
+statement ok
+CREATE SOURCE blue.ctr FROM LOAD GENERATOR COUNTER;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_load_generator_counter TO false;
+----
+COMPLETE 0
+
+statement ok
+ALTER SCHEMA blue SWAP WITH green;
+
+
 # Disable the feature.
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_alter_swap TO false;
