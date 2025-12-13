@@ -19,12 +19,15 @@
 {{- end -}}
 {{- if .syntax_elements }}
 
-Syntax element | Description
----------------|------------
-{{- range .syntax_elements }}
-{{ .name | markdownify }} | {{ .description | markdownify }}
-{{- end }}
+{{ partial "yaml-tables/generic-table.html" (dict
+  "columns" (slice
+    (dict "column" "name" "header" "Syntax element")
+    (dict "column" "description" "header" "Description")
+  )
+  "rows" .syntax_elements
+) }}
 {{- end -}}
+
 {{- if .addenda }}
 
 {{ .addenda | markdownify }}
