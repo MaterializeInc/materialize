@@ -24,7 +24,7 @@ from pg8000.native import identifier
 from psycopg import Connection
 from psycopg.errors import OperationalError
 
-import materialize.parallel_workload.database
+import materialize.parallel_workload.column
 from materialize.data_ingest.data_type import (
     NUMBER_TYPES,
     Boolean,
@@ -223,7 +223,7 @@ class Action:
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
-        if materialize.parallel_workload.database.NAUGHTY_IDENTIFIERS:
+        if materialize.parallel_workload.column.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
         return result
 
