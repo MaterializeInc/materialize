@@ -80,7 +80,7 @@ pub use variadic::VariadicFunc;
 ///
 /// Note: This number appears in our user-facing documentation in the function reference for every
 /// function where it applies.
-const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
+pub const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
 
 pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&'a str> {
     match a {
@@ -400,6 +400,9 @@ fn decode<'a>(
 ) -> Result<&'a [u8], EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
+    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
+        return Err(EvalError::LengthTooLarge);
+    }
     Ok(temp_storage.push_bytes(out))
 }
 
@@ -4732,11 +4735,14 @@ impl fmt::Display for BinaryFunc {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary<'a>(a: &str, b: &str, temp_storage: &'a RowArena) -> &'a str {
+fn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {
+    if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
+        return Err(EvalError::LengthTooLarge);
+    }
     let mut buf = String::with_capacity(a.len() + b.len());
     buf.push_str(a);
     buf.push_str(b);
-    temp_storage.push_string(buf)
+    Ok(buf)
 }
 
 #[sqlfunc(propagates_nulls = true, introduces_nulls = false)]
@@ -4827,6 +4833,9 @@ pub(crate) fn regexp_replace_parse_flags(flags: &str) -> (usize, Cow<'_, str>) {
     (limit, flags)
 }
 
+// WARNING: This function has potential OOM risk if used with an inflationary
+// replacement pattern. It is very difficult to calculate the output size ahead
+// of time because the replacement pattern may depend on capture groups.
 fn regexp_replace_static<'a>(
     source: Datum<'a>,
     replacement: Datum<'a>,

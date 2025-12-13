@@ -295,16 +295,16 @@
       The NULL (0) character is not allowed.
 
   - signature: 'concat(f: any, r: any...) -> text'
-    description: Concatenates the text representation of non-NULL arguments.
+    description: Concatenates the text representation of non-NULL arguments. The maximum length of the result string is 100 MiB.
 
   - signature: 'concat_ws(sep: str, f: any, r: any...) -> text'
-    description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`.
+    description: Concatenates the text representation of non-NULL arguments from `f` and `r` separated by `sep`. The maximum length of the result string is 100 MiB.
 
   - signature: 'convert_from(b: bytea, src_encoding: text) -> text'
     description: Convert data `b` from original encoding specified by `src_encoding` into `text`.
 
   - signature: 'decode(s: text, format: text) -> bytea'
-    description: Decode `s` using the specified textual representation
+    description: Decode `s` using the specified textual representation. The maximum size of the result is 100 MiB.
     url: /sql/functions/encode
 
   - signature: 'encode(b: bytea, format: text) -> text'
@@ -395,6 +395,11 @@
 
   - signature: 'regexp_replace(source: str, pattern: str, replacement: str [, flags: str]]) -> str'
     description: |
+      {{< warning >}}
+      This function has the potential to produce very large strings and
+      may cause queries to run out of memory or crash. Use with caution.
+      {{< /warning >}}
+
       Replaces the first occurrence of `pattern` with `replacement` in `source`.
       No match will return `source` unchanged.
 
@@ -425,7 +430,7 @@
     description: Replicate the string `n` times. The maximum length of the result string is 100 MiB.
 
   - signature: 'replace(s: str, f: str, r: str) -> str'
-    description: "`s` with all instances of `f` replaced with `r`."
+    description: "`s` with all instances of `f` replaced with `r`. The maximum length of the result string is 100 MiB."
 
   - signature: 'right(s: str, n: int) -> str'
     description: The last `n` characters of `s`. If `n` is negative, all but the first `|n|` characters of `s`.
@@ -770,6 +775,11 @@
     description: 'Returns the subscript of `needle` in `haystack`, skipping the first `skip` elements. Returns `null` if not found.'
   - signature: 'array_to_string(a: anyarray, sep: text [, ifnull: text]) -> text'
     description: |
+      {{< warning >}}
+      This function has the potential to produce very large strings and
+      may cause queries to run out of memory or crash. Use with caution.
+      {{< /warning >}}
+
       Concatenates the elements of `array` together separated by `sep`.
       Null elements are omitted unless `ifnull` is non-null, in which case
       null elements are replaced with the value of `ifnull`.

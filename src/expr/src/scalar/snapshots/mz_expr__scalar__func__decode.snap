@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(propagates_nulls = true)]\nfn decode<'a>(\n    string: &str,\n    format: &str,\n    temp_storage: &'a RowArena,\n) -> Result<&'a [u8], EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(string)?;\n    Ok(temp_storage.push_bytes(out))\n}\n"
+expression: "#[sqlfunc(propagates_nulls = true)]\nfn decode<'a>(\n    string: &str,\n    format: &str,\n    temp_storage: &'a RowArena,\n) -> Result<&'a [u8], EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(string)?;\n    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {\n        return Err(EvalError::LengthTooLarge);\n    }\n    Ok(temp_storage.push_bytes(out))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -62,5 +62,8 @@ fn decode<'a>(
 ) -> Result<&'a [u8], EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
+    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
+        return Err(EvalError::LengthTooLarge);
+    }
     Ok(temp_storage.push_bytes(out))
 }
