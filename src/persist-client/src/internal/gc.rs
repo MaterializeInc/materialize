@@ -19,29 +19,34 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
+use mz_dyncfg::Config;
+use mz_ore::cast::CastFrom;
+use mz_ore::collections::HashSet;
+use mz_ore::soft_assert_or_log;
+use mz_persist::location::{Blob, SeqNo};
+use mz_persist_types::{Codec, Codec64};
 use prometheus::Counter;
 use timely::progress::Timestamp;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tracing::{Instrument, Span, debug, debug_span, warn};
 
+use crate::ShardId;
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::PartDeletes;
 use crate::cfg::GC_BLOB_DELETE_CONCURRENCY_LIMIT;
-
-use mz_ore::cast::CastFrom;
-use mz_ore::collections::HashSet;
-use mz_ore::soft_assert_or_log;
-use mz_persist::location::{Blob, SeqNo};
-use mz_persist_types::{Codec, Codec64};
-
-use crate::ShardId;
 use crate::internal::machine::{Machine, retry_external};
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::{GcStepTimings, RetryMetrics};
 use crate::internal::paths::{BlobKey, PartialBlobKey, PartialRollupKey};
 use crate::internal::state::HollowBlobRef;
 use crate::internal::state_versions::{InspectDiff, StateVersionsIter};
+
+pub(crate) const GC_GLOBAL_CONCURRENCY: Config<usize> = Config::new(
+    "persist_gc_global_concurrency",
+    5,
+    "A limit on the global number of concurrent GC deletes from this process.",
+);
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GcReq {
@@ -538,6 +543,16 @@ where
     ) where
         F: FnMut(&Counter),
     {
+        // Process-wide limiting on the number of concurrent GC deletes.
+        let _gc_delete_permit = machine
+            .applier
+            .metrics
+            .semaphore
+            .gc()
+            .await
+            .acquire_permits(1)
+            .await;
+
         let shard_id = machine.shard_id();
         let concurrency_limit = GC_BLOB_DELETE_CONCURRENCY_LIMIT.get(&machine.applier.cfg);
         let delete_semaphore = Semaphore::new(concurrency_limit);
