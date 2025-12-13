@@ -29,20 +29,25 @@ use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_sql_parser::ast::{CopyDirection, ExplainStage, Statement};
+use mz_sql::ast::Raw;
+use mz_sql::plan::Params;
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
 use tracing::{Span, debug};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use crate::catalog::CatalogState;
+use crate::catalog::{Catalog, CatalogState};
 use crate::command::Command;
 use crate::coord::peek::PeekPlan;
 use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, TargetCluster};
+use crate::coord::{Coordinator, CopyToContext, ExplainContext, ExplainPlanContext, ExecuteContextExtra, TargetCluster};
 use crate::explain::insights::PlanInsightsContext;
+use crate::statement_logging::{
+    StatementEndedExecutionReason, StatementLifecycleEvent,
+};
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::optimize::dataflows::{ComputeInstanceSnapshot, DataflowBuilder};
 use crate::optimize::{Optimize, OptimizerError};
@@ -52,12 +57,14 @@ use crate::{
     TimelineContext, TimestampContext, TimestampProvider, optimize,
 };
 use crate::{coord, metrics};
+use crate::coord::statement_logging::IdsToWatch;
 
 impl PeekClient {
-    pub(crate) async fn try_frontend_peek_inner(
+    pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
         session: &mut Session,
+        outer_ctx_extra: &mut Option<ExecuteContextExtra>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if session.vars().emit_timestamp_notice() {
             // TODO(peek-seq): implement this. See end of peek_finish
@@ -96,8 +103,8 @@ impl PeekClient {
             return Ok(None);
         }
 
-        // TODO(peek-seq): statement logging (and then enable it in various tests)
-        let (stmt, params) = {
+        // Extract things from the portal.
+        let (stmt, params, logging, lifecycle_timestamps) = {
             let portal = session
                 .get_portal_unverified(portal_name)
                 // The portal is a session-level thing, so it couldn't have concurrently disappeared
@@ -105,9 +112,161 @@ impl PeekClient {
                 .expect("called verify_portal above");
             let params = portal.parameters.clone();
             let stmt = portal.stmt.clone();
-            (stmt, params)
+            let logging = Arc::clone(&portal.logging);
+            let lifecycle_timestamps = portal.lifecycle_timestamps.clone();
+            (stmt, params, logging, lifecycle_timestamps)
         };
 
+        // Before planning, check if this is a statement type we can handle.
+        // This must happen BEFORE statement logging setup to avoid orphaned execution records.
+        if let Some(ref stmt) = stmt {
+            match &**stmt {
+                Statement::Select(_)
+                | Statement::ExplainAnalyzeObject(_)
+                | Statement::ExplainAnalyzeCluster(_) => {
+                    // These are always fine, just continue.
+                    // Note: EXPLAIN ANALYZE will `plan` to `Plan::Select`.
+                }
+                Statement::ExplainPlan(explain_stmt) => {
+                    // Only handle ExplainPlan for SELECT statements.
+                    // We don't want to handle e.g. EXPLAIN CREATE MATERIALIZED VIEW here, because that
+                    // requires purification before planning, which the frontend peek sequencing doesn't
+                    // do.
+                    match &explain_stmt.explainee {
+                        mz_sql_parser::ast::Explainee::Select(..) => {
+                            // This is a SELECT, continue
+                        }
+                        _ => {
+                            debug!(
+                                "Bailing out from try_frontend_peek, because EXPLAIN is not for a SELECT query"
+                            );
+                            return Ok(None);
+                        }
+                    }
+                }
+                Statement::ExplainPushdown(explain_stmt) => {
+                    // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
+                    match &explain_stmt.explainee {
+                        mz_sql_parser::ast::Explainee::Select(..) => {}
+                        _ => {
+                            debug!(
+                                "Bailing out from try_frontend_peek, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query"
+                            );
+                            return Ok(None);
+                        }
+                    }
+                }
+                Statement::Copy(copy_stmt) => {
+                    match &copy_stmt.direction {
+                        CopyDirection::To => {
+                            // This is COPY TO, continue
+                        }
+                        CopyDirection::From => {
+                            debug!(
+                                "Bailing out from try_frontend_peek, because COPY FROM is not supported"
+                            );
+                            return Ok(None);
+                        }
+                    }
+                }
+                _ => {
+                    debug!(
+                        "Bailing out from try_frontend_peek, because statement type is not supported"
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+
+        // Set up statement logging, and log the beginning of execution.
+        // BUT only if we're not executing in the context of another statement.
+        let statement_logging_id = if outer_ctx_extra.is_none() {
+            // This is a new statement, so begin statement logging
+            let result = self.statement_logging_frontend.begin_statement_execution(
+                session,
+                &params,
+                &logging,
+                catalog.system_config(),
+                lifecycle_timestamps,
+            );
+
+            if let Some((logging_id, events)) = result {
+                self.log_began_execution(
+                    events.began_execution,
+                    events.prepared_statement,
+                );
+                Some(logging_id)
+            } else {
+                None
+            }
+        } else {
+            // We're executing in the context of another statement (e.g., FETCH),
+            // so extract the statement logging ID from the outer context if present.
+            // We take ownership and retire the outer context here. The end of execution will be
+            // logged in one of the following ways:
+            // - At the end of this function, if the execution is finished by then.
+            // - Later by the Coordinator, either due to RegisterFrontendPeek or ExecuteSlowPathPeek.
+            outer_ctx_extra.take().and_then(|extra| extra.retire())
+        };
+
+        let result = self.try_frontend_peek_inner(
+            session,
+            catalog,
+            stmt,
+            params,
+            statement_logging_id,
+        ).await;
+
+        // Log the end of execution if we are logging this statement and execution has already
+        // ended.
+        if let Some(logging_id) = statement_logging_id {
+            let reason = match &result {
+                // Streaming results are handled asynchronously by the coordinator
+                Ok(Some(ExecuteResponse::SendingRowsStreaming { .. })) => {
+                    // Don't log here - the peek is still executing.
+                    // It will be logged when handle_peek_notification is called.
+                    return result;
+                }
+                // COPY TO needs to check its inner response
+                Ok(Some(resp @ ExecuteResponse::CopyTo { resp: inner, .. })) => {
+                    match inner.as_ref() {
+                        ExecuteResponse::SendingRowsStreaming { .. } => {
+                            // Don't log here - the peek is still executing.
+                            // It will be logged when handle_peek_notification is called.
+                            return result;
+                        }
+                        // For non-streaming COPY TO responses, use the outer CopyTo for conversion
+                        _ => resp.into(),
+                    }
+                }
+                // Bailout case - don't log
+                Ok(None) => {
+                    return result;
+                }
+                // All other success responses - use the From implementation
+                // TODO(peek-seq): After we delete the old peek sequencing, we'll be able to adjust
+                // the From implementation to do exactly what we need in the frontend peek
+                // sequencing, so that the above special cases won't be needed.
+                Ok(Some(resp)) => resp.into(),
+                Err(e) => StatementEndedExecutionReason::Errored {
+                    error: e.to_string(),
+                },
+            };
+
+            self.log_ended_execution(logging_id, reason);
+        }
+
+        result
+    }
+
+    async fn try_frontend_peek_inner(
+        &mut self,
+        session: &mut Session,
+        catalog: Arc<Catalog>,
+        stmt: Option<Arc<Statement<Raw>>>,
+        params: Params,
+        statement_logging_id: Option<crate::coord::statement_logging::StatementLoggingId>,
+    ) -> Result<Option<ExecuteResponse>, AdapterError> {
         let stmt = match stmt {
             Some(stmt) => stmt,
             None => {
@@ -115,64 +274,6 @@ impl PeekClient {
                 return Ok(Some(ExecuteResponse::EmptyQuery));
             }
         };
-
-        // Before planning, check if this is a statement type we can handle.
-        match &*stmt {
-            Statement::Select(_)
-            | Statement::ExplainAnalyzeObject(_)
-            | Statement::ExplainAnalyzeCluster(_) => {
-                // These are always fine, just continue.
-                // Note: EXPLAIN ANALYZE will `plan` to `Plan::Select`.
-            }
-            Statement::ExplainPlan(explain_stmt) => {
-                // Only handle ExplainPlan for SELECT statements.
-                // We don't want to handle e.g. EXPLAIN CREATE MATERIALIZED VIEW here, because that
-                // requires purification before planning, which the frontend peek sequencing doesn't
-                // do.
-                match &explain_stmt.explainee {
-                    mz_sql_parser::ast::Explainee::Select(..) => {
-                        // This is a SELECT, continue
-                    }
-                    _ => {
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because EXPLAIN is not for a SELECT query"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-            Statement::ExplainPushdown(explain_stmt) => {
-                // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
-                match &explain_stmt.explainee {
-                    mz_sql_parser::ast::Explainee::Select(..) => {}
-                    _ => {
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-            Statement::Copy(copy_stmt) => {
-                match &copy_stmt.direction {
-                    CopyDirection::To => {
-                        // This is COPY TO, continue
-                    }
-                    CopyDirection::From => {
-                        debug!(
-                            "Bailing out from try_frontend_peek_inner, because COPY FROM is not supported"
-                        );
-                        return Ok(None);
-                    }
-                }
-            }
-            _ => {
-                debug!(
-                    "Bailing out from try_frontend_peek_inner, because statement type is not supported"
-                );
-                return Ok(None);
-            }
-        }
 
         let session_type = metrics::session_type_label_value(session.user());
         let stmt_type = metrics::statement_type_label_value(&stmt);
@@ -286,7 +387,14 @@ impl PeekClient {
             (cluster, cluster.id, &cluster.name)
         };
 
-        // TODO(peek-seq): statement logging: set_statement_execution_cluster
+        // Log cluster selection
+        if let Some(logging_id) = &statement_logging_id {
+            self.log_set_cluster(
+                *logging_id,
+                target_cluster_id,
+                target_cluster_name.to_string(),
+            );
+        }
 
         coord::catalog_serving::check_cluster_restrictions(
             target_cluster_name.as_str(),
@@ -309,14 +417,15 @@ impl PeekClient {
         // (This is done slightly earlier in the normal peek sequencing, but we have to be past the
         // last use of `conn_catalog` here.)
         if let Some(_) = coord::appends::waiting_on_startup_appends(&*catalog, session, &plan) {
-            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but call
-            // `defer_op`. Needs `ExecuteContext`.
+            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here.
+            //
             // This fallback is currently causing a bug: `waiting_on_startup_appends` has the
             // side effect that it already clears the wait flag, and therefore the old peek
             // sequencing that we fall back to here won't do waiting. This is tested by
             // `test_mz_sessions` and `test_pg_cancel_dropped_role`, where I've disabled the
             // frontend peek sequencing for now. This bug will just go away once we don't fall back
-            // to the old peek sequencing here, but properly call `defer_op` instead.
+            // to the old peek sequencing here. (Instead of calling `defer_op`, we can just simply
+            // await the Future returned by `waiting_on_startup_appends`.)
             debug!("Bailing out from try_frontend_peek_inner, because waiting_on_startup_appends");
             return Ok(None);
         }
@@ -890,6 +999,14 @@ impl PeekClient {
         .await
         .map_err(|optimizer_error| AdapterError::Internal(format!("internal error in optimizer: {}", optimizer_error)))?;
 
+        // Log optimization finished
+        if let Some(logging_id) = &statement_logging_id {
+            self.log_lifecycle_event(
+                *logging_id,
+                StatementLifecycleEvent::OptimizationFinished,
+            );
+        }
+
         // Handle the optimization result: either generate EXPLAIN output or continue with execution
         match optimization_result {
             Execution::ExplainPlan {
@@ -992,10 +1109,39 @@ impl PeekClient {
 
                 // TODO(peek-seq): statement logging
 
+                let ids_to_watch = if statement_logging_id.is_some() {
+                    Some(IdsToWatch::new(
+                        catalog.state(),
+                        &input_id_bundle,
+                        determination.timestamp_context.timestamp_or_default(),
+                    ))
+                } else {
+                    None
+                };
+
                 let max_result_size = catalog.system_config().max_result_size();
 
                 let response = match peek_plan {
                     PeekPlan::FastPath(fast_path_plan) => {
+                        if let Some(logging_id) = &statement_logging_id {
+                            // TODO(peek-seq): Actually, we should log it also for
+                            // FastPathPlan::Constant. The only reason we are not doing so at the
+                            // moment is to match the old peek sequencing, so that statement logging
+                            // tests pass with the frontend peek sequencing turned both on and off.
+                            //
+                            // When the old sequencing is removed, we should make a couple of
+                            // changes in how we log timestamps:
+                            // - Move this up to just after timestamp determination, so that it
+                            //   appears in the log as soon as possible.
+                            // - Do it also for Constant peeks.
+                            // - Currently, slow-path peeks' timestamp logging is done by
+                            //   `implement_peek_plan`. We could remove it from there, and just do
+                            //   it here.
+                            if !matches!(fast_path_plan, crate::coord::peek::FastPathPlan::Constant(..)) {
+                                self.log_set_timestamp(*logging_id, determination.timestamp_context.timestamp_or_default());
+                            }
+                        }
+
                         let row_set_finishing_seconds =
                             session.metrics().row_set_finishing_seconds().clone();
 
@@ -1019,6 +1165,10 @@ impl PeekClient {
                             read_holds,
                             peek_stash_read_batch_size_bytes,
                             peek_stash_read_memory_budget_bytes,
+                            session.conn_id().clone(),
+                            statement_logging_id,
+                            source_ids,
+                            ids_to_watch,
                         )
                         .await?
                     }
@@ -1082,6 +1232,10 @@ impl PeekClient {
                             }
                         }
 
+                        if let Some(logging_id) = &statement_logging_id {
+                            self.log_set_transient_index_id(*logging_id, dataflow_plan.id);
+                        }
+
                         self.call_coordinator(|tx| Command::ExecuteSlowPathPeek {
                             dataflow_plan: Box::new(dataflow_plan),
                             determination,
@@ -1093,6 +1247,8 @@ impl PeekClient {
                             conn_id: session.conn_id().clone(),
                             max_result_size,
                             max_query_result_size,
+                            ctx_extra: ExecuteContextExtra::new(statement_logging_id),
+                            ids_to_watch,
                             tx,
                         })
                         .await?
@@ -1120,6 +1276,16 @@ impl PeekClient {
                     &df_meta.optimizer_notices,
                 );
 
+                let ids_to_watch = if statement_logging_id.is_some() {
+                    Some(IdsToWatch::new(
+                        catalog.state(),
+                        &input_id_bundle,
+                        determination.timestamp_context.timestamp_or_default(),
+                    ))
+                } else {
+                    None
+                };
+
                 let response = self
                     .call_coordinator(|tx| Command::ExecuteCopyTo {
                         df_desc: Box::new(df_desc),
@@ -1127,6 +1293,8 @@ impl PeekClient {
                         target_replica,
                         source_ids,
                         conn_id: session.conn_id().clone(),
+                        ctx_extra: ExecuteContextExtra::new(statement_logging_id),
+                        ids_to_watch,
                         tx,
                     })
                     .await?;

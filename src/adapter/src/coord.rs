@@ -104,7 +104,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
-use mz_compute_client::controller::error::{DataflowCreationError, InstanceMissing};
+use mz_compute_client::controller::error::{CollectionLookupError, DataflowCreationError, InstanceMissing};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -373,6 +373,8 @@ impl Message {
                 Command::StoreTransactionReadHolds { .. } => "store-transaction-read-holds",
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
+                Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
+                Command::FrontendStatementLogging(..) => "frontend-statement-logging",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -1331,7 +1333,7 @@ impl ExecuteContextExtra {
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
     #[must_use]
-    fn retire(mut self) -> Option<StatementLoggingId> {
+    pub(crate) fn retire(mut self) -> Option<StatementLoggingId> {
         let Self { statement_uuid } = &mut self;
         statement_uuid.take()
     }
@@ -3762,13 +3764,14 @@ impl Coordinator {
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) {
-        let ws_id = self.controller.install_compute_watch_set(objects, t);
+    ) -> Result<(), CollectionLookupError> {
+        let ws_id = self.controller.install_compute_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        Ok(())
     }
 
     /// Install a _watch set_ in the controller that is automatically associated with the given
@@ -3780,13 +3783,14 @@ impl Coordinator {
         objects: BTreeSet<GlobalId>,
         t: Timestamp,
         state: WatchSetResponse,
-    ) {
-        let ws_id = self.controller.install_storage_watch_set(objects, t);
+    ) -> Result<(), CollectionLookupError> {
+        let ws_id = self.controller.install_storage_watch_set(objects, t)?;
         self.connection_watch_sets
             .entry(conn_id.clone())
             .or_default()
             .insert(ws_id);
         self.installed_watch_sets.insert(ws_id, (conn_id, state));
+        Ok(())
     }
 
     /// Cancels pending watchsets associated with the provided connection id.

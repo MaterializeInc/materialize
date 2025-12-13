@@ -56,6 +56,7 @@ use tracing::{Instrument, Span};
 use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
+use crate::coord::statement_logging::IdsToWatch;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -1197,7 +1198,7 @@ impl crate::coord::Coordinator {
     /// This is called from the command handler for ExecuteSlowPathPeek.
     ///
     /// (For now, this method simply delegates to implement_peek_plan by constructing
-    /// the necessary PlannedPeek structure and a minimal ExecuteContext.)
+    /// the necessary PlannedPeek structure.)
     pub(crate) async fn implement_slow_path_peek(
         &mut self,
         dataflow_plan: PeekDataflowPlan<mz_repr::Timestamp>,
@@ -1210,7 +1211,20 @@ impl crate::coord::Coordinator {
         conn_id: ConnectionId,
         max_result_size: u64,
         max_query_result_size: Option<u64>,
+        mut ctx_extra: ExecuteContextExtra,
+        ids_to_watch: Option<IdsToWatch>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // Install watch sets for statement lifecycle logging if enabled.
+        if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+            self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch)
+                .map_err(|e| {
+                    AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                        e,
+                        compute_instance,
+                    )
+                })?;
+        }
+
         let source_arity = intermediate_result_type.arity();
 
         let planned_peek = PlannedPeek {
@@ -1221,10 +1235,6 @@ impl crate::coord::Coordinator {
             source_arity,
             source_ids,
         };
-
-        // Create a minimal ExecuteContext
-        // TODO(peek-seq): Use the real context once we have statement logging.
-        let mut ctx_extra = ExecuteContextExtra::default();
 
         // Call the old peek sequencing's implement_peek_plan for now.
         // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
@@ -1242,8 +1252,8 @@ impl crate::coord::Coordinator {
         .await
     }
 
-    /// Implements a COPY TO command by validating S3 connection, shipping the dataflow,
-    /// and spawning a background task to wait for completion.
+    /// Implements a COPY TO command by installing peek watch sets, validating S3 connection,
+    /// shipping the dataflow, and spawning a background task to wait for completion.
     /// This is called from the command handler for ExecuteCopyTo.
     ///
     /// This method inlines the logic from peek_copy_to_preflight and peek_copy_to_dataflow
@@ -1259,6 +1269,8 @@ impl crate::coord::Coordinator {
         target_replica: Option<ReplicaId>,
         source_ids: BTreeSet<GlobalId>,
         conn_id: ConnectionId,
+        ctx_extra: ExecuteContextExtra,
+        ids_to_watch: Option<IdsToWatch>,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     ) {
         // Helper to send error and return early
@@ -1266,6 +1278,22 @@ impl crate::coord::Coordinator {
                         e: AdapterError| {
             let _ = tx.send(Err(e));
         };
+
+        // Install watch sets for statement lifecycle logging if enabled.
+        if let (Some(logging_id), Some(ids_to_watch)) = (ctx_extra.contents(), ids_to_watch) {
+            if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), logging_id, ids_to_watch) {
+                let err = AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                    e,
+                    compute_instance,
+                );
+                send_err(tx, err);
+                return;
+            }
+        }
+
+        // We retire the execution context immediately, as the coordinator doesn't need
+        // to track the execution for statement logging purposes (the frontend handles that).
+        let _ = ctx_extra.retire();
 
         let sink_id = df_desc.sink_id();
 
@@ -1340,7 +1368,7 @@ impl crate::coord::Coordinator {
             // created. If we don't do this, the sink_id remains in drop_sinks but no collection
             // exists in the compute controller, causing a panic when the connection terminates.
             self.remove_active_compute_sink(sink_id).await;
-            let _ = tx.send(Err(e));
+            send_err(tx, e);
             return;
         }
 
@@ -1357,6 +1385,7 @@ impl crate::coord::Coordinator {
                     Ok(res) => res,
                     Err(_) => Err(AdapterError::Internal("copy to sender dropped".into())),
                 };
+
                 let _ = tx.send(result);
             }
             .instrument(span),

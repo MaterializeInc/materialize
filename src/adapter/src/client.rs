@@ -264,6 +264,7 @@ impl Client {
             transient_id_gen,
             optimizer_metrics,
             persist_client,
+            statement_logging_frontend,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -272,6 +273,7 @@ impl Client {
             transient_id_gen,
             optimizer_metrics,
             persist_client,
+            statement_logging_frontend,
         );
 
         let mut client = SessionClient {
@@ -704,11 +706,16 @@ impl SessionClient {
         // Attempt peek sequencing in the session task.
         // If unsupported, fall back to the Coordinator path.
         // TODO(peek-seq): wire up cancel_future
-        if let Some(resp) = self.try_frontend_peek(&portal_name).await? {
+        let mut outer_ctx_extra = outer_ctx_extra;
+        if let Some(resp) = self.try_frontend_peek(&portal_name, &mut outer_ctx_extra).await? {
             debug!("frontend peek succeeded");
+            // Frontend peek handled the execution and retired outer_ctx_extra if it existed.
+            // No additional work needed here.
             return Ok((resp, execute_started));
         } else {
-            debug!("frontend peek did not happen");
+            debug!("frontend peek did not happen, falling back to `Command::Execute`");
+            // If we bailed out, outer_ctx_extra is still present (if it was originally).
+            // `Command::Execute` will handle it.
         }
 
         let response = self
@@ -1019,7 +1026,9 @@ impl SessionClient {
                 | Command::GetTransactionReadHoldsBundle { .. }
                 | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
-                | Command::ExecuteCopyTo { .. } => {}
+                | Command::ExecuteCopyTo { .. }
+                | Command::RegisterFrontendPeek { .. }
+                | Command::FrontendStatementLogging(..) => {}
             };
             cmd
         });
@@ -1109,11 +1118,12 @@ impl SessionClient {
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
+        outer_ctx_extra: &mut Option<ExecuteContextExtra>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");
             self.peek_client
-                .try_frontend_peek_inner(portal_name, session)
+                .try_frontend_peek(portal_name, session, outer_ctx_extra)
                 .await
         } else {
             Ok(None)
