@@ -205,12 +205,23 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
 /// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
 /// is to emit a definite error forcing source recreation. In cases of HA, the upstream DB may
 /// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
-/// flag puts the owness on the customer to recreate the source if the upstream DB changes timeline
+/// flag puts the onus on the customer to recreate the source if the upstream DB changes timeline
 /// in a way that introduces data loss (e.g. manual failover, restore, etc.).
 pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
     "pg_source_validate_timeline",
     true,
     "Whether to treat a timeline switch as a definite error",
+);
+
+/// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
+/// default behavior is to emit a definite error, forcing source recreation.  In cases of Always
+/// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
+/// Changing this flag puts the onus on the customer to recreate the source if the upstream DB
+/// changes in a way that introduces data loss.
+pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::new(
+    "sql_server_source_validate_restore_history",
+    true,
+    "Whether to treat a restore history change as a definite error",
 );
 
 // Networking
@@ -360,6 +371,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&REPLICA_METRICS_HISTORY_RETENTION_INTERVAL)
         .add(&SINK_ENSURE_TOPIC_CONFIG)
         .add(&SINK_PROGRESS_SEARCH)
+        .add(&SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY)
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&STORAGE_RECLOCK_TO_LATEST)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
