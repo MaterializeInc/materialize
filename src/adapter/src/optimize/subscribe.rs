@@ -19,7 +19,7 @@ use mz_compute_types::plan::Plan;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection};
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_or_log;
-use mz_repr::{GlobalId, RelationDesc, Timestamp};
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::SubscribeFrom;
 use mz_transform::TransformCtx;
@@ -224,6 +224,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // HIR ⇒ MIR lowering and decorrelation here. This would allow
                 // us implement something like `EXPLAIN RAW PLAN FOR SUBSCRIBE.`
                 //
+                // let typ = expr.top_level_typ();
                 // let expr = expr.lower(&self.config)?;
 
                 // MIR ⇒ MIR optimization (local)
@@ -247,7 +248,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
                 // Make SinkDesc
                 let sink_description = ComputeSinkDesc {
                     from: self.view_id,
-                    from_desc: RelationDesc::new(expr.typ(), desc.iter_names()),
+                    from_desc: desc.clone(),
                     connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection::default()),
                     with_snapshot: self.with_snapshot,
                     up_to: self.up_to.map(Antichain::from_elem).unwrap_or_default(),
