@@ -106,6 +106,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--check-statement-logging",
+        action="store_true",
+        help="Run statement logging consistency checks (adds a few seconds at the end of every test file)",
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -150,6 +156,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         blob_store_is_azure=args.azurite,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
+        check_statement_logging=args.check_statement_logging,
         entrypoint_extra=[
             f"--var=uses-redpanda={args.redpanda}",
         ],

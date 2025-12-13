@@ -343,7 +343,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: testdrive
-              args: [--default-size=1, --slow]
+              args: [--default-size=1, --slow, --check-statement-logging]
 
       - id: testdrive-size-8
         label: ":racing_car: testdrive with SIZE 8"

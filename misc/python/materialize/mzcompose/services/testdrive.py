@@ -52,6 +52,7 @@ class Testdrive(Service):
         aws_access_key_id: str | None = "minioadmin",
         aws_secret_access_key: str | None = "minioadmin",
         no_consistency_checks: bool = False,
+        check_statement_logging: bool = False,
         external_metadata_store: bool = False,
         external_blob_store: bool = False,
         blob_store_is_azure: bool = False,
@@ -164,6 +165,9 @@ class Testdrive(Service):
 
         if no_consistency_checks:
             entrypoint.append("--consistency-checks=disable")
+
+        if check_statement_logging:
+            entrypoint.append("--check-statement-logging")
 
         if fivetran_destination:
             entrypoint.append(f"--fivetran-destination-url={fivetran_destination_url}")

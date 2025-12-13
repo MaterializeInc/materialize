@@ -78,7 +78,7 @@ mod version_check;
 mod webhook;
 
 /// User-settable configuration parameters.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     // === Testdrive options. ===
     /// Variables to make available to the testdrive script.
@@ -112,6 +112,9 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    pub check_statement_logging: bool,
     /// Whether to automatically rewrite wrong results instead of failing.
     pub rewrite_results: bool,
 
@@ -205,6 +208,9 @@ pub struct MaterializeState {
 }
 
 pub struct State {
+    // The Config that this `State` was originally created from.
+    pub config: Config,
+
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
@@ -217,6 +223,7 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    check_statement_logging: bool,
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
     regex_replacement: String,
@@ -1037,6 +1044,8 @@ pub async fn create_state(
     };
 
     let mut state = State {
+        config: config.clone(),
+
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
         cmd_vars: BTreeMap::new(),
@@ -1049,6 +1058,7 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        check_statement_logging: config.check_statement_logging,
         consistency_checks_adhoc_skip: false,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
