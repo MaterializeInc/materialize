@@ -3,7 +3,7 @@ title: "Appendix: Required configuration"
 description: "Required configuration for Materialize on Azure Terraform."
 menu:
   main:
-    parent: "install-on-azure"
+    parent: "install-on-azure-legacy-terraform-module"
     identifier: "appendix-azure-config"
     weight: 50
 aliases:
@@ -82,6 +82,22 @@ provider "helm" {
   }
 }
 ```
+
+## Swap support
+
+Starting in v0.6.1 of Materialize on Azure Terraform,
+disk support (using swap on NVMe instance storage) may be enabled for
+Materialize. With this change, the Terraform:
+
+- Creates a node group for Materialize.
+- Configures NVMe instance store volumes as swap using a daemonset.
+- Enables swap at the Kubelet.
+
+For swap support, the following configuration option is available:
+
+- [`swap_enabled`](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#input_swap_enabled)
+
+See [Upgrade Notes](https://github.com/MaterializeInc/terraform-azurerm-materialize?tab=readme-ov-file#v061).
 
 [^1]: If using the `examples/simple/main.tf`, the example configuration handles
 them for you.

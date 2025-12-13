@@ -1,6 +1,6 @@
 
 ---
-title: "Appendix: Terraforms"
+title: "Terraform Modules"
 description: "List of template Terraform modules that are available as a
 starting point."
 menu:
@@ -10,7 +10,7 @@ menu:
     weight: 95
 ---
 
-To help you get started, Materialize provides some template Terraforms.
+To help you get started, Materialize provides Terraform modules.
 
 {{< important >}}
 These modules are intended for evaluation/demonstration purposes and for serving
@@ -25,11 +25,18 @@ your own production deployment, either:
 
 {{</ important >}}
 
+### **Terraform Modules**
+
+Materialize provides a [**unified Terraform module**](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main?tab=readme-ov-file#materialize-self-managed-terraform-modules) in order to provide concrete examples and an opinionated model for deploying materialize.
+This module supports deployments for AWS
+
 {{< yaml-table data="self_managed/terraform_list" >}}
 
-## Releases
+### *Legacy Terraform Modules*
 
-### Materialize on AWS Terraform module
+{{< yaml-table data="self_managed/legacy_terraform_list" >}}
+
+#### Materialize on AWS Terraform module
 
 {{< yaml-table data="self_managed/aws_terraform_versions" >}}
 
@@ -40,7 +47,7 @@ https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#u
 for release-specific upgrade notes.
 
 
-### Materialize on Azure Terraform module
+#### Materialize on Azure Terraform module
 
 {{< yaml-table data="self_managed/azure_terraform_versions" >}}
 
