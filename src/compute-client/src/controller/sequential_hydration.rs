@@ -179,7 +179,7 @@ where
         ) = resp
         {
             if let Some(collection) = self.collections.remove(id) {
-                let hydrated = PartialOrder::less_than(&collection.as_of, frontier);
+                let hydrated = PartialOrder::less_equal(&collection.as_of, frontier);
                 if hydrated || frontier.is_empty() {
                     debug!(%id, "collection hydrated");
 
