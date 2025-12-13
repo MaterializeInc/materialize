@@ -70,8 +70,8 @@ running `CREATE SINK`, observe the following guidance:
 | Progress topic | Compaction          | We recommend enabling compaction to avoid accumulating unbounded state. Disabling compaction may cause performance issues, but will not cause correctness issues.
 | Progress topic | Retention           | **Must be disabled.** Enabling retention can cause Materialize to violate its [exactly-once guarantees](/sql/create-sink/kafka#exactly-once-processing).
 | Progress topic | Tiered storage      | We recommend disabling tiered storage to allow for more aggressive data compaction. Fully compacted data requires minimal storage, typically only tens of bytes per sink, making it cost-effective to maintain directly on local disk.
-| Progress topic | Segment bytes.      | Defaults to 128 MiB, we recommend going no higher than 256 MiB to avoid
-slow startups when creting new sinks, as they must process the entire progress topic on startup.
+| Progress topic | Segment bytes.      | Defaults to 128 MiB. We recommend going no higher than 256 MiB to avoid
+slow startups when creating new sinks, as they must process the entire progress topic on startup.
 {{< warning >}}
 {{% kafka-sink-drop %}}
 {{</ warning >}}
