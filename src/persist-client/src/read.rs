@@ -293,7 +293,7 @@ where
             let next_batch = self.handle.machine.next_listen_batch(
                 &self.frontier,
                 &mut self.watch,
-                Some(&self.handle.reader_id),
+                &self.handle.reader_id,
                 retry,
             );
             match tokio::time::timeout(min_elapsed, next_batch).await {
