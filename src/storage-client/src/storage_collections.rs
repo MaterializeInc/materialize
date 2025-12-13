@@ -30,7 +30,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_ore::{assert_none, instrument, soft_assert_or_log};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
-use mz_persist_client::critical::SinceHandle;
+use mz_persist_client::critical::{CriticalReaderId, SinceHandle};
 use mz_persist_client::read::{Cursor, ReadHandle};
 use mz_persist_client::schema::CaESchema;
 use mz_persist_client::stats::{SnapshotPartsStats, SnapshotStats};
@@ -724,17 +724,28 @@ where
             handle_purpose: format!("controller data for {}", id),
         };
 
+        let reader_id = {
+            let (discriminant, value): (u8, u64) = match *id {
+                GlobalId::System(id) => (0, id),
+                GlobalId::IntrospectionSourceIndex(id) => (1, id),
+                GlobalId::User(id) => (2, id),
+                GlobalId::Transient(id) => (3, id),
+                GlobalId::Explain => (4, 0),
+            };
+            let mut bytes = [0u8; 16];
+            bytes[0] = discriminant;
+            bytes[8..16].copy_from_slice(&value.to_be_bytes());
+            CriticalReaderId::from(bytes)
+        };
+        let old_reader_id = PersistClient::CONTROLLER_CRITICAL_SINCE;
+
         // Construct the handle in a separate block to ensure all error paths
         // are diverging
         let since_handle = {
             // This block's aim is to ensure the handle is in terms of our epoch
             // by the time we return it.
             let mut handle: SinceHandle<_, _, _, _, PersistEpoch> = persist_client
-                .open_critical_since(
-                    shard,
-                    PersistClient::CONTROLLER_CRITICAL_SINCE,
-                    diagnostics.clone(),
-                )
+                .open_critical_since(shard, reader_id.clone(), diagnostics.clone())
                 .await
                 .expect("invalid persist usage");
 
@@ -773,6 +784,15 @@ where
                 }
             }
         };
+
+        persist_client
+            .expire_critical_reader::<SourceData, (), T, StorageDiff>(
+                shard,
+                old_reader_id,
+                diagnostics,
+            )
+            .await
+            .expect("invalid persist usage");
 
         since_handle
     }
@@ -911,10 +931,6 @@ where
         collection_desc: &CollectionDescription<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
         let mut dependencies = Vec::new();
-
-        if let Some(id) = collection_desc.primary {
-            dependencies.push(id);
-        }
 
         match &collection_desc.data_source {
             DataSource::Introspection(_)
@@ -1342,18 +1358,12 @@ where
         let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
-                // If the collection has a "primary" collection, let that primary drive compaction.
-                let collection = collections.get(&key).expect("must still exist");
-                let should_emit_persist_compaction = collection.description.primary.is_none();
-
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
                     collections.remove(&key).expect("must still exist");
                 }
 
-                if should_emit_persist_compaction {
-                    persist_compaction_commands.push((key, frontier));
-                }
+                persist_compaction_commands.push((key, frontier));
             }
         }
 
@@ -1874,20 +1884,11 @@ where
                     // somewhere
                     debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
-                    // If this collection has a primary, the primary is responsible for downgrading
-                    // the critical since and it would be an error if we did so here while opening
-                    // the since handle.
-                    let since = if description.primary.is_some() {
-                        None
-                    } else {
-                        description.since.as_ref()
-                    };
-
                     let (write, mut since_handle) = this
                         .open_data_handles(
                             &id,
                             metadata.data_shard,
-                            since,
+                            description.since.as_ref(),
                             metadata.relation_desc.clone(),
                             persist_client,
                         )
@@ -2346,35 +2347,17 @@ where
         {
             let mut self_collections = self.collections.lock().expect("lock poisoned");
 
-            // Update the existing collection so we know it's a "projection" of this new one.
             let existing = self_collections
                 .get_mut(&existing_collection)
                 .expect("existing collection missing");
 
             // A higher level should already be asserting this, but let's make sure.
             assert_eq!(existing.description.data_source, DataSource::Table);
-            assert_none!(existing.description.primary);
-
-            // The existing version of the table will depend on the new version.
-            existing.description.primary = Some(new_collection);
-            existing.storage_dependencies.push(new_collection);
 
             // Copy over the frontiers from the previous version.
-            // The new table starts with two holds - the implied capability, and the hold from
-            // the previous version - both at the previous version's read frontier.
             let implied_capability = existing.read_capabilities.frontier().to_owned();
             let write_frontier = existing.write_frontier.clone();
 
-            // Determine the relevant read capabilities on the new collection.
-            //
-            // Note(parkmycar): Originally we used `install_collection_dependency_read_holds_inner`
-            // here, but that only installed a ReadHold on the new collection for the implied
-            // capability of the existing collection. This would cause runtime panics because it
-            // would eventually result in negative read capabilities.
-            let mut changes = ChangeBatch::new();
-            changes.extend(implied_capability.iter().map(|t| (t.clone(), 1)));
-
-            // Note: The new collection is now the "primary collection".
             let collection_desc = CollectionDescription::for_table(new_desc.clone());
             let collection_meta = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
@@ -2392,13 +2375,6 @@ where
 
             // Add a record of the new collection.
             self_collections.insert(new_collection, collection_state);
-
-            let mut updates = BTreeMap::from([(new_collection, changes)]);
-            StorageCollectionsImpl::update_read_capabilities_inner(
-                &self.cmd_tx,
-                &mut *self_collections,
-                &mut updates,
-            );
         };
 
         // TODO(alter_table): Support changes to sources.

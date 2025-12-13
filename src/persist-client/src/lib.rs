@@ -486,6 +486,30 @@ impl PersistClient {
         Ok(handle)
     }
 
+    /// Expire the given critical reader.
+    pub async fn expire_critical_reader<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        reader_id: CriticalReaderId,
+        diagnostics: Diagnostics,
+    ) -> Result<(), InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+
+        let (_, maintenance) = machine.expire_critical_reader(&reader_id).await;
+        maintenance.start_performing(&machine, &gc);
+
+        Ok(())
+    }
+
     /// [Self::open], but returning only a [WriteHandle].
     ///
     /// Use this to save latency and a bit of persist traffic if you're just

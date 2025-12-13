@@ -46,6 +46,12 @@ impl std::fmt::Debug for CriticalReaderId {
     }
 }
 
+impl From<[u8; 16]> for CriticalReaderId {
+    fn from(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+}
+
 impl std::str::FromStr for CriticalReaderId {
     type Err = String;
 

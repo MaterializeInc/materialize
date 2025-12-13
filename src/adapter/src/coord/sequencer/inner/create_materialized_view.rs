@@ -706,17 +706,8 @@ impl Coordinator {
 
                     let storage_metadata = coord.catalog.state().storage_metadata();
 
-                    let mut collection_desc =
+                    let collection_desc =
                         CollectionDescription::for_other(output_desc, Some(storage_as_of));
-                    let mut allow_writes = true;
-
-                    // If this MV is intended to replace another one, we need to start it in
-                    // read-only mode, targeting the shard of the replacement target.
-                    if let Some(target_id) = replacement_target {
-                        let target_gid = coord.catalog.get_entry(&target_id).latest_global_id();
-                        collection_desc.primary = Some(target_gid);
-                        allow_writes = false;
-                    }
 
                     // Announce the creation of the materialized view source.
                     coord
@@ -745,7 +736,9 @@ impl Coordinator {
                         )
                         .await;
 
-                    if allow_writes {
+                    // If this MV is intended to replace another one, we need to start it in
+                    // read-only mode.
+                    if replacement_target.is_none() {
                         coord.allow_writes(cluster_id, global_id);
                     }
                 })
