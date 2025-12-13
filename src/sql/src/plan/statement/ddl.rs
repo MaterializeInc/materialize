@@ -4044,7 +4044,8 @@ fn kafka_sink_builder(
                 CastContext::Assignment,
                 &SqlScalarType::UInt64,
             )?;
-            let expr = expr.lower_uncorrelated()?;
+            let expr =
+                expr.lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())?;
 
             Some(expr)
         }
@@ -4954,6 +4955,7 @@ pub fn unplan_create_cluster(
                 enable_dequadratic_eqprop_map: _,
                 enable_eq_classes_withholding_errors: _,
                 enable_fast_path_plan_insights: _,
+                enable_cast_elimination: _,
             } = optimizer_feature_overrides;
             // The ones from above that don't occur below are not wired up to cluster features.
             let features_extracted = ClusterFeatureExtracted {
