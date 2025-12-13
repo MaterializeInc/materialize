@@ -35,7 +35,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 
 [build-dependencies]
-prost-build = "0.13.5"
+prost-build = "0.14.1"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
 
 [package.metadata.cargo-udeps.ignore]
