@@ -38,6 +38,7 @@ use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, ContinualTask, DataSourceDesc, Index,
     MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
+use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
@@ -51,8 +52,9 @@ use mz_repr::{CatalogItemId, GlobalId, RelationVersion, RelationVersionSelector,
 use mz_sql::plan::ConnectionDetails;
 use mz_storage_client::controller::{CollectionDescription, DataSource};
 use mz_storage_types::connections::PostgresConnection;
-use mz_storage_types::connections::inline::IntoInlineConnection;
-use mz_storage_types::sources::{GenericSourceConnection, SourceExport};
+use mz_storage_types::connections::inline::{InlinedConnection, IntoInlineConnection};
+use mz_storage_types::sinks::StorageSinkConnection;
+use mz_storage_types::sources::{GenericSourceConnection, SourceExport, SourceExportDataConfig};
 use tracing::{Instrument, info_span, warn};
 
 use crate::active_compute_sink::ActiveComputeSinkRetireReason;
@@ -185,11 +187,22 @@ impl Coordinator {
         let mut source_collections_to_create = BTreeMap::new();
         let mut storage_policies_to_initialize = BTreeMap::new();
         let mut execution_timestamps_to_set = BTreeSet::new();
+        let mut vpc_endpoints_to_create: Vec<(CatalogItemId, VpcEndpointConfig)> = vec![];
 
         // Replacing a materialized view causes the replacement's catalog entry
         // to be dropped. Its compute and storage collections are transferred to
         // the target MV though, so we must make sure not to drop those.
         let mut replacement_gids = vec![];
+
+        // Collections for batching connection-related alterations.
+        let mut source_connections_to_alter: BTreeMap<
+            GlobalId,
+            GenericSourceConnection<InlinedConnection>,
+        > = BTreeMap::new();
+        let mut sink_connections_to_alter: BTreeMap<GlobalId, StorageSinkConnection> =
+            BTreeMap::new();
+        let mut source_export_data_configs_to_alter: BTreeMap<GlobalId, SourceExportDataConfig> =
+            BTreeMap::new();
 
         // We're incrementally migrating the code that manipulates the
         // controller from closures in the sequencer. For some types of catalog
@@ -373,18 +386,17 @@ impl Coordinator {
                     compute_gids_to_drop.push((ct.cluster_id, ct.global_id()));
                     sources_to_drop.push((catalog_id, ct.global_id()));
                 }
-                CatalogImplication::Secret(CatalogImplicationKind::Added(secret)) => {
-                    tracing::debug!(?secret, "not handling AddSecret in here yet");
+                CatalogImplication::Secret(CatalogImplicationKind::Added(_secret)) => {
+                    // No action needed: the secret payload is stored in
+                    // secrets_controller.ensure() BEFORE the catalog transaction.
+                    // By the time we see this update, the secret is already stored.
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Altered {
-                    prev: prev_secret,
-                    new: new_secret,
+                    prev: _prev_secret,
+                    new: _new_secret,
                 }) => {
-                    tracing::debug!(
-                        ?prev_secret,
-                        ?new_secret,
-                        "not handling AlterSecret in here yet"
-                    );
+                    // No action needed: altering a secret updates the payload via
+                    // secrets_controller.ensure() without a catalog transaction.
                 }
                 CatalogImplication::Secret(CatalogImplicationKind::Dropped(
                     _secret,
@@ -393,16 +405,33 @@ impl Coordinator {
                     secrets_to_drop.push(catalog_id);
                 }
                 CatalogImplication::Connection(CatalogImplicationKind::Added(connection)) => {
-                    tracing::debug!(?connection, "not handling AddConnection in here yet");
+                    match &connection.details {
+                        // SSH connections: key pair is stored in secrets_controller
+                        // BEFORE the catalog transaction, so no action needed here.
+                        ConnectionDetails::Ssh { .. } => {}
+                        // AWS PrivateLink connections: create the VPC endpoint
+                        ConnectionDetails::AwsPrivatelink(privatelink) => {
+                            let spec = VpcEndpointConfig {
+                                aws_service_name: privatelink.service_name.to_owned(),
+                                availability_zone_ids: privatelink.availability_zones.to_owned(),
+                            };
+                            vpc_endpoints_to_create.push((catalog_id, spec));
+                        }
+                        // Other connection types don't require post-transaction actions
+                        _ => {}
+                    }
                 }
                 CatalogImplication::Connection(CatalogImplicationKind::Altered {
-                    prev: prev_connection,
+                    prev: _prev_connection,
                     new: new_connection,
                 }) => {
-                    tracing::debug!(
-                        ?prev_connection,
-                        ?new_connection,
-                        "not handling AlterConnection in here yet"
+                    self.handle_alter_connection(
+                        catalog_id,
+                        new_connection,
+                        &mut vpc_endpoints_to_create,
+                        &mut source_connections_to_alter,
+                        &mut sink_connections_to_alter,
+                        &mut source_export_data_configs_to_alter,
                     );
                 }
                 CatalogImplication::Connection(CatalogImplicationKind::Dropped(
@@ -537,6 +566,49 @@ impl Coordinator {
         // policy that might make the since advance.
         self.initialize_storage_collections(storage_policies_to_initialize)
             .await?;
+
+        // Create VPC endpoints for AWS PrivateLink connections
+        if !vpc_endpoints_to_create.is_empty() {
+            if let Some(cloud_resource_controller) = self.cloud_resource_controller.as_ref() {
+                for (connection_id, spec) in vpc_endpoints_to_create {
+                    if let Err(err) = cloud_resource_controller
+                        .ensure_vpc_endpoint(connection_id, spec)
+                        .await
+                    {
+                        tracing::error!(?err, "failed to ensure vpc endpoint!");
+                    }
+                }
+            } else {
+                tracing::error!(
+                    "AWS PrivateLink connections unsupported without cloud_resource_controller"
+                );
+            }
+        }
+
+        // Apply batched connection alterations to dependent sources/sinks/tables.
+        if !source_connections_to_alter.is_empty() {
+            self.controller
+                .storage
+                .alter_ingestion_connections(source_connections_to_alter)
+                .await
+                .unwrap_or_terminate("cannot fail to alter ingestion connections");
+        }
+
+        if !sink_connections_to_alter.is_empty() {
+            self.controller
+                .storage
+                .alter_export_connections(sink_connections_to_alter)
+                .await
+                .unwrap_or_terminate("altering export connections after txn must succeed");
+        }
+
+        if !source_export_data_configs_to_alter.is_empty() {
+            self.controller
+                .storage
+                .alter_ingestion_export_data_configs(source_export_data_configs_to_alter)
+                .await
+                .unwrap_or_terminate("altering source export data configs after txn must succeed");
+        }
 
         let collections_to_drop: BTreeSet<_> = sources_to_drop
             .iter()
@@ -1276,6 +1348,103 @@ impl Coordinator {
         }
 
         Ok(())
+    }
+
+    /// Handles altering a connection by collecting all the dependent sources,
+    /// sinks, and tables that need their connection updated.
+    ///
+    /// This mirrors the logic from `sequence_alter_connection_stage_finish` but
+    /// collects the changes into batched collections for application after all
+    /// implications are processed.
+    #[instrument(level = "debug")]
+    fn handle_alter_connection(
+        &self,
+        connection_id: CatalogItemId,
+        connection: Connection,
+        vpc_endpoints_to_create: &mut Vec<(CatalogItemId, VpcEndpointConfig)>,
+        source_connections_to_alter: &mut BTreeMap<
+            GlobalId,
+            GenericSourceConnection<InlinedConnection>,
+        >,
+        sink_connections_to_alter: &mut BTreeMap<GlobalId, StorageSinkConnection>,
+        source_export_data_configs_to_alter: &mut BTreeMap<GlobalId, SourceExportDataConfig>,
+    ) {
+        use std::collections::VecDeque;
+
+        // Handle AWS PrivateLink connections by queueing VPC endpoint creation.
+        if let ConnectionDetails::AwsPrivatelink(ref privatelink) = connection.details {
+            let spec = VpcEndpointConfig {
+                aws_service_name: privatelink.service_name.to_owned(),
+                availability_zone_ids: privatelink.availability_zones.to_owned(),
+            };
+            vpc_endpoints_to_create.push((connection_id, spec));
+        }
+
+        // Walk the dependency graph to find all sources, sinks, and tables
+        // that depend on this connection (directly or transitively through
+        // other connections).
+        let mut connections_to_process = VecDeque::new();
+        connections_to_process.push_front(connection_id.clone());
+
+        while let Some(id) = connections_to_process.pop_front() {
+            for dependent_id in self.catalog().get_entry(&id).used_by() {
+                let dependent_entry = self.catalog().get_entry(dependent_id);
+                match dependent_entry.item() {
+                    CatalogItem::Connection(_) => {
+                        // Connections can depend on other connections (e.g., a
+                        // Kafka connection using an SSH tunnel connection).
+                        // Process these transitively.
+                        connections_to_process.push_back(*dependent_id);
+                    }
+                    CatalogItem::Source(source) => {
+                        let desc = match &dependent_entry
+                            .source()
+                            .expect("known to be source")
+                            .data_source
+                        {
+                            DataSourceDesc::Ingestion { desc, .. }
+                            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                                desc.clone().into_inline_connection(self.catalog().state())
+                            }
+                            _ => {
+                                // Only ingestions reference connections directly.
+                                continue;
+                            }
+                        };
+
+                        source_connections_to_alter.insert(source.global_id, desc.connection);
+                    }
+                    CatalogItem::Sink(sink) => {
+                        let export = dependent_entry.sink().expect("known to be sink");
+                        sink_connections_to_alter.insert(
+                            sink.global_id,
+                            export
+                                .connection
+                                .clone()
+                                .into_inline_connection(self.catalog().state()),
+                        );
+                    }
+                    CatalogItem::Table(table) => {
+                        // This is a source-fed table that references a schema
+                        // registry connection as part of its encoding/data
+                        // config.
+                        if let Some((_, _, _, export_data_config)) =
+                            dependent_entry.source_export_details()
+                        {
+                            let data_config = export_data_config.clone();
+                            source_export_data_configs_to_alter.insert(
+                                table.global_id_writes(),
+                                data_config.into_inline_connection(self.catalog().state()),
+                            );
+                        }
+                    }
+                    _ => {
+                        // Other item types don't have connection dependencies
+                        // that need updating.
+                    }
+                }
+            }
+        }
     }
 }
 
