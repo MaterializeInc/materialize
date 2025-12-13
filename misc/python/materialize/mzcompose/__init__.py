@@ -359,7 +359,7 @@ def get_variable_system_parameters(
         VariableSystemParameter("pg_offset_known_interval", "1s", ["100ms", "1s"]),
         VariableSystemParameter(
             "statement_logging_default_sample_rate",
-            "1.0",
+            "0",
             ["0", "0.01", "0.5", "0.99", "1.0"],
         ),
         VariableSystemParameter(
