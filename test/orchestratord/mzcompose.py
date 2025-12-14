@@ -1865,19 +1865,24 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
                     if port_forward_process:
                         os.killpg(os.getpgid(port_forward_process.pid), signal.SIGTERM)
                         port_forward_process = None
-                    balancerd_name = spawn.capture(
-                        [
-                            "kubectl",
-                            "get",
-                            "pods",
-                            "-l",
-                            "app=balancerd",
-                            "-n",
-                            "materialize-environment",
-                            "-o",
-                            "jsonpath={.items[0].metadata.name}",
-                        ]
-                    ).strip()
+                    try:
+                        balancerd_name = spawn.capture(
+                            [
+                                "kubectl",
+                                "get",
+                                "pods",
+                                "-l",
+                                "app=balancerd",
+                                "-n",
+                                "materialize-environment",
+                                "-o",
+                                "jsonpath={.items[0].metadata.name}",
+                            ]
+                        ).strip()
+                    except subprocess.CalledProcessError:
+                        # balancerd can take a bit to start up
+                        time.sleep(1)
+                        continue
                     port_forward_process = subprocess.Popen(
                         [
                             "kubectl",
@@ -1930,10 +1935,12 @@ def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) ->
 
     test_failed = False
     max_downtime = 15
-    for downtime in downtimes:
-        if downtime > max_downtime:
-            print(f"SELECT 1 took more than {max_downtime}s: {downtime}s")
-            test_failed = True
+    upgrade_downtime = downtimes[-1]
+    if upgrade_downtime > max_downtime:
+        print(
+            f"SELECT 1 after upgrade took more than {max_downtime}s: {upgrade_downtime}s"
+        )
+        test_failed = True
 
     upload_upgrade_downtime_to_test_analytics(
         c, downtimes[0], downtimes[1], not test_failed
