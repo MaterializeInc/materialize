@@ -19,7 +19,7 @@ use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
@@ -142,12 +142,12 @@ impl PeekClient {
                 }
             }
             Statement::ExplainPushdown(explain_stmt) => {
-                // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
+                // Only handle EXPLAIN FILTER PUSHDOWN for non-BROKEN SELECT statements
                 match &explain_stmt.explainee {
-                    mz_sql_parser::ast::Explainee::Select(..) => {}
+                    mz_sql_parser::ast::Explainee::Select(_, false) => {}
                     _ => {
                         debug!(
-                            "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query"
+                            "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a (non-BROKEN) SELECT query"
                         );
                         return Ok(None);
                     }
@@ -253,6 +253,12 @@ impl PeekClient {
                         (plan, explain_ctx, None)
                     }
                     _ => {
+                        // This shouldn't happen because we already checked for this at the AST
+                        // level before calling `try_frontend_peek_inner`.
+                        soft_panic_or_log!(
+                            "unexpected EXPLAIN FILTER PUSHDOWN plan kind in frontend peek sequencing: {:?}",
+                            explainee
+                        );
                         debug!(
                             "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query or is EXPLAIN BROKEN"
                         );
