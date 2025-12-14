@@ -15,7 +15,7 @@ askama = { version = "0.12.1", default-features = false, features = ["config", "
 axum = "0.7.5"
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
 headers = "0.4.1"
-http = "1.2.0"
+http = "1.4.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 include_dir = "0.7.4"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing"] }

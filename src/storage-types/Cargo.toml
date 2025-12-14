@@ -27,7 +27,7 @@ dec = "0.4.8"
 derivative = "2.2.0"
 differential-dataflow = "0.18.0"
 hex = "0.4.3"
-http = "1.2.0"
+http = "1.4.0"
 itertools = { version = "0.14.0" }
 mysql_async = { version = "0.36.1", default-features = false, features = [
     "minimal",

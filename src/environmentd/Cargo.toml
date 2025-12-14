@@ -26,7 +26,7 @@ derivative = "2.2.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
 headers = "0.4.1"
-http = "1.2.0"
+http = "1.4.0"
 humantime = "2.3.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 hyper-openssl = "0.10.2"
