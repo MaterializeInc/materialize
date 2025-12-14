@@ -55,10 +55,10 @@ use crate::plan::{PlanError, QueryContext};
 /// effects.
 ///
 /// See the module docs for details.
-#[derive(Debug, EnumKind)]
+#[derive(Debug, EnumKind, Clone)]
 #[enum_kind(SefKind)]
 pub enum SideEffectingFunc {
-    /// The `pg_cancel_backend` function, .
+    /// The `pg_cancel_backend` function.
     PgCancelBackend {
         // The ID of the connection to cancel.
         connection_id: u32,

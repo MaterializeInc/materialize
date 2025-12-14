@@ -193,6 +193,7 @@ impl PeekClient {
 
         let pcx = session.pcx();
         let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+
         let (select_plan, explain_ctx, copy_to_ctx) = match &plan {
             Plan::Select(select_plan) => {
                 let explain_ctx = if session.vars().emit_plan_insights_notice() {
@@ -273,9 +274,29 @@ impl PeekClient {
                     }
                 }
             }
+            Plan::SideEffectingFunc(sef_plan) => {
+                // Side-effecting functions need Coordinator state (e.g., active_conns),
+                // so delegate to the Coordinator via a Command.
+                // The RBAC check is performed in the Coordinator where active_conns is available.
+                let response = self
+                    .call_coordinator(|tx| Command::ExecuteSideEffectingFunc {
+                        plan: sef_plan.clone(),
+                        conn_id: session.conn_id().clone(),
+                        current_role: session.role_metadata().current_role,
+                        tx,
+                    })
+                    .await?;
+                return Ok(Some(response));
+            }
             _ => {
+                // This shouldn't happen because we already checked for this at the AST
+                // level before calling `try_frontend_peek_inner`.
+                soft_panic_or_log!(
+                    "Unexpected plan kind in frontend peek sequencing: {:?}",
+                    plan
+                );
                 debug!(
-                    "Bailing out from try_frontend_peek_inner, because the Plan is not a SELECT, EXPLAIN SELECT, EXPLAIN FILTER PUSHDOWN, or COPY TO"
+                    "Bailing out from try_frontend_peek_inner, because the Plan is not a SELECT, side-effecting SELECT, EXPLAIN SELECT, EXPLAIN FILTER PUSHDOWN, or COPY TO S3"
                 );
                 return Ok(None);
             }
@@ -309,6 +330,8 @@ impl PeekClient {
 
         rbac::check_plan(
             &conn_catalog,
+            // We can't look at `active_conns` here, but that's ok, because this case was handled
+            // above already inside `Command::ExecuteSideEffectingFunc`.
             None::<fn(u32) -> Option<RoleId>>,
             session,
             &plan,
