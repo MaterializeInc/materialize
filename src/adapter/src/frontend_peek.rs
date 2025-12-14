@@ -28,7 +28,7 @@ use mz_sql::plan::{self, Plan, QueryWhen};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::{CopyDirection, ExplainStage, Statement};
+use mz_sql_parser::ast::{CopyDirection, CopyRelation, ExplainStage, Statement};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -156,7 +156,14 @@ impl PeekClient {
             Statement::Copy(copy_stmt) => {
                 match &copy_stmt.direction {
                     CopyDirection::To => {
-                        // This is COPY TO, continue
+                        // Check for SUBSCRIBE inside COPY TO - we don't handle Plan::Subscribe
+                        if matches!(&copy_stmt.relation, CopyRelation::Subscribe(_)) {
+                            debug!(
+                                "Bailing out from try_frontend_peek_inner, because COPY (SUBSCRIBE ...) TO is not supported"
+                            );
+                            return Ok(None);
+                        }
+                        // This is COPY TO (SELECT), continue
                     }
                     CopyDirection::From => {
                         debug!(
