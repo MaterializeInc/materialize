@@ -323,3 +323,9 @@ ROLLBACK
 > SELECT mseh.began_at, mslh.occurred_at
   FROM mz_internal.mz_statement_execution_history mseh JOIN mz_internal.mz_statement_lifecycle_history mslh ON (mseh.id = mslh.statement_id)
   WHERE mslh.event_type = 'execution-began' AND mseh.began_at != mslh.occurred_at;
+
+# Check that all statements are marked as finished.
+> SELECT count(*)
+  FROM mz_internal.mz_recent_activity_log
+  WHERE (finished_at IS NULL OR finished_status IS NULL) AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%';
+0
