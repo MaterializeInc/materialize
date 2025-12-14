@@ -24,6 +24,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.services.azurite import Azurite
 from materialize.mzcompose.services.fivetran_destination import FivetranDestination
+from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Minio
@@ -48,6 +49,7 @@ SERVICES = [
     Materialized(external_blob_store=True, sanity_restart=False),
     FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
     Testdrive(external_blob_store=True),
+    FoundationDB(),
 ]
 
 
@@ -106,6 +108,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
 
     parser.add_argument(
+        "--foundationdb",
+        action="store_true",
+        help="Use FoundationDB for internal metadata storage instead of Postgres",
+    )
+
+    parser.add_argument(
         "files",
         nargs="*",
         default=["*.td"],
@@ -138,8 +146,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         additional_system_parameter_defaults=additional_system_parameter_defaults,
         default_replication_factor=1,
         sanity_restart=False,
+        consensus_foundationdb=args.foundationdb,
     )
-
     testdrive = Testdrive(
         kafka_default_partitions=args.kafka_default_partitions,
         aws_region=args.aws_region,
@@ -150,10 +158,25 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         blob_store_is_azure=args.azurite,
         fivetran_destination=True,
         fivetran_destination_files_path="/share/tmp",
-        entrypoint_extra=[
-            f"--var=uses-redpanda={args.redpanda}",
-        ],
+        entrypoint_extra=(
+            [
+                f"--var=uses-redpanda={args.redpanda}",
+            ]
+            + ["--consistency-checks=disable"]
+            if args.foundationdb
+            else []
+        ),
     )
+    if args.foundationdb:
+        c.up("foundationdb")
+        c.run(
+            "foundationdb",
+            "-C",
+            "/etc/foundationdb/fdb.cluster",
+            "--exec",
+            "configure new single memory",
+            entrypoint="fdbcli",
+        )
 
     with c.override(testdrive, materialized):
         c.up(*dependencies, Service("testdrive", idle=True))
