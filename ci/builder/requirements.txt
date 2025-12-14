@@ -24,7 +24,7 @@ jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==17.2.0
-matplotlib==3.10.7
+matplotlib==3.10.8
 matplotlib-stubs==0.3.4
 # Keep on 3.4.2 for Python 3.10 compatibility
 networkx==3.4.2
