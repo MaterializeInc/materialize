@@ -166,12 +166,79 @@ fn test_persistence() {
     );
 }
 
+/// A wrapper around `TestServerWithRuntime` that runs statement logging checks when dropped.
+///
+/// This guard ensures that all statements have finished executing (have non-NULL `finished_at`
+/// and `finished_status` in `mz_internal.mz_recent_activity_log`) before the test completes.
+struct TestServerWithStatementLoggingChecks {
+    server: test_util::TestServerWithRuntime,
+}
+
+impl TestServerWithStatementLoggingChecks {
+    /// Connect to the __internal__ SQL port of the running `environmentd` server.
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: postgres::tls::MakeTlsConnect<postgres::Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as postgres::tls::TlsConnect<postgres::Socket>>::Future: Send,
+    {
+        self.server.connect_internal(tls)
+    }
+}
+
+impl Drop for TestServerWithStatementLoggingChecks {
+    fn drop(&mut self) {
+        // Don't run checks if we're already panicking, as this could mask the original error.
+        if std::thread::panicking() {
+            return;
+        }
+
+        let mut mz_client = self
+            .server
+            .connect_internal(postgres::NoTls)
+            .expect("Failed to connect to internal SQL port for statement logging check");
+
+        // Disable RBAC checks so we can query mz_internal tables.
+        // (We don't need to restore this afterwards, since no more tests run in the same system.)
+        mz_client
+            .batch_execute("ALTER SYSTEM SET enable_rbac_checks = false")
+            .expect("Failed to disable RBAC checks");
+
+        // The statement log has a 5-second buffer flush interval, so allow sufficient time.
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let result = mz_client.query_one(
+                    "SELECT count(*)
+                     FROM mz_internal.mz_recent_activity_log
+                     WHERE (finished_at IS NULL OR finished_status IS NULL)
+                       AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'",
+                    &[],
+                );
+
+                match result {
+                    Ok(row) => {
+                        let count: i64 = row.get(0);
+                        if count == 0 {
+                            Ok(())
+                        } else {
+                            Err(format!("{} statements have not finished", count))
+                        }
+                    }
+                    Err(e) => Err(format!("Query failed: {}", e)),
+                }
+            })
+            .expect("All statements should have finished executing");
+    }
+}
+
 fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
     target_data_rate: &str,
     test_harness: test_util::TestHarness,
-) -> (test_util::TestServerWithRuntime, postgres::Client) {
+) -> (TestServerWithStatementLoggingChecks, postgres::Client) {
     let server = test_harness
         .with_system_parameter_default(
             "statement_logging_max_sample_rate".to_string(),
@@ -199,6 +266,7 @@ fn setup_statement_logging_core(
         )
         .start_blocking();
     let client = server.connect(postgres::NoTls).unwrap();
+    let server = TestServerWithStatementLoggingChecks { server };
     (server, client)
 }
 
@@ -206,7 +274,7 @@ fn setup_statement_logging(
     max_sample_rate: f64,
     sample_rate: f64,
     target_data_rate: &str,
-) -> (test_util::TestServerWithRuntime, postgres::Client) {
+) -> (TestServerWithStatementLoggingChecks, postgres::Client) {
     setup_statement_logging_core(
         max_sample_rate,
         sample_rate,
@@ -220,11 +288,7 @@ fn setup_statement_logging(
 fn test_statement_logging_immediate() {
     let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
 
-    let mut mz_client = server
-        .pg_config_internal()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
-        .unwrap();
+    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
     mz_client
         .batch_execute("ALTER SYSTEM SET enable_statement_lifecycle_logging = false")
         .unwrap();
@@ -686,7 +750,7 @@ fn test_statement_logging_subscribes() {
 /// (1) that the effective sampling rate for the session is 50%,
 /// (2) that we are using the deterministic testing RNG.
 fn test_statement_logging_sampling_inner(
-    server: test_util::TestServerWithRuntime,
+    server: TestServerWithStatementLoggingChecks,
     mut client: postgres::Client,
 ) {
     for i in 0..50 {
