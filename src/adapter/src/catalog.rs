@@ -2277,6 +2277,7 @@ impl SessionCatalog for ConnCatalog<'_> {
         if qualified_name.qualifiers.schema_spec.is_temporary() {
             // All bets are off. Just give up and return the qualified name as is.
             // TODO: Figure out what's going on with temporary objects.
+
             // See e.g. `temporary_objects.slt` fail if you comment this out, which has the repro
             // from https://github.com/MaterializeInc/database-issues/issues/9973#issuecomment-3646382143
             // There is also https://github.com/MaterializeInc/database-issues/issues/9974, for
