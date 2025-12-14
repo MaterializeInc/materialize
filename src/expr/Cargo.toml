@@ -71,7 +71,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 smallvec = { version = "1.15.1" }
 
 [dev-dependencies]
-criterion = { version = "0.6.0" }
+criterion = { version = "0.8.1" }
 datadriven = "0.9.0"
 insta = "1.44"
 mz-expr-derive-impl = { path = "../expr-derive-impl", features = ["test"] }

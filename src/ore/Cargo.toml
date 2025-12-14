@@ -97,7 +97,7 @@ yansi = { version = "1.0.1", optional = true }
 
 [dev-dependencies]
 anyhow = { version = "1.0.100" }
-criterion = { version = "0.6.0", features = ["async_tokio"] }
+criterion = { version = "0.8.1", features = ["async_tokio"] }
 mz-ore = { path = "../ore", features = ["id_gen", "chrono"] }
 proptest = { version = "1.9.0", default-features = false, features = ["std"] }
 scopeguard = "1.2.0"
