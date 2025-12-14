@@ -116,7 +116,7 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
-reqwest = { version = "0.12.24", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest = { version = "0.12.25", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 schemars = { version = "1.1.0", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
@@ -139,7 +139,7 @@ toml_datetime = { version = "0.6.11", default-features = false, features = ["ser
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.7", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.8", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.43", features = ["log"] }
 tracing-core = { version = "0.1.35" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
@@ -257,7 +257,7 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
-reqwest = { version = "0.12.24", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest = { version = "0.12.25", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 schemars = { version = "1.1.0", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
@@ -282,7 +282,7 @@ toml_datetime = { version = "0.6.11", default-features = false, features = ["ser
 toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
-tower-http = { version = "0.6.7", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
+tower-http = { version = "0.6.8", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tracing = { version = "0.1.43", features = ["log"] }
 tracing-core = { version = "0.1.35" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
@@ -310,7 +310,7 @@ openssl-sys = { version = "0.9.111", default-features = false, features = ["vend
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
-tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-unknown-linux-gnu.build-dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
@@ -326,7 +326,7 @@ openssl-sys = { version = "0.9.111", default-features = false, features = ["vend
 ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
-tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
@@ -339,7 +339,7 @@ ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
-tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
 [target.x86_64-apple-darwin.build-dependencies]
 bitflags = { version = "2.9.4", default-features = false, features = ["std"] }
@@ -352,6 +352,6 @@ ring = { version = "0.17.14", features = ["std"] }
 rustix-d585fab2519d2d1 = { package = "rustix", version = "0.38.44", features = ["fs", "net", "process", "termios"] }
 rustix-dff4ba8e3ae991db = { package = "rustix", version = "1.0.7", features = ["event", "fs", "pipe", "process", "time"] }
 security-framework = { version = "2.10.0", features = ["alpn"] }
-tower-http = { version = "0.6.7", default-features = false, features = ["follow-redirect"] }
+tower-http = { version = "0.6.8", default-features = false, features = ["follow-redirect"] }
 
 ### END HAKARI SECTION

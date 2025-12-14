@@ -20,7 +20,7 @@ lru = "0.14.0"
 mz-ore = { path = "../ore", features = ["network", "metrics"] }
 mz-repr = { path = "../repr" }
 prometheus = { version = "0.14.0", default-features = false }
-reqwest = "0.12.24"
+reqwest = "0.12.25"
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
 serde = { version = "1.0.219", features = ["derive"] }
