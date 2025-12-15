@@ -47,7 +47,6 @@ use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
     HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
-use crate::session::vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS;
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -577,15 +576,12 @@ fn show_materialized_views<'a>(
     }
 
     let query = format!(
-        "SELECT name, cluster, comment, replacing
+        "SELECT name, cluster, comment
             FROM mz_internal.mz_show_materialized_views
             WHERE {where_clause}"
     );
 
-    let mut projection = vec!["name", "cluster", "comment"];
-    if scx.is_feature_flag_enabled(&ENABLE_REPLACEMENT_MATERIALIZED_VIEWS) {
-        projection.push("replacing");
-    }
+    let projection = vec!["name", "cluster", "comment"];
 
     ShowSelect::new(scx, query, filter, None, Some(&projection))
 }

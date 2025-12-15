@@ -556,8 +556,6 @@ mz_relations  owner_id
 mz_relations  privileges
 mz_relations  schema_id
 mz_relations  type
-mz_replacements  id
-mz_replacements  target_id
 mz_roles  id
 mz_roles  inherit
 mz_roles  name
@@ -624,7 +622,6 @@ mz_show_materialized_views  cluster_id
 mz_show_materialized_views  comment
 mz_show_materialized_views  id
 mz_show_materialized_views  name
-mz_show_materialized_views  replacing
 mz_show_materialized_views  schema_id
 mz_show_roles  comment
 mz_show_roles  name
