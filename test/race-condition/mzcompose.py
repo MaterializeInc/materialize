@@ -638,12 +638,12 @@ class View(Object):
 
 class MaterializedView(Object):
     def create(self) -> str:
-        select = (
+        self.select = (
             "* FROM " + self.references.name
             if self.references
             else "'foo' AS a, 'bar' AS b"
         )
-        return f"> CREATE MATERIALIZED VIEW {self.name} AS SELECT {select}"
+        return f"> CREATE MATERIALIZED VIEW {self.name} AS SELECT {self.select}"
 
     def destroy(self) -> str:
         return f"> DROP MATERIALIZED VIEW {self.name} CASCADE"
@@ -658,38 +658,18 @@ class MaterializedView(Object):
                 > ALTER MATERIALIZED VIEW {self.name}_tmp_mv RENAME TO {self.name}
                 """
             ),
-        ]
-        return manipulations[kind % len(manipulations)]()
-
-    def verify(self) -> str:
-        raise NotImplementedError
-
-
-class ReplacementMaterializedView(Object):
-    def create(self) -> str:
-        select = (
-            "* FROM " + self.references.name
-            if self.references
-            else "'foo' AS a, 'bar' AS b"
-        )
-        return f"> CREATE MATERIALIZED VIEW {self.name} AS SELECT {select}"
-
-    def destroy(self) -> str:
-        return f"> DROP MATERIALIZED VIEW {self.name} CASCADE"
-
-    def manipulate(self, kind: int) -> str:
-        select = (
-            "* FROM " + self.references.name
-            if self.references
-            else "'foo' AS a, 'bar' AS b"
-        )
-        manipulations = [
-            lambda: "",
             lambda: dedent(
                 f"""
                 > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
-                > CREATE MATERIALIZED VIEW {self.name}_replacement REPLACING {self.name} AS SELECT {select}
+                > CREATE MATERIALIZED VIEW {self.name}_replacement REPLACING {self.name} AS SELECT {self.select}
                 > ALTER MATERIALIZED VIEW {self.name} APPLY REPLACEMENT {self.name}_replacement
+                """
+            ),
+            lambda: dedent(
+                f"""
+                > DROP MATERIALIZED VIEW IF EXISTS {self.name}_replacement
+                > CREATE MATERIALIZED VIEW {self.name}_replacement REPLACING {self.name} AS SELECT {self.select}
+                > DROP MATERIALIZED VIEW {self.name}_replacement
                 """
             ),
         ]
