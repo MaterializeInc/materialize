@@ -152,8 +152,8 @@ async fn decode_remap_data_until_geq_external_frontier<
             match event {
                 ListenEvent::Updates(updates) => {
                     for ((k, v), into_ts, diff) in updates {
-                        let row: Row = k.expect("invalid binding").0.expect("invalid binding");
-                        let _v: () = v.expect("invalid binding");
+                        let row: Row = k.0.expect("invalid binding");
+                        let _v: () = v;
 
                         let from_ts: FromTime = SourceTimestamp::decode_row(&row);
                         pending_remap.push(Reverse((into_ts, from_ts, diff)));

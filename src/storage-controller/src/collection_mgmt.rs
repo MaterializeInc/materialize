@@ -1024,7 +1024,7 @@ where
             Ok(contents) => {
                 let mut snapshot = Vec::with_capacity(contents.len());
                 for ((data, _), _, diff) in contents {
-                    let row = data.expect("invalid protobuf data").0.unwrap();
+                    let row = data.0.unwrap();
                     snapshot.push((row, -Diff::from(diff)));
                 }
                 snapshot
@@ -1546,8 +1546,7 @@ where
     // Produce retractions by inverting diffs of rows we want to delete.
     let mut builder = write_handle.builder(Antichain::from_elem(old_upper_ts.clone()));
     while let Some(chunk) = rows.next().await {
-        for ((key, _v), _t, diff) in chunk {
-            let data = key.map_err(|e| anyhow!("decoding error in metrics snapshot: {e}"))?;
+        for (data, _t, diff) in chunk {
             let Ok(row) = &data.0 else { continue };
             let datums = row.unpack();
             let occurred_at = datums[occurred_at_col].unwrap_timestamptz();
@@ -1664,8 +1663,7 @@ where
             > = BTreeMap::new();
 
             while let Some(chunk) = rows.next().await {
-                for ((key, _v), _t, diff) in chunk {
-                    let data = key.expect("successful decode");
+                for (data, _t, diff) in chunk {
                     let Ok(row) = &data.0 else { continue };
                     let (key, timestamp) = handle_row(row, diff);
 
@@ -1705,8 +1703,7 @@ where
 
             // Mark any row outside the retention window for deletion
             while let Some(chunk) = rows.next().await {
-                for ((key, _v), _t, diff) in chunk {
-                    let data = key.expect("successful decode");
+                for (data, _t, diff) in chunk {
                     let Ok(row) = &data.0 else { continue };
                     let (_, timestamp) = handle_row(row, diff);
 

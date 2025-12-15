@@ -156,8 +156,8 @@ where
                 match event {
                     ListenEvent::Updates(updates) => {
                         for ((k, v), t, d) in updates {
-                            let row: Row = k.expect("invalid binding").0.expect("invalid binding");
-                            let _v: () = v.expect("invalid binding");
+                            let row: Row = k.0.expect("invalid binding");
+                            let _v: () = v;
                             let from_ts = C::Time::decode_row(&row);
                             remap_updates.push((from_ts, t, d));
                         }

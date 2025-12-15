@@ -664,12 +664,7 @@ where
                                 fetched_part.next_with_storage(&mut key_storage, &mut val_storage)
                             {
                                 builder
-                                    .add(
-                                        &k.expect("decoded just-encoded key data"),
-                                        &v.expect("decoded just-encoded val data"),
-                                        &t,
-                                        &d,
-                                    )
+                                    .add(&k, &v, &t, &d)
                                     .await
                                     .expect("re-encoding just-decoded data");
                             }

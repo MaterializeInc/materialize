@@ -744,7 +744,7 @@ mod tests {
                 TxnsCache::open(&self.client, self.txns_id, Some(data_id)).await;
             let _ = cache.update_gt(&as_of).await;
             let snapshot = cache.data_snapshot(data_id, as_of);
-            let mut data_read = self
+            let mut data_read: ReadHandle<String, (), _, _> = self
                 .client
                 .open_leased_reader(
                     data_id,
@@ -762,10 +762,7 @@ mod tests {
             data_read.expire().await;
             let snapshot: Vec<_> = snapshot
                 .into_iter()
-                .map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                .map(|((k, ()), t, d)| (k, t, d))
                 .collect();
 
             // Check that a subscribe would produce the same result.

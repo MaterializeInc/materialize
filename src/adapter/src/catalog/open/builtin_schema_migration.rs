@@ -987,16 +987,7 @@ where
 
     let entries: Vec<_> = updates
         .into_iter()
-        .filter_map(|(data, _, _)| {
-            if let (Ok(key), Ok(val)) = data {
-                Some((key, val))
-            } else {
-                // If we can't decode the data, it has likely been written by a newer version, so
-                // we ignore it.
-                info!("skipping unreadable migration shard entry: {data:?}");
-                None
-            }
-        })
+        .map(|(data, _, _)| data)
         .filter(move |(key, _)| predicate(key))
         .collect();
 

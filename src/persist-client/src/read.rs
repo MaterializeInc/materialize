@@ -159,9 +159,7 @@ where
     /// Equivalent to `next`, but rather than returning a [`LeasedBatchPart`],
     /// fetches and returns the data from within it.
     #[instrument(level = "debug", fields(shard = %self.listen.handle.machine.shard_id()))]
-    pub async fn fetch_next(
-        &mut self,
-    ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+    pub async fn fetch_next(&mut self) -> Vec<ListenEvent<T, ((K, V), T, D)>> {
         let events = self.next(None).await;
         let new_len = events
             .iter()
@@ -416,9 +414,7 @@ where
     /// If you have a use for consolidated listen output, given that snapshots can't be
     /// consolidated, come talk to us!
     #[instrument(level = "debug", name = "listen::next", fields(shard = %self.handle.machine.shard_id()))]
-    pub async fn fetch_next(
-        &mut self,
-    ) -> Vec<ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+    pub async fn fetch_next(&mut self) -> Vec<ListenEvent<T, ((K, V), T, D)>> {
         let (parts, progress) = self.next(None).await;
         let mut ret = Vec::with_capacity(parts.len() + 1);
         for part in parts {
@@ -433,9 +429,7 @@ where
     }
 
     /// Convert listener into futures::Stream
-    pub fn into_stream(
-        mut self,
-    ) -> impl Stream<Item = ListenEvent<T, ((Result<K, String>, Result<V, String>), T, D)>> {
+    pub fn into_stream(mut self) -> impl Stream<Item = ListenEvent<T, ((K, V), T, D)>> {
         async_stream::stream!({
             loop {
                 for msg in self.fetch_next().await {
@@ -450,13 +444,7 @@ where
     /// return the final progress info.
     #[cfg(test)]
     #[track_caller]
-    pub async fn read_until(
-        &mut self,
-        ts: &T,
-    ) -> (
-        Vec<((Result<K, String>, Result<V, String>), T, D)>,
-        Antichain<T>,
-    ) {
+    pub async fn read_until(&mut self, ts: &T) -> (Vec<((K, V), T, D)>, Antichain<T>) {
         let mut updates = Vec::new();
         let mut frontier = Antichain::from_elem(T::minimum());
         while self.frontier.less_than(ts) {
@@ -939,9 +927,7 @@ where
     D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Grab the next batch of consolidated data.
-    pub async fn next(
-        &mut self,
-    ) -> Option<impl Iterator<Item = ((Result<K, String>, Result<V, String>), T, D)> + '_> {
+    pub async fn next(&mut self) -> Option<impl Iterator<Item = ((K, V), T, D)> + '_> {
         let Self {
             consolidator,
             max_len,
@@ -971,7 +957,7 @@ where
             val_decoder.decode(i, &mut v);
             let t = T::decode(part.time.value(i).to_le_bytes());
             let d = D::decode(part.diff.value(i).to_le_bytes());
-            ((Ok(k), Ok(v)), t, d)
+            ((k, v), t, d)
         });
 
         Some(iter)
@@ -1001,7 +987,7 @@ where
     pub async fn snapshot_and_fetch(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>> {
+    ) -> Result<Vec<((K, V), T, D)>, Since<T>> {
         let mut cursor = self.snapshot_cursor(as_of, |_| true).await?;
         let mut contents = Vec::new();
         while let Some(iter) = cursor.next().await {
@@ -1189,10 +1175,7 @@ where
     pub async fn snapshot_and_stream(
         &mut self,
         as_of: Antichain<T>,
-    ) -> Result<
-        impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + use<K, V, T, D>,
-        Since<T>,
-    > {
+    ) -> Result<impl Stream<Item = ((K, V), T, D)> + use<K, V, T, D>, Since<T>> {
         let snap = self.snapshot(as_of).await?;
 
         let blob = Arc::clone(&self.blob);
@@ -1239,10 +1222,7 @@ where
     /// succeed, process its batches, and then return its data sorted.
     #[cfg(test)]
     #[track_caller]
-    pub async fn expect_snapshot_and_fetch(
-        &mut self,
-        as_of: T,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)> {
+    pub async fn expect_snapshot_and_fetch(&mut self, as_of: T) -> Vec<((K, V), T, D)> {
         let mut ret = self
             .snapshot_and_fetch(Antichain::from_elem(as_of))
             .await
@@ -1384,10 +1364,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(
-            updates,
-            &[((Ok("k".to_owned()), Ok("v".to_owned())), 4u64, 3i64)],
-        )
+        assert_eq!(updates, &[(("k".to_owned(), "v".to_owned()), 4u64, 3i64)],)
     }
 
     #[mz_persist_proc::test(tokio::test)]
@@ -1418,7 +1395,7 @@ mod tests {
 
         let mut snapshot_rows = vec![];
         while let Some(((k, v), t, d)) = snapshot.next().await {
-            snapshot_rows.push(((k.expect("valid key"), v.expect("valid key")), t, d));
+            snapshot_rows.push(((k, v), t, d));
         }
 
         for ((_k, _v), t, _d) in data.as_mut_slice() {
