@@ -19,7 +19,7 @@ sources instead.
 | MySQL      | ✓                   | {{% ingest-data/mysql-native-support %}}                                                       |
 | SQL Server | ✓                   | {{% ingest-data/sql-server-native-support %}}                                                  |
 | Oracle     |                     | [Kafka + Debezium](https://debezium.io/documentation/reference/stable/connectors/oracle.html)  |
-| MongoDB    |                     | [Kafka + Debezium](https://debezium.io/documentation/reference/stable/connectors/mongodb.html) |
+| MongoDB    |                     | [Kafka + Debezium](/ingest-data/mongodb/) |
 
 ### Using Debezium
 

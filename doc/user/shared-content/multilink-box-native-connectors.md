@@ -4,7 +4,7 @@
 - [MySQL](/ingest-data/mysql/)
 - [SQL Server](/ingest-data/sql-server/)
 - [CockroachDB](/ingest-data/cdc-cockroachdb/)
-- [MongoDB](https://github.com/MaterializeIncLabs/materialize-mongodb-debezium)
+- [MongoDB](/ingest-data/mongodb/)
 {{</ linkbox >}}
 {{< linkbox title="Message Brokers" >}}
 - [Kafka](/ingest-data/kafka/)
