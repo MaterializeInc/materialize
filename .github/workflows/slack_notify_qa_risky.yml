@@ -54,6 +54,9 @@ on:
       - src/sql/src/plan/query.rs
       - src/sql-parser/src/parser.rs
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     name: "Notify about risky PRs"
@@ -64,6 +67,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          persist-credentials: false
       - name: "Long change filter"
         id: long
         run: |
