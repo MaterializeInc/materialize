@@ -1126,7 +1126,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edca88bc138befd0323b20752846e6587272d3b03b0343c8ea28a6f819e6e71f"
 dependencies = [
  "async-trait",
- "axum-core",
+ "axum-core 0.4.5",
  "base64 0.22.1",
  "bytes",
  "futures-util",
@@ -1136,7 +1136,7 @@ dependencies = [
  "hyper 1.8.1",
  "hyper-util",
  "itoa",
- "matchit",
+ "matchit 0.7.0",
  "memchr",
  "mime",
  "percent-encoding",
@@ -1150,6 +1150,32 @@ dependencies = [
  "sync_wrapper",
  "tokio",
  "tokio-tungstenite 0.24.0",
+ "tower 0.5.2",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "axum"
+version = "0.8.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b098575ebe77cb6d14fc7f32749631a6e44edbef6b796f89b020e99ba20d425"
+dependencies = [
+ "axum-core 0.5.5",
+ "bytes",
+ "futures-util",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "itoa",
+ "matchit 0.8.4",
+ "memchr",
+ "mime",
+ "percent-encoding",
+ "pin-project-lite",
+ "serde_core",
+ "sync_wrapper",
  "tower 0.5.2",
  "tower-layer",
  "tower-service",
@@ -1178,27 +1204,44 @@ dependencies = [
 ]
 
 [[package]]
-name = "axum-extra"
-version = "0.9.6"
+name = "axum-core"
+version = "0.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c794b30c904f0a1c2fb7740f7df7f7972dfaa14ef6f57cb6178dc63e5dca2f04"
+checksum = "59446ce19cd142f8833f856eb31f3eb097812d1479ab224f54d72428ca21ea22"
 dependencies = [
- "axum",
- "axum-core",
  "bytes",
- "fastrand 2.3.0",
+ "futures-core",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "sync_wrapper",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
+name = "axum-extra"
+version = "0.12.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbfe9f610fe4e99cf0cfcd03ccf8c63c28c616fe714d80475ef731f3b13dd21b"
+dependencies = [
+ "axum 0.8.7",
+ "axum-core 0.5.5",
+ "bytes",
+ "futures-core",
  "futures-util",
  "headers",
  "http 1.4.0",
  "http-body 1.0.1",
  "http-body-util",
  "mime",
- "multer",
  "pin-project-lite",
- "serde",
- "tower 0.5.2",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]
@@ -4988,6 +5031,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b87248edafb776e59e6ee64a79086f65890d3510f2c656c000bf2a7e8a0aea40"
 
 [[package]]
+name = "matchit"
+version = "0.8.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5086,23 +5135,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "multer"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
-dependencies = [
- "bytes",
- "encoding_rs",
- "futures-util",
- "http 1.4.0",
- "httparse",
- "memchr",
- "mime",
- "spin 0.9.8",
- "version_check",
-]
-
-[[package]]
 name = "multimap"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5185,7 +5217,7 @@ name = "mz"
 version = "0.3.1"
 dependencies = [
  "assert_cmd",
- "axum",
+ "axum 0.7.9",
  "clap",
  "csv",
  "dirs",
@@ -5482,7 +5514,7 @@ version = "26.5.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "bytes",
  "bytesize",
  "chrono",
@@ -5782,7 +5814,7 @@ name = "mz-clusterd"
 version = "26.5.0-dev.0"
 dependencies = [
  "anyhow",
- "axum",
+ "axum 0.7.9",
  "clap",
  "fail",
  "futures",
@@ -6087,7 +6119,7 @@ dependencies = [
  "askama",
  "assert_cmd",
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "axum-extra",
  "base64 0.22.1",
  "bytes",
@@ -6371,7 +6403,7 @@ name = "mz-frontegg-auth"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "axum",
+ "axum 0.7.9",
  "base64 0.22.1",
  "clap",
  "derivative",
@@ -6415,7 +6447,7 @@ name = "mz-frontegg-mock"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "axum",
+ "axum 0.7.9",
  "axum-extra",
  "base64 0.22.1",
  "chrono",
@@ -6441,7 +6473,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "askama",
- "axum",
+ "axum 0.7.9",
  "axum-extra",
  "headers",
  "http 1.4.0",
@@ -6793,7 +6825,7 @@ version = "26.5.0-dev.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "chrono",
  "clap",
  "futures",
@@ -7262,7 +7294,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "askama",
- "axum",
+ "axum 0.7.9",
  "axum-extra",
  "bytesize",
  "cfg-if",
@@ -7793,7 +7825,7 @@ dependencies = [
  "async-trait",
  "aws-credential-types",
  "aws-sdk-sts",
- "axum",
+ "axum 0.7.9",
  "bincode",
  "bytes",
  "bytesize",
@@ -9057,7 +9089,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "bytes",
  "clap",
  "differential-dataflow",
@@ -11248,12 +11280,6 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "spin"
-version = "0.9.8"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6980e8d7511241f8acf4aebddbb1ff938df5eebe98691418c4468d0b72a96a67"
-
-[[package]]
-name = "spin"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d5fe4ccb98d9c292d56fec89a5e07da7fc4cf0dc11e156b41793132775d3e591"
@@ -12115,7 +12141,7 @@ checksum = "877c5b330756d856ffcc4553ab34a5684481ade925ecc54bcd1bf02b1d0d4d52"
 dependencies = [
  "async-stream",
  "async-trait",
- "axum",
+ "axum 0.7.9",
  "base64 0.22.1",
  "bytes",
  "flate2",
@@ -12198,7 +12224,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fd0118512cf0b3768f7fcccf0bef1ae41d68f2b45edc1e77432b36c97c56c6d"
 dependencies = [
  "async-trait",
- "axum-core",
+ "axum-core 0.4.5",
  "cookie",
  "futures-util",
  "http 1.4.0",
@@ -12305,7 +12331,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fb6abbfcaf6436ec5a772cd9f965401da12db793e404ae6134eac066fa5a04f3"
 dependencies = [
  "async-trait",
- "axum-core",
+ "axum-core 0.4.5",
  "base64 0.22.1",
  "futures",
  "http 1.4.0",
@@ -13283,8 +13309,8 @@ dependencies = [
  "aws-smithy-runtime",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
- "axum",
- "axum-core",
+ "axum 0.7.9",
+ "axum-core 0.4.5",
  "base16ct",
  "bindgen",
  "bit-set",
