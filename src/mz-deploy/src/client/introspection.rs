@@ -344,6 +344,57 @@ pub async fn check_tables_exist(
     Ok(existing)
 }
 
+/// Check which sinks from the given set exist in the database.
+///
+/// Returns a BTreeSet of ObjectIds for sinks that already exist.
+/// Used during apply to skip creating sinks that already exist (like tables).
+pub async fn check_sinks_exist(
+    client: &PgClient,
+    sinks: &BTreeSet<ObjectId>,
+) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+    let fqns: Vec<String> = sinks.iter().map(|o| o.to_string()).collect();
+    if fqns.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let placeholders: Vec<String> = (1..=fqns.len()).map(|i| format!("${}", i)).collect();
+    let placeholders_str = placeholders.join(", ");
+
+    let query = format!(
+        r#"
+        SELECT d.name || '.' || s.name || '.' || k.name as fqn
+        FROM mz_sinks k
+        JOIN mz_schemas s ON k.schema_id = s.id
+        JOIN mz_databases d ON s.database_id = d.id
+        WHERE d.name || '.' || s.name || '.' || k.name IN ({})
+        ORDER BY fqn
+    "#,
+        placeholders_str
+    );
+
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+    for fqn in &fqns {
+        params.push(fqn);
+    }
+
+    let rows = client
+        .query(&query, &params)
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    // Convert FQN strings back to ObjectIds
+    let mut existing = BTreeSet::new();
+    for row in rows {
+        let fqn: String = row.get("fqn");
+        // Find the matching ObjectId from the input set
+        if let Some(obj_id) = sinks.iter().find(|o| o.to_string() == fqn) {
+            existing.insert(obj_id.clone());
+        }
+    }
+
+    Ok(existing)
+}
+
 /// Get staging schema names for a specific deployment.
 pub async fn get_staging_schemas(
     client: &PgClient,

@@ -15,7 +15,7 @@ pub enum DeploymentKind {
     /// Full object deployment (stage, apply commands)
     Objects,
     /// Contains sinks
-    Sinks
+    Sinks,
 }
 
 impl fmt::Display for DeploymentKind {

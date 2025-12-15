@@ -2,6 +2,7 @@
 
 use crate::cli::CliError;
 use crate::client::{ApplyState, Client, DeploymentKind, Profile};
+use crate::project::object_id::ObjectId;
 use crate::{project, verbose};
 use owo_colors::OwoColorize;
 use std::collections::BTreeSet;
@@ -114,7 +115,13 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     // Only do this if we have the resource info (i.e., we did the swap in this run)
     if !staging_schemas.is_empty() || !staging_clusters.is_empty() {
         println!("\nDropping old production objects...");
-        drop_old_resources(&client, &staging_schemas, &staging_clusters, &staging_suffix).await;
+        drop_old_resources(
+            &client,
+            &staging_schemas,
+            &staging_clusters,
+            &staging_suffix,
+        )
+        .await;
     }
 
     // Clean up apply state and pending statements
@@ -178,7 +185,8 @@ async fn gather_resources_and_check_conflicts(
         if record.kind == DeploymentKind::Sinks {
             verbose!(
                 "Skipping sink-only schema {}.{} (no swap needed)",
-                record.database, record.schema
+                record.database,
+                record.schema
             );
             continue;
         }
@@ -327,8 +335,8 @@ async fn execute_atomic_swap(
 /// Execute pending sink statements (created after swap).
 ///
 /// Sinks are created in production after the swap because they immediately
-/// start writing to external systems. Each sink is marked as executed after
-/// successful creation to support resumability.
+/// start writing to external systems. Like tables, sinks are only created if
+/// they don't already exist - the hash is ignored.
 async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), CliError> {
     let pending = client.get_pending_statements(deploy_id).await?;
 
@@ -337,12 +345,64 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
         return Ok(());
     }
 
-    println!("\nCreating {} sink(s)...", pending.len());
+    // Build set of sink ObjectIds from pending statements
+    let sink_ids: BTreeSet<ObjectId> = pending
+        .iter()
+        .map(|stmt| ObjectId {
+            database: stmt.database.clone(),
+            schema: stmt.schema.clone(),
+            object: stmt.object.clone(),
+        })
+        .collect();
 
-    for stmt in &pending {
+    // Check which sinks already exist (like tables, skip existing ones)
+    let existing_sinks = client.check_sinks_exist(&sink_ids).await?;
+
+    // Filter to only sinks that don't exist
+    let sinks_to_create: Vec<_> = pending
+        .iter()
+        .filter(|stmt| {
+            let obj_id = ObjectId {
+                database: stmt.database.clone(),
+                schema: stmt.schema.clone(),
+                object: stmt.object.clone(),
+            };
+            !existing_sinks.contains(&obj_id)
+        })
+        .collect();
+
+    // Log skipped sinks
+    if !existing_sinks.is_empty() {
+        println!("\nSinks that already exist (skipping):");
+        let mut existing_list: Vec<_> = existing_sinks.iter().collect();
+        existing_list.sort_by_key(|obj| (&obj.database, &obj.schema, &obj.object));
+        for sink_id in existing_list {
+            println!(
+                "  - {}.{}.{}",
+                sink_id.database, sink_id.schema, sink_id.object
+            );
+        }
+    }
+
+    // If all sinks exist, exit early
+    if sinks_to_create.is_empty() {
+        if !existing_sinks.is_empty() {
+            println!(
+                "\nAll {} sink(s) already exist. Nothing to create.",
+                sink_ids.len()
+            );
+        }
+        return Ok(());
+    }
+
+    println!("\nCreating {} sink(s)...", sinks_to_create.len());
+
+    for stmt in sinks_to_create {
         verbose!(
             "Creating sink {}.{}.{}...",
-            stmt.database, stmt.schema, stmt.object
+            stmt.database,
+            stmt.schema,
+            stmt.object
         );
 
         // Execute the sink creation statement
@@ -363,10 +423,7 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
             .mark_statement_executed(deploy_id, stmt.sequence_num)
             .await?;
 
-        verbose!(
-            "  Created sink {}.{}.{}",
-            stmt.database, stmt.schema, stmt.object
-        );
+        println!("  ✓ {}.{}.{}", stmt.database, stmt.schema, stmt.object);
     }
 
     Ok(())

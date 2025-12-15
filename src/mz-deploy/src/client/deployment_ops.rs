@@ -666,9 +666,7 @@ pub async fn get_deployment_details(
     let deployed_by: String = first_row.get("deployed_by");
     let git_commit: Option<String> = first_row.get("commit");
     let kind_str: String = first_row.get("kind");
-    let kind: DeploymentKind = kind_str
-        .parse()
-        .map_err(ConnectionError::Message)?;
+    let kind: DeploymentKind = kind_str.parse().map_err(ConnectionError::Message)?;
 
     let mut schemas = Vec::new();
     for row in rows {

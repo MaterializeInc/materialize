@@ -306,8 +306,13 @@ pub async fn run(
                 })
                 .collect();
 
-            client.insert_pending_statements(&pending_statements).await?;
-            verbose!("Stored {} pending sink statement(s)", pending_statements.len());
+            client
+                .insert_pending_statements(&pending_statements)
+                .await?;
+            verbose!(
+                "Stored {} pending sink statement(s)",
+                pending_statements.len()
+            );
         }
 
         let metadata_duration = metadata_start.elapsed();
