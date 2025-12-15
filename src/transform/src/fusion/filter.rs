@@ -88,7 +88,7 @@ impl Filter {
             } = &mut **input
             {
                 predicates.append(p2);
-                *input = Box::new(inner.take_dangerous());
+                **input = inner.take_dangerous();
             }
 
             mz_expr::canonicalize::canonicalize_predicates(predicates, &input.typ().column_types);

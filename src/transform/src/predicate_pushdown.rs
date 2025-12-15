@@ -344,7 +344,7 @@ impl PredicatePushdown {
                             }
 
                             if !push_down.is_empty() {
-                                *inner = Box::new(inner.take_dangerous().filter(push_down));
+                                **inner = inner.take_dangerous().filter(push_down);
                             }
                             self.action(inner, get_predicates)?;
 
@@ -388,7 +388,7 @@ impl PredicatePushdown {
                             std::mem::swap(&mut retain, predicates);
 
                             if !push_down.is_empty() {
-                                *input = Box::new(input.take_dangerous().filter(push_down));
+                                **input = input.take_dangerous().filter(push_down);
                             }
 
                             self.action(input, get_predicates)?;
@@ -455,7 +455,7 @@ impl PredicatePushdown {
                         }
                         MirRelationExpr::Union { base, inputs } => {
                             let predicates = std::mem::take(predicates);
-                            *base = Box::new(base.take_dangerous().filter(predicates.clone()));
+                            **base = base.take_dangerous().filter(predicates.clone());
                             self.action(base, get_predicates)?;
                             for input in inputs {
                                 *input = input.take_dangerous().filter(predicates.clone());
