@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    is_infix_op = true,\n    sqlname = \"-\",\n    propagates_nulls = true\n)]\nfn sub_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {\n    let (t, _) = time.overflowing_sub_signed(interval.duration_as_chrono());\n    t\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(false, false)\", is_infix_op = true, sqlname = \"-\")]\nfn sub_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {\n    let (t, _) = time.overflowing_sub_signed(interval.duration_as_chrono());\n    t\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimeInterval {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (false, false)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for SubTimeInterval {

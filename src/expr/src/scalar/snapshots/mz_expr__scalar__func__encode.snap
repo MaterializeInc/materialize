@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(propagates_nulls = true)]\nfn encode<'a>(\n    bytes: &[u8],\n    format: &str,\n    temp_storage: &'a RowArena,\n) -> Result<&'a str, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.encode(bytes);\n    Ok(temp_storage.push_string(out))\n}\n"
+expression: "#[sqlfunc()]\n/// Encode `bytes` using the specified textual representation. Errors if the\n/// format is not recognized.\nfn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    Ok(format.encode(bytes))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,14 +19,14 @@ pub struct Encode;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
     type Input1 = &'a [u8];
     type Input2 = &'a str;
-    type Output = Result<&'a str, EvalError>;
+    type Output = Result<String, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        encode(a, b, temp_storage)
+        encode(a, b)
     }
     fn output_type(
         &self,
@@ -46,21 +46,15 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Encode {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for Encode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(encode))
     }
 }
-fn encode<'a>(
-    bytes: &[u8],
-    format: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a str, EvalError> {
+/// Encode `bytes` using the specified textual representation. Errors if the
+/// format is not recognized.
+fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
     let format = encoding::lookup_format(format)?;
-    let out = format.encode(bytes);
-    Ok(temp_storage.push_string(out))
+    Ok(format.encode(bytes))
 }

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"date_partiv\", propagates_nulls = true, introduces_nulls = false)]\nfn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_interval_inner::<f64>(units, b)?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"date_partiv\")]\nfn date_part_interval_f64(units: &str, b: Interval) -> Result<f64, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_interval_inner::<f64>(units, b)?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,12 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartIntervalF64 {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DatePartIntervalF64 {

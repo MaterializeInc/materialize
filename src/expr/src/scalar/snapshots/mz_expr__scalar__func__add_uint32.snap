@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_uint32(a: u32, b: u32) -> Result<u32, EvalError> {\n    a.checked_add(b)\n        .ok_or_else(|| EvalError::UInt32OutOfRange(format!(\"{a} + {b}\").into()))\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"+\")]\nfn add_uint32(a: u32, b: u32) -> Result<u32, EvalError> {\n    a.checked_add(b)\n        .ok_or_else(|| EvalError::UInt32OutOfRange(format!(\"{a} + {b}\").into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddUint32 {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for AddUint32 {

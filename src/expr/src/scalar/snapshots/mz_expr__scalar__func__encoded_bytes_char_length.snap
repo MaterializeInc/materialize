@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"length\", propagates_nulls = true)]\nfn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {\n    let encoding_name = b.to_lowercase().replace('_', \"-\").into_boxed_str();\n    let enc = match encoding_from_whatwg_label(&encoding_name) {\n        Some(enc) => enc,\n        None => return Err(EvalError::InvalidEncodingName(encoding_name)),\n    };\n    let decoded_string = match enc.decode(a, DecoderTrap::Strict) {\n        Ok(s) => s,\n        Err(e) => {\n            return Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.into(),\n                encoding_name,\n            });\n        }\n    };\n    let count = decoded_string.chars().count();\n    i32::try_from(count)\n        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))\n}\n"
+expression: "#[sqlfunc(sqlname = \"length\")]\nfn encoded_bytes_char_length(a: &[u8], b: &str) -> Result<i32, EvalError> {\n    let encoding_name = b.to_lowercase().replace('_', \"-\").into_boxed_str();\n    let enc = match encoding_from_whatwg_label(&encoding_name) {\n        Some(enc) => enc,\n        None => return Err(EvalError::InvalidEncodingName(encoding_name)),\n    };\n    let decoded_string = match enc.decode(a, DecoderTrap::Strict) {\n        Ok(s) => s,\n        Err(e) => {\n            return Err(EvalError::InvalidByteSequence {\n                byte_sequence: e.into(),\n                encoding_name,\n            });\n        }\n    };\n    let count = decoded_string.chars().count();\n    i32::try_from(count)\n        .map_err(|_| EvalError::Int32OutOfRange(count.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for EncodedBytesCharLength {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for EncodedBytesCharLength {

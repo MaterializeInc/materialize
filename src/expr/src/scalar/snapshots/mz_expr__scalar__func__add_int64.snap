@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_int64(a: i64, b: i64) -> Result<i64, EvalError> {\n    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"+\")]\nfn add_int64(a: i64, b: i64) -> Result<i64, EvalError> {\n    a.checked_add(b).ok_or(EvalError::NumericFieldOverflow)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInt64 {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for AddInt64 {

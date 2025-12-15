@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {\n    let mut cx = numeric::cx_datum();\n    cx.div(&mut a, &b);\n    let cx_status = cx.status();\n    if b.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else if cx_status.overflow() {\n        Err(EvalError::FloatOverflow)\n    } else if cx_status.subnormal() {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        numeric::munge_numeric(&mut a).unwrap();\n        Ok(a)\n    }\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, false)\", is_infix_op = true, sqlname = \"/\")]\nfn div_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {\n    let mut cx = numeric::cx_datum();\n    cx.div(&mut a, &b);\n    let cx_status = cx.status();\n    if b.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else if cx_status.overflow() {\n        Err(EvalError::FloatOverflow)\n    } else if cx_status.subnormal() {\n        Err(EvalError::FloatUnderflow)\n    } else {\n        numeric::munge_numeric(&mut a).unwrap();\n        Ok(a)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivNumeric {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, false)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DivNumeric {

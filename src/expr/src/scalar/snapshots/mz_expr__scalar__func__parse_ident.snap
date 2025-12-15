@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(output_type = \"mz_repr::ArrayRustType<String>\", propagates_nulls = true)]\nfn parse_ident<'a>(\n    ident: &str,\n    strict: bool,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    fn is_ident_start(c: char) -> bool {\n        matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\\u{80}'..= char::MAX)\n    }\n    fn is_ident_cont(c: char) -> bool {\n        matches!(c, '0'..='9' | '$') || is_ident_start(c)\n    }\n    let mut elems = vec![];\n    let buf = &mut LexBuf::new(ident);\n    let mut after_dot = false;\n    buf.take_while(|ch| ch.is_ascii_whitespace());\n    loop {\n        let mut missing_ident = true;\n        let c = buf.next();\n        if c == Some('\"') {\n            let s = buf.take_while(|ch| !matches!(ch, '\"'));\n            if buf.next() != Some('\"') {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"String has unclosed double quotes.\".into()),\n                });\n            }\n            elems.push(Datum::String(s));\n            missing_ident = false;\n        } else if c.map(is_ident_start).unwrap_or(false) {\n            buf.prev();\n            let s = buf.take_while(is_ident_cont);\n            let s = temp_storage.push_string(s.to_ascii_lowercase());\n            elems.push(Datum::String(s));\n            missing_ident = false;\n        }\n        if missing_ident {\n            if c == Some('.') {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"No valid identifier before \\\".\\\".\".into()),\n                });\n            } else if after_dot {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"No valid identifier after \\\".\\\".\".into()),\n                });\n            } else {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: None,\n                });\n            }\n        }\n        buf.take_while(|ch| ch.is_ascii_whitespace());\n        match buf.next() {\n            Some('.') => {\n                after_dot = true;\n                buf.take_while(|ch| ch.is_ascii_whitespace());\n            }\n            Some(_) if strict => {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: None,\n                });\n            }\n            _ => break,\n        }\n    }\n    Ok(\n        temp_storage\n            .try_make_datum(|packer| {\n                packer\n                    .try_push_array(\n                        &[\n                            ArrayDimension {\n                                lower_bound: 1,\n                                length: elems.len(),\n                            },\n                        ],\n                        elems,\n                    )\n            })?,\n    )\n}\n"
+expression: "#[sqlfunc()]\nfn parse_ident(ident: &str, strict: bool) -> Result<ArrayRustType<String>, EvalError> {\n    fn is_ident_start(c: char) -> bool {\n        matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\\u{80}'..= char::MAX)\n    }\n    fn is_ident_cont(c: char) -> bool {\n        matches!(c, '0'..='9' | '$') || is_ident_start(c)\n    }\n    let mut elems = vec![];\n    let buf = &mut LexBuf::new(ident);\n    let mut after_dot = false;\n    buf.take_while(|ch| ch.is_ascii_whitespace());\n    loop {\n        let mut missing_ident = true;\n        let c = buf.next();\n        if c == Some('\"') {\n            let s = buf.take_while(|ch| !matches!(ch, '\"'));\n            if buf.next() != Some('\"') {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"String has unclosed double quotes.\".into()),\n                });\n            }\n            elems.push(s.to_string());\n            missing_ident = false;\n        } else if c.map(is_ident_start).unwrap_or(false) {\n            buf.prev();\n            let s = buf.take_while(is_ident_cont);\n            elems.push(s.to_ascii_lowercase());\n            missing_ident = false;\n        }\n        if missing_ident {\n            if c == Some('.') {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"No valid identifier before \\\".\\\".\".into()),\n                });\n            } else if after_dot {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: Some(\"No valid identifier after \\\".\\\".\".into()),\n                });\n            } else {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: None,\n                });\n            }\n        }\n        buf.take_while(|ch| ch.is_ascii_whitespace());\n        match buf.next() {\n            Some('.') => {\n                after_dot = true;\n                buf.take_while(|ch| ch.is_ascii_whitespace());\n            }\n            Some(_) if strict => {\n                return Err(EvalError::InvalidIdentifier {\n                    ident: ident.into(),\n                    detail: None,\n                });\n            }\n            _ => break,\n        }\n    }\n    Ok(elems.into())\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,14 +19,14 @@ pub struct ParseIdent;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ParseIdent {
     type Input1 = &'a str;
     type Input2 = bool;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<ArrayRustType<String>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        parse_ident(a, b, temp_storage)
+        parse_ident(a, b)
     }
     fn output_type(
         &self,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ParseIdent {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <mz_repr::ArrayRustType<String>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,23 +46,13 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ParseIdent {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <mz_repr::ArrayRustType<String> as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for ParseIdent {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(parse_ident))
     }
 }
-fn parse_ident<'a>(
-    ident: &str,
-    strict: bool,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+fn parse_ident(ident: &str, strict: bool) -> Result<ArrayRustType<String>, EvalError> {
     fn is_ident_start(c: char) -> bool {
         matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..= char::MAX)
     }
@@ -84,13 +74,12 @@ fn parse_ident<'a>(
                     detail: Some("String has unclosed double quotes.".into()),
                 });
             }
-            elems.push(Datum::String(s));
+            elems.push(s.to_string());
             missing_ident = false;
         } else if c.map(is_ident_start).unwrap_or(false) {
             buf.prev();
             let s = buf.take_while(is_ident_cont);
-            let s = temp_storage.push_string(s.to_ascii_lowercase());
-            elems.push(Datum::String(s));
+            elems.push(s.to_ascii_lowercase());
             missing_ident = false;
         }
         if missing_ident {
@@ -126,19 +115,5 @@ fn parse_ident<'a>(
             _ => break,
         }
     }
-    Ok(
-        temp_storage
-            .try_make_datum(|packer| {
-                packer
-                    .try_push_array(
-                        &[
-                            ArrayDimension {
-                                lower_bound: 1,
-                                length: elems.len(),
-                            },
-                        ],
-                        elems,
-                    )
-            })?,
-    )
+    Ok(elems.into())
 }

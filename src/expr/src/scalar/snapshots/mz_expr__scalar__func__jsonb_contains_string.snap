@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?\", propagates_nulls = true)]\nfn jsonb_contains_string<'a>(a: Datum<'a>, k: &str) -> bool {\n    match a {\n        Datum::List(list) => list.iter().any(|k2| Datum::from(k) == k2),\n        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2),\n        Datum::String(string) => string == k,\n        _ => false,\n    }\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?\")]\nfn jsonb_contains_string<'a>(a: ExcludeNull<Datum<'a>>, k: &str) -> bool {\n    match *a {\n        Datum::List(list) => list.iter().any(|k2| Datum::from(k) == k2),\n        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2),\n        Datum::String(string) => string == k,\n        _ => false,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,7 +17,7 @@ expression: "#[sqlfunc(is_infix_op = true, sqlname = \"?\", propagates_nulls = t
 )]
 pub struct JsonbContainsString;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbContainsString {
-    type Input1 = Datum<'a>;
+    type Input1 = ExcludeNull<Datum<'a>>;
     type Input2 = &'a str;
     type Output = bool;
     fn call(
@@ -49,17 +49,14 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for JsonbContainsString {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for JsonbContainsString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("?")
     }
 }
-fn jsonb_contains_string<'a>(a: Datum<'a>, k: &str) -> bool {
-    match a {
+fn jsonb_contains_string<'a>(a: ExcludeNull<Datum<'a>>, k: &str) -> bool {
+    match *a {
         Datum::List(list) => list.iter().any(|k2| Datum::from(k) == k2),
         Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2),
         Datum::String(string) => string == k,

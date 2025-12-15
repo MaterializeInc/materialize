@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"tochartstz\", propagates_nulls = true)]\nfn to_char_timestamp_tz_format(\n    ts: CheckedTimestamp<chrono::DateTime<Utc>>,\n    format: &str,\n) -> String {\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
+expression: "#[sqlfunc(sqlname = \"tochartstz\")]\nfn to_char_timestamp_tz_format(\n    ts: CheckedTimestamp<chrono::DateTime<Utc>>,\n    format: &str,\n) -> String {\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ToCharTimestampTzFormat {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for ToCharTimestampTzFormat {

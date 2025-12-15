@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"log\", propagates_nulls = true)]\nfn log_base_numeric(mut a: Numeric, mut b: Numeric) -> Result<Numeric, EvalError> {\n    log_guard_numeric(&a, \"log\")?;\n    log_guard_numeric(&b, \"log\")?;\n    let mut cx = numeric::cx_datum();\n    cx.ln(&mut a);\n    cx.ln(&mut b);\n    cx.div(&mut b, &a);\n    if a.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))\n            .expect(\"reducing precision below max always succeeds\");\n        let mut integral_check = b.clone();\n        cx.reduce(&mut integral_check);\n        let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };\n        numeric::munge_numeric(&mut b).unwrap();\n        Ok(b)\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"log\")]\nfn log_base_numeric(mut a: Numeric, mut b: Numeric) -> Result<Numeric, EvalError> {\n    log_guard_numeric(&a, \"log\")?;\n    log_guard_numeric(&b, \"log\")?;\n    let mut cx = numeric::cx_datum();\n    cx.ln(&mut a);\n    cx.ln(&mut b);\n    cx.div(&mut b, &a);\n    if a.is_zero() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        cx.set_precision(usize::from(numeric::NUMERIC_DATUM_MAX_PRECISION - 1))\n            .expect(\"reducing precision below max always succeeds\");\n        let mut integral_check = b.clone();\n        cx.reduce(&mut integral_check);\n        let mut b = if integral_check.exponent() >= 0 { integral_check } else { b };\n        numeric::munge_numeric(&mut b).unwrap();\n        Ok(b)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for LogBaseNumeric {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for LogBaseNumeric {

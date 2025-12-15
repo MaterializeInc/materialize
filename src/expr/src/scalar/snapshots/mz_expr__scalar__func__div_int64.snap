@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_int64(a: i64, b: i64) -> Result<i64, EvalError> {\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.checked_div(b)\n            .ok_or_else(|| EvalError::Int64OutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, false)\", is_infix_op = true, sqlname = \"/\")]\nfn div_int64(a: i64, b: i64) -> Result<i64, EvalError> {\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        a.checked_div(b)\n            .ok_or_else(|| EvalError::Int64OutOfRange(format!(\"{a} / {b}\").into()))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivInt64 {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, false)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DivInt64 {

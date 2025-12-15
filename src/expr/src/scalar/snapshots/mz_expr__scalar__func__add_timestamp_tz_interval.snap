@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<DateTime<Utc>>\",\n    is_infix_op = true,\n    sqlname = \"+\"\n)]\nfn add_timestamp_tz_interval<'a>(\n    a: CheckedTimestamp<DateTime<Utc>>,\n    b: Interval,\n) -> Result<Datum<'a>, EvalError> {\n    add_timestamplike_interval(a, b)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"+\")]\nfn add_timestamp_tz_interval<'a>(\n    a: CheckedTimestamp<DateTime<Utc>>,\n    b: Interval,\n) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {\n    add_timestamplike_interval(a, b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct AddTimestampTzInterval;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimestampTzInterval {
     type Input1 = CheckedTimestamp<DateTime<Utc>>;
     type Input2 = Interval;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimestampTzInterval {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <CheckedTimestamp<DateTime<Utc>>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimestampTzInterval {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <CheckedTimestamp<DateTime<Utc>> as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -64,6 +61,6 @@ impl std::fmt::Display for AddTimestampTzInterval {
 fn add_timestamp_tz_interval<'a>(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     add_timestamplike_interval(a, b)
 }

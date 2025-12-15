@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"rtrim\", propagates_nulls = true)]\nfn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {\n    a.trim_end_matches(|c| trim_chars.contains(c))\n}\n"
+expression: "#[sqlfunc(sqlname = \"rtrim\")]\nfn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {\n    a.trim_end_matches(|c| trim_chars.contains(c))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TrimTrailing {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for TrimTrailing {

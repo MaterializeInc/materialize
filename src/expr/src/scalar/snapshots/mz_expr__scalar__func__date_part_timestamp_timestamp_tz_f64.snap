@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"date_parttstz\", propagates_nulls = true)]\nfn date_part_timestamp_timestamp_tz_f64(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<f64, EvalError> {\n    match units.parse() {\n        Ok(units) => date_part_timestamp_inner(units, &*ts),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"date_parttstz\")]\nfn date_part_timestamp_timestamp_tz_f64(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<f64, EvalError> {\n    match units.parse() {\n        Ok(units) => date_part_timestamp_inner(units, &*ts),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DatePartTimestampTimestamp
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DatePartTimestampTimestampTzF64 {

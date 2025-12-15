@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"extracttstz\", propagates_nulls = true)]\nfn date_part_timestamp_timestamp_tz_numeric(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Numeric, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
+expression: "#[sqlfunc(sqlname = \"extracttstz\")]\nfn date_part_timestamp_timestamp_tz_numeric(\n    units: &str,\n    ts: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Numeric, EvalError> {\n    match units.parse() {\n        Ok(units) => Ok(date_part_timestamp_inner::<_, Numeric>(units, &*ts)?),\n        Err(_) => Err(EvalError::UnknownUnits(units.into())),\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,9 +46,6 @@ for DatePartTimestampTimestampTzNumeric {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DatePartTimestampTimestampTzNumeric {

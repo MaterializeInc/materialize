@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \">>\", propagates_nulls = true)]\n#[allow(clippy::as_conversions)]\nfn bit_shift_right_int16(lhs: i16, rhs: i32) -> i16 {\n    let lhs = lhs as i32;\n    let rhs = rhs as u32;\n    lhs.wrapping_shr(rhs) as i16\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \">>\")]\n#[allow(clippy::as_conversions)]\nfn bit_shift_right_int16(lhs: i16, rhs: i32) -> i16 {\n    let lhs = lhs as i32;\n    let rhs = rhs as u32;\n    lhs.wrapping_shr(rhs) as i16\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -47,9 +47,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftRightInt16 {
             )
     }
     fn is_infix_op(&self) -> bool {
-        true
-    }
-    fn propagates_nulls(&self) -> bool {
         true
     }
 }

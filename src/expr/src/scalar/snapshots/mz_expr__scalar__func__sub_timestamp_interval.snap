@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<NaiveDateTime>\",\n    is_infix_op = true,\n    sqlname = \"-\"\n)]\nfn sub_timestamp_interval<'a>(\n    a: CheckedTimestamp<NaiveDateTime>,\n    b: Interval,\n) -> Result<Datum<'a>, EvalError> {\n    sub_timestamplike_interval(a, b)\n}\n"
+expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<NaiveDateTime>\",\n    is_infix_op = true,\n    sqlname = \"-\"\n)]\nfn sub_timestamp_interval<'a>(\n    a: CheckedTimestamp<NaiveDateTime>,\n    b: Interval,\n) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {\n    sub_timestamplike_interval(a, b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct SubTimestampInterval;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestampInterval {
     type Input1 = CheckedTimestamp<NaiveDateTime>;
     type Input2 = Interval;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -64,6 +64,6 @@ impl std::fmt::Display for SubTimestampInterval {
 fn sub_timestamp_interval<'a>(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     sub_timestamplike_interval(a, b)
 }

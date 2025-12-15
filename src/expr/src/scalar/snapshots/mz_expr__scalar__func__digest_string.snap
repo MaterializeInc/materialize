@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"Vec<u8>\",\n    sqlname = \"digest\",\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn digest_string<'a>(\n    a: &str,\n    b: &str,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let to_digest = a.as_bytes();\n    digest_inner(to_digest, b, temp_storage)\n}\n"
+expression: "#[sqlfunc(sqlname = \"digest\")]\nfn digest_string(string: &str, function: &str) -> Result<Vec<u8>, EvalError> {\n    digest_inner(string.as_bytes(), function)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,14 +19,14 @@ pub struct DigestString;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DigestString {
     type Input1 = &'a str;
     type Input2 = &'a str;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<Vec<u8>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        digest_string(a, b, temp_storage)
+        digest_string(a, b)
     }
     fn output_type(
         &self,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DigestString {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Vec<u8>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,23 +46,12 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DigestString {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        false
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for DigestString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("digest")
     }
 }
-fn digest_string<'a>(
-    a: &str,
-    b: &str,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
-    let to_digest = a.as_bytes();
-    digest_inner(to_digest, b, temp_storage)
+fn digest_string(string: &str, function: &str) -> Result<Vec<u8>, EvalError> {
+    digest_inner(string.as_bytes(), function)
 }

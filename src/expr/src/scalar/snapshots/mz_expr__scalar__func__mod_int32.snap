@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\", propagates_nulls = true)]\nfn mod_int32(a: i32, b: i32) -> Result<i32, EvalError> {\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        Ok(a.checked_rem(b).unwrap_or(0))\n    }\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\")]\nfn mod_int32(a: i32, b: i32) -> Result<i32, EvalError> {\n    if b == 0 {\n        Err(EvalError::DivisionByZero)\n    } else {\n        Ok(a.checked_rem(b).unwrap_or(0))\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -47,9 +47,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModInt32 {
             )
     }
     fn is_infix_op(&self) -> bool {
-        true
-    }
-    fn propagates_nulls(&self) -> bool {
         true
     }
 }

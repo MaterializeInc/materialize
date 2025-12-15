@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {\n    let sum = a + b;\n    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(sum)\n    }\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"+\")]\nfn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {\n    let sum = a + b;\n    if sum.is_infinite() && !a.is_infinite() && !b.is_infinite() {\n        Err(EvalError::FloatOverflow)\n    } else {\n        Ok(sum)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddFloat64 {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for AddFloat64 {

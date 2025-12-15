@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\", propagates_nulls = true)]\nfn mod_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {\n    if b.is_zero() {\n        return Err(EvalError::DivisionByZero);\n    }\n    let mut cx = numeric::cx_datum();\n    cx.rem(&mut a, &b);\n    numeric::munge_numeric(&mut a).unwrap();\n    Ok(a)\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\")]\nfn mod_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {\n    if b.is_zero() {\n        return Err(EvalError::DivisionByZero);\n    }\n    let mut cx = numeric::cx_datum();\n    cx.rem(&mut a, &b);\n    numeric::munge_numeric(&mut a).unwrap();\n    Ok(a)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -47,9 +47,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModNumeric {
             )
     }
     fn is_infix_op(&self) -> bool {
-        true
-    }
-    fn propagates_nulls(&self) -> bool {
         true
     }
 }

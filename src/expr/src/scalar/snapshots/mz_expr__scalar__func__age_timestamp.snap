@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"Interval\",\n    sqlname = \"age\",\n    propagates_nulls = true\n)]\nfn age_timestamp(\n    a: CheckedTimestamp<chrono::NaiveDateTime>,\n    b: CheckedTimestamp<chrono::NaiveDateTime>,\n) -> Result<Interval, EvalError> {\n    Ok(a.age(&b)?)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", output_type = \"Interval\", sqlname = \"age\")]\nfn age_timestamp(\n    a: CheckedTimestamp<chrono::NaiveDateTime>,\n    b: CheckedTimestamp<chrono::NaiveDateTime>,\n) -> Result<Interval, EvalError> {\n    Ok(a.age(&b)?)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AgeTimestamp {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for AgeTimestamp {

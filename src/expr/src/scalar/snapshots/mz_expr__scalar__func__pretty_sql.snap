@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(propagates_nulls = true)]\nfn pretty_sql<'a>(\n    sql: &str,\n    width: i32,\n    temp_storage: &'a RowArena,\n) -> Result<&'a str, EvalError> {\n    let width = usize::try_from(width)\n        .map_err(|_| EvalError::PrettyError(\"invalid width\".into()))?;\n    let pretty = pretty_str(\n            sql,\n            PrettyConfig {\n                width,\n                format_mode: FormatMode::Simple,\n            },\n        )\n        .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;\n    let pretty = temp_storage.push_string(pretty);\n    Ok(pretty)\n}\n"
+expression: "#[sqlfunc()]\nfn pretty_sql<'a>(sql: &str, width: i32) -> Result<String, EvalError> {\n    let width = usize::try_from(width)\n        .map_err(|_| EvalError::PrettyError(\"invalid width\".into()))?;\n    let config = PrettyConfig {\n        width,\n        format_mode: FormatMode::Simple,\n    };\n    pretty_str(sql, config).map_err(|e| EvalError::PrettyError(e.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,14 +19,14 @@ pub struct PrettySql;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PrettySql {
     type Input1 = &'a str;
     type Input2 = i32;
-    type Output = Result<&'a str, EvalError>;
+    type Output = Result<String, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        pretty_sql(a, b, temp_storage)
+        pretty_sql(a, b)
     }
     fn output_type(
         &self,
@@ -46,30 +46,18 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for PrettySql {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for PrettySql {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(pretty_sql))
     }
 }
-fn pretty_sql<'a>(
-    sql: &str,
-    width: i32,
-    temp_storage: &'a RowArena,
-) -> Result<&'a str, EvalError> {
+fn pretty_sql<'a>(sql: &str, width: i32) -> Result<String, EvalError> {
     let width = usize::try_from(width)
         .map_err(|_| EvalError::PrettyError("invalid width".into()))?;
-    let pretty = pretty_str(
-            sql,
-            PrettyConfig {
-                width,
-                format_mode: FormatMode::Simple,
-            },
-        )
-        .map_err(|e| EvalError::PrettyError(e.to_string().into()))?;
-    let pretty = temp_storage.push_string(pretty);
-    Ok(pretty)
+    let config = PrettyConfig {
+        width,
+        format_mode: FormatMode::Simple,
+    };
+    pretty_str(sql, config).map_err(|e| EvalError::PrettyError(e.to_string().into()))
 }

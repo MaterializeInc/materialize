@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"input_type_b.scalar_type.without_modifiers().nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"||\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn element_list_concat<'a>(\n    a: Datum<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    temp_storage\n        .make_datum(|packer| {\n            packer\n                .push_list_with(|packer| {\n                    packer.push(a);\n                    if !b.is_null() {\n                        for elem in b.unwrap_list().iter() {\n                            packer.push(elem);\n                        }\n                    }\n                })\n        })\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"input_type_b.scalar_type.without_modifiers().nullable(true)\",\n    is_infix_op = true,\n    sqlname = \"||\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn element_list_concat<'a>(\n    a: Datum<'a>,\n    b: Option<DatumList<'a>>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    temp_storage\n        .make_datum(|packer| {\n            packer\n                .push_list_with(|packer| {\n                    packer.push(a);\n                    if let Some(b) = b {\n                        for elem in b.iter() {\n                            packer.push(elem);\n                        }\n                    }\n                })\n        })\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -18,7 +18,7 @@ expression: "#[sqlfunc(\n    output_type_expr = \"input_type_b.scalar_type.witho
 pub struct ElementListConcat;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ElementListConcat {
     type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
+    type Input2 = Option<DatumList<'a>>;
     type Output = Datum<'a>;
     fn call(
         &self,
@@ -63,7 +63,7 @@ impl std::fmt::Display for ElementListConcat {
 }
 fn element_list_concat<'a>(
     a: Datum<'a>,
-    b: Datum<'a>,
+    b: Option<DatumList<'a>>,
     temp_storage: &'a RowArena,
 ) -> Datum<'a> {
     temp_storage
@@ -71,8 +71,8 @@ fn element_list_concat<'a>(
             packer
                 .push_list_with(|packer| {
                     packer.push(a);
-                    if !b.is_null() {
-                        for elem in b.unwrap_list().iter() {
+                    if let Some(b) = b {
+                        for elem in b.iter() {
                             packer.push(elem);
                         }
                     }

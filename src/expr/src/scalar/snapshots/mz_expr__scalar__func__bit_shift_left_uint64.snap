@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"u64\",\n    is_infix_op = true,\n    sqlname = \"<<\",\n    propagates_nulls = true\n)]\nfn bit_shift_left_uint64(lhs: u64, rhs: u32) -> u64 {\n    lhs.wrapping_shl(rhs)\n}\n"
+expression: "#[sqlfunc(output_type = \"u64\", is_infix_op = true, sqlname = \"<<\")]\nfn bit_shift_left_uint64(lhs: u64, rhs: u32) -> u64 {\n    lhs.wrapping_shl(rhs)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -50,9 +50,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitShiftLeftUint64 {
         <u64 as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
-        true
-    }
-    fn propagates_nulls(&self) -> bool {
         true
     }
 }

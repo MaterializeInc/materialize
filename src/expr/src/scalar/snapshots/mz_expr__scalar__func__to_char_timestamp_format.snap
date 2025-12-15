@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"tocharts\", propagates_nulls = true)]\nfn to_char_timestamp_format(\n    ts: CheckedTimestamp<chrono::NaiveDateTime>,\n    format: &str,\n) -> String {\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
+expression: "#[sqlfunc(sqlname = \"tocharts\")]\n/// Converts a timestamp into a string using the specified format\nfn to_char_timestamp_format(\n    ts: CheckedTimestamp<chrono::NaiveDateTime>,\n    format: &str,\n) -> String {\n    let fmt = DateTimeFormat::compile(format);\n    fmt.render(&*ts)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,15 +46,13 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ToCharTimestampFormat {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for ToCharTimestampFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("tocharts")
     }
 }
+/// Converts a timestamp into a string using the specified format
 fn to_char_timestamp_format(
     ts: CheckedTimestamp<chrono::NaiveDateTime>,
     format: &str,

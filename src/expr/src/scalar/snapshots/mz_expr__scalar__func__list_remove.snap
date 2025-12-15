@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.without_modifiers().nullable(true)\",\n    sqlname = \"list_remove\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn list_remove<'a>(\n    a: DatumList<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> Datum<'a> {\n    temp_storage\n        .make_datum(|packer| {\n            packer\n                .push_list_with(|packer| {\n                    for elem in a.iter() {\n                        if elem != b {\n                            packer.push(elem);\n                        }\n                    }\n                })\n        })\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = \"input_type_a.scalar_type.without_modifiers().nullable(true)\",\n    sqlname = \"list_remove\",\n    propagates_nulls = false,\n    introduces_nulls = false\n)]\nfn list_remove<'a>(\n    a: DatumList<'a>,\n    b: Datum<'a>,\n    temp_storage: &'a RowArena,\n) -> DatumList<'a> {\n    temp_storage\n        .make_datum(|packer| {\n            packer\n                .push_list_with(|packer| {\n                    for elem in a.iter() {\n                        if elem != b {\n                            packer.push(elem);\n                        }\n                    }\n                })\n        })\n        .unwrap_list()\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct ListRemove;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ListRemove {
     type Input1 = DatumList<'a>;
     type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Output = DatumList<'a>;
     fn call(
         &self,
         a: Self::Input1,
@@ -62,7 +62,7 @@ fn list_remove<'a>(
     a: DatumList<'a>,
     b: Datum<'a>,
     temp_storage: &'a RowArena,
-) -> Datum<'a> {
+) -> DatumList<'a> {
     temp_storage
         .make_datum(|packer| {
             packer
@@ -74,4 +74,5 @@ fn list_remove<'a>(
                     }
                 })
         })
+        .unwrap_list()
 }

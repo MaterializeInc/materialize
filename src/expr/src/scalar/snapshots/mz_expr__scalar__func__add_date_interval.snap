@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<NaiveDateTime>\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_date_interval<'a>(\n    date: Date,\n    interval: Interval,\n) -> Result<Datum<'a>, EvalError> {\n    let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();\n    let dt = add_timestamp_months(&dt, interval.months)?;\n    let dt = dt\n        .checked_add_signed(interval.duration_as_chrono())\n        .ok_or(EvalError::TimestampOutOfRange)?;\n    Ok(dt.try_into()?)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"+\")]\nfn add_date_interval<'a>(\n    date: Date,\n    interval: Interval,\n) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {\n    let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();\n    let dt = add_timestamp_months(&dt, interval.months)?;\n    let dt = dt\n        .checked_add_signed(interval.duration_as_chrono())\n        .ok_or(EvalError::TimestampOutOfRange)?;\n    Ok(CheckedTimestamp::from_timestamplike(dt)?)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct AddDateInterval;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddDateInterval {
     type Input1 = Date;
     type Input2 = Interval;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddDateInterval {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <CheckedTimestamp<NaiveDateTime>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,17 +46,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddDateInterval {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <CheckedTimestamp<NaiveDateTime> as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn is_infix_op(&self) -> bool {
         true
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for AddDateInterval {
@@ -67,11 +61,11 @@ impl std::fmt::Display for AddDateInterval {
 fn add_date_interval<'a>(
     date: Date,
     interval: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
     let dt = add_timestamp_months(&dt, interval.months)?;
     let dt = dt
         .checked_add_signed(interval.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    Ok(dt.try_into()?)
+    Ok(CheckedTimestamp::from_timestamplike(dt)?)
 }

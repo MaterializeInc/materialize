@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"#\", propagates_nulls = true)]\nfn bit_xor_int64(a: i64, b: i64) -> i64 {\n    a ^ b\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"#\")]\nfn bit_xor_int64(a: i64, b: i64) -> i64 {\n    a ^ b\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -47,9 +47,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitXorInt64 {
             )
     }
     fn is_infix_op(&self) -> bool {
-        true
-    }
-    fn propagates_nulls(&self) -> bool {
         true
     }
 }

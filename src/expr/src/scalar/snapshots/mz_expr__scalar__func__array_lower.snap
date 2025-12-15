@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"Option<i32>\",\n    is_infix_op = true,\n    sqlname = \"array_lower\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\n#[allow(clippy::as_conversions)]\nfn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {\n    if i < 1 {\n        return None;\n    }\n    match a.dims().into_iter().nth(i as usize - 1) {\n        Some(_) => Some(1),\n        None => None,\n    }\n}\n"
+expression: "#[sqlfunc()]\n#[allow(clippy::as_conversions)]\nfn array_lower<'a>(a: Array<'a>, i: i64) -> Option<i32> {\n    if i < 1 {\n        return None;\n    }\n    match a.dims().into_iter().nth(i as usize - 1) {\n        Some(_) => Some(1),\n        None => None,\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLower {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <Option<i32>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,19 +46,10 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLower {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        true
-    }
-    fn is_infix_op(&self) -> bool {
-        true
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for ArrayLower {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        f.write_str("array_lower")
+        f.write_str(stringify!(array_lower))
     }
 }
 #[allow(clippy::as_conversions)]

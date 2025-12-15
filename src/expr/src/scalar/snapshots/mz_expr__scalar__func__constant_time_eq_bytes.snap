@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"constant_time_compare_bytes\", propagates_nulls = true)]\npub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {\n    bool::from(a.ct_eq(b))\n}\n"
+expression: "#[sqlfunc(sqlname = \"constant_time_compare_bytes\")]\npub fn constant_time_eq_bytes(a: &[u8], b: &[u8]) -> bool {\n    bool::from(a.ct_eq(b))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqBytes {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for ConstantTimeEqBytes {

@@ -1940,6 +1940,12 @@ pub trait DatumType<'a, E>: Sized {
 #[derive(Debug)]
 pub struct ArrayRustType<T>(pub Vec<T>);
 
+impl<T> From<Vec<T>> for ArrayRustType<T> {
+    fn from(vec: Vec<T>) -> Self {
+        ArrayRustType(vec)
+    }
+}
+
 impl<B: AsColumnType> AsColumnType for Option<B> {
     fn as_column_type() -> SqlColumnType {
         B::as_column_type().nullable(true)

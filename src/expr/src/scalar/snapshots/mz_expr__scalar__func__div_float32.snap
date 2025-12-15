@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, false)\",\n    is_infix_op = true,\n    sqlname = \"/\",\n    propagates_nulls = true\n)]\nfn div_float32(a: f32, b: f32) -> Result<f32, EvalError> {\n    if b == 0.0f32 && !a.is_nan() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        let quotient = a / b;\n        if quotient.is_infinite() && !a.is_infinite() {\n            Err(EvalError::FloatOverflow)\n        } else if quotient == 0.0f32 && a != 0.0f32 && !b.is_infinite() {\n            Err(EvalError::FloatUnderflow)\n        } else {\n            Ok(quotient)\n        }\n    }\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, false)\", is_infix_op = true, sqlname = \"/\")]\nfn div_float32(a: f32, b: f32) -> Result<f32, EvalError> {\n    if b == 0.0f32 && !a.is_nan() {\n        Err(EvalError::DivisionByZero)\n    } else {\n        let quotient = a / b;\n        if quotient.is_infinite() && !a.is_infinite() {\n            Err(EvalError::FloatOverflow)\n        } else if quotient == 0.0f32 && a != 0.0f32 && !b.is_infinite() {\n            Err(EvalError::FloatUnderflow)\n        } else {\n            Ok(quotient)\n        }\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -51,9 +51,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DivFloat32 {
     }
     fn is_monotone(&self) -> (bool, bool) {
         (true, false)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DivFloat32 {

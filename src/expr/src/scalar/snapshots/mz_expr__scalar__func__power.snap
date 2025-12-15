@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(propagates_nulls = true)]\nfn power(a: f64, b: f64) -> Result<f64, EvalError> {\n    if a == 0.0 && b.is_sign_negative() {\n        return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n    }\n    if a.is_sign_negative() && b.fract() != 0.0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let res = a.powf(b);\n    if res.is_infinite() {\n        return Err(EvalError::FloatOverflow);\n    }\n    if res == 0.0 && a != 0.0 {\n        return Err(EvalError::FloatUnderflow);\n    }\n    Ok(res)\n}\n"
+expression: "#[sqlfunc()]\nfn power(a: f64, b: f64) -> Result<f64, EvalError> {\n    if a == 0.0 && b.is_sign_negative() {\n        return Err(EvalError::Undefined(\"zero raised to a negative power\".into()));\n    }\n    if a.is_sign_negative() && b.fract() != 0.0 {\n        return Err(EvalError::ComplexOutOfRange(\"pow\".into()));\n    }\n    let res = a.powf(b);\n    if res.is_infinite() {\n        return Err(EvalError::FloatOverflow);\n    }\n    if res == 0.0 && a != 0.0 {\n        return Err(EvalError::FloatUnderflow);\n    }\n    Ok(res)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Power {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for Power {

@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<DateTime<Utc>>\",\n    sqlname = \"bin_unix_epoch_timestamptz\",\n    propagates_nulls = true\n)]\nfn date_bin_timestamp_tz<'a>(\n    stride: Interval,\n    source: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<Datum<'a>, EvalError> {\n    let origin = CheckedTimestamp::from_timestamplike(\n            DateTime::from_timestamp(0, 0).unwrap(),\n        )\n        .expect(\"must fit\");\n    date_bin(stride, source, origin)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", sqlname = \"bin_unix_epoch_timestamptz\")]\nfn date_bin_timestamp_tz<'a>(\n    stride: Interval,\n    source: CheckedTimestamp<DateTime<Utc>>,\n) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {\n    let origin = CheckedTimestamp::from_timestamplike(\n            DateTime::from_timestamp(0, 0).unwrap(),\n        )\n        .expect(\"must fit\");\n    date_bin(stride, source, origin)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct DateBinTimestampTz;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateBinTimestampTz {
     type Input1 = Interval;
     type Input2 = CheckedTimestamp<DateTime<Utc>>;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<CheckedTimestamp<DateTime<Utc>>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateBinTimestampTz {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <CheckedTimestamp<DateTime<Utc>>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,14 +46,8 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateBinTimestampTz {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <CheckedTimestamp<DateTime<Utc>> as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DateBinTimestampTz {
@@ -64,7 +58,7 @@ impl std::fmt::Display for DateBinTimestampTz {
 fn date_bin_timestamp_tz<'a>(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     let origin = CheckedTimestamp::from_timestamplike(
             DateTime::from_timestamp(0, 0).unwrap(),
         )

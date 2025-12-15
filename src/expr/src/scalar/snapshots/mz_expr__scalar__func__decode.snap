@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(propagates_nulls = true)]\nfn decode<'a>(\n    string: &str,\n    format: &str,\n    temp_storage: &'a RowArena,\n) -> Result<&'a [u8], EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(string)?;\n    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {\n        return Err(EvalError::LengthTooLarge);\n    }\n    Ok(temp_storage.push_bytes(out))\n}\n"
+expression: "#[sqlfunc()]\n/// Decode `text` using the specified textual representation. Errors if the\n/// text is not a valid representation in the specified format, or if the\n/// format is not recognized.\nfn decode(text: &str, format: &str) -> Result<Vec<u8>, EvalError> {\n    let format = encoding::lookup_format(format)?;\n    let out = format.decode(text)?;\n    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {\n        Err(EvalError::LengthTooLarge)\n    } else {\n        Ok(out)\n    }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,14 +19,14 @@ pub struct Decode;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
     type Input1 = &'a str;
     type Input2 = &'a str;
-    type Output = Result<&'a [u8], EvalError>;
+    type Output = Result<Vec<u8>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
         b: Self::Input2,
         temp_storage: &'a mz_repr::RowArena,
     ) -> Self::Output {
-        decode(a, b, temp_storage)
+        decode(a, b)
     }
     fn output_type(
         &self,
@@ -46,24 +46,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Decode {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for Decode {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(decode))
     }
 }
-fn decode<'a>(
-    string: &str,
-    format: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a [u8], EvalError> {
+/// Decode `text` using the specified textual representation. Errors if the
+/// text is not a valid representation in the specified format, or if the
+/// format is not recognized.
+fn decode(text: &str, format: &str) -> Result<Vec<u8>, EvalError> {
     let format = encoding::lookup_format(format)?;
-    let out = format.decode(string)?;
+    let out = format.decode(text)?;
     if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
-        return Err(EvalError::LengthTooLarge);
+        Err(EvalError::LengthTooLarge)
+    } else {
+        Ok(out)
     }
-    Ok(temp_storage.push_bytes(out))
 }

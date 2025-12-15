@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type_expr = r#\"SqlScalarType::Record {\n                fields: [\n                    (\"abbrev\".into(), SqlScalarType::String.nullable(false)),\n                    (\"base_utc_offset\".into(), SqlScalarType::Interval.nullable(false)),\n                    (\"dst_offset\".into(), SqlScalarType::Interval.nullable(false)),\n                ].into(),\n                custom_id: None,\n            }.nullable(true)\"#,\n    propagates_nulls = true,\n    introduces_nulls = false\n)]\nfn timezone_offset<'a>(\n    tz_str: &str,\n    b: CheckedTimestamp<chrono::DateTime<Utc>>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let tz = match Tz::from_str_insensitive(tz_str) {\n        Ok(tz) => tz,\n        Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),\n    };\n    let offset = tz.offset_from_utc_datetime(&b.naive_utc());\n    Ok(\n        temp_storage\n            .make_datum(|packer| {\n                packer\n                    .push_list_with(|packer| {\n                        packer.push(Datum::from(offset.abbreviation()));\n                        packer.push(Datum::from(offset.base_utc_offset()));\n                        packer.push(Datum::from(offset.dst_offset()));\n                    });\n            }),\n    )\n}\n"
+expression: "#[sqlfunc(\n    output_type_expr = r#\"SqlScalarType::Record {\n                fields: [\n                    (\"abbrev\".into(), SqlScalarType::String.nullable(false)),\n                    (\"base_utc_offset\".into(), SqlScalarType::Interval.nullable(false)),\n                    (\"dst_offset\".into(), SqlScalarType::Interval.nullable(false)),\n                ].into(),\n                custom_id: None,\n            }.nullable(true)\"#,\n    introduces_nulls = false\n)]\nfn timezone_offset<'a>(\n    tz_str: &str,\n    b: CheckedTimestamp<chrono::DateTime<Utc>>,\n    temp_storage: &'a RowArena,\n) -> Result<Datum<'a>, EvalError> {\n    let tz = match Tz::from_str_insensitive(tz_str) {\n        Ok(tz) => tz,\n        Err(_) => return Err(EvalError::InvalidIanaTimezoneId(tz_str.into())),\n    };\n    let offset = tz.offset_from_utc_datetime(&b.naive_utc());\n    Ok(\n        temp_storage\n            .make_datum(|packer| {\n                packer\n                    .push_list_with(|packer| {\n                        packer.push(Datum::from(offset.abbreviation()));\n                        packer.push(Datum::from(offset.base_utc_offset()));\n                        packer.push(Datum::from(offset.dst_offset()));\n                    });\n            }),\n    )\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -57,9 +57,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TimezoneOffset {
     }
     fn introduces_nulls(&self) -> bool {
         false
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for TimezoneOffset {

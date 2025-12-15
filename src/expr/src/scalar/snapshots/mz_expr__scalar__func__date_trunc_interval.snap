@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"date_trunciv\", propagates_nulls = true)]\nfn date_trunc_interval(\n    units: &str,\n    mut interval: Interval,\n) -> Result<Interval, EvalError> {\n    let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;\n    interval\n        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)\n        .expect(\n            \"truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate\",\n        );\n    Ok(interval)\n}\n"
+expression: "#[sqlfunc(sqlname = \"date_trunciv\")]\nfn date_trunc_interval(\n    units: &str,\n    mut interval: Interval,\n) -> Result<Interval, EvalError> {\n    let dtf = units.parse().map_err(|_| EvalError::UnknownUnits(units.into()))?;\n    interval\n        .truncate_low_fields(dtf, Some(0), RoundBehavior::Truncate)\n        .expect(\n            \"truncate_low_fields should not fail with max_precision 0 and RoundBehavior::Truncate\",\n        );\n    Ok(interval)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for DateTruncInterval {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for DateTruncInterval {
