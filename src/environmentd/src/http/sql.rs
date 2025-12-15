@@ -53,7 +53,7 @@ use tokio::{select, time};
 use tokio_postgres::error::SqlState;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tower_sessions::Session as TowerSession;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
 use tungstenite::protocol::frame::coding::CloseCode;
 
 use crate::http::prometheus::PrometheusSqlQuery;

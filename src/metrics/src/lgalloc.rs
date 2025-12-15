@@ -13,7 +13,6 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MetricsRegistry, raw};
 use paste::paste;
 use prometheus::core::{AtomicU64, GenericGauge};
-use tracing::error;
 
 use crate::MetricsUpdate;
 
