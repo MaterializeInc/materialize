@@ -338,7 +338,6 @@ def get_baseline_and_other_endpoints(
                 resolved_target=resolved_target,
                 use_balancerd=use_balancerd,
                 image=f"{image_registry()}/materialized:{resolved_target}",
-                alternative_image=f"{image_registry()}/materialized:latest",
             )
         assert endpoint is not None
 

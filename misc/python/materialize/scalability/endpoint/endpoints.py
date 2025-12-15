@@ -136,13 +136,9 @@ class MaterializeContainer(MaterializeNonRemote):
         resolved_target: str | None,
         use_balancerd: bool,
         image: str | None = None,
-        alternative_image: str | None = None,
     ) -> None:
         self.composition = composition
         self.image = image
-        self.alternative_image = (
-            alternative_image if image != alternative_image else None
-        )
         self._port: int | None = None
         self._port_password: int | None = None
         self._port_sasl: int | None = None
@@ -179,23 +175,7 @@ class MaterializeContainer(MaterializeNonRemote):
 
     def up(self) -> None:
         self.composition.down(destroy_volumes=True)
-
-        print(f"Image is {self.image} (alternative: {self.alternative_image})")
-
-        if self.image is not None and self.alternative_image is not None:
-            if not self.composition.try_pull_service_image(
-                Materialized(
-                    image=self.image,
-                )
-            ):
-                # explicitly specified image cannot be found and alternative exists
-                print(
-                    f"Unable to find image {self.image}, proceeding with alternative image {self.alternative_image}!"
-                )
-                self.image = self.alternative_image
-            else:
-                print(f"Found image {self.image}, proceeding with this image.")
-
+        print(f"Image is {self.image}")
         self.up_internal()
         self.lift_limits()
 
