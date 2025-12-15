@@ -12,30 +12,24 @@ menu:
 
 Using Change Data Capture (CDC), you can track and propagate changes from
 MongoDB to downstream consumers. This guide outlines how to ingest data from a
-MongoDB replica set into Materialize.
-
-{{< note >}}
-
-Your MongoDB deployment must be configured as a replica set or a sharded
-cluster.
-
-{{< /note >}}
+MongoDB replica set (`rs0`) into Materialize; specifically from the collections
+`items` and `orders` in the `test` database.
 
 ## High-level architecture
 
 ```mermaid
 flowchart LR
-    subgraph "Operational Layer"
+    subgraph "Source"
         Mongo[("MongoDB (Replica Set/Sharded Cluster)")]
     end
 
-    subgraph "Streaming Layer"
+    subgraph "Streaming Ingestion: Debezium + Kafka"
         Debezium["Debezium Connector"]
         Kafka{{"Kafka Broker"}}
         Schema["Schema Registry"]
     end
 
-    subgraph "Analytical Layer"
+    subgraph "Materialize"
         MZ[("Materialize")]
     end
 
@@ -46,25 +40,25 @@ flowchart LR
     Schema -. "Decodes Data" .- MZ
 ```
 
-The architecture consists of four main components working in a pipeline:
+The architecture consists of the following components:
 
-- **MongoDB (Source):** Your operational database. It must be deployed as a
-  **replica set** or **a sharded cluster** to generate an oplog (operations
-  log), which records all data modifications. To deploy as a replica set or a
-  sharded cluster, refer to the official MongoDB documentation on [replica
+- **Source Component: MongoDB**
+  - **MongoDB**: MongoDB must be deployed as a **replica set** or **a sharded
+  cluster** to generate an oplog (operations log), which records all data
+  modifications. To deploy as a replica set or a sharded cluster, refer to the
+  official MongoDB documentation on [replica
   sets](https://www.mongodb.com/docs/manual/replication/) and [sharded
   clusters](https://www.mongodb.com/docs/manual/sharding/).
 
-- **Debezium:** A connector that [obtains the oplog data via MongoDB change
-  streams](https://debezium.io/documentation//reference/stable/connectors/mongodb.html#change-streams).
+- **Streaming Ingestion Component: Debezium + Kafka (with Schema Registry)**
+  - **Debezium:** A connector that [obtains the oplog data via MongoDB change
+    streams](https://debezium.io/documentation//reference/stable/connectors/mongodb.html#change-streams).
+  - **Kafka & Schema Registry:** The streaming transport layer. Debezium pushes
+    the events to a Kafka topic, while the Schema Registry ensures the data
+    structure (schema) is consistent and readable.
 
-- **Kafka & Schema Registry:** The streaming transport layer. Debezium pushes
-  the events to a Kafka topic, while the Schema Registry ensures the data
-  structure (schema) is consistent and readable.
-
-- **Materialize (Destination):** Connects to Kafka, reads the change events, and
-  incrementally updates its internal tables. This allows you to query the live
-  state of your MongoDB data using standard SQL.
+- **Materialize:** Materialize uses connects to Kafka to ingests data from
+  MongoDB.
 
 ## Prerequisites
 
@@ -90,8 +84,9 @@ to read from the database. Depending on the connector's
 [`capture.scope`](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#required-user-permissions)
 property, the user may need `read` on a specific database or all databases.
 
-This example uses `capture.scope` of `database` to read from the `test` database
-only:
+For this guide, the example will ingest `items` and `orders` collections in the
+`test` database.  As such, the example uses `capture.scope` of `database` to
+read from the `test` database only:
 
 ```javascript
 db.getSiblingDB("test").createUser({
@@ -119,6 +114,9 @@ Debezium MongoDB connector. If you have not set up these services, see:
 - [Debezium
     Tutorial](https://debezium.io/documentation/reference/stable/tutorial.html):
     Example using Docker Compose.
+
+  For this tutorial, ensure your Debezium container allows outbound traffic to
+  your external MongoDB host.
 
 ### 1. Configure Kafka Connect worker
 
@@ -163,8 +161,8 @@ Materialize to use the `UPSERT` envelope.
       "name": "mongodb-connector",
       "config": {
         "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
-        "mongodb.connection.string": "mongodb://debezium_materialize_user:<associated_pwd>@mongodb-primary:27017/?replicaSet=rs0&authSource=test",
-        "topic.prefix": "mdb-prod-rs0.",
+        "mongodb.connection.string": "mongodb://debezium_materialize_user:<associated_pwd>@host1:27017,host2:27017,host3:27017/?replicaSet=rs0&authSource=test",
+        "topic.prefix": "mdb-prod-rs0",
         "collection.include.list": "test.orders,test.items",
         "capture.mode": "change_streams_update_full",
         "capture.scope": "database",
@@ -176,11 +174,15 @@ Materialize to use the `UPSERT` envelope.
    ```
 
    **Required updates:**
-   - Replace `mongodb.connection.string` with your [MongoDB connection
-     details](https://www.mongodb.com/docs/manual/reference/connection-string-formats/)
-     (host, port, credentials for your debezium user, replica set name, and auth
-     source).
+   - Update `mongodb.connection.string` with your [MongoDB connection
+     string](https://www.mongodb.com/docs/manual/reference/connection-string-formats/)
+     for the `debezium_materialize_user`. For example:
+
+     - `"mongodb+srv://debezium_materialize_user:<associated_pwd>@host[/[defaultauthdb][?options]]"`
+     - `"mongodb://debezium_materialize_user:<associated_pwd>@host1[:port1][,...hostN[:portN]]/?replicaSet=<replica_set_name>&authSource=test"`
+
    - Update `collection.include.list` with the collections you want to capture.
+
    - Update `topic.prefix` with unique prefix for your environment.
 
    **Optional modifications:**
@@ -189,7 +191,6 @@ Materialize to use the `UPSERT` envelope.
      broader MongoDB permissions for your debezium user).
    - `capture.target`: Only needed if `capture.scope` is `"database"`.
    - `transforms` and `transforms.unwrap.type`: You can omit or customize.
-
 
    {{< tip >}}
    When using the `unwrap` transform of type `ExtractNewDocumentState` with
@@ -328,9 +329,6 @@ Query the data using standard SQL.
   {{< /tip >}}
 
 ## Troubleshooting
-
-- **Networking:** Ensure your Debezium container allows outbound traffic to
-  your external MongoDB host.
 
 See also: [Debezium documentation on the MongoDB
 Connector](https://debezium.io/documentation/reference/stable/connectors/mongodb.html#mongodb-when-things-go-wrong)
