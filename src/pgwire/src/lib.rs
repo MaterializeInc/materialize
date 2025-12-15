@@ -30,4 +30,4 @@ mod server;
 
 pub use metrics::MetricsConfig;
 pub use protocol::match_handshake;
-pub use server::{Config, Server};
+pub use server::{Config, RateLimitConfig, Server};

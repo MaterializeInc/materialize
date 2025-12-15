@@ -1148,6 +1148,10 @@ impl SystemVars {
             &KAFKA_PROGRESS_RECORD_FETCH_TIMEOUT,
             &ENABLE_LAUNCHDARKLY,
             &MAX_CONNECTIONS,
+            &PGWIRE_CONNECTION_RATE_LIMIT,
+            &PGWIRE_CONNECTION_RATE_LIMIT_BURST,
+            &PGWIRE_CONNECTION_RATE_LIMIT_PER_IP,
+            &PGWIRE_CONNECTION_RATE_LIMIT_PER_IP_BURST,
             &NETWORK_POLICY,
             &SUPERUSER_RESERVED_CONNECTIONS,
             &KEEP_N_SOURCE_STATUS_HISTORY_ENTRIES,
@@ -1949,6 +1953,30 @@ impl SystemVars {
     /// Returns the `superuser_reserved_connections` configuration parameter.
     pub fn superuser_reserved_connections(&self) -> u32 {
         *self.expect_value(&SUPERUSER_RESERVED_CONNECTIONS)
+    }
+
+    /// Returns the `pgwire_connection_rate_limit` configuration parameter.
+    /// A value of 0 means rate limiting is disabled.
+    pub fn pgwire_connection_rate_limit(&self) -> u32 {
+        *self.expect_value(&PGWIRE_CONNECTION_RATE_LIMIT)
+    }
+
+    /// Returns the `pgwire_connection_rate_limit_burst` configuration parameter.
+    /// A value of 0 means use the rate limit value as the burst size.
+    pub fn pgwire_connection_rate_limit_burst(&self) -> u32 {
+        *self.expect_value(&PGWIRE_CONNECTION_RATE_LIMIT_BURST)
+    }
+
+    /// Returns the `pgwire_connection_rate_limit_per_ip` configuration parameter.
+    /// A value of 0 means rate limiting is disabled.
+    pub fn pgwire_connection_rate_limit_per_ip(&self) -> u32 {
+        *self.expect_value(&PGWIRE_CONNECTION_RATE_LIMIT_PER_IP)
+    }
+
+    /// Returns the `pgwire_connection_rate_limit_per_ip_burst` configuration parameter.
+    /// A value of 0 means use the rate limit value as the burst size.
+    pub fn pgwire_connection_rate_limit_per_ip_burst(&self) -> u32 {
+        *self.expect_value(&PGWIRE_CONNECTION_RATE_LIMIT_PER_IP_BURST)
     }
 
     pub fn keep_n_source_status_history_entries(&self) -> usize {

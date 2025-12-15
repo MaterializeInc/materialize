@@ -800,3 +800,104 @@ fn test_pgtest_mz_transactions() {
 fn test_pgtest_mz_vars() {
     pg_test_inner(Path::new("../../test/pgtest-mz/vars.pt"), true);
 }
+
+#[mz_ore::test]
+fn test_connection_rate_limiting() {
+    // Start a server with a very restrictive rate limit: 1 connection per second with burst of 2.
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default("pgwire_connection_rate_limit".to_string(), "1".to_string())
+        .with_system_parameter_default(
+            "pgwire_connection_rate_limit_burst".to_string(),
+            "2".to_string(),
+        )
+        .start_blocking();
+
+    // First two connections should succeed (burst allows 2).
+    let client1 = server.connect(postgres::NoTls);
+    assert!(client1.is_ok(), "first connection should succeed");
+
+    let client2 = server.connect(postgres::NoTls);
+    assert!(
+        client2.is_ok(),
+        "second connection should succeed (within burst)"
+    );
+
+    // Third connection should fail due to rate limiting (burst exhausted).
+    // Retry to handle transient network errors.
+    let err = Retry::default()
+        .retry(|_| {
+            server
+                .connect(postgres::NoTls)
+                .err()
+                .unwrap()
+                .as_db_error()
+                .cloned()
+                .ok_or("expected database error")
+        })
+        .unwrap();
+
+    assert_eq!(err.severity(), "FATAL");
+    assert_eq!(*err.code(), SqlState::TOO_MANY_CONNECTIONS);
+    assert_eq!(err.message(), "too many connections");
+
+    // Wait for rate limiter to replenish (1 second + buffer).
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // Now a new connection should succeed again.
+    let client4 = server.connect(postgres::NoTls);
+    assert!(
+        client4.is_ok(),
+        "connection after rate limit replenish should succeed"
+    );
+}
+
+#[mz_ore::test]
+fn test_connection_rate_limiting_per_ip() {
+    // Start a server with per-IP rate limiting: 1 connection per second per IP with burst of 1.
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "pgwire_connection_rate_limit_per_ip".to_string(),
+            "1".to_string(),
+        )
+        .with_system_parameter_default(
+            "pgwire_connection_rate_limit_per_ip_burst".to_string(),
+            "1".to_string(),
+        )
+        .start_blocking();
+
+    // First connection should succeed.
+    let client1 = server.connect(postgres::NoTls);
+    assert!(client1.is_ok(), "first connection should succeed");
+
+    // Second connection from same IP should fail due to per-IP rate limiting.
+    // Retry to handle transient network errors.
+    let err = Retry::default()
+        .retry(|_| {
+            server
+                .connect(postgres::NoTls)
+                .err()
+                .unwrap()
+                .as_db_error()
+                .cloned()
+                .ok_or("expected database error")
+        })
+        .unwrap();
+
+    assert_eq!(err.severity(), "FATAL");
+    assert_eq!(*err.code(), SqlState::TOO_MANY_CONNECTIONS);
+    assert!(
+        err.message().starts_with("too many connections from"),
+        "unexpected error message: {}",
+        err.message()
+    );
+
+    // Wait for rate limiter to replenish.
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // Now a new connection should succeed again.
+    let client3 = server.connect(postgres::NoTls);
+    assert!(
+        client3.is_ok(),
+        "connection after rate limit replenish should succeed"
+    );
+}

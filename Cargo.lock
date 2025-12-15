@@ -7139,6 +7139,7 @@ dependencies = [
  "bytesize",
  "enum-kinds",
  "futures",
+ "governor",
  "itertools 0.14.0",
  "mz-adapter",
  "mz-adapter-types",

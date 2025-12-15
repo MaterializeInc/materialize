@@ -14,6 +14,7 @@
 //! [timely dataflow]: ../timely/index.html
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU32;
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -52,7 +53,7 @@ use mz_ore::url::SensitiveUrl;
 use mz_ore::{instrument, task};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::usage::StorageUsageClient;
-use mz_pgwire::MetricsConfig;
+use mz_pgwire::{MetricsConfig, RateLimitConfig};
 use mz_pgwire_common::ConnectionCounter;
 use mz_repr::strconv;
 use mz_secrets::SecretsController;
@@ -283,6 +284,19 @@ impl Listener<SqlListenerConfig> {
             AuthenticatorKind::None => Authenticator::None,
         };
 
+        // Get rate limit configuration from system vars.
+        let system_vars = adapter_client.get_system_vars().await;
+        let rate_limit = RateLimitConfig {
+            global_rate_per_second: NonZeroU32::new(system_vars.pgwire_connection_rate_limit()),
+            global_burst_size: NonZeroU32::new(system_vars.pgwire_connection_rate_limit_burst()),
+            per_ip_rate_per_second: NonZeroU32::new(
+                system_vars.pgwire_connection_rate_limit_per_ip(),
+            ),
+            per_ip_burst_size: NonZeroU32::new(
+                system_vars.pgwire_connection_rate_limit_per_ip_burst(),
+            ),
+        };
+
         task::spawn(|| format!("{}_sql_server", label), {
             let sql_server = mz_pgwire::Server::new(mz_pgwire::Config {
                 label,
@@ -293,6 +307,7 @@ impl Listener<SqlListenerConfig> {
                 active_connection_counter,
                 helm_chart_version,
                 allowed_roles: self.config.allowed_roles,
+                rate_limit,
             });
             mz_server_core::serve(ServeConfig {
                 conns: self.connection_stream,
