@@ -1092,25 +1092,26 @@ impl Coordinator {
 
         let result = self.catalog_transact(Some(ctx.session()), ops).await;
 
-        match result {
-            Ok(()) => {
-                ctx.retire(Ok(ExecuteResponse::CreatedSink));
+        // Make sure we can't early-return and always retire the context.
+        let infallible = |result| -> Result<_, _> {
+            match result {
+                Ok(()) => Ok(ExecuteResponse::CreatedSink),
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind:
+                        mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                })) if if_not_exists => {
+                    ctx.session()
+                        .add_notice(AdapterNotice::ObjectAlreadyExists {
+                            name: name.item,
+                            ty: "sink",
+                        });
+                    Ok(ExecuteResponse::CreatedSink)
+                }
+                Err(e) => Err(e),
             }
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if if_not_exists => {
-                ctx.session()
-                    .add_notice(AdapterNotice::ObjectAlreadyExists {
-                        name: name.item,
-                        ty: "sink",
-                    });
-                ctx.retire(Ok(ExecuteResponse::CreatedSink));
-            }
-            Err(e) => {
-                ctx.retire(Err(e));
-            }
-        }
+        };
+        let result = infallible(result);
+        ctx.retire(result);
     }
 
     /// Validates that a view definition does not contain any expressions that may lead to
