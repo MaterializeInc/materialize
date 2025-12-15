@@ -13532,8 +13532,3 @@ dependencies = [
  "cc",
  "pkg-config",
 ]
-
-[[patch.unused]]
-name = "iceberg-catalog-s3tables"
-version = "0.7.0"
-source = "git+https://github.com/MaterializeInc/iceberg-rust.git?rev=cf1e6e0c9de3#cf1e6e0c9de38149e9fe85d5d87b00062d49074b"

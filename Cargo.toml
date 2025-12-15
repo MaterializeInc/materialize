@@ -351,7 +351,6 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 # All changes should go to the `mz_changes` branch.
 iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cf1e6e0c9de3" }
 iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cf1e6e0c9de3" }
-iceberg-catalog-s3tables = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cf1e6e0c9de3" }
 
 
 # BEGIN LINT CONFIG
