@@ -4813,7 +4813,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
             }) => Bool, 3889;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange { rev: false }))
+                Ok(lhs.call_binary(rhs, BF::from(func::RangeContainsRange)))
             }) => Bool, 3890;
             params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArray)))
@@ -4847,7 +4847,7 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(rhs.call_binary(lhs, BF::RangeContainsElem { elem_type, rev: true }))
             }) => Bool, 3891;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(rhs.call_binary(lhs, BF::RangeContainsRange { rev: true }))
+                Ok(rhs.call_binary(lhs, BF::from(func::RangeContainsRangeRev)))
             }) => Bool, 3892;
             params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArrayRev)))
