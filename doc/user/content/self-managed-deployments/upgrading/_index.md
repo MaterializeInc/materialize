@@ -23,11 +23,12 @@ name="upgrade-major-version-restriction" >}}
 
 {{< /note >}}
 
-## Upgrade
+
+## Upgrading
 
 ### Upgrade guides
 
-The following upgrade guides are available:
+The following upgrade guides are available as examples:
 
 {{% include-from-yaml data="self_managed/upgrades"
 name="upgrade-landing-guides-helm" %}}

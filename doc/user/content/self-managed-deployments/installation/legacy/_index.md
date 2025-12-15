@@ -6,7 +6,9 @@ menu:
     parent: "installation"
     weight: 50
     identifier: "installation-legacy"
+disable_list: true
 ---
 
-For deployments that are using the legacy Terraform modules, the following
-upgrade guides are available:
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-landing-guides-legacy" %}}

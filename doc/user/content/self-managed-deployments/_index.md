@@ -115,7 +115,10 @@ page](/self-managed-deployments/operator-configuration/).
 
 ## Materialize Instance
 
-A Materialize instance is the actual database that you connect to and interact with. Each instance is an isolated Materialize deployment with its own data, configuration, and compute resources.
+A Materialize instance is the actual database that you connect to and interact
+with. Each instance is an isolated Materialize deployment (deployed via a
+Kubernetes Custom Resource) with its own data, configuration, and compute
+resources.
 
 ### Components
 

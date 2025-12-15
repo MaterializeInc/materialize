@@ -6,7 +6,8 @@ menu:
     parent: "upgrading"
     weight: 60
     identifier: "upgrading-legacy"
+disable_list: true
 ---
 
-For deployments that are using the legacy Terraform modules, the following
-upgrade guides are available:
+{{% include-from-yaml data="self_managed/upgrades"
+name="upgrade-landing-guides-legacy" %}}

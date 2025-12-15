@@ -34,7 +34,7 @@
 - name: upgrade-landing-guides-helm
   content: |
 
-    ### Upgrade using Helm Commands
+    #### Upgrade using Helm Commands
 
     |  Guide         | Description  |
     | ------------- | -------|
@@ -43,7 +43,12 @@
 
 - name: upgrade-landing-guides-unified
   content: |
-    ### Upgrade using the new Terraform Modules
+    #### Upgrade using the new Terraform Modules
+
+    {{< tip >}}
+    The Terraform modules are provided as examples. They are not required for
+    upgrading Materialize.
+    {{< /tip >}}
 
     |  Guide         | Description  |
     | -------------  | ----------- |
@@ -54,7 +59,12 @@
 - name: upgrade-landing-guides-legacy
   content: |
 
-    ### Upgrade using Legacy Terraform Modules
+    #### Upgrade using Legacy Terraform Modules
+
+    {{< tip >}}
+    The Terraform modules are provided as examples. They are not required for
+    upgrading Materialize.
+    {{< /tip >}}
 
     |  Guide         | Description  |
     | -------------  | ----------- |
