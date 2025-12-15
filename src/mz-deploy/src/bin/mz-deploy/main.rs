@@ -1,5 +1,5 @@
-use clap::{Parser, Subcommand};
 use clap::CommandFactory;
+use clap::{Parser, Subcommand};
 use mz_build_info::{BuildInfo, build_info};
 use mz_deploy::cli;
 use mz_deploy::cli::CliError;

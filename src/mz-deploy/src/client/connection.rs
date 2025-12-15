@@ -11,12 +11,10 @@
 
 use crate::client::config::{Profile, ProfilesConfig};
 use crate::client::deployment_ops::{
-    self, ClusterDeploymentStatus, ClusterStatusContext, FailureReason, HydrationStatusUpdate,
-    DEFAULT_ALLOWED_LAG_SECS,
+    self, ClusterDeploymentStatus, ClusterStatusContext, DEFAULT_ALLOWED_LAG_SECS, FailureReason,
+    HydrationStatusUpdate,
 };
 use crate::client::errors::{ConnectionError, DatabaseValidationError};
-use async_stream::try_stream;
-use futures::Stream;
 use crate::client::introspection;
 use crate::client::models::{
     ApplyState, Cluster, ClusterConfig, ClusterOptions, ConflictRecord, DeploymentDetails,
@@ -29,6 +27,8 @@ use crate::project::object_id::ObjectId;
 use crate::project::planned;
 use crate::types::{ColumnType, Types};
 use crate::utils::sql_utils::quote_identifier;
+use async_stream::try_stream;
+use futures::Stream;
 use openssl::ssl::{SslConnector, SslMethod, SslVerifyMode};
 use postgres_openssl::MakeTlsConnector;
 use std::collections::{BTreeMap, BTreeSet};
@@ -92,7 +92,10 @@ impl Client {
         }
 
         if let Some(ref password) = profile.password {
-            conn_str.push_str(&format!(" password='{}'", escape_conn_string_value(password)));
+            conn_str.push_str(&format!(
+                " password='{}'",
+                escape_conn_string_value(password)
+            ));
         }
 
         // Determine if this is likely a cloud connection (not localhost)
@@ -104,13 +107,14 @@ impl Client {
 
         let client = if is_local {
             // Local connection - use NoTls
-            let (client, connection) = tokio_postgres::connect(&conn_str, NoTls)
-                .await
-                .map_err(|source| ConnectionError::Connect {
-                    host: profile.host.clone(),
-                    port: profile.port,
-                    source,
-                })?;
+            let (client, connection) =
+                tokio_postgres::connect(&conn_str, NoTls)
+                    .await
+                    .map_err(|source| ConnectionError::Connect {
+                        host: profile.host.clone(),
+                        port: profile.port,
+                        source,
+                    })?;
 
             // Spawn the connection handler
             mz_ore::task::spawn(|| "mz-deploy-connection", async move {
@@ -122,21 +126,22 @@ impl Client {
             client
         } else {
             // Cloud connection - use TLS
-            let mut builder = SslConnector::builder(SslMethod::tls())
-                .map_err(|e| ConnectionError::Message(format!("Failed to create TLS builder: {}", e)))?;
+            let mut builder = SslConnector::builder(SslMethod::tls()).map_err(|e| {
+                ConnectionError::Message(format!("Failed to create TLS builder: {}", e))
+            })?;
 
             // Load CA certificates - try platform-specific paths
             // macOS: Homebrew OpenSSL or system certificates
             // Linux: Standard system paths
             let ca_paths = [
-                "/etc/ssl/cert.pem",                          // macOS system
-                "/opt/homebrew/etc/openssl@3/cert.pem",       // macOS Homebrew ARM
-                "/usr/local/etc/openssl@3/cert.pem",          // macOS Homebrew Intel
-                "/opt/homebrew/etc/openssl/cert.pem",         // macOS Homebrew ARM (older)
-                "/usr/local/etc/openssl/cert.pem",            // macOS Homebrew Intel (older)
-                "/etc/ssl/certs/ca-certificates.crt",         // Debian/Ubuntu
-                "/etc/pki/tls/certs/ca-bundle.crt",           // RHEL/CentOS
-                "/etc/ssl/ca-bundle.pem",                     // OpenSUSE
+                "/etc/ssl/cert.pem",                    // macOS system
+                "/opt/homebrew/etc/openssl@3/cert.pem", // macOS Homebrew ARM
+                "/usr/local/etc/openssl@3/cert.pem",    // macOS Homebrew Intel
+                "/opt/homebrew/etc/openssl/cert.pem",   // macOS Homebrew ARM (older)
+                "/usr/local/etc/openssl/cert.pem",      // macOS Homebrew Intel (older)
+                "/etc/ssl/certs/ca-certificates.crt",   // Debian/Ubuntu
+                "/etc/pki/tls/certs/ca-bundle.crt",     // RHEL/CentOS
+                "/etc/ssl/ca-bundle.pem",               // OpenSUSE
             ];
 
             let mut ca_loaded = false;
@@ -948,6 +953,14 @@ impl Client {
         tables: &BTreeSet<ObjectId>,
     ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
         introspection::check_tables_exist(&self.client, tables).await
+    }
+
+    /// Check which sinks from the given set exist in the database.
+    pub async fn check_sinks_exist(
+        &self,
+        sinks: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeSet<ObjectId>, ConnectionError> {
+        introspection::check_sinks_exist(&self.client, sinks).await
     }
 
     /// Get staging schema names for a specific deployment.

@@ -55,7 +55,11 @@ pub async fn run(profile: &Profile, deploy_id: &str) -> Result<(), CliError> {
         println!("{}: {}", "Commit".dimmed(), commit_sha);
     }
 
-    println!("{}: {}", "Deployed by".dimmed(), details.deployed_by.yellow());
+    println!(
+        "{}: {}",
+        "Deployed by".dimmed(),
+        details.deployed_by.yellow()
+    );
 
     let deployed_datetime: DateTime<Local> = details.deployed_at.with_timezone(&Local);
     let deployed_str = deployed_datetime

@@ -14,7 +14,9 @@ use std::hash::{Hash, Hasher};
 use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 
-use crate::client::{Client, ConnectionError, DeploymentKind, DeploymentObjectRecord, SchemaDeploymentRecord};
+use crate::client::{
+    Client, ConnectionError, DeploymentKind, DeploymentObjectRecord, SchemaDeploymentRecord,
+};
 use crate::project::object_id::ObjectId;
 use crate::project::{planned, typed};
 

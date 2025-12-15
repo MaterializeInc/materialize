@@ -379,11 +379,18 @@ fn compute_dirty_datalog(
     verbose!("[dirty-propagation] Starting fixed-point computation...");
     verbose!(
         "[dirty-propagation] Initial changed statements: {:?}",
-        changed_stmts.iter().map(|o| o.to_string()).collect::<Vec<_>>()
+        changed_stmts
+            .iter()
+            .map(|o| o.to_string())
+            .collect::<Vec<_>>()
     );
     verbose!(
         "[dirty-propagation] Known sinks: {:?}",
-        base_facts.is_sink.iter().map(|o| o.to_string()).collect::<Vec<_>>()
+        base_facts
+            .is_sink
+            .iter()
+            .map(|o| o.to_string())
+            .collect::<Vec<_>>()
     );
 
     let indexes = DatalogIndexes::from_base_facts(base_facts);
@@ -525,7 +532,10 @@ fn compute_dirty_datalog(
     verbose!(
         "[dirty-propagation] Dirty statements ({}): {:?}",
         dirty_stmts.len(),
-        dirty_stmts.iter().map(|o| o.to_string()).collect::<Vec<_>>()
+        dirty_stmts
+            .iter()
+            .map(|o| o.to_string())
+            .collect::<Vec<_>>()
     );
     verbose!(
         "[dirty-propagation] Dirty clusters ({}): {:?}",
