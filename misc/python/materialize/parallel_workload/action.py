@@ -1037,6 +1037,28 @@ class RenameSinkAction(Action):
         return True
 
 
+class ReplaceMaterializedViewAction(Action):
+    def run(self, exe: Executor) -> bool:
+        with exe.db.lock:
+            mvs = [v for v in exe.db.views if v.materialized]
+            if not mvs:
+                return False
+            view = self.rng.choice(mvs)
+
+        tmp_mv = identifier(view.name() + "_" + threading.current_thread().getName())
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {tmp_mv} REPLACING {identifier(view.name())} AS {view.get_select()}",
+        )
+        time.sleep(self.rng.random())
+        if self.rng.choice([True, False]):
+            exe.execute(
+                f"ALTER MATERIALIZED VIEW {identifier(view.name())} APPLY REPLACEMENT {tmp_mv}",
+            )
+        else:
+            exe.execute(f"DROP MATERIALIZED VIEW {tmp_mv}")
+        return True
+
+
 class AlterKafkaSinkFromAction(Action):
     def run(self, exe: Executor) -> bool:
         if exe.db.scenario in (Scenario.Kill, Scenario.ZeroDowntimeDeploy):
@@ -2085,7 +2107,6 @@ class ReconnectAction(Action):
 
         NUM_ATTEMPTS = 20
         if exe.ws:
-            threading.current_thread().getName()
             for i in range(
                 NUM_ATTEMPTS
                 if exe.db.scenario != Scenario.ZeroDowntimeDeploy
@@ -2967,6 +2988,7 @@ ddl_action_list = ActionList(
         (RenameViewAction, 10),
         (RenameSinkAction, 10),
         (SwapSchemaAction, 10),
+        (ReplaceMaterializedViewAction, 20),
         (FlipFlagsAction, 2),
         # TODO: Reenable when database-issues#8813 is fixed.
         # (AlterTableAddColumnAction, 10),

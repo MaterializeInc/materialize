@@ -292,13 +292,12 @@ class View(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: Executor) -> None:
-        query = "CREATE "
-        if self.temp:
-            query += "TEMP "
-        if self.materialized:
-            query += "MATERIALIZED "
-        query += f"VIEW {self}"
+    def get_select(self) -> str:
+        def select_str(exprs: str) -> str:
+            select = f"SELECT {exprs} FROM {self.base_object}"
+            if self.base_object2:
+                select += f" JOIN {self.base_object2} ON {self.on_expr}"
+            return select
 
         expressions_str = ", ".join(
             [
@@ -309,21 +308,7 @@ class View(DBObject):
             ]
         )
 
-        options = []
-
-        if self.refresh:
-            options.append(f"REFRESH {self.refresh}")
-
-        if options:
-            query += f" WITH ({', '.join(options)})"
-
-        def select_str(exprs: str) -> str:
-            select = f"SELECT {exprs} FROM {self.base_object}"
-            if self.base_object2:
-                select += f" JOIN {self.base_object2} ON {self.on_expr}"
-            return select
-
-        query += f" AS {select_str(expressions_str)}"
+        query = select_str(expressions_str)
 
         if self.union:
             expressions_str2 = ", ".join(
@@ -336,6 +321,26 @@ class View(DBObject):
             )
 
             query += f" UNION ALL {select_str(expressions_str2)}"
+
+        return query
+
+    def create(self, exe: Executor) -> None:
+        query = "CREATE "
+        if self.temp:
+            query += "TEMP "
+        if self.materialized:
+            query += "MATERIALIZED "
+        query += f"VIEW {self}"
+
+        options = []
+
+        if self.refresh:
+            options.append(f"REFRESH {self.refresh}")
+
+        if options:
+            query += f" WITH ({', '.join(options)})"
+
+        query += f" AS {self.get_select()}"
 
         exe.execute(query)
 
