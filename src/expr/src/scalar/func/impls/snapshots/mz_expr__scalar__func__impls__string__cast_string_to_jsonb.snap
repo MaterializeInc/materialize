@@ -44,6 +44,17 @@ impl std::fmt::Display for CastStringToJsonb {
         f.write_str("text_to_jsonb")
     }
 }
+impl CastStringToJsonb {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_string_to_jsonb),
+            category: "Uncategorized",
+            signature: "text_to_jsonb(a text) -> jsonb",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_string_to_jsonb<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     { Ok(strconv::parse_jsonb(a)?) }

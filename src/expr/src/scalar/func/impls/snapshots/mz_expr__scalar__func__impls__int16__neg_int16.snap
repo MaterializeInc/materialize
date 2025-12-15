@@ -44,6 +44,17 @@ impl std::fmt::Display for NegInt16 {
         f.write_str("-")
     }
 }
+impl NegInt16 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(neg_int16),
+            category: "Uncategorized",
+            signature: "-(a int2) -> int2",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn neg_int16<'a>(a: i16) -> Result<i16, EvalError> {
     { a.checked_neg().ok_or_else(|| EvalError::Int16OutOfRange(a.to_string().into())) }

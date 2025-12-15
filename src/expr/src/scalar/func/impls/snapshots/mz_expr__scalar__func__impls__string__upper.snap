@@ -44,6 +44,17 @@ impl std::fmt::Display for Upper {
         f.write_str(stringify!(upper))
     }
 }
+impl Upper {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(upper),
+            category: "Uncategorized",
+            signature: "stringify ! (upper)(a text) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn upper<'a>(a: &'a str) -> String {
     { a.to_uppercase() }

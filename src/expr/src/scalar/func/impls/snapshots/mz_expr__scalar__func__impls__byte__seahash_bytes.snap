@@ -44,6 +44,17 @@ impl std::fmt::Display for SeahashBytes {
         f.write_str("seahash_bytes")
     }
 }
+impl SeahashBytes {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(seahash_bytes),
+            category: "Uncategorized",
+            signature: "seahash_bytes(a bytea) -> uint8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn seahash_bytes<'a>(a: &'a [u8]) -> u64 {
     { seahash::hash(a) }

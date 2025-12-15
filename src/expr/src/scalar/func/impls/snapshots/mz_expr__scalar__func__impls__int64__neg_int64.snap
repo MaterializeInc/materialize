@@ -44,6 +44,17 @@ impl std::fmt::Display for NegInt64 {
         f.write_str("-")
     }
 }
+impl NegInt64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(neg_int64),
+            category: "Uncategorized",
+            signature: "-(a int8) -> int8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn neg_int64<'a>(a: i64) -> Result<i64, EvalError> {
     { a.checked_neg().ok_or_else(|| EvalError::Int64OutOfRange(a.to_string().into())) }

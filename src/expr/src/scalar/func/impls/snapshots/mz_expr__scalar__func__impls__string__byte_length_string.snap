@@ -44,6 +44,17 @@ impl std::fmt::Display for ByteLengthString {
         f.write_str("octet_length")
     }
 }
+impl ByteLengthString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(byte_length_string),
+            category: "Uncategorized",
+            signature: "octet_length(a text) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn byte_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
     {

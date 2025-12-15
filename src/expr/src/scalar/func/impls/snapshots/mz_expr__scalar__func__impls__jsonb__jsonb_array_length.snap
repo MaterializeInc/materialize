@@ -44,6 +44,17 @@ impl std::fmt::Display for JsonbArrayLength {
         f.write_str(stringify!(jsonb_array_length))
     }
 }
+impl JsonbArrayLength {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_array_length),
+            category: "Uncategorized",
+            signature: "stringify ! (jsonb_array_length)(a jsonb) -> int4?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn jsonb_array_length<'a>(a: JsonbRef<'a>) -> Result<Option<i32>, EvalError> {
     {

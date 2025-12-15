@@ -44,6 +44,17 @@ impl std::fmt::Display for NegInt32 {
         f.write_str("-")
     }
 }
+impl NegInt32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(neg_int32),
+            category: "Uncategorized",
+            signature: "-(a int4) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn neg_int32<'a>(a: i32) -> Result<i32, EvalError> {
     { a.checked_neg().ok_or_else(|| EvalError::Int32OutOfRange(a.to_string().into())) }

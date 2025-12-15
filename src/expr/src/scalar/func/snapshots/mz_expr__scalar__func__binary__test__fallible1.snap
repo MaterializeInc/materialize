@@ -52,6 +52,17 @@ impl std::fmt::Display for Fallible1 {
         f.write_str(stringify!(fallible1))
     }
 }
+impl Fallible1 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(fallible1),
+            category: "Uncategorized",
+            signature: "fallible1(a float4, b float4) -> float4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(dead_code)]
 fn fallible1(a: f32, b: f32) -> Result<f32, EvalError> {
     Ok(a + b)

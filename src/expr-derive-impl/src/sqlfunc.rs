@@ -243,6 +243,7 @@ fn output_type(arg: &syn::ItemFn) -> Result<&syn::Type, syn::Error> {
     }
 }
 
+/// Extract the documentation string from a function.
 fn documentation_string(func: &syn::ItemFn) -> String {
     let mut doc_lines = Vec::new();
 
@@ -608,6 +609,7 @@ fn binary_func(
     Ok(result)
 }
 
+/// Convert a Rust type to its SQL documentation representation.
 fn type_to_sqldoc(ty: &syn::Type) -> String {
     /// Handle types that have a vector/slice representation in Rust but
     /// are represented by a specific type in SQL, such as `bytea` for `Vec<u8>`.
@@ -708,6 +710,8 @@ fn type_to_sqldoc(ty: &syn::Type) -> String {
     }
 }
 
+/// Generate the function documentation implementation. Adds a `func_doc` associated
+/// function to the struct, which returns a `FuncDoc` instance.
 fn generate_function_doc(
     name: String,
     func: &syn::ItemFn,

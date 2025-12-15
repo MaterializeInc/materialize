@@ -44,6 +44,17 @@ impl std::fmt::Display for Ascii {
         f.write_str("ascii")
     }
 }
+impl Ascii {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(ascii),
+            category: "Uncategorized",
+            signature: "ascii(a text) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn ascii<'a>(a: &'a str) -> i32 {
     { a.chars().next().and_then(|c| i32::try_from(u32::from(c)).ok()).unwrap_or(0) }

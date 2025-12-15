@@ -44,6 +44,17 @@ impl std::fmt::Display for MzFormatPrivileges {
         f.write_str("mz_format_privileges")
     }
 }
+impl MzFormatPrivileges {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mz_format_privileges),
+            category: "Uncategorized",
+            signature: "mz_format_privileges(privileges text) -> text[]",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn mz_format_privileges<'a>(
     privileges: String,

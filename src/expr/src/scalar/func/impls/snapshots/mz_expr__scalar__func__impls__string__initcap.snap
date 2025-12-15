@@ -44,6 +44,17 @@ impl std::fmt::Display for Initcap {
         f.write_str("initcap")
     }
 }
+impl Initcap {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(initcap),
+            category: "Uncategorized",
+            signature: "initcap(a text) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn initcap<'a>(a: &'a str) -> String {
     {

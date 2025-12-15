@@ -44,6 +44,17 @@ impl std::fmt::Display for CastStringToFloat32 {
         f.write_str("text_to_real")
     }
 }
+impl CastStringToFloat32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_string_to_float32),
+            category: "Uncategorized",
+            signature: "text_to_real(a text) -> float4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_string_to_float32<'a>(a: &'a str) -> Result<f32, EvalError> {
     { strconv::parse_float32(a).err_into() }

@@ -44,6 +44,17 @@ impl std::fmt::Display for CastInt32ToPgLegacyChar {
         f.write_str("integer_to_\"char\"")
     }
 }
+impl CastInt32ToPgLegacyChar {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_int32_to_pg_legacy_char),
+            category: "Uncategorized",
+            signature: "integer_to_\\char\\(a int4) -> character",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_int32_to_pg_legacy_char<'a>(a: i32) -> Result<PgLegacyChar, EvalError> {
     {

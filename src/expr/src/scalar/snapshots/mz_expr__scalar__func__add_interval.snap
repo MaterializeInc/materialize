@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {\n    a.checked_add(&b)\n        .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} + {b}\").into()))\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"+\")]\nfn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {\n    a.checked_add(&b)\n        .ok_or_else(|| EvalError::IntervalOutOfRange(format!(\"{a} + {b}\").into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -52,13 +52,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddInterval {
     fn is_monotone(&self) -> (bool, bool) {
         (true, true)
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for AddInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("+")
+    }
+}
+impl AddInterval {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(add_interval),
+            category: "Uncategorized",
+            signature: "interval + interval -> interval",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn add_interval(a: Interval, b: Interval) -> Result<Interval, EvalError> {

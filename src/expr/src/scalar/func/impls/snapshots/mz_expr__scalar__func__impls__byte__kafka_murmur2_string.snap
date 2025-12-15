@@ -44,6 +44,17 @@ impl std::fmt::Display for KafkaMurmur2String {
         f.write_str("kafka_murmur2_string")
     }
 }
+impl KafkaMurmur2String {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(kafka_murmur2_string),
+            category: "Uncategorized",
+            signature: "kafka_murmur2_string(a text) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn kafka_murmur2_string<'a>(a: &'a str) -> i32 {
     { kafka_murmur2_bytes(a.as_bytes()) }

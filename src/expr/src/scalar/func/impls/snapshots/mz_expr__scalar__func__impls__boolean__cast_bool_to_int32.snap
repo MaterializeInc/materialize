@@ -44,6 +44,17 @@ impl std::fmt::Display for CastBoolToInt32 {
         f.write_str("boolean_to_integer")
     }
 }
+impl CastBoolToInt32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_bool_to_int32),
+            category: "Uncategorized",
+            signature: "boolean_to_integer(a boolean) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_bool_to_int32<'a>(a: bool) -> i32 {
     {

@@ -44,6 +44,17 @@ impl std::fmt::Display for AclItemGrantee {
         f.write_str("aclitem_grantee")
     }
 }
+impl AclItemGrantee {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(acl_item_grantee),
+            category: "Uncategorized",
+            signature: "aclitem_grantee(acl_item aclitem) -> oid",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn acl_item_grantee<'a>(acl_item: AclItem) -> Oid {
     { acl_item.grantee }

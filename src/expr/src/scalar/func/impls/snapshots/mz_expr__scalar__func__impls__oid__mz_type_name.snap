@@ -44,6 +44,17 @@ impl std::fmt::Display for MzTypeName {
         f.write_str(stringify!(mz_type_name))
     }
 }
+impl MzTypeName {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mz_type_name),
+            category: "Uncategorized",
+            signature: "stringify ! (mz_type_name)(oid oid) -> text?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn mz_type_name<'a>(oid: Oid) -> Option<String> {
     { if let Ok(t) = Type::from_oid(oid.0) { Some(t.name().to_string()) } else { None } }

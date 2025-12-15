@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(propagates_nulls = true)]\nfn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {\n    let err = EvalError::IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,\n    };\n    let index = usize::try_from(index).map_err(|_| err.clone())?;\n    let byte_index = index / 8;\n    let bit_index = index % 8;\n    let i = bytes.get(byte_index).map(|b| (*b >> bit_index) & 1).ok_or(err)?;\n    assert!(i == 0 || i == 1);\n    Ok(i32::from(i))\n}\n"
+expression: "#[sqlfunc()]\nfn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {\n    let err = EvalError::IndexOutOfRange {\n        provided: index,\n        valid_end: i32::try_from(bytes.len().saturating_mul(8)).unwrap() - 1,\n    };\n    let index = usize::try_from(index).map_err(|_| err.clone())?;\n    let byte_index = index / 8;\n    let bit_index = index % 8;\n    let i = bytes.get(byte_index).map(|b| (*b >> bit_index) & 1).ok_or(err)?;\n    assert!(i == 0 || i == 1);\n    Ok(i32::from(i))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,13 +46,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for GetBit {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for GetBit {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(get_bit))
+    }
+}
+impl GetBit {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(get_bit),
+            category: "Uncategorized",
+            signature: "get_bit(bytes bytea, index int4) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn get_bit(bytes: &[u8], index: i32) -> Result<i32, EvalError> {

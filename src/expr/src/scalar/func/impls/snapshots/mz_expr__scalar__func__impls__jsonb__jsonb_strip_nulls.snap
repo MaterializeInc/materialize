@@ -44,6 +44,17 @@ impl std::fmt::Display for JsonbStripNulls {
         f.write_str(stringify!(jsonb_strip_nulls))
     }
 }
+impl JsonbStripNulls {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_strip_nulls),
+            category: "Uncategorized",
+            signature: "stringify ! (jsonb_strip_nulls)(a jsonb) -> jsonb",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {
     {

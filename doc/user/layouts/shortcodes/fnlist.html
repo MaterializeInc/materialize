@@ -5,8 +5,7 @@
   {{$releasedVersions = merge $releasedVersions (dict .File.ContentBaseName .) }}
 {{end}}
 
-{{ $data := append $.Site.Data.sql_funcs .Site.Data.sql_funcs_old }}
-{{ range $data }}
+{{ range $.Site.Data.sql_funcs }}
 
 {{ if not (isset $.Params 0) }}
 

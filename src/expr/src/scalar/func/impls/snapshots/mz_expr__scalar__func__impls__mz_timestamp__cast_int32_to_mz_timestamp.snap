@@ -44,6 +44,17 @@ impl std::fmt::Display for CastInt32ToMzTimestamp {
         f.write_str("integer_to_mz_timestamp")
     }
 }
+impl CastInt32ToMzTimestamp {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_int32_to_mz_timestamp),
+            category: "Uncategorized",
+            signature: "integer_to_mz_timestamp(a int4) -> mz_timestamp",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_int32_to_mz_timestamp<'a>(a: i32) -> Result<Timestamp, EvalError> {
     {

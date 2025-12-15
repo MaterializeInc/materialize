@@ -44,6 +44,17 @@ impl std::fmt::Display for MzRowSize {
         f.write_str(stringify!(mz_row_size))
     }
 }
+impl MzRowSize {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mz_row_size),
+            category: "Uncategorized",
+            signature: "stringify ! (mz_row_size)(a anylist) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn mz_row_size<'a>(a: DatumList<'a>) -> Result<i32, EvalError> {
     {

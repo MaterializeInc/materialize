@@ -44,6 +44,17 @@ impl std::fmt::Display for FloorFloat32 {
         f.write_str("floorf32")
     }
 }
+impl FloorFloat32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(floor_float32),
+            category: "Uncategorized",
+            signature: "floorf32(a float4) -> float4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn floor_float32<'a>(a: f32) -> f32 {
     { a.floor() }

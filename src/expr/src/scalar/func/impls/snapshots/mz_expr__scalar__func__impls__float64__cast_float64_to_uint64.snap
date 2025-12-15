@@ -44,6 +44,17 @@ impl std::fmt::Display for CastFloat64ToUint64 {
         f.write_str("double_to_uint8")
     }
 }
+impl CastFloat64ToUint64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_float64_to_uint64),
+            category: "Uncategorized",
+            signature: "double_to_uint8(a float8) -> uint8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_float64_to_uint64<'a>(a: f64) -> Result<u64, EvalError> {
     {

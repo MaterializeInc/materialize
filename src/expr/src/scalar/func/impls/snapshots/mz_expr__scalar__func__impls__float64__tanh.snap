@@ -44,6 +44,17 @@ impl std::fmt::Display for Tanh {
         f.write_str(stringify!(tanh))
     }
 }
+impl Tanh {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(tanh),
+            category: "Uncategorized",
+            signature: "stringify ! (tanh)(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn tanh<'a>(a: f64) -> f64 {
     { a.tanh() }

@@ -44,6 +44,17 @@ impl std::fmt::Display for CastFloat64ToString {
         f.write_str("double_to_text")
     }
 }
+impl CastFloat64ToString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_float64_to_string),
+            category: "Uncategorized",
+            signature: "double_to_text(a float8) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_float64_to_string<'a>(a: f64) -> String {
     {

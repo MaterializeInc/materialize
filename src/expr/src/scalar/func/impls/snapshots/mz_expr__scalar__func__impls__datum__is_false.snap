@@ -44,6 +44,17 @@ impl std::fmt::Display for IsFalse {
         f.write_str("isfalse")
     }
 }
+impl IsFalse {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(is_false),
+            category: "Uncategorized",
+            signature: "isfalse(a any) -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn is_false<'a>(a: Datum<'a>) -> bool {
     { a == Datum::False }

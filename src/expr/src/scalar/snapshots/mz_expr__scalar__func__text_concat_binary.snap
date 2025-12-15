@@ -61,6 +61,17 @@ impl std::fmt::Display for TextConcatBinary {
         f.write_str("||")
     }
 }
+impl TextConcatBinary {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(text_concat_binary),
+            category: "Uncategorized",
+            signature: "text || text -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {
     if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);

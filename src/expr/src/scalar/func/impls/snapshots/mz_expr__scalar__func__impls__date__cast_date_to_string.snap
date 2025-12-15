@@ -44,6 +44,17 @@ impl std::fmt::Display for CastDateToString {
         f.write_str("date_to_text")
     }
 }
+impl CastDateToString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_date_to_string),
+            category: "Uncategorized",
+            signature: "date_to_text(a date) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_date_to_string<'a>(a: Date) -> String {
     {

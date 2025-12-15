@@ -55,6 +55,17 @@ impl std::fmt::Display for Right {
         f.write_str(stringify!(right))
     }
 }
+impl Right {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(right),
+            category: "Uncategorized",
+            signature: "right(string text, n int4) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn right<'a>(string: &'a str, n: i32) -> Result<&'a str, EvalError> {
     let mut byte_indices = string.char_indices().map(|(i, _)| i);
     let start_in_bytes = if n == 0 {

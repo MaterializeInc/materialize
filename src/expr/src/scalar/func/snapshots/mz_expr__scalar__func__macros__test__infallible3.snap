@@ -44,6 +44,17 @@ impl std::fmt::Display for Infallible3 {
         f.write_str(stringify!(infallible3))
     }
 }
+impl Infallible3 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(infallible3),
+            category: "Uncategorized",
+            signature: "stringify ! (infallible3)(a float4) -> float4?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn infallible3<'a>(a: f32) -> Option<f32> {
     { Some(a) }

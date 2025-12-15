@@ -44,6 +44,17 @@ impl std::fmt::Display for CastTimestampTzToDate {
         f.write_str("timestamp_with_time_zone_to_date")
     }
 }
+impl CastTimestampTzToDate {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_timestamp_tz_to_date),
+            category: "Uncategorized",
+            signature: "timestamp_with_time_zone_to_date(a timestamptz) -> date",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_timestamp_tz_to_date<'a>(
     a: CheckedTimestamp<DateTime<Utc>>,

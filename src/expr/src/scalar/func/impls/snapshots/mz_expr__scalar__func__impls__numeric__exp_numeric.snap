@@ -44,6 +44,17 @@ impl std::fmt::Display for ExpNumeric {
         f.write_str("expnumeric")
     }
 }
+impl ExpNumeric {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(exp_numeric),
+            category: "Uncategorized",
+            signature: "expnumeric(a numeric) -> numeric",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn exp_numeric<'a>(a: Numeric) -> Result<Numeric, EvalError> {
     {

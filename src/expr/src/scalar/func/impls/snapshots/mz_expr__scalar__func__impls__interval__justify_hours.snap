@@ -44,6 +44,17 @@ impl std::fmt::Display for JustifyHours {
         f.write_str("justify_hours")
     }
 }
+impl JustifyHours {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(justify_hours),
+            category: "Uncategorized",
+            signature: "justify_hours(i interval) -> interval",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn justify_hours<'a>(i: Interval) -> Result<Interval, EvalError> {
     {

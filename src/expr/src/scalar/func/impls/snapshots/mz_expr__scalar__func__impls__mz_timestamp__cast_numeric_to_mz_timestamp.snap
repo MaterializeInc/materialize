@@ -44,6 +44,17 @@ impl std::fmt::Display for CastNumericToMzTimestamp {
         f.write_str("numeric_to_mz_timestamp")
     }
 }
+impl CastNumericToMzTimestamp {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_numeric_to_mz_timestamp),
+            category: "Uncategorized",
+            signature: "numeric_to_mz_timestamp(a numeric) -> mz_timestamp",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_numeric_to_mz_timestamp<'a>(a: Numeric) -> Result<Timestamp, EvalError> {
     { a.try_into().map_err(|_| EvalError::MzTimestampOutOfRange(a.to_string().into())) }

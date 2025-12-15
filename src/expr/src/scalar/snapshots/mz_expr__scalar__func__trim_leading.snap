@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"ltrim\", propagates_nulls = true)]\nfn trim_leading<'a>(a: &'a str, trim_chars: &str) -> &'a str {\n    a.trim_start_matches(|c| trim_chars.contains(c))\n}\n"
+expression: "#[sqlfunc(sqlname = \"ltrim\")]\nfn trim_leading<'a>(a: &'a str, trim_chars: &str) -> &'a str {\n    a.trim_start_matches(|c| trim_chars.contains(c))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,13 +46,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for TrimLeading {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for TrimLeading {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("ltrim")
+    }
+}
+impl TrimLeading {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(trim_leading),
+            category: "Uncategorized",
+            signature: "ltrim(a text, trim_chars text) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn trim_leading<'a>(a: &'a str, trim_chars: &str) -> &'a str {

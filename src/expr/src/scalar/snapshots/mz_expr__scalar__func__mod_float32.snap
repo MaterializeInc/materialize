@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\", propagates_nulls = true)]\nfn mod_float32(a: f32, b: f32) -> Result<f32, EvalError> {\n    if b == 0.0 { Err(EvalError::DivisionByZero) } else { Ok(a % b) }\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"%\")]\nfn mod_float32(a: f32, b: f32) -> Result<f32, EvalError> {\n    if b == 0.0 { Err(EvalError::DivisionByZero) } else { Ok(a % b) }\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ModFloat32 {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for ModFloat32 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("%")
+    }
+}
+impl ModFloat32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mod_float32),
+            category: "Uncategorized",
+            signature: "float4 % float4 -> float4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn mod_float32(a: f32, b: f32) -> Result<f32, EvalError> {

@@ -55,6 +55,17 @@ impl std::fmt::Display for Position {
         f.write_str(stringify!(position))
     }
 }
+impl Position {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(position),
+            category: "Uncategorized",
+            signature: "position(substring text, string text) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn position(substring: &str, string: &str) -> Result<i32, EvalError> {
     let char_index = string.find(substring);
     if let Some(char_index) = char_index {

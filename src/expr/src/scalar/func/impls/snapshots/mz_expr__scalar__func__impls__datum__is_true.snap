@@ -44,6 +44,17 @@ impl std::fmt::Display for IsTrue {
         f.write_str("istrue")
     }
 }
+impl IsTrue {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(is_true),
+            category: "Uncategorized",
+            signature: "istrue(a any) -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn is_true<'a>(a: Datum<'a>) -> bool {
     { a == Datum::True }

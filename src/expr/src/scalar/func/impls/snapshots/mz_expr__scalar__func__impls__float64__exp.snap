@@ -44,6 +44,17 @@ impl std::fmt::Display for Exp {
         f.write_str("expf64")
     }
 }
+impl Exp {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(exp),
+            category: "Uncategorized",
+            signature: "expf64(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn exp<'a>(a: f64) -> Result<f64, EvalError> {
     {

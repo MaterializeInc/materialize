@@ -44,6 +44,17 @@ impl std::fmt::Display for CastNumericToInt64 {
         f.write_str("numeric_to_bigint")
     }
 }
+impl CastNumericToInt64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_numeric_to_int64),
+            category: "Uncategorized",
+            signature: "numeric_to_bigint(a numeric) -> int8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_numeric_to_int64<'a>(a: Numeric) -> Result<i64, EvalError> {
     {

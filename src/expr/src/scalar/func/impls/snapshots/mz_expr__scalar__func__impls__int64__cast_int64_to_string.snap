@@ -44,6 +44,17 @@ impl std::fmt::Display for CastInt64ToString {
         f.write_str("bigint_to_text")
     }
 }
+impl CastInt64ToString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_int64_to_string),
+            category: "Uncategorized",
+            signature: "bigint_to_text(a int8) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_int64_to_string<'a>(a: i64) -> String {
     {

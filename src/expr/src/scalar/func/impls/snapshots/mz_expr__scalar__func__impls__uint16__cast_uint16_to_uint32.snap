@@ -44,6 +44,17 @@ impl std::fmt::Display for CastUint16ToUint32 {
         f.write_str("uint2_to_uint4")
     }
 }
+impl CastUint16ToUint32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_uint16_to_uint32),
+            category: "Uncategorized",
+            signature: "uint2_to_uint4(a uint2) -> uint4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_uint16_to_uint32<'a>(a: u16) -> u32 {
     { u32::from(a) }

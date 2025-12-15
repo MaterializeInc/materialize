@@ -44,6 +44,17 @@ impl std::fmt::Display for SqrtNumeric {
         f.write_str("sqrtnumeric")
     }
 }
+impl SqrtNumeric {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(sqrt_numeric),
+            category: "Uncategorized",
+            signature: "sqrtnumeric(a numeric) -> numeric",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn sqrt_numeric<'a>(a: Numeric) -> Result<Numeric, EvalError> {
     {

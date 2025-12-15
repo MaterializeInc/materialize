@@ -44,6 +44,17 @@ impl std::fmt::Display for CastIntervalToString {
         f.write_str("interval_to_text")
     }
 }
+impl CastIntervalToString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_interval_to_string),
+            category: "Uncategorized",
+            signature: "interval_to_text(a interval) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_interval_to_string<'a>(a: Interval) -> String {
     {

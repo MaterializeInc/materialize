@@ -44,6 +44,17 @@ impl std::fmt::Display for CastFloat32ToFloat64 {
         f.write_str("real_to_double")
     }
 }
+impl CastFloat32ToFloat64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_float32_to_float64),
+            category: "Uncategorized",
+            signature: "real_to_double(a float4) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_float32_to_float64<'a>(a: f32) -> f64 {
     { a.into() }

@@ -164,6 +164,17 @@ impl Interval {
         })
     }
 
+    /// Converts a `chrono::Duration` to an `Interval`. The resulting `Interval` will only have
+    /// microseconds, with the nanoseconds truncated. If the result exceeds the capacity of `i64`,
+    /// returns a duration of `0`. This mirrors PostgreSQL's behavior.
+    pub fn from_chrono_duration_unchecked(duration: chrono::Duration) -> Self {
+        Self {
+            months: 0,
+            days: 0,
+            micros: duration.num_microseconds().unwrap_or(0),
+        }
+    }
+
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
         let months = match self.months.checked_add(other.months) {
             Some(m) => m,

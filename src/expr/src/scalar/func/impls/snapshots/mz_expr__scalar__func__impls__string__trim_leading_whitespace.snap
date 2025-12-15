@@ -44,6 +44,17 @@ impl std::fmt::Display for TrimLeadingWhitespace {
         f.write_str("ltrim")
     }
 }
+impl TrimLeadingWhitespace {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(trim_leading_whitespace),
+            category: "Uncategorized",
+            signature: "ltrim(a text) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn trim_leading_whitespace<'a>(a: &'a str) -> &'a str {
     { a.trim_start_matches(' ') }

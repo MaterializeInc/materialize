@@ -44,6 +44,17 @@ impl std::fmt::Display for CastStringToPgLegacyName {
         f.write_str("text_to_name")
     }
 }
+impl CastStringToPgLegacyName {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_string_to_pg_legacy_name),
+            category: "Uncategorized",
+            signature: "text_to_name(a text) -> name",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_string_to_pg_legacy_name<'a>(a: &'a str) -> PgLegacyName<String> {
     { PgLegacyName(strconv::parse_pg_legacy_name(a)) }
