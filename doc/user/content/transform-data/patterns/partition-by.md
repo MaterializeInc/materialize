@@ -61,7 +61,6 @@ Materialize currently imposes some restrictions on the list of columns in the `P
     - `boolean` and `uuid`;
     - `record` types where all fields types are supported.
 
-We intend to relax some of these restrictions in the future.
 
 ## Filter pushdown
 
