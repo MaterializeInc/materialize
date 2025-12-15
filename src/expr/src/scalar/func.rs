@@ -2618,7 +2618,8 @@ pub enum BinaryFunc {
     ConstantTimeEqBytes(ConstantTimeEqBytes),
     ConstantTimeEqString(ConstantTimeEqString),
     RangeContainsElem { elem_type: SqlScalarType, rev: bool },
-    RangeContainsRange { rev: bool },
+    RangeContainsRange(RangeContainsRange),
+    RangeContainsRangeRev(RangeContainsRangeRev),
     RangeOverlaps(RangeOverlaps),
     RangeAfter(RangeAfter),
     RangeBefore(RangeBefore),
@@ -2927,8 +2928,12 @@ impl BinaryFunc {
             //     }
             //     _ => unreachable!(),
             // }),
-            // BinaryFunc::RangeContainsRange { rev: false } => Ok(range_contains_range(a, b)),
-            // BinaryFunc::RangeContainsRange { rev: true } => Ok(range_contains_range_rev(a, b)),
+            BinaryFunc::RangeContainsRange(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
+            BinaryFunc::RangeContainsRangeRev(s) => {
+                return s.eval(datums, temp_storage, a_expr, b_expr);
+            }
             BinaryFunc::RangeOverlaps(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::RangeAfter(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
             BinaryFunc::RangeBefore(s) => return s.eval(datums, temp_storage, a_expr, b_expr),
@@ -2988,8 +2993,6 @@ impl BinaryFunc {
                 }
                 _ => unreachable!(),
             }),
-            BinaryFunc::RangeContainsRange { rev: false } => Ok(range_contains_range(a, b)),
-            BinaryFunc::RangeContainsRange { rev: true } => Ok(range_contains_range_rev(a, b)),
             BinaryFunc::RegexpReplace { regex, limit } => {
                 regexp_replace_static(a, b, regex, *limit, temp_storage)
             }
@@ -3228,9 +3231,9 @@ impl BinaryFunc {
 
             UuidGenerateV5(s) => s.output_type(input1_type, input2_type),
 
-            RangeContainsElem { .. } | RangeContainsRange { .. } => {
-                SqlScalarType::Bool.nullable(in_nullable)
-            }
+            RangeContainsElem { .. } => SqlScalarType::Bool.nullable(in_nullable),
+            RangeContainsRange(s) => s.output_type(input1_type, input2_type),
+            RangeContainsRangeRev(s) => s.output_type(input1_type, input2_type),
             RangeOverlaps(s) => s.output_type(input1_type, input2_type),
             RangeAfter(s) => s.output_type(input1_type, input2_type),
             RangeBefore(s) => s.output_type(input1_type, input2_type),
@@ -3410,7 +3413,8 @@ impl BinaryFunc {
             BinaryFunc::RangeAfter(s) => s.propagates_nulls(),
             BinaryFunc::RangeBefore(s) => s.propagates_nulls(),
             BinaryFunc::RangeContainsElem { .. } => true,
-            BinaryFunc::RangeContainsRange { .. } => true,
+            BinaryFunc::RangeContainsRange(s) => s.propagates_nulls(),
+            BinaryFunc::RangeContainsRangeRev(s) => s.propagates_nulls(),
             BinaryFunc::RangeDifference(s) => s.propagates_nulls(),
             BinaryFunc::RangeIntersection(s) => s.propagates_nulls(),
             BinaryFunc::RangeOverlaps(s) => s.propagates_nulls(),
@@ -3605,7 +3609,8 @@ impl BinaryFunc {
             RangeAfter(s) => s.introduces_nulls(),
             RangeBefore(s) => s.introduces_nulls(),
             RangeContainsElem { .. } => false,
-            RangeContainsRange { .. } => false,
+            RangeContainsRange(s) => s.introduces_nulls(),
+            RangeContainsRangeRev(s) => s.introduces_nulls(),
             RangeDifference(s) => s.introduces_nulls(),
             RangeIntersection(s) => s.introduces_nulls(),
             RangeOverlaps(s) => s.introduces_nulls(),
@@ -3784,7 +3789,8 @@ impl BinaryFunc {
             RangeAfter(s) => s.is_infix_op(),
             RangeBefore(s) => s.is_infix_op(),
             RangeContainsElem { .. } => true,
-            RangeContainsRange { .. } => true,
+            RangeContainsRange(s) => s.is_infix_op(),
+            RangeContainsRangeRev(s) => s.is_infix_op(),
             RangeDifference(s) => s.is_infix_op(),
             RangeIntersection(s) => s.is_infix_op(),
             RangeOverlaps(s) => s.is_infix_op(),
@@ -4029,7 +4035,8 @@ impl BinaryFunc {
             BinaryFunc::RangeAfter(s) => s.negate(),
             BinaryFunc::RangeBefore(s) => s.negate(),
             BinaryFunc::RangeContainsElem { .. } => None,
-            BinaryFunc::RangeContainsRange { .. } => None,
+            BinaryFunc::RangeContainsRange(s) => s.negate(),
+            BinaryFunc::RangeContainsRangeRev(s) => s.negate(),
             BinaryFunc::RangeDifference(s) => s.negate(),
             BinaryFunc::RangeIntersection(s) => s.negate(),
             BinaryFunc::RangeOverlaps(s) => s.negate(),
@@ -4142,7 +4149,8 @@ impl BinaryFunc {
             BinaryFunc::RangeAfter(s) => s.could_error(),
             BinaryFunc::RangeBefore(s) => s.could_error(),
             BinaryFunc::RangeContainsElem { .. } => false,
-            BinaryFunc::RangeContainsRange { .. } => false,
+            BinaryFunc::RangeContainsRange(s) => s.could_error(),
+            BinaryFunc::RangeContainsRangeRev(s) => s.could_error(),
             BinaryFunc::RangeOverlaps(s) => s.could_error(),
             BinaryFunc::RangeOverleft(s) => s.could_error(),
             BinaryFunc::RangeOverright(s) => s.could_error(),
@@ -4480,7 +4488,8 @@ impl BinaryFunc {
             BinaryFunc::GetBit(s) => s.is_monotone(),
             BinaryFunc::GetByte(s) => s.is_monotone(),
             BinaryFunc::RangeContainsElem { .. } => (false, false),
-            BinaryFunc::RangeContainsRange { .. } => (false, false),
+            BinaryFunc::RangeContainsRange(s) => s.is_monotone(),
+            BinaryFunc::RangeContainsRangeRev(s) => s.is_monotone(),
             BinaryFunc::RangeOverlaps(s) => s.is_monotone(),
             BinaryFunc::RangeAfter(s) => s.is_monotone(),
             BinaryFunc::RangeBefore(s) => s.is_monotone(),
@@ -4695,9 +4704,8 @@ impl fmt::Display for BinaryFunc {
             BinaryFunc::RangeContainsElem { rev, .. } => {
                 f.write_str(if *rev { "<@" } else { "@>" })
             }
-            BinaryFunc::RangeContainsRange { rev, .. } => {
-                f.write_str(if *rev { "<@" } else { "@>" })
-            }
+            BinaryFunc::RangeContainsRange(s) => s.fmt(f),
+            BinaryFunc::RangeContainsRangeRev(s) => s.fmt(f),
             BinaryFunc::RangeOverlaps(s) => s.fmt(f),
             BinaryFunc::RangeAfter(s) => s.fmt(f),
             BinaryFunc::RangeBefore(s) => s.fmt(f),

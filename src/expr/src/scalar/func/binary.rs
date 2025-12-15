@@ -336,7 +336,8 @@ mod derive {
         RangeAfter,
         RangeBefore,
         // RangeContainsElem
-        // RangeContainsRange
+        RangeContainsRange,
+        RangeContainsRangeRev,
         RangeDifference,
         RangeIntersection,
         RangeOverlaps,
@@ -806,19 +807,6 @@ mod test {
                 elem_type: SqlScalarType::TimestampTz { precision: None },
                 rev: true,
             },
-            &i32_ty,
-            &i32_ty,
-        );
-
-        check(
-            func::RangeContainsRange,
-            BF::RangeContainsRange { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsRangeRev,
-            BF::RangeContainsRange { rev: true },
             &i32_ty,
             &i32_ty,
         );
