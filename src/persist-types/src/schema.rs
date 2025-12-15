@@ -321,6 +321,8 @@ fn backward_compatible_typ(old: &DataType, new: &DataType) -> Option<ArrayMigrat
             | LargeListView(_)
             | Union(_, _)
             | Dictionary(_, _)
+            | Decimal32(_, _)
+            | Decimal64(_, _)
             | Decimal128(_, _)
             | Decimal256(_, _)
             | RunEndEncoded(_, _),

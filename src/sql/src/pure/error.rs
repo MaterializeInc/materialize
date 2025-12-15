@@ -9,7 +9,6 @@
 
 use std::sync::Arc;
 
-use aws_sdk_sts::operation::get_caller_identity::GetCallerIdentityError;
 use mz_ccsr::ListError;
 use mz_repr::adt::system::Oid;
 use mz_sql_parser::ast::display::AstDisplay;

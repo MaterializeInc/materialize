@@ -107,6 +107,7 @@ use iceberg::writer::file_writer::ParquetWriterBuilder;
 use iceberg::writer::file_writer::location_generator::{
     DefaultFileNameGenerator, DefaultLocationGenerator,
 };
+use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
 use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
 use itertools::Itertools;
@@ -157,11 +158,18 @@ const PARQUET_FILE_PREFIX: &str = "mz_data";
 /// many batches we have in-flight at any given time.
 const INITIAL_DESCRIPTIONS_TO_MINT: u64 = 3;
 
-type ParquetWriterType = ParquetWriterBuilder<DefaultLocationGenerator, DefaultFileNameGenerator>;
 type DeltaWriterType = DeltaWriter<
-    DataFileWriter<ParquetWriterType>,
-    PositionDeleteFileWriter<ParquetWriterType>,
-    EqualityDeleteFileWriter<ParquetWriterType>,
+    DataFileWriter<ParquetWriterBuilder, DefaultLocationGenerator, DefaultFileNameGenerator>,
+    PositionDeleteFileWriter<
+        ParquetWriterBuilder,
+        DefaultLocationGenerator,
+        DefaultFileNameGenerator,
+    >,
+    EqualityDeleteFileWriter<
+        ParquetWriterBuilder,
+        DefaultLocationGenerator,
+        DefaultFileNameGenerator,
+    >,
 >;
 
 /// Add Parquet field IDs to an Arrow schema. Iceberg requires field IDs in the
@@ -831,12 +839,14 @@ where
                 let data_parquet_writer = ParquetWriterBuilder::new(
                     writer_properties.clone(),
                     Arc::clone(&current_schema),
-                    None,
+                );
+                let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+                    data_parquet_writer,
                     file_io.clone(),
                     location_generator.clone(),
                     file_name_generator.clone(),
                 );
-                let data_writer_builder = DataFileWriterBuilder::new(data_parquet_writer, None, 0);
+                let data_writer_builder = DataFileWriterBuilder::new(data_rolling_writer);
 
                 let pos_arrow_schema = PositionDeleteWriterConfig::arrow_schema();
                 let pos_schema =
@@ -844,22 +854,20 @@ where
                         "Failed to convert position delete Arrow schema to Iceberg schema",
                     )?);
                 let pos_config = PositionDeleteWriterConfig::new(None, 0, None);
-                let pos_parquet_writer = ParquetWriterBuilder::new(
-                    writer_properties.clone(),
-                    pos_schema,
-                    None,
+                let pos_parquet_writer =
+                    ParquetWriterBuilder::new(writer_properties.clone(), pos_schema);
+                let pos_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+                    pos_parquet_writer,
                     file_io.clone(),
                     location_generator.clone(),
                     file_name_generator.clone(),
                 );
                 let pos_delete_writer_builder =
-                    PositionDeleteFileWriterBuilder::new(pos_parquet_writer, pos_config);
+                    PositionDeleteFileWriterBuilder::new(pos_rolling_writer, pos_config);
 
                 let eq_config = EqualityDeleteWriterConfig::new(
                     equality_ids.clone(),
                     Arc::clone(&current_schema),
-                    None,
-                    0,
                 )
                 .context("Failed to create EqualityDeleteWriterConfig")?;
 
@@ -869,16 +877,16 @@ where
                     )?,
                 );
 
-                let eq_parquet_writer = ParquetWriterBuilder::new(
-                    writer_properties.clone(),
-                    eq_schema,
-                    None,
+                let eq_parquet_writer =
+                    ParquetWriterBuilder::new(writer_properties.clone(), eq_schema);
+                let eq_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
+                    eq_parquet_writer,
                     file_io.clone(),
                     location_generator.clone(),
                     file_name_generator.clone(),
                 );
                 let eq_delete_writer_builder =
-                    EqualityDeleteFileWriterBuilder::new(eq_parquet_writer, eq_config);
+                    EqualityDeleteFileWriterBuilder::new(eq_rolling_writer, eq_config);
 
                 DeltaWriterBuilder::new(
                     data_writer_builder,
@@ -886,7 +894,7 @@ where
                     eq_delete_writer_builder,
                     equality_ids.clone(),
                 )
-                .build()
+                .build(None)
                 .await
                 .context("Failed to create DeltaWriter")
             };

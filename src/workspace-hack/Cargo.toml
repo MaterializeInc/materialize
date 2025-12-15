@@ -20,6 +20,11 @@ workspace = true
 ahash = { version = "0.8.12" }
 aho-corasick = { version = "1.1.4" }
 arrayvec = { version = "0.7.6" }
+arrow = { version = "57.1.0", default-features = false, features = ["ffi", "prettyprint"] }
+arrow-array = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-cast = { version = "57.1.0", default-features = false, features = ["prettyprint"] }
+arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-schema = { version = "57.1.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
@@ -40,6 +45,7 @@ brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
 bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
+cast = { version = "0.3.0", default-features = false, features = ["std"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
@@ -70,8 +76,7 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
-hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
@@ -89,12 +94,11 @@ mysql_common = { version = "0.35.5", default-features = false, features = ["binl
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
 nix = { version = "0.30.1", features = ["fs", "signal"] }
 nom = { version = "7.1.3" }
-num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
-parquet = { version = "55.2.0", features = ["async"] }
+parquet = { version = "57.1.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
 phf = { version = "0.13.1", features = ["uncased"] }
 phf_shared-594e8ee84c453af0 = { package = "phf_shared", version = "0.13.1", features = ["uncased"] }
@@ -124,11 +128,11 @@ serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
 serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
+simd-adler32 = { version = "0.3.7", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.111", features = ["extra-traits", "full", "visit", "visit-mut"] }
-thrift = { version = "0.17.0" }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 timely = { version = "0.25.1" }
 tokio = { version = "1.48.0", features = ["full", "test-util", "tracing"] }
@@ -144,11 +148,13 @@ tracing = { version = "0.1.43", features = ["log"] }
 tracing-core = { version = "0.1.35" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 tungstenite = { version = "0.27.0" }
+twox-hash = { version = "2.1.0", default-features = false, features = ["xxhash32", "xxhash64"] }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
 uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
+zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.16", features = ["std"] }
@@ -157,6 +163,11 @@ zstd-sys = { version = "2.0.16", features = ["std"] }
 ahash = { version = "0.8.12" }
 aho-corasick = { version = "1.1.4" }
 arrayvec = { version = "0.7.6" }
+arrow = { version = "57.1.0", default-features = false, features = ["ffi", "prettyprint"] }
+arrow-array = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-cast = { version = "57.1.0", default-features = false, features = ["prettyprint"] }
+arrow-data = { version = "57.1.0", default-features = false, features = ["ffi"] }
+arrow-schema = { version = "57.1.0", default-features = false, features = ["ffi"] }
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d", default-features = false, features = ["brotli", "bzip2-sys", "gzip", "tokio", "xz", "zlib", "zstd"] }
 aws-config = { version = "1.8.12", default-features = false, features = ["sso"] }
 aws-credential-types = { version = "1.2.11", default-features = false, features = ["hardcoded-credentials", "test-util"] }
@@ -178,6 +189,7 @@ brotli = { version = "8.0.2" }
 bstr = { version = "1.12.1" }
 bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
+cast = { version = "0.3.0", default-features = false, features = ["std"] }
 cc = { version = "1.2.49", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clang-sys = { version = "1.8.1", default-features = false, features = ["clang_11_0", "runtime"] }
@@ -210,8 +222,7 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
-hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
@@ -229,12 +240,11 @@ mysql_common = { version = "0.35.5", default-features = false, features = ["binl
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
 nix = { version = "0.30.1", features = ["fs", "signal"] }
 nom = { version = "7.1.3" }
-num = { version = "0.4.3" }
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46", features = ["i128"] }
 num-traits = { version = "0.2.19", features = ["i128", "libm"] }
 parking_lot = { version = "0.12.5", features = ["serde"] }
-parquet = { version = "55.2.0", features = ["async"] }
+parquet = { version = "57.1.0", features = ["async"] }
 percent-encoding = { version = "2.3.2" }
 phf = { version = "0.13.1", features = ["uncased"] }
 phf_shared-594e8ee84c453af0 = { package = "phf_shared", version = "0.13.1", features = ["uncased"] }
@@ -265,12 +275,12 @@ serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
 serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
+simd-adler32 = { version = "0.3.7", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
 syn-dff4ba8e3ae991db = { package = "syn", version = "1.0.109", features = ["extra-traits", "full", "visit", "visit-mut"] }
 syn-f595c2ba2a3f28df = { package = "syn", version = "2.0.111", features = ["extra-traits", "full", "visit", "visit-mut"] }
-thrift = { version = "0.17.0" }
 time = { version = "0.3.37", features = ["local-offset", "macros", "quickcheck", "serde-well-known"] }
 time-macros = { version = "0.2.19", default-features = false, features = ["formatting", "parsing", "serde"] }
 timely = { version = "0.25.1" }
@@ -287,11 +297,13 @@ tracing = { version = "0.1.43", features = ["log"] }
 tracing-core = { version = "0.1.35" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 tungstenite = { version = "0.27.0" }
+twox-hash = { version = "2.1.0", default-features = false, features = ["xxhash32", "xxhash64"] }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
 uuid = { version = "1.19.0", features = ["serde", "v4", "v5", "v7"] }
 zeroize = { version = "1.8.2", features = ["serde"] }
+zip = { version = "6.0.0", default-features = false, features = ["deflate"] }
 zstd = { version = "0.13.3" }
 zstd-safe = { version = "7.2.4", default-features = false, features = ["arrays", "legacy", "std", "zdict_builder"] }
 zstd-sys = { version = "2.0.16", features = ["std"] }
