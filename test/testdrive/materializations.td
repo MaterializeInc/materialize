@@ -55,9 +55,9 @@ name       comment
 data_view  ""
 
 > SHOW MATERIALIZED VIEWS
-name    cluster     comment  replacing
---------------------------------------
-test1   quickstart  ""       <null>
+name    cluster     comment
+---------------------------
+test1   quickstart  ""
 
 > SELECT * FROM test1
 b  sum

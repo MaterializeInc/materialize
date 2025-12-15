@@ -11127,7 +11127,6 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| 
         .with_column("schema_id", SqlScalarType::String.nullable(false))
         .with_column("cluster_id", SqlScalarType::String.nullable(false))
         .with_column("comment", SqlScalarType::String.nullable(false))
-        .with_column("replacing", SqlScalarType::String.nullable(true))
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "
@@ -11136,11 +11135,6 @@ WITH
         SELECT id, comment
         FROM mz_internal.mz_comments
         WHERE object_type = 'materialized-view' AND object_sub_id IS NULL
-    ),
-    replacements AS (
-        SELECT r.id, mv.name AS target_name
-        FROM mz_internal.mz_replacements r
-        JOIN mz_materialized_views mv ON r.target_id = mv.id
     )
 SELECT
     mviews.id as id,
@@ -11148,13 +11142,11 @@ SELECT
     clusters.name AS cluster,
     schema_id,
     cluster_id,
-    COALESCE(comments.comment, '') as comment,
-    replacements.target_name as replacing
+    COALESCE(comments.comment, '') as comment
 FROM
     mz_catalog.mz_materialized_views AS mviews
     JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = mviews.cluster_id
-    LEFT JOIN comments ON mviews.id = comments.id
-    LEFT JOIN replacements ON mviews.id = replacements.id",
+    LEFT JOIN comments ON mviews.id = comments.id",
     access: vec![PUBLIC_SELECT],
 });
 
