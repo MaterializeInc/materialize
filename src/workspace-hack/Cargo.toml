@@ -44,7 +44,7 @@ chrono = { version = "0.4.41", features = ["serde"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
-criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.1", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.6" }
 crossbeam-epoch = { version = "0.9.18" }
 crossbeam-queue = { version = "0.3.12" }
@@ -184,7 +184,7 @@ clang-sys = { version = "1.8.1", default-features = false, features = ["clang_11
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
 clap_builder = { version = "4.5.23", default-features = false, features = ["color", "env", "std", "string", "suggestions", "usage", "wrap_help"] }
 concurrent-queue = { version = "2.5.0" }
-criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
+criterion = { version = "0.8.1", features = ["async_tokio", "html_reports"] }
 crossbeam-deque = { version = "0.8.6" }
 crossbeam-epoch = { version = "0.9.18" }
 crossbeam-queue = { version = "0.3.12" }
