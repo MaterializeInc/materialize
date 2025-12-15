@@ -86,7 +86,6 @@ use mz_repr::user::ExternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use thiserror::Error;
-use tracing::error;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;

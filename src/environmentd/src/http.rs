@@ -78,7 +78,7 @@ use tower_sessions::{
     MemoryStore as TowerSessionMemoryStore, Session as TowerSession,
     SessionManagerLayer as TowerSessionManagerLayer,
 };
-use tracing::{error, warn};
+use tracing::warn;
 
 use crate::BUILD_INFO;
 use crate::deployment::state::DeploymentStateHandle;
