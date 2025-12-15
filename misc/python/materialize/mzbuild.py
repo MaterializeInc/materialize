@@ -50,6 +50,8 @@ from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
 
+GHCR_PREFIX = "ghcr.io/materializeinc/"
+
 
 class RustICE(Exception):
     pass
@@ -335,16 +337,44 @@ def is_ghcr_image_pushed(name: str) -> bool:
                 with KNOWN_DOCKER_IMAGES_FILE.open() as f:
                     _known_docker_images = set(line.strip() for line in f)
 
+    name_without_ghcr = name.removeprefix("ghcr.io/")
     if name in _known_docker_images:
         return True
 
-    proc = subprocess.run(
-        ["docker", "manifest", "inspect", name],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
-    )
-    exists = proc.returncode == 0
+    if ":" not in name_without_ghcr:
+        image, tag = name_without_ghcr, "latest"
+    else:
+        image, tag = name_without_ghcr.rsplit(":", 1)
+
+    exists: bool = False
+
+    try:
+        token = requests.get(
+            "https://ghcr.io/token",
+            params={
+                "scope": f"repository:{image}:pull",
+            },
+        ).json()["token"]
+        response = requests.head(
+            f"https://ghcr.io/v2/{image}/manifests/{tag}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        if response.status_code in (401, 429, 500, 502, 503, 504):
+            # Fall back to 5x slower method
+            proc = subprocess.run(
+                ["docker", "manifest", "inspect", name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=dict(os.environ, DOCKER_CLI_EXPERIMENTAL="enabled"),
+            )
+            exists = proc.returncode == 0
+        else:
+            exists = response.status_code == 200
+
+    except Exception as e:
+        print(f"Error checking Docker image: {e}")
+        return False
 
     if exists:
         with _known_docker_images_lock:
@@ -977,9 +1007,15 @@ class ResolvedImage:
         return self.acquired
 
     def is_published_if_necessary(self) -> bool:
-        """Report whether the image exists on Docker Hub if it is publishable."""
-        if self.publish and is_docker_image_pushed(self.spec()):
-            ui.say(f"{self.spec()} already exists")
+        """Report whether the image exists on DockerHub & GHCR if it is publishable."""
+        if not self.publish:
+            return False
+        spec = self.spec()
+        if spec.startswith(GHCR_PREFIX):
+            spec = spec.removeprefix(GHCR_PREFIX)
+        ghcr_spec = f"{GHCR_PREFIX}{spec}"
+        if is_docker_image_pushed(spec) and is_ghcr_image_pushed(ghcr_spec):
+            ui.say(f"{spec} already exists")
             return True
         return False
 
@@ -1507,8 +1543,7 @@ def publish_multiarch_images(
             )
             spawn.runv(["docker", "manifest", "push", name])
 
-        ghcr_prefix = "ghcr.io/materializeinc"
-        ghcr_name = f"{ghcr_prefix}/{name}"
+        ghcr_name = f"{GHCR_PREFIX}{name}"
         if ghcr_token and (
             tag in always_push_tags or not is_ghcr_image_pushed(ghcr_name)
         ):
@@ -1518,7 +1553,7 @@ def publish_multiarch_images(
                     "manifest",
                     "create",
                     ghcr_name,
-                    *(f"{ghcr_prefix}/{image.spec()}" for image in images),
+                    *(f"{GHCR_PREFIX}{image.spec()}" for image in images),
                 ]
             )
             spawn.runv(["docker", "manifest", "push", ghcr_name])
