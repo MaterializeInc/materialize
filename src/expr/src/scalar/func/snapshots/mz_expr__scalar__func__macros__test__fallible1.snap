@@ -44,6 +44,17 @@ impl std::fmt::Display for Fallible1 {
         f.write_str(stringify!(fallible1))
     }
 }
+impl Fallible1 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(fallible1),
+            category: "Uncategorized",
+            signature: "stringify ! (fallible1)(a float4) -> float4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn fallible1<'a>(a: f32) -> Result<f32, EvalError> {
     { Ok(a) }

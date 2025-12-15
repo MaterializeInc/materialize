@@ -44,6 +44,17 @@ impl std::fmt::Display for BitNotUint64 {
         f.write_str("~")
     }
 }
+impl BitNotUint64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_not_uint64),
+            category: "Uncategorized",
+            signature: "~(a uint8) -> uint8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn bit_not_uint64<'a>(a: u64) -> u64 {
     { !a }

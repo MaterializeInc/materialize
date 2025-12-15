@@ -44,6 +44,17 @@ impl std::fmt::Display for CastUint32ToString {
         f.write_str("uint4_to_text")
     }
 }
+impl CastUint32ToString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_uint32_to_string),
+            category: "Uncategorized",
+            signature: "uint4_to_text(a uint4) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_uint32_to_string<'a>(a: u32) -> String {
     {

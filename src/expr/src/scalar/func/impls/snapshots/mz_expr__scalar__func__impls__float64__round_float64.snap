@@ -44,6 +44,17 @@ impl std::fmt::Display for RoundFloat64 {
         f.write_str("roundf64")
     }
 }
+impl RoundFloat64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(round_float64),
+            category: "Uncategorized",
+            signature: "roundf64(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn round_float64<'a>(a: f64) -> f64 {
     { a.round_ties_even() }

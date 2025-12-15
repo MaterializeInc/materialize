@@ -55,6 +55,17 @@ impl std::fmt::Display for JsonbContainsJsonb {
         f.write_str("@>")
     }
 }
+impl JsonbContainsJsonb {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_contains_jsonb),
+            category: "Uncategorized",
+            signature: "jsonb @> jsonb -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn jsonb_contains_jsonb<'a>(a: JsonbRef<'a>, b: JsonbRef<'a>) -> bool {
     fn contains(a: Datum, b: Datum, at_top_level: bool) -> bool {
         match (a, b) {

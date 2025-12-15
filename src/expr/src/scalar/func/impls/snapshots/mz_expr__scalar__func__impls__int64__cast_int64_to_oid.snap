@@ -44,6 +44,17 @@ impl std::fmt::Display for CastInt64ToOid {
         f.write_str("bigint_to_oid")
     }
 }
+impl CastInt64ToOid {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_int64_to_oid),
+            category: "Uncategorized",
+            signature: "bigint_to_oid(a int8) -> oid",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_int64_to_oid<'a>(a: i64) -> Result<Oid, EvalError> {
     {

@@ -29,7 +29,9 @@ use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_boun
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{
+    ColumnName, Datum, DatumType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
+};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
@@ -1242,12 +1244,14 @@ impl VariadicFunc {
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamp(),
                 ds[2].unwrap_timestamp(),
-            ),
+            )
+            .into_result(temp_storage),
             VariadicFunc::DateBinTimestampTz => date_bin(
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamptz(),
                 ds[2].unwrap_timestamptz(),
-            ),
+            )
+            .into_result(temp_storage),
             VariadicFunc::DateDiffTimestamp => date_diff_timestamp(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffTimestampTz => date_diff_timestamptz(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffDate => date_diff_date(ds[0], ds[1], ds[2]),

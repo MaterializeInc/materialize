@@ -44,6 +44,17 @@ impl std::fmt::Display for CastInt16ToUint16 {
         f.write_str("smallint_to_uint2")
     }
 }
+impl CastInt16ToUint16 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_int16_to_uint16),
+            category: "Uncategorized",
+            signature: "smallint_to_uint2(a int2) -> uint2",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_int16_to_uint16<'a>(a: i16) -> Result<u16, EvalError> {
     {

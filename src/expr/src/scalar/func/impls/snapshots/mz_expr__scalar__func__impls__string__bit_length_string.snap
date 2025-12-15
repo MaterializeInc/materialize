@@ -44,6 +44,17 @@ impl std::fmt::Display for BitLengthString {
         f.write_str("bit_length")
     }
 }
+impl BitLengthString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_length_string),
+            category: "Uncategorized",
+            signature: "bit_length(a text) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn bit_length_string<'a>(a: &'a str) -> Result<i32, EvalError> {
     {

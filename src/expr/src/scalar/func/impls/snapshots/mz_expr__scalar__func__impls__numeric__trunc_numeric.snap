@@ -44,6 +44,17 @@ impl std::fmt::Display for TruncNumeric {
         f.write_str("truncnumeric")
     }
 }
+impl TruncNumeric {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(trunc_numeric),
+            category: "Uncategorized",
+            signature: "truncnumeric(a numeric) -> numeric",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn trunc_numeric<'a>(a: Numeric) -> Numeric {
     {

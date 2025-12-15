@@ -44,6 +44,17 @@ impl std::fmt::Display for AbsNumeric {
         f.write_str("abs")
     }
 }
+impl AbsNumeric {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(abs_numeric),
+            category: "Uncategorized",
+            signature: "abs(a numeric) -> numeric",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn abs_numeric<'a>(a: Numeric) -> Numeric {
     {

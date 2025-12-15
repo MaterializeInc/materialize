@@ -44,6 +44,17 @@ impl std::fmt::Display for Not {
         f.write_str("NOT")
     }
 }
+impl Not {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(not),
+            category: "Uncategorized",
+            signature: "NOT(a boolean) -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn not<'a>(a: bool) -> bool {
     { !a }

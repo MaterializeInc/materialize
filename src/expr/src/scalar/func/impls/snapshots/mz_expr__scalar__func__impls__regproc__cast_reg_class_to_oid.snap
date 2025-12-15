@@ -44,6 +44,17 @@ impl std::fmt::Display for CastRegClassToOid {
         f.write_str("regclasstooid")
     }
 }
+impl CastRegClassToOid {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_reg_class_to_oid),
+            category: "Uncategorized",
+            signature: "regclasstooid(a regclass) -> oid",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_reg_class_to_oid<'a>(a: RegClass) -> Oid {
     { Oid(a.0) }

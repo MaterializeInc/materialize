@@ -44,6 +44,17 @@ impl std::fmt::Display for Degrees {
         f.write_str(stringify!(degrees))
     }
 }
+impl Degrees {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(degrees),
+            category: "Uncategorized",
+            signature: "stringify ! (degrees)(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn degrees<'a>(a: f64) -> f64 {
     { a.to_degrees() }

@@ -65,6 +65,17 @@ impl std::fmt::Display for MapGetValue {
         f.write_str("->")
     }
 }
+impl MapGetValue {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(map_get_value),
+            category: "Uncategorized",
+            signature: "anymap -> text -> any",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn map_get_value<'a>(a: DatumMap<'a>, target_key: &str) -> Datum<'a> {
     match a.iter().find(|(key, _v)| target_key == *key) {
         Some((_k, v)) => v,

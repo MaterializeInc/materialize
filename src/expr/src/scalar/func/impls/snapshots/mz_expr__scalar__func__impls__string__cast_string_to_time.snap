@@ -44,6 +44,17 @@ impl std::fmt::Display for CastStringToTime {
         f.write_str("text_to_time")
     }
 }
+impl CastStringToTime {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_string_to_time),
+            category: "Uncategorized",
+            signature: "text_to_time(a text) -> time",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_string_to_time<'a>(a: &'a str) -> Result<NaiveTime, EvalError> {
     { strconv::parse_time(a).err_into() }

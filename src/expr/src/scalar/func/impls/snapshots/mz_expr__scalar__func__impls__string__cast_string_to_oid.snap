@@ -44,6 +44,17 @@ impl std::fmt::Display for CastStringToOid {
         f.write_str("text_to_oid")
     }
 }
+impl CastStringToOid {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_string_to_oid),
+            category: "Uncategorized",
+            signature: "text_to_oid(a text) -> oid",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_string_to_oid<'a>(a: &'a str) -> Result<Oid, EvalError> {
     { Ok(Oid(strconv::parse_oid(a)?)) }

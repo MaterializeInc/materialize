@@ -44,6 +44,17 @@ impl std::fmt::Display for JustifyDays {
         f.write_str("justify_days")
     }
 }
+impl JustifyDays {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(justify_days),
+            category: "Uncategorized",
+            signature: "justify_days(i interval) -> interval",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn justify_days<'a>(i: Interval) -> Result<Interval, EvalError> {
     { i.justify_days().map_err(|_| EvalError::IntervalOutOfRange(i.to_string().into())) }

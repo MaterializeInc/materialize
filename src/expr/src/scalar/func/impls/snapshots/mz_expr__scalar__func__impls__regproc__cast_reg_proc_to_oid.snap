@@ -44,6 +44,17 @@ impl std::fmt::Display for CastRegProcToOid {
         f.write_str("regproctooid")
     }
 }
+impl CastRegProcToOid {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_reg_proc_to_oid),
+            category: "Uncategorized",
+            signature: "regproctooid(a regprocedure) -> oid",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_reg_proc_to_oid<'a>(a: RegProc) -> Oid {
     { Oid(a.0) }

@@ -44,6 +44,17 @@ impl std::fmt::Display for JsonbTypeof {
         f.write_str(stringify!(jsonb_typeof))
     }
 }
+impl JsonbTypeof {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(jsonb_typeof),
+            category: "Uncategorized",
+            signature: "stringify ! (jsonb_typeof)(a jsonb) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn jsonb_typeof<'a>(a: JsonbRef<'a>) -> &'a str {
     {

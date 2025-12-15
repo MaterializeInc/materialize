@@ -44,6 +44,17 @@ impl std::fmt::Display for CastDateToMzTimestamp {
         f.write_str("date_to_mz_timestamp")
     }
 }
+impl CastDateToMzTimestamp {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_date_to_mz_timestamp),
+            category: "Uncategorized",
+            signature: "date_to_mz_timestamp(a date) -> mz_timestamp",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_date_to_mz_timestamp<'a>(a: Date) -> Result<Timestamp, EvalError> {
     {

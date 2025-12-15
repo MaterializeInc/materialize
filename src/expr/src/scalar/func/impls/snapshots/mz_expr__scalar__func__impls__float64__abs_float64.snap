@@ -44,6 +44,17 @@ impl std::fmt::Display for AbsFloat64 {
         f.write_str("abs")
     }
 }
+impl AbsFloat64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(abs_float64),
+            category: "Uncategorized",
+            signature: "abs(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn abs_float64<'a>(a: f64) -> f64 {
     { a.abs() }

@@ -44,6 +44,17 @@ impl std::fmt::Display for CastStringToPgLegacyChar {
         f.write_str("text_to_\"char\"")
     }
 }
+impl CastStringToPgLegacyChar {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_string_to_pg_legacy_char),
+            category: "Uncategorized",
+            signature: "text_to_\\char\\(a text) -> character",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_string_to_pg_legacy_char<'a>(a: &'a str) -> PgLegacyChar {
     { PgLegacyChar(a.as_bytes().get(0).copied().unwrap_or(0)) }

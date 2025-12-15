@@ -44,6 +44,17 @@ impl std::fmt::Display for MzAclItemGrantor {
         f.write_str("mz_aclitem_grantor")
     }
 }
+impl MzAclItemGrantor {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mz_acl_item_grantor),
+            category: "Uncategorized",
+            signature: "mz_aclitem_grantor(mz_acl_item mz_acl_item) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn mz_acl_item_grantor<'a>(mz_acl_item: MzAclItem) -> String {
     { mz_acl_item.grantor.to_string() }

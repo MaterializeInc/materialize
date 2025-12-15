@@ -61,6 +61,17 @@ impl std::fmt::Display for RangeUnion {
         f.write_str("+")
     }
 }
+impl RangeUnion {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(range_union),
+            category: "Uncategorized",
+            signature: "anyrange + anyrange -> any",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn range_union<'a>(
     l: Range<Datum<'a>>,
     r: Range<Datum<'a>>,

@@ -44,6 +44,17 @@ impl std::fmt::Display for SqrtFloat64 {
         f.write_str("sqrtf64")
     }
 }
+impl SqrtFloat64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(sqrt_float64),
+            category: "Uncategorized",
+            signature: "sqrtf64(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn sqrt_float64<'a>(a: f64) -> Result<f64, EvalError> {
     {

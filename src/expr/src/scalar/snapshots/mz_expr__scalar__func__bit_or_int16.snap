@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_infix_op = true, sqlname = \"|\", propagates_nulls = true)]\nfn bit_or_int16(a: i16, b: i16) -> i16 {\n    a | b\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"|\")]\nfn bit_or_int16(a: i16, b: i16) -> i16 {\n    a | b\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -49,13 +49,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for BitOrInt16 {
     fn is_infix_op(&self) -> bool {
         true
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for BitOrInt16 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("|")
+    }
+}
+impl BitOrInt16 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_or_int16),
+            category: "Uncategorized",
+            signature: "int2 | int2 -> int2",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn bit_or_int16(a: i16, b: i16) -> i16 {

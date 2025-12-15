@@ -44,6 +44,17 @@ impl std::fmt::Display for Cosh {
         f.write_str(stringify!(cosh))
     }
 }
+impl Cosh {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cosh),
+            category: "Uncategorized",
+            signature: "stringify ! (cosh)(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cosh<'a>(a: f64) -> f64 {
     { a.cosh() }

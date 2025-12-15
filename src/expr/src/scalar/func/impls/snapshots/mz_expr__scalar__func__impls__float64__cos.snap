@@ -44,6 +44,17 @@ impl std::fmt::Display for Cos {
         f.write_str(stringify!(cos))
     }
 }
+impl Cos {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cos),
+            category: "Uncategorized",
+            signature: "stringify ! (cos)(a float8) -> float8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cos<'a>(a: f64) -> Result<f64, EvalError> {
     {

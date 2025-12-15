@@ -44,6 +44,17 @@ impl std::fmt::Display for AbsInt32 {
         f.write_str("abs")
     }
 }
+impl AbsInt32 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(abs_int32),
+            category: "Uncategorized",
+            signature: "abs(a int4) -> int4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn abs_int32<'a>(a: i32) -> Result<i32, EvalError> {
     { a.checked_abs().ok_or_else(|| EvalError::Int32OutOfRange(a.to_string().into())) }

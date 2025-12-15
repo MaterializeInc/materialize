@@ -44,6 +44,17 @@ impl std::fmt::Display for RangeLowerInf {
         f.write_str("range_lower_inf")
     }
 }
+impl RangeLowerInf {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(range_lower_inf),
+            category: "Uncategorized",
+            signature: "range_lower_inf(a anyrange) -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn range_lower_inf<'a>(a: Range<Datum<'a>>) -> bool {
     {

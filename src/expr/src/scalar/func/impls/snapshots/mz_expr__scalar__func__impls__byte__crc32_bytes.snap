@@ -44,6 +44,17 @@ impl std::fmt::Display for Crc32Bytes {
         f.write_str("crc32_bytes")
     }
 }
+impl Crc32Bytes {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(crc32_bytes),
+            category: "Uncategorized",
+            signature: "crc32_bytes(a bytea) -> uint4",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn crc32_bytes<'a>(a: &'a [u8]) -> u32 {
     { crc32fast::hash(a) }

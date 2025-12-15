@@ -44,6 +44,17 @@ impl std::fmt::Display for CastJsonbToInt16 {
         f.write_str("jsonb_to_smallint")
     }
 }
+impl CastJsonbToInt16 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_jsonb_to_int16),
+            category: "Uncategorized",
+            signature: "jsonb_to_smallint(a jsonb) -> int2",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_jsonb_to_int16<'a>(a: JsonbRef<'a>) -> Result<i16, EvalError> {
     {

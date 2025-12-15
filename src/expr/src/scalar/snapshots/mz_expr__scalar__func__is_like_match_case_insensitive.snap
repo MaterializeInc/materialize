@@ -55,6 +55,17 @@ impl std::fmt::Display for IsLikeMatchCaseInsensitive {
         f.write_str("ilike")
     }
 }
+impl IsLikeMatchCaseInsensitive {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(is_like_match_case_insensitive),
+            category: "Uncategorized",
+            signature: "text ilike text -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 fn is_like_match_case_insensitive(
     haystack: &str,
     pattern: &str,

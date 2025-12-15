@@ -44,6 +44,17 @@ impl std::fmt::Display for ToTimestamp {
         f.write_str("tots")
     }
 }
+impl ToTimestamp {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(to_timestamp),
+            category: "Uncategorized",
+            signature: "tots(f float8) -> timestamptz",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn to_timestamp<'a>(f: f64) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     {

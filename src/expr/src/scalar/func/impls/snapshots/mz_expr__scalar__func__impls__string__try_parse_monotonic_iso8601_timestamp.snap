@@ -44,6 +44,17 @@ impl std::fmt::Display for TryParseMonotonicIso8601Timestamp {
         f.write_str("try_parse_monotonic_iso8601_timestamp")
     }
 }
+impl TryParseMonotonicIso8601Timestamp {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(try_parse_monotonic_iso8601_timestamp),
+            category: "Uncategorized",
+            signature: "try_parse_monotonic_iso8601_timestamp(a text) -> timestamp?",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn try_parse_monotonic_iso8601_timestamp<'a>(
     a: &'a str,

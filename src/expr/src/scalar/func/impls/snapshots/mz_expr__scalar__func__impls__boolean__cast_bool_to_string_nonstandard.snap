@@ -44,6 +44,17 @@ impl std::fmt::Display for CastBoolToStringNonstandard {
         f.write_str("boolean_to_nonstandard_text")
     }
 }
+impl CastBoolToStringNonstandard {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_bool_to_string_nonstandard),
+            category: "Uncategorized",
+            signature: "boolean_to_nonstandard_text(a boolean) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_bool_to_string_nonstandard<'a>(a: bool) -> &'a str {
     { strconv::format_bool_static(a) }

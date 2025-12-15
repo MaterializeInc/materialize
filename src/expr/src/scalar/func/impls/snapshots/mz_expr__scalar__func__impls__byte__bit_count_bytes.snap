@@ -44,6 +44,17 @@ impl std::fmt::Display for BitCountBytes {
         f.write_str("bit_count")
     }
 }
+impl BitCountBytes {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(bit_count_bytes),
+            category: "Uncategorized",
+            signature: "bit_count(a bytea) -> int8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn bit_count_bytes<'a>(a: &'a [u8]) -> Result<i64, EvalError> {
     {

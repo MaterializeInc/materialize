@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(sqlname = \"constant_time_compare_strings\", propagates_nulls = true)]\npub fn constant_time_eq_string(a: &str, b: &str) -> bool {\n    bool::from(a.as_bytes().ct_eq(b.as_bytes()))\n}\n"
+expression: "#[sqlfunc(sqlname = \"constant_time_compare_strings\")]\npub fn constant_time_eq_string(a: &str, b: &str) -> bool {\n    bool::from(a.as_bytes().ct_eq(b.as_bytes()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -46,13 +46,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ConstantTimeEqString {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for ConstantTimeEqString {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("constant_time_compare_strings")
+    }
+}
+impl ConstantTimeEqString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(constant_time_eq_string),
+            category: "Uncategorized",
+            signature: "constant_time_compare_strings(a text, b text) -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 pub fn constant_time_eq_string(a: &str, b: &str) -> bool {

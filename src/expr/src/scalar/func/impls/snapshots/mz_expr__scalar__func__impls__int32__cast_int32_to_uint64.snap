@@ -44,6 +44,17 @@ impl std::fmt::Display for CastInt32ToUint64 {
         f.write_str("integer_to_uint8")
     }
 }
+impl CastInt32ToUint64 {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_int32_to_uint64),
+            category: "Uncategorized",
+            signature: "integer_to_uint8(a int4) -> uint8",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_int32_to_uint64<'a>(a: i32) -> Result<u64, EvalError> {
     {

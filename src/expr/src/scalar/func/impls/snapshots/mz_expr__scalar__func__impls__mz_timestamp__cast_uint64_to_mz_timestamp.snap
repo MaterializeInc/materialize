@@ -44,6 +44,17 @@ impl std::fmt::Display for CastUint64ToMzTimestamp {
         f.write_str("uint8_to_mz_timestamp")
     }
 }
+impl CastUint64ToMzTimestamp {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_uint64_to_mz_timestamp),
+            category: "Uncategorized",
+            signature: "uint8_to_mz_timestamp(a uint8) -> mz_timestamp",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_uint64_to_mz_timestamp<'a>(a: u64) -> Timestamp {
     { a.into() }

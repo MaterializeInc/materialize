@@ -44,6 +44,17 @@ impl std::fmt::Display for CastJsonbableToJsonb {
         f.write_str("jsonbable_to_jsonb")
     }
 }
+impl CastJsonbableToJsonb {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_jsonbable_to_jsonb),
+            category: "Uncategorized",
+            signature: "jsonbable_to_jsonb(a jsonb) -> jsonb",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_jsonbable_to_jsonb<'a>(a: JsonbRef<'a>) -> JsonbRef<'a> {
     {

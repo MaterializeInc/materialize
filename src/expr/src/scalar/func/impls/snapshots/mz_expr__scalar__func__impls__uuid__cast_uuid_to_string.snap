@@ -44,6 +44,17 @@ impl std::fmt::Display for CastUuidToString {
         f.write_str("uuid_to_text")
     }
 }
+impl CastUuidToString {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(cast_uuid_to_string),
+            category: "Uncategorized",
+            signature: "uuid_to_text(u uuid) -> text",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn cast_uuid_to_string<'a>(u: Uuid) -> String {
     {

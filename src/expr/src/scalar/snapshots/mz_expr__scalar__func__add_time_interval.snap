@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(false, false)\",\n    is_infix_op = true,\n    sqlname = \"+\",\n    propagates_nulls = true\n)]\nfn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {\n    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());\n    t\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(false, false)\", is_infix_op = true, sqlname = \"+\")]\nfn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {\n    let (t, _) = time.overflowing_add_signed(interval.duration_as_chrono());\n    t\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -52,13 +52,21 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimeInterval {
     fn is_monotone(&self) -> (bool, bool) {
         (false, false)
     }
-    fn propagates_nulls(&self) -> bool {
-        true
-    }
 }
 impl std::fmt::Display for AddTimeInterval {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str("+")
+    }
+}
+impl AddTimeInterval {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(add_time_interval),
+            category: "Uncategorized",
+            signature: "time + interval -> time",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
     }
 }
 fn add_time_interval(time: chrono::NaiveTime, interval: Interval) -> chrono::NaiveTime {

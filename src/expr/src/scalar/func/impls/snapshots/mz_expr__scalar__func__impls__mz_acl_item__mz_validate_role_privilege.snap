@@ -44,6 +44,17 @@ impl std::fmt::Display for MzValidateRolePrivilege {
         f.write_str("mz_validate_role_privilege")
     }
 }
+impl MzValidateRolePrivilege {
+    pub const fn func_doc() -> crate::func::FuncDoc {
+        crate::func::FuncDoc {
+            unique_name: stringify!(mz_validate_role_privilege),
+            category: "Uncategorized",
+            signature: "mz_validate_role_privilege(privilege text) -> boolean",
+            description: "",
+            ..crate::func::FuncDoc::default()
+        }
+    }
+}
 #[allow(clippy::extra_unused_lifetimes)]
 pub fn mz_validate_role_privilege<'a>(privilege: String) -> Result<bool, EvalError> {
     {
