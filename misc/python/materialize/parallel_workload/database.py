@@ -49,6 +49,7 @@ from materialize.parallel_workload.column import (
     SqlServerColumn,
     WebhookColumn,
     naughtify,
+    set_naughty_identifiers,
 )
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.expression import ExprKind, expression
@@ -891,13 +892,12 @@ class Database:
         scenario: Scenario,
         naughty_identifiers: bool,
     ):
-        global NAUGHTY_IDENTIFIERS
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
         self.seed = seed
-        NAUGHTY_IDENTIFIERS = naughty_identifiers
+        set_naughty_identifiers(naughty_identifiers)
 
         self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
