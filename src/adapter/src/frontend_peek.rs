@@ -339,22 +339,10 @@ impl PeekClient {
             &resolved_ids,
         )?;
 
-        // Check if we're still waiting for any of the builtin table appends from when we
-        // started the Session to complete.
-        //
-        // (This is done slightly earlier in the normal peek sequencing, but we have to be past the
-        // last use of `conn_catalog` here.)
-        if let Some(_) = coord::appends::waiting_on_startup_appends(&*catalog, session, &plan) {
-            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but call
-            // `defer_op`. Needs `ExecuteContext`.
-            // This fallback is currently causing a bug: `waiting_on_startup_appends` has the
-            // side effect that it already clears the wait flag, and therefore the old peek
-            // sequencing that we fall back to here won't do waiting. This is tested by
-            // `test_mz_sessions` and `test_pg_cancel_dropped_role`, where I've disabled the
-            // frontend peek sequencing for now. This bug will just go away once we don't fall back
-            // to the old peek sequencing here, but properly call `defer_op` instead.
-            debug!("Bailing out from try_frontend_peek_inner, because waiting_on_startup_appends");
-            return Ok(None);
+        if let Some((_, wait_future)) =
+            coord::appends::waiting_on_startup_appends(&*catalog, session, &plan)
+        {
+            wait_future.await;
         }
 
         let max_query_result_size = Some(session.vars().max_query_result_size());

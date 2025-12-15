@@ -2604,11 +2604,6 @@ fn test_dont_drop_sinks_twice() {
 #[mz_ore::test]
 fn test_mz_sessions() {
     let server = test_util::TestHarness::default().start_blocking();
-    // TODO(peek-seq): This would currently fail with the flag on, indicating a bug in the frontend
-    // peek sequencing. Re-enable this once we never fall back from the frontend peek sequencing to
-    // the old peek sequencing. See comment on the call to `waiting_on_startup_appends` in
-    // `frontend_peek.rs`.
-    server.disable_feature_flags(&["enable_frontend_peek_sequencing"]);
 
     let mut foo_client = server
         .pg_config()
@@ -3169,13 +3164,6 @@ fn test_params() {
 #[mz_ore::test]
 fn test_pg_cancel_dropped_role() {
     let server = test_util::TestHarness::default().start_blocking();
-
-    // TODO(peek-seq): This would currently fail with the flag on, indicating a bug in the frontend
-    // peek sequencing. Re-enable this once we never fall back from the frontend peek sequencing to
-    // the old peek sequencing. See comment on the call to `waiting_on_startup_appends` in
-    // `frontend_peek.rs`.
-    server.disable_feature_flags(&["enable_frontend_peek_sequencing"]);
-
     let dropped_role = "r1";
 
     let mut query_client = server.connect(postgres::NoTls).unwrap();
