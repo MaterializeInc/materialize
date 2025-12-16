@@ -103,14 +103,12 @@ impl PeekClient {
         // back to the old sequencing.
         let catalog = self.catalog_snapshot("try_frontend_peek").await;
 
-        if let Err(_) = Coordinator::verify_portal(&*catalog, session, portal_name) {
-            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but retire already.
-            debug!("Bailing out from try_frontend_peek, because verify_portal returned an error");
-            return Ok(None);
-        }
-
         // Extract things from the portal.
         let (stmt, params, logging, lifecycle_timestamps) = {
+            if let Err(err) = Coordinator::verify_portal(&*catalog, session, portal_name) {
+                outer_ctx_extra.take().and_then(|extra| extra.retire());
+                return Err(err);
+            }
             let portal = session
                 .get_portal_unverified(portal_name)
                 // The portal is a session-level thing, so it couldn't have concurrently disappeared
