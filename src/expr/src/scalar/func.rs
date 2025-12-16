@@ -4896,7 +4896,7 @@ where
         Uuid => Ok(strconv::format_uuid(buf, d.unwrap_uuid())),
         Record { fields, .. } => {
             let mut fields = fields.iter();
-            strconv::format_record(buf, &d.unwrap_list(), |buf, d| {
+            strconv::format_record(buf, d.unwrap_list(), |buf, d| {
                 let (_name, ty) = fields.next().unwrap();
                 if d.is_null() {
                     Ok(buf.write_null())
@@ -4908,7 +4908,7 @@ where
         Array(elem_type) => strconv::format_array(
             buf,
             &d.unwrap_array().dims().into_iter().collect::<Vec<_>>(),
-            &d.unwrap_array().elements(),
+            d.unwrap_array().elements(),
             |buf, d| {
                 if d.is_null() {
                     Ok(buf.write_null())
@@ -4917,7 +4917,7 @@ where
                 }
             },
         ),
-        List { element_type, .. } => strconv::format_list(buf, &d.unwrap_list(), |buf, d| {
+        List { element_type, .. } => strconv::format_list(buf, d.unwrap_list(), |buf, d| {
             if d.is_null() {
                 Ok(buf.write_null())
             } else {
@@ -4931,7 +4931,7 @@ where
                 stringify_datum(buf.nonnull_buffer(), d, value_type)
             }
         }),
-        Int2Vector => strconv::format_legacy_vector(buf, &d.unwrap_array().elements(), |buf, d| {
+        Int2Vector => strconv::format_legacy_vector(buf, d.unwrap_array().elements(), |buf, d| {
             stringify_datum(buf.nonnull_buffer(), d, &SqlScalarType::Int16)
         }),
         MzTimestamp { .. } => Ok(strconv::format_mz_timestamp(buf, d.unwrap_mz_timestamp())),

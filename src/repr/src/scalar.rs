@@ -1556,12 +1556,12 @@ impl fmt::Display for Datum<'_> {
                     f.write_str("=")?;
                 }
                 f.write_str("{")?;
-                write_delimited(f, ", ", &array.elements, |f, e| write!(f, "{}", e))?;
+                write_delimited(f, ", ", array.elements, |f, e| write!(f, "{}", e))?;
                 f.write_str("}")
             }
             Datum::List(list) => {
                 f.write_str("[")?;
-                write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
+                write_delimited(f, ", ", *list, |f, e| write!(f, "{}", e))?;
                 f.write_str("]")
             }
             Datum::Map(dict) => {
