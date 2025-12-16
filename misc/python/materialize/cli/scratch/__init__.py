@@ -17,3 +17,6 @@ def check_required_vars() -> None:
         os.environ["AWS_PROFILE"] = "mz-scratch-admin"
         if not os.environ.get("AWS_DEFAULT_REGION"):
             os.environ["AWS_DEFAULT_REGION"] = "us-east-1"
+    # Can't run with those set, use SSO instead
+    os.environ.pop("AWS_ACCESS_KEY_ID", None)
+    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
