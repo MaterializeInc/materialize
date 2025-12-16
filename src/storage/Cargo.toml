@@ -19,7 +19,7 @@ async-stream = "0.3.6"
 async-trait = "0.1.89"
 aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
-arrow = { version = "55.2.0", default-features = false }
+arrow = { version = "57.1.0", default-features = false }
 bytes = { version = "1.10.1", features = ["serde"] }
 bytesize = "2.1.0"
 bincode = "1"

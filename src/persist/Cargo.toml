@@ -23,7 +23,7 @@ bench = false
 # don't leak in dependencies on other Materialize packages.
 [dependencies]
 anyhow = "1.0.100"
-arrow = { version = "55.2.0", default-features = false }
+arrow = { version = "57.1.0", default-features = false }
 async-trait = "0.1.89"
 async-stream = "0.3.6"
 aws-config = { version = "1.8.12", default-features = false }
