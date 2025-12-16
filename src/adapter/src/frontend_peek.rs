@@ -291,8 +291,13 @@ impl PeekClient {
             }
         };
 
-        let session_type = metrics::session_type_label_value(session.user());
-        let stmt_type = metrics::statement_type_label_value(&stmt);
+        session
+            .metrics()
+            .query_total(&[
+                metrics::session_type_label_value(session.user()),
+                metrics::statement_type_label_value(&stmt),
+            ])
+            .inc();
 
         // # From handle_execute_inner
 
@@ -1118,15 +1123,6 @@ impl PeekClient {
                         .await?;
                     session.add_notice(AdapterNotice::PlanInsights(insights));
                 }
-
-                // TODO(peek-seq): move this up to the beginning of the function when we have eliminated all
-                // the fallbacks to the old peek sequencing. Currently, it has to be here to avoid
-                // double-counting a fallback situation, but this has the drawback that if we error out
-                // from this function then we don't count the peek at all.
-                session
-                    .metrics()
-                    .query_total(&[session_type, stmt_type])
-                    .inc();
 
                 // # Now back to peek_finish
 
