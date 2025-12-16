@@ -316,9 +316,9 @@ RUN arch_helm_docs=$(echo "$ARCH_GCC" | sed -e "s/aarch64/arm64/" -e "s/amd64/x8
     && rm helm-docs.tar.gz
 
 RUN mkdir -p /usr/local/share/helm/plugins/unittest \
-    && curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v1.0.3/helm-unittest-linux-$ARCH_GO-1.0.3.tgz > helm-unittest.tar.gz \
-    && if [ $ARCH_GO = amd64 ]; then echo '12a9ef198e21166fe5f7487544903d91355b4ea08b1d59220f1543234caf4371 helm-unittest.tar.gz' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '540aec896945e0e26f443b0d1976d556ce0a3bfa7b10255ed1beecc8d2f7a1cc helm-unittest.tar.gz' | sha256sum --check; fi \
+    && curl -fsSL https://github.com/helm-unittest/helm-unittest/releases/download/v1.0.2/helm-unittest-linux-$ARCH_GO-1.0.2.tgz > helm-unittest.tar.gz \
+    && if [ $ARCH_GO = amd64 ]; then echo 'c3fa443e21860549120cc43455e7fe517f80e5878aff4aa3fee8f8b803eb00fa helm-unittest.tar.gz' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'f543a40777e45a63aaf2808a3395e72027a53d3daef10520a9aba65dbf13ff91 helm-unittest.tar.gz' | sha256sum --check; fi \
     && tar -xf helm-unittest.tar.gz -C /usr/local/share/helm/plugins/unittest \
     && rm helm-unittest.tar.gz
 
