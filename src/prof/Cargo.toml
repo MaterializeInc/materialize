@@ -28,7 +28,7 @@ workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = tru
 [build-dependencies]
 anyhow = "1.0.100"
 mz-build-tools = { path = "../build-tools", default-features = false, features = ["protobuf-src"] }
-prost-build = "0.13.5"
+prost-build = "0.14.1"
 
 [features]
 default = ["workspace-hack"]
