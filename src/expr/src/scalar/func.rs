@@ -2050,11 +2050,11 @@ fn extract_date_units(units: &str, b: Date) -> Result<Numeric, EvalError> {
     }
 }
 
-pub fn date_bin<'a, T>(
+pub fn date_bin<T>(
     stride: Interval,
     source: CheckedTimestamp<T>,
     origin: CheckedTimestamp<T>,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<CheckedTimestamp<T>, EvalError>
 where
     T: TimestampLike,
 {
@@ -2094,35 +2094,25 @@ where
     let res = origin
         .checked_add_signed(Duration::nanoseconds(tm_delta))
         .ok_or(EvalError::TimestampOutOfRange)?;
-    Ok(res.try_into()?)
+    Ok(CheckedTimestamp::from_timestamplike(res)?)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    sqlname = "bin_unix_epoch_timestamp",
-    propagates_nulls = true
-)]
-fn date_bin_timestamp<'a>(
+#[sqlfunc(is_monotone = "(true, true)", sqlname = "bin_unix_epoch_timestamp")]
+fn date_bin_timestamp(
     stride: Interval,
     source: CheckedTimestamp<NaiveDateTime>,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     let origin =
         CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(0, 0).unwrap().naive_utc())
             .expect("must fit");
     date_bin(stride, source, origin)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    sqlname = "bin_unix_epoch_timestamptz",
-    propagates_nulls = true
-)]
-fn date_bin_timestamp_tz<'a>(
+#[sqlfunc(is_monotone = "(true, true)", sqlname = "bin_unix_epoch_timestamptz")]
+fn date_bin_timestamp_tz(
     stride: Interval,
     source: CheckedTimestamp<DateTime<Utc>>,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     let origin = CheckedTimestamp::from_timestamplike(DateTime::from_timestamp(0, 0).unwrap())
         .expect("must fit");
     date_bin(stride, source, origin)
