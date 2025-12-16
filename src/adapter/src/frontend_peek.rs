@@ -30,7 +30,7 @@ use mz_sql::plan::{self, Plan, QueryWhen};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::{CopyDirection, CopyRelation, ExplainStage, Statement};
+use mz_sql_parser::ast::{CopyDirection, CopyRelation, ExplainStage, ShowStatement, Statement};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -129,9 +129,13 @@ impl PeekClient {
             match &**stmt {
                 Statement::Select(_)
                 | Statement::ExplainAnalyzeObject(_)
-                | Statement::ExplainAnalyzeCluster(_) => {
+                | Statement::ExplainAnalyzeCluster(_)
+                | Statement::Show(ShowStatement::ShowObjects(_))
+                | Statement::Show(ShowStatement::ShowColumns(_)) => {
                     // These are always fine, just continue.
                     // Note: EXPLAIN ANALYZE will `plan` to `Plan::Select`.
+                    // Note: ShowObjects plans to `Plan::Select`, ShowColumns plans to `Plan::ShowColumns`.
+                    // We handle `Plan::ShowColumns` specially in `try_frontend_peek_inner`.
                 }
                 Statement::ExplainPlan(explain_stmt) => {
                     // Only handle ExplainPlan for SELECT statements.
@@ -312,6 +316,10 @@ impl PeekClient {
                     ExplainContext::None
                 };
                 (select_plan, explain_ctx, None)
+            }
+            Plan::ShowColumns(show_columns_plan) => {
+                // ShowColumns wraps a SelectPlan, extract it and proceed as normal.
+                (&show_columns_plan.select_plan, ExplainContext::None, None)
             }
             Plan::ExplainPlan(plan::ExplainPlanPlan {
                 stage,
