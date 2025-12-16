@@ -338,6 +338,9 @@ pub fn check_plan(
     catalog: &impl SessionCatalog,
     // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
     // Only required for Plan::SideEffectingFunc; can be None for other plan types.
+    // TODO(peek-seq): Remove this when deleting the old peek sequencing. The logic here that uses
+    // `active_conns` is mirrored in `execute_side_effecting_func`, which is what the frontend peek
+    // sequencing uses.
     active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
     session: &dyn SessionMetadata,
     plan: &Plan,

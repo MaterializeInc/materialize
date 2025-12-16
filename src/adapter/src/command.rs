@@ -33,7 +33,7 @@ use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator, SqlRelationType
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
-use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
+use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, SideEffectingFunc};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
@@ -221,6 +221,15 @@ pub enum Command {
         conn_id: ConnectionId,
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
+
+    /// Execute a side-effecting function from the frontend peek path.
+    ExecuteSideEffectingFunc {
+        plan: SideEffectingFunc,
+        conn_id: ConnectionId,
+        /// The current role of the session, used for RBAC checks.
+        current_role: RoleId,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
 }
 
 impl Command {
@@ -247,7 +256,8 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
-            | Command::ExecuteCopyTo { .. } => None,
+            | Command::ExecuteCopyTo { .. }
+            | Command::ExecuteSideEffectingFunc { .. } => None,
         }
     }
 
@@ -274,7 +284,8 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
-            | Command::ExecuteCopyTo { .. } => None,
+            | Command::ExecuteCopyTo { .. }
+            | Command::ExecuteSideEffectingFunc { .. } => None,
         }
     }
 }

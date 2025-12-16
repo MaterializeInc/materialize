@@ -916,18 +916,21 @@ pub struct GroupCommitPermit {
     _permit: Option<OwnedSemaphorePermit>,
 }
 
-/// When we start a [`Session`] we need to update some builtin tables, we don't want to wait for
+/// When we start a [`Session`] we need to update some builtin tables, but we don't want to wait for
 /// these writes to complete for two reasons:
 ///
 /// 1. Doing a write can take a relatively long time.
 /// 2. Decoupling the write from the session start allows us to batch multiple writes together, if
 ///    sessions are being created with a high frequency.
 ///
-/// So as an optimization we do not wait for these writes to complete. But if a [`Session`] tries
+/// So, as an optimization we do not wait for these writes to complete. But if a [`Session`] tries
 /// to query any of these builtin objects, we need to block that query on the writes completing to
 /// maintain linearizability.
 ///
 /// Warning: this already clears the wait flag (i.e., it calls `clear_builtin_table_updates`).
+///
+/// TODO(peek-seq): After we delete the old peek sequencing, we can remove the first component of
+/// the return tuple.
 pub(crate) fn waiting_on_startup_appends(
     catalog: &Catalog,
     session: &mut Session,

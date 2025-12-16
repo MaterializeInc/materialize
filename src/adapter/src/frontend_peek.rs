@@ -19,7 +19,7 @@ use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
-use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log};
+use mz_ore::{soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
 use mz_repr::role_id::RoleId;
 use mz_repr::{Datum, GlobalId, IntoRowIterator, Timestamp};
@@ -28,7 +28,7 @@ use mz_sql::plan::{self, Plan, QueryWhen};
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
-use mz_sql_parser::ast::{CopyDirection, ExplainStage, Statement};
+use mz_sql_parser::ast::{CopyDirection, CopyRelation, ExplainStage, Statement};
 use mz_transform::EmptyStatisticsOracle;
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
@@ -142,12 +142,12 @@ impl PeekClient {
                 }
             }
             Statement::ExplainPushdown(explain_stmt) => {
-                // Only handle EXPLAIN FILTER PUSHDOWN for SELECT statements
+                // Only handle EXPLAIN FILTER PUSHDOWN for non-BROKEN SELECT statements
                 match &explain_stmt.explainee {
-                    mz_sql_parser::ast::Explainee::Select(..) => {}
+                    mz_sql_parser::ast::Explainee::Select(_, false) => {}
                     _ => {
                         debug!(
-                            "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query"
+                            "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a (non-BROKEN) SELECT query"
                         );
                         return Ok(None);
                     }
@@ -156,7 +156,14 @@ impl PeekClient {
             Statement::Copy(copy_stmt) => {
                 match &copy_stmt.direction {
                     CopyDirection::To => {
-                        // This is COPY TO, continue
+                        // Check for SUBSCRIBE inside COPY TO - we don't handle Plan::Subscribe
+                        if matches!(&copy_stmt.relation, CopyRelation::Subscribe(_)) {
+                            debug!(
+                                "Bailing out from try_frontend_peek_inner, because COPY (SUBSCRIBE ...) TO is not supported"
+                            );
+                            return Ok(None);
+                        }
+                        // This is COPY TO (SELECT), continue
                     }
                     CopyDirection::From => {
                         debug!(
@@ -186,6 +193,7 @@ impl PeekClient {
 
         let pcx = session.pcx();
         let plan = mz_sql::plan::plan(Some(pcx), &conn_catalog, stmt, &params, &resolved_ids)?;
+
         let (select_plan, explain_ctx, copy_to_ctx) = match &plan {
             Plan::Select(select_plan) => {
                 let explain_ctx = if session.vars().emit_plan_insights_notice() {
@@ -253,6 +261,12 @@ impl PeekClient {
                         (plan, explain_ctx, None)
                     }
                     _ => {
+                        // This shouldn't happen because we already checked for this at the AST
+                        // level before calling `try_frontend_peek_inner`.
+                        soft_panic_or_log!(
+                            "unexpected EXPLAIN FILTER PUSHDOWN plan kind in frontend peek sequencing: {:?}",
+                            explainee
+                        );
                         debug!(
                             "Bailing out from try_frontend_peek_inner, because EXPLAIN FILTER PUSHDOWN is not for a SELECT query or is EXPLAIN BROKEN"
                         );
@@ -260,9 +274,29 @@ impl PeekClient {
                     }
                 }
             }
+            Plan::SideEffectingFunc(sef_plan) => {
+                // Side-effecting functions need Coordinator state (e.g., active_conns),
+                // so delegate to the Coordinator via a Command.
+                // The RBAC check is performed in the Coordinator where active_conns is available.
+                let response = self
+                    .call_coordinator(|tx| Command::ExecuteSideEffectingFunc {
+                        plan: sef_plan.clone(),
+                        conn_id: session.conn_id().clone(),
+                        current_role: session.role_metadata().current_role,
+                        tx,
+                    })
+                    .await?;
+                return Ok(Some(response));
+            }
             _ => {
+                // This shouldn't happen because we already checked for this at the AST
+                // level before calling `try_frontend_peek_inner`.
+                soft_panic_or_log!(
+                    "Unexpected plan kind in frontend peek sequencing: {:?}",
+                    plan
+                );
                 debug!(
-                    "Bailing out from try_frontend_peek_inner, because the Plan is not a SELECT, EXPLAIN SELECT, EXPLAIN FILTER PUSHDOWN, or COPY TO"
+                    "Bailing out from try_frontend_peek_inner, because the Plan is not a SELECT, side-effecting SELECT, EXPLAIN SELECT, EXPLAIN FILTER PUSHDOWN, or COPY TO S3"
                 );
                 return Ok(None);
             }
@@ -296,6 +330,8 @@ impl PeekClient {
 
         rbac::check_plan(
             &conn_catalog,
+            // We can't look at `active_conns` here, but that's ok, because this case was handled
+            // above already inside `Command::ExecuteSideEffectingFunc`.
             None::<fn(u32) -> Option<RoleId>>,
             session,
             &plan,
@@ -303,22 +339,10 @@ impl PeekClient {
             &resolved_ids,
         )?;
 
-        // Check if we're still waiting for any of the builtin table appends from when we
-        // started the Session to complete.
-        //
-        // (This is done slightly earlier in the normal peek sequencing, but we have to be past the
-        // last use of `conn_catalog` here.)
-        if let Some(_) = coord::appends::waiting_on_startup_appends(&*catalog, session, &plan) {
-            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but call
-            // `defer_op`. Needs `ExecuteContext`.
-            // This fallback is currently causing a bug: `waiting_on_startup_appends` has the
-            // side effect that it already clears the wait flag, and therefore the old peek
-            // sequencing that we fall back to here won't do waiting. This is tested by
-            // `test_mz_sessions` and `test_pg_cancel_dropped_role`, where I've disabled the
-            // frontend peek sequencing for now. This bug will just go away once we don't fall back
-            // to the old peek sequencing here, but properly call `defer_op` instead.
-            debug!("Bailing out from try_frontend_peek_inner, because waiting_on_startup_appends");
-            return Ok(None);
+        if let Some((_, wait_future)) =
+            coord::appends::waiting_on_startup_appends(&*catalog, session, &plan)
+        {
+            wait_future.await;
         }
 
         let max_query_result_size = Some(session.vars().max_query_result_size());

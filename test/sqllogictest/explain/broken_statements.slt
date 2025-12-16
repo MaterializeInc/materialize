@@ -101,6 +101,8 @@ EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
 CREATE MATERIALIZED VIEW mv AS
 SELECT pg_catalog.now();
 
+statement error db error: ERROR: EXPLAIN FILTER PUSHDOWN queries for this explainee type are not supported
+EXPLAIN FILTER PUSHDOWN FOR BROKEN SELECT 1;
 
 # EXPLAIN ... BROKEN CREATE INDEX
 # -------------------------------

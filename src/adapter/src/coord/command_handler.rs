@@ -382,6 +382,18 @@ impl Coordinator {
                     )
                     .await;
                 }
+
+                Command::ExecuteSideEffectingFunc {
+                    plan,
+                    conn_id,
+                    current_role,
+                    tx,
+                } => {
+                    let result = self
+                        .execute_side_effecting_func(plan, conn_id, current_role)
+                        .await;
+                    let _ = tx.send(result);
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
