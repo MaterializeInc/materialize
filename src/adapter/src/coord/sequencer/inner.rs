@@ -18,7 +18,6 @@ use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
-use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{ENABLE_MULTI_REPLICA_SOURCES, ENABLE_PASSWORD_AUTH};
 use mz_catalog::memory::objects::{
@@ -1093,34 +1092,26 @@ impl Coordinator {
 
         let result = self.catalog_transact(Some(ctx.session()), ops).await;
 
-        match result {
-            Ok(()) => {}
-            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                kind:
-                    mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
-            })) if if_not_exists => {
-                ctx.session()
-                    .add_notice(AdapterNotice::ObjectAlreadyExists {
-                        name: name.item,
-                        ty: "sink",
-                    });
-                ctx.retire(Ok(ExecuteResponse::CreatedSink));
-                return;
-            }
-            Err(e) => {
-                ctx.retire(Err(e));
-                return;
+        // Make sure we can't early-return and always retire the context.
+        let infallible = |result| -> Result<_, _> {
+            match result {
+                Ok(()) => Ok(ExecuteResponse::CreatedSink),
+                Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind:
+                        mz_catalog::memory::error::ErrorKind::Sql(CatalogError::ItemAlreadyExists(_, _)),
+                })) if if_not_exists => {
+                    ctx.session()
+                        .add_notice(AdapterNotice::ObjectAlreadyExists {
+                            name: name.item,
+                            ty: "sink",
+                        });
+                    Ok(ExecuteResponse::CreatedSink)
+                }
+                Err(e) => Err(e),
             }
         };
-
-        self.create_storage_export(global_id, &catalog_sink)
-            .await
-            .unwrap_or_terminate("cannot fail to create exports");
-
-        self.initialize_storage_read_policies([item_id].into(), CompactionWindow::Default)
-            .await;
-
-        ctx.retire(Ok(ExecuteResponse::CreatedSink))
+        let result = infallible(result);
+        ctx.retire(result);
     }
 
     /// Validates that a view definition does not contain any expressions that may lead to
