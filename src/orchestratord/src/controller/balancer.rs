@@ -461,6 +461,10 @@ impl k8s_controller::Context for Context {
         client: Client,
         balancer: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
+        if balancer.meta().deletion_timestamp.is_some() {
+            return Ok(Some(Action::await_change()));
+        }
+
         if balancer.status.is_none() {
             let balancer_api: Api<Balancer> =
                 Api::namespaced(client.clone(), &balancer.meta().namespace.clone().unwrap());
