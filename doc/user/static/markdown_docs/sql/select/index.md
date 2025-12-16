@@ -1,0 +1,504 @@
+<div class="content" role="main">
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJpb25pY29uIiB2aWV3Ym94PSIwIDAgNTEyIDUxMiI+CiAgICAgICAgICAgIDx0aXRsZT5BcnJvdyBQb2ludGluZyB0byB0aGUgbGVmdDwvdGl0bGU+CiAgICAgICAgICAgIDxwYXRoIGZpbGw9Im5vbmUiIHN0cm9rZT0iY3VycmVudENvbG9yIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiIHN0cm9rZS13aWR0aD0iNDgiIGQ9Ik0zMjggMTEyTDE4NCAyNTZsMTQ0IDE0NCIgLz4KICAgICAgICAgIDwvc3ZnPg=="
+class="ionicon" /> All Topics
+
+<div>
+
+<div class="breadcrumb">
+
+[Home](/docs/self-managed/v25.2/)
+ /  [Reference](/docs/self-managed/v25.2/sql/)
+
+</div>
+
+# SELECT
+
+The `SELECT` statement is the root of a SQL query, and is used both to
+bind SQL queries to named [views](../create-view) or [materialized
+views](../create-materialized-view), and to interactively query data
+maintained in Materialize. For interactive queries, you should consider
+creating [indexes](../create-index) on the underlying relations based on
+common query patterns.
+
+## Syntax
+
+### select_stmt
+
+<div class="rr-diagram">
+
+![](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyOTUiIGhlaWdodD0iMTI1Ij4KICAgPHBvbHlnb24gcG9pbnRzPSI5IDE3IDEgMTMgMSAyMSI+PC9wb2x5Z29uPgogICA8cG9seWdvbiBwb2ludHM9IjE3IDE3IDkgMTMgOSAyMSI+PC9wb2x5Z29uPgogICA8cmVjdCB4PSI1MSIgeT0iMyIgd2lkdGg9IjEyOCIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iNDkiIHk9IjEiIHdpZHRoPSIxMjgiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSI1OSIgeT0iMjEiPnNlbGVjdF93aXRoX2N0ZXM8L3RleHQ+CiAgIDxyZWN0IHg9IjUxIiB5PSI0NyIgd2lkdGg9IjE5NiIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iNDkiIHk9IjQ1IiB3aWR0aD0iMTk2IiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iNTkiIHk9IjY1Ij5zZWxlY3Rfd2l0aF9yZWN1cnNpdmVfY3RlczwvdGV4dD4KICAgPHJlY3QgeD0iNTEiIHk9IjkxIiB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSI0OSIgeT0iODkiIHdpZHRoPSIxNDQiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSI1OSIgeT0iMTA5Ij5zaW1wbGVfc2VsZWN0X3N0bXQ8L3RleHQ+CiAgIDxwYXRoIGNsYXNzPSJsaW5lIiBkPSJtMTcgMTcgaDIgbTIwIDAgaDEwIG0xMjggMCBoMTAgbTAgMCBoNjggbS0yMzYgMCBoMjAgbTIxNiAwIGgyMCBtLTI1NiAwIHExMCAwIDEwIDEwIG0yMzYgMCBxMCAtMTAgMTAgLTEwIG0tMjQ2IDEwIHYyNCBtMjM2IDAgdi0yNCBtLTIzNiAyNCBxMCAxMCAxMCAxMCBtMjE2IDAgcTEwIDAgMTAgLTEwIG0tMjI2IDEwIGgxMCBtMTk2IDAgaDEwIG0tMjI2IC0xMCB2MjAgbTIzNiAwIHYtMjAgbS0yMzYgMjAgdjI0IG0yMzYgMCB2LTI0IG0tMjM2IDI0IHEwIDEwIDEwIDEwIG0yMTYgMCBxMTAgMCAxMCAtMTAgbS0yMjYgMTAgaDEwIG0xNDQgMCBoMTAgbTAgMCBoNTIgbTIzIC04OCBoLTMiIC8+CiAgIDxwb2x5Z29uIHBvaW50cz0iMjg1IDE3IDI5MyAxMyAyOTMgMjEiPjwvcG9seWdvbj4KICAgPHBvbHlnb24gcG9pbnRzPSIyODUgMTcgMjc3IDEzIDI3NyAyMSI+PC9wb2x5Z29uPgo8L3N2Zz4=)
+
+</div>
+
+### simple_select_stmt
+
+<div class="rr-diagram">
+
+![](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2MjciIGhlaWdodD0iMTEyMyI+CiAgIDxwb2x5Z29uIHBvaW50cz0iOSAxNyAxIDEzIDEgMjEiPjwvcG9seWdvbj4KICAgPHBvbHlnb24gcG9pbnRzPSIxNyAxNyA5IDEzIDkgMjEiPjwvcG9seWdvbj4KICAgPHJlY3QgeD0iMzEiIHk9IjMiIHdpZHRoPSI3NCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyOSIgeT0iMSIgd2lkdGg9Ijc0IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIzOSIgeT0iMjEiPlNFTEVDVDwvdGV4dD4KICAgPHJlY3QgeD0iMTQ1IiB5PSIzNSIgd2lkdGg9IjQ2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjE0MyIgeT0iMzMiIHdpZHRoPSI0NiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMTUzIiB5PSI1MyI+QUxMPC90ZXh0PgogICA8cmVjdCB4PSIxNDUiIHk9IjEyMyIgd2lkdGg9Ijg2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjE0MyIgeT0iMTIxIiB3aWR0aD0iODYiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjE1MyIgeT0iMTQxIj5ESVNUSU5DVDwvdGV4dD4KICAgPHJlY3QgeD0iMjcxIiB5PSIxMjMiIHdpZHRoPSI0MCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyNjkiIHk9IjEyMSIgd2lkdGg9IjQwIiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIyNzkiIHk9IjE0MSI+T048L3RleHQ+CiAgIDxyZWN0IHg9IjMzMSIgeT0iMTIzIiB3aWR0aD0iMjYiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMzI5IiB5PSIxMjEiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMzM5IiB5PSIxNDEiPig8L3RleHQ+CiAgIDxyZWN0IHg9IjM5NyIgeT0iMTIzIiB3aWR0aD0iNjQiIGhlaWdodD0iMzIiIC8+CiAgIDxyZWN0IHg9IjM5NSIgeT0iMTIxIiB3aWR0aD0iNjQiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSI0MDUiIHk9IjE0MSI+Y29sX3JlZjwvdGV4dD4KICAgPHJlY3QgeD0iMzk3IiB5PSI3OSIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjM5NSIgeT0iNzciIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iNDA1IiB5PSI5NyI+LDwvdGV4dD4KICAgPHJlY3QgeD0iNTAxIiB5PSIxMjMiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSI0OTkiIHk9IjEyMSIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSI1MDkiIHk9IjE0MSI+KTwvdGV4dD4KICAgPHJlY3QgeD0iODMiIHk9IjI0OSIgd2lkdGg9Ijk4IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSI4MSIgeT0iMjQ3IiB3aWR0aD0iOTgiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSI5MSIgeT0iMjY3Ij50YXJnZXRfZWxlbTwvdGV4dD4KICAgPHJlY3QgeD0iODMiIHk9IjIwNSIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjgxIiB5PSIyMDMiIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iOTEiIHk9IjIyMyI+LDwvdGV4dD4KICAgPHJlY3QgeD0iMjIxIiB5PSIyNDkiIHdpZHRoPSI2MCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyMTkiIHk9IjI0NyIgd2lkdGg9IjYwIiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIyMjkiIHk9IjI2NyI+RlJPTTwvdGV4dD4KICAgPHJlY3QgeD0iMzIxIiB5PSIyNDkiIHdpZHRoPSI4OCIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iMzE5IiB5PSIyNDciIHdpZHRoPSI4OCIgaGVpZ2h0PSIzMiIgY2xhc3M9Im5vbnRlcm1pbmFsIiAvPgogICA8dGV4dCBjbGFzcz0ibm9udGVybWluYWwiIHg9IjMyOSIgeT0iMjY3Ij50YWJsZV9leHByPC90ZXh0PgogICA8cmVjdCB4PSIzMjEiIHk9IjIwNSIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjMxOSIgeT0iMjAzIiB3aWR0aD0iMjQiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjMyOSIgeT0iMjIzIj4sPC90ZXh0PgogICA8cmVjdCB4PSI0NjkiIHk9IjI4MSIgd2lkdGg9Ijc4IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSI0NjciIHk9IjI3OSIgd2lkdGg9Ijc4IiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iNDc3IiB5PSIyOTkiPmpvaW5fZXhwcjwvdGV4dD4KICAgPHJlY3QgeD0iODkiIHk9IjQyMyIgd2lkdGg9IjcwIiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9Ijg3IiB5PSI0MjEiIHdpZHRoPSI3MCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iOTciIHk9IjQ0MSI+V0hFUkU8L3RleHQ+CiAgIDxyZWN0IHg9IjE3OSIgeT0iNDIzIiB3aWR0aD0iNDgiIGhlaWdodD0iMzIiIC8+CiAgIDxyZWN0IHg9IjE3NyIgeT0iNDIxIiB3aWR0aD0iNDgiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIxODciIHk9IjQ0MSI+ZXhwcjwvdGV4dD4KICAgPHJlY3QgeD0iMjg3IiB5PSIzOTEiIHdpZHRoPSI3MCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyODUiIHk9IjM4OSIgd2lkdGg9IjcwIiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIyOTUiIHk9IjQwOSI+R1JPVVA8L3RleHQ+CiAgIDxyZWN0IHg9IjM3NyIgeT0iMzkxIiB3aWR0aD0iNDAiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMzc1IiB5PSIzODkiIHdpZHRoPSI0MCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMzg1IiB5PSI0MDkiPkJZPC90ZXh0PgogICA8cmVjdCB4PSI0NTciIHk9IjM5MSIgd2lkdGg9IjY0IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSI0NTUiIHk9IjM4OSIgd2lkdGg9IjY0IiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iNDY1IiB5PSI0MDkiPmNvbF9yZWY8L3RleHQ+CiAgIDxyZWN0IHg9IjQ1NyIgeT0iMzQ3IiB3aWR0aD0iMjQiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iNDU1IiB5PSIzNDUiIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iNDY1IiB5PSIzNjUiPiw8L3RleHQ+CiAgIDxyZWN0IHg9IjExMyIgeT0iNTMzIiB3aWR0aD0iODQiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMTExIiB5PSI1MzEiIHdpZHRoPSI4NCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMTIxIiB5PSI1NTEiPk9QVElPTlM8L3RleHQ+CiAgIDxyZWN0IHg9IjIxNyIgeT0iNTMzIiB3aWR0aD0iMjYiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMjE1IiB5PSI1MzEiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMjI1IiB5PSI1NTEiPig8L3RleHQ+CiAgIDxyZWN0IHg9IjI4MyIgeT0iNTMzIiB3aWR0aD0iNjIiIGhlaWdodD0iMzIiIC8+CiAgIDxyZWN0IHg9IjI4MSIgeT0iNTMxIiB3aWR0aD0iNjIiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIyOTEiIHk9IjU1MSI+b3B0aW9uPC90ZXh0PgogICA8cmVjdCB4PSIzNjUiIHk9IjUzMyIgd2lkdGg9IjI4IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjM2MyIgeT0iNTMxIiB3aWR0aD0iMjgiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjM3MyIgeT0iNTUxIj49PC90ZXh0PgogICA8cmVjdCB4PSI0MTMiIHk9IjUzMyIgd2lkdGg9IjM4IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSI0MTEiIHk9IjUzMSIgd2lkdGg9IjM4IiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iNDIxIiB5PSI1NTEiPnZhbDwvdGV4dD4KICAgPHJlY3QgeD0iMjgzIiB5PSI0ODkiIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyODEiIHk9IjQ4NyIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIyOTEiIHk9IjUwNyI+LDwvdGV4dD4KICAgPHJlY3QgeD0iNDkxIiB5PSI1MzMiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSI0ODkiIHk9IjUzMSIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSI0OTkiIHk9IjU1MSI+KTwvdGV4dD4KICAgPHJlY3QgeD0iMjQzIiB5PSI2MzEiIHdpZHRoPSI3NiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyNDEiIHk9IjYyOSIgd2lkdGg9Ijc2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIyNTEiIHk9IjY0OSI+SEFWSU5HPC90ZXh0PgogICA8cmVjdCB4PSIzMzkiIHk9IjYzMSIgd2lkdGg9IjQ4IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSIzMzciIHk9IjYyOSIgd2lkdGg9IjQ4IiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iMzQ3IiB5PSI2NDkiPmV4cHI8L3RleHQ+CiAgIDxyZWN0IHg9IjQ1IiB5PSI3NDEiIHdpZHRoPSI2OCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSI0MyIgeT0iNzM5IiB3aWR0aD0iNjgiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjUzIiB5PSI3NTkiPk9SREVSPC90ZXh0PgogICA8cmVjdCB4PSIxMzMiIHk9Ijc0MSIgd2lkdGg9IjQwIiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjEzMSIgeT0iNzM5IiB3aWR0aD0iNDAiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjE0MSIgeT0iNzU5Ij5CWTwvdGV4dD4KICAgPHJlY3QgeD0iMjEzIiB5PSI3NDEiIHdpZHRoPSI2NCIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iMjExIiB5PSI3MzkiIHdpZHRoPSI2NCIgaGVpZ2h0PSIzMiIgY2xhc3M9Im5vbnRlcm1pbmFsIiAvPgogICA8dGV4dCBjbGFzcz0ibm9udGVybWluYWwiIHg9IjIyMSIgeT0iNzU5Ij5jb2xfcmVmPC90ZXh0PgogICA8cmVjdCB4PSIzMTciIHk9Ijc3MyIgd2lkdGg9IjUwIiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjMxNSIgeT0iNzcxIiB3aWR0aD0iNTAiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjMyNSIgeT0iNzkxIj5BU0M8L3RleHQ+CiAgIDxyZWN0IHg9IjMxNyIgeT0iODE3IiB3aWR0aD0iNTgiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMzE1IiB5PSI4MTUiIHdpZHRoPSI1OCIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMzI1IiB5PSI4MzUiPkRFU0M8L3RleHQ+CiAgIDxyZWN0IHg9IjQzNSIgeT0iNzczIiB3aWR0aD0iMTA2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjQzMyIgeT0iNzcxIiB3aWR0aD0iMTA2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSI0NDMiIHk9Ijc5MSI+TlVMTFMgTEFTVDwvdGV4dD4KICAgPHJlY3QgeD0iNDM1IiB5PSI4MTciIHdpZHRoPSIxMTAiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iNDMzIiB5PSI4MTUiIHdpZHRoPSIxMTAiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjQ0MyIgeT0iODM1Ij5OVUxMUyBGSVJTVDwvdGV4dD4KICAgPHJlY3QgeD0iMjEzIiB5PSI2OTciIHdpZHRoPSIyNCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyMTEiIHk9IjY5NSIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIyMjEiIHk9IjcxNSI+LDwvdGV4dD4KICAgPHJlY3QgeD0iMTQyIiB5PSI5MTUiIHdpZHRoPSI1OCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIxNDAiIHk9IjkxMyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIxNTAiIHk9IjkzMyI+TElNSVQ8L3RleHQ+CiAgIDxyZWN0IHg9IjIyMCIgeT0iOTE1IiB3aWR0aD0iNDgiIGhlaWdodD0iMzIiIC8+CiAgIDxyZWN0IHg9IjIxOCIgeT0iOTEzIiB3aWR0aD0iNDgiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIyMjgiIHk9IjkzMyI+ZXhwcjwvdGV4dD4KICAgPHJlY3QgeD0iMzI4IiB5PSI5MTUiIHdpZHRoPSI3NCIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIzMjYiIHk9IjkxMyIgd2lkdGg9Ijc0IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIzMzYiIHk9IjkzMyI+T0ZGU0VUPC90ZXh0PgogICA8cmVjdCB4PSI0MjIiIHk9IjkxNSIgd2lkdGg9IjY2IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSI0MjAiIHk9IjkxMyIgd2lkdGg9IjY2IiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iNDMwIiB5PSI5MzMiPmludGVnZXI8L3RleHQ+CiAgIDxyZWN0IHg9IjE0MyIgeT0iMTAwMSIgd2lkdGg9IjY2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjE0MSIgeT0iOTk5IiB3aWR0aD0iNjYiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjE1MSIgeT0iMTAxOSI+VU5JT048L3RleHQ+CiAgIDxyZWN0IHg9IjE0MyIgeT0iMTA0NSIgd2lkdGg9Ijk4IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjE0MSIgeT0iMTA0MyIgd2lkdGg9Ijk4IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIxNTEiIHk9IjEwNjMiPklOVEVSU0VDVDwvdGV4dD4KICAgPHJlY3QgeD0iMTQzIiB5PSIxMDg5IiB3aWR0aD0iNzYiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMTQxIiB5PSIxMDg3IiB3aWR0aD0iNzYiIGhlaWdodD0iMzIiIGNsYXNzPSJ0ZXJtaW5hbCIgcng9IjEwIiAvPgogICA8dGV4dCBjbGFzcz0idGVybWluYWwiIHg9IjE1MSIgeT0iMTEwNyI+RVhDRVBUPC90ZXh0PgogICA8cmVjdCB4PSIzMDEiIHk9IjEwMzMiIHdpZHRoPSI0NiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSIyOTkiIHk9IjEwMzEiIHdpZHRoPSI0NiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMzA5IiB5PSIxMDUxIj5BTEw8L3RleHQ+CiAgIDxyZWN0IHg9IjMwMSIgeT0iMTA3NyIgd2lkdGg9Ijg2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjI5OSIgeT0iMTA3NSIgd2lkdGg9Ijg2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIzMDkiIHk9IjEwOTUiPkRJU1RJTkNUPC90ZXh0PgogICA8cmVjdCB4PSI0MjciIHk9IjEwMDEiIHdpZHRoPSIxNTIiIGhlaWdodD0iMzIiIC8+CiAgIDxyZWN0IHg9IjQyNSIgeT0iOTk5IiB3aWR0aD0iMTUyIiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iNDM1IiB5PSIxMDE5Ij5hbm90aGVyX3NlbGVjdF9zdG10PC90ZXh0PgogICA8cGF0aCBjbGFzcz0ibGluZSIgZD0ibTE3IDE3IGgyIG0wIDAgaDEwIG03NCAwIGgxMCBtMjAgMCBoMTAgbTAgMCBoNDEyIG0tNDQyIDAgaDIwIG00MjIgMCBoMjAgbS00NjIgMCBxMTAgMCAxMCAxMCBtNDQyIDAgcTAgLTEwIDEwIC0xMCBtLTQ1MiAxMCB2MTIgbTQ0MiAwIHYtMTIgbS00NDIgMTIgcTAgMTAgMTAgMTAgbTQyMiAwIHExMCAwIDEwIC0xMCBtLTQzMiAxMCBoMTAgbTQ2IDAgaDEwIG0wIDAgaDM1NiBtLTQzMiAtMTAgdjIwIG00NDIgMCB2LTIwIG0tNDQyIDIwIHY2OCBtNDQyIDAgdi02OCBtLTQ0MiA2OCBxMCAxMCAxMCAxMCBtNDIyIDAgcTEwIDAgMTAgLTEwIG0tNDMyIDEwIGgxMCBtODYgMCBoMTAgbTIwIDAgaDEwIG00MCAwIGgxMCBtMCAwIGgxMCBtMjYgMCBoMTAgbTIwIDAgaDEwIG02NCAwIGgxMCBtLTEwNCAwIGwyMCAwIG0tMSAwIHEtOSAwIC05IC0xMCBsMCAtMjQgcTAgLTEwIDEwIC0xMCBtODQgNDQgbDIwIDAgbS0yMCAwIHExMCAwIDEwIC0xMCBsMCAtMjQgcTAgLTEwIC0xMCAtMTAgbS04NCAwIGgxMCBtMjQgMCBoMTAgbTAgMCBoNDAgbTIwIDQ0IGgxMCBtMjYgMCBoMTAgbS0yOTYgMCBoMjAgbTI3NiAwIGgyMCBtLTMxNiAwIHExMCAwIDEwIDEwIG0yOTYgMCBxMCAtMTAgMTAgLTEwIG0tMzA2IDEwIHYxNCBtMjk2IDAgdi0xNCBtLTI5NiAxNCBxMCAxMCAxMCAxMCBtMjc2IDAgcTEwIDAgMTAgLTEwIG0tMjg2IDEwIGgxMCBtMCAwIGgyNjYgbTQyIC0xNTQgbDIgMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0tNTQ4IDI0NiBsMiAwIG0yIDAgbDIgMCBtMiAwIGwyIDAgbTIyIDAgaDEwIG05OCAwIGgxMCBtLTEzOCAwIGwyMCAwIG0tMSAwIHEtOSAwIC05IC0xMCBsMCAtMjQgcTAgLTEwIDEwIC0xMCBtMTE4IDQ0IGwyMCAwIG0tMjAgMCBxMTAgMCAxMCAtMTAgbDAgLTI0IHEwIC0xMCAtMTAgLTEwIG0tMTE4IDAgaDEwIG0yNCAwIGgxMCBtMCAwIGg3NCBtMjAgNDQgaDEwIG02MCAwIGgxMCBtMjAgMCBoMTAgbTg4IDAgaDEwIG0tMTI4IDAgbDIwIDAgbS0xIDAgcS05IDAgLTkgLTEwIGwwIC0yNCBxMCAtMTAgMTAgLTEwIG0xMDggNDQgbDIwIDAgbS0yMCAwIHExMCAwIDEwIC0xMCBsMCAtMjQgcTAgLTEwIC0xMCAtMTAgbS0xMDggMCBoMTAgbTI0IDAgaDEwIG0wIDAgaDY0IG00MCA0NCBoMTAgbTAgMCBoODggbS0xMTggMCBoMjAgbTk4IDAgaDIwIG0tMTM4IDAgcTEwIDAgMTAgMTAgbTExOCAwIHEwIC0xMCAxMCAtMTAgbS0xMjggMTAgdjEyIG0xMTggMCB2LTEyIG0tMTE4IDEyIHEwIDEwIDEwIDEwIG05OCAwIHExMCAwIDEwIC0xMCBtLTEwOCAxMCBoMTAgbTc4IDAgaDEwIG0yMiAtMzIgbDIgMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0tNTQyIDE0MiBsMiAwIG0yIDAgbDIgMCBtMiAwIGwyIDAgbTIyIDAgaDEwIG0wIDAgaDE0OCBtLTE3OCAwIGgyMCBtMTU4IDAgaDIwIG0tMTk4IDAgcTEwIDAgMTAgMTAgbTE3OCAwIHEwIC0xMCAxMCAtMTAgbS0xODggMTAgdjEyIG0xNzggMCB2LTEyIG0tMTc4IDEyIHEwIDEwIDEwIDEwIG0xNTggMCBxMTAgMCAxMCAtMTAgbS0xNjggMTAgaDEwIG03MCAwIGgxMCBtMCAwIGgxMCBtNDggMCBoMTAgbTQwIC0zMiBoMTAgbTcwIDAgaDEwIG0wIDAgaDEwIG00MCAwIGgxMCBtMjAgMCBoMTAgbTY0IDAgaDEwIG0tMTA0IDAgbDIwIDAgbS0xIDAgcS05IDAgLTkgLTEwIGwwIC0yNCBxMCAtMTAgMTAgLTEwIG04NCA0NCBsMjAgMCBtLTIwIDAgcTEwIDAgMTAgLTEwIGwwIC0yNCBxMCAtMTAgLTEwIC0xMCBtLTg0IDAgaDEwIG0yNCAwIGgxMCBtMCAwIGg0MCBtLTI3NCA0NCBoMjAgbTI3NCAwIGgyMCBtLTMxNCAwIHExMCAwIDEwIDEwIG0yOTQgMCBxMCAtMTAgMTAgLTEwIG0tMzA0IDEwIHYxNCBtMjk0IDAgdi0xNCBtLTI5NCAxNCBxMCAxMCAxMCAxMCBtMjc0IDAgcTEwIDAgMTAgLTEwIG0tMjg0IDEwIGgxMCBtMCAwIGgyNjQgbTIyIC0zNCBsMiAwIG0yIDAgbDIgMCBtMiAwIGwyIDAgbS01MTIgMTQyIGwyIDAgbTIgMCBsMiAwIG0yIDAgbDIgMCBtMjIgMCBoMTAgbTg0IDAgaDEwIG0wIDAgaDEwIG0yNiAwIGgxMCBtMjAgMCBoMTAgbTYyIDAgaDEwIG0wIDAgaDEwIG0yOCAwIGgxMCBtMCAwIGgxMCBtMzggMCBoMTAgbS0yMDggMCBsMjAgMCBtLTEgMCBxLTkgMCAtOSAtMTAgbDAgLTI0IHEwIC0xMCAxMCAtMTAgbTE4OCA0NCBsMjAgMCBtLTIwIDAgcTEwIDAgMTAgLTEwIGwwIC0yNCBxMCAtMTAgLTEwIC0xMCBtLTE4OCAwIGgxMCBtMjQgMCBoMTAgbTAgMCBoMTQ0IG0yMCA0NCBoMTAgbTI2IDAgaDEwIG0tNDQ0IDAgaDIwIG00MjQgMCBoMjAgbS00NjQgMCBxMTAgMCAxMCAxMCBtNDQ0IDAgcTAgLTEwIDEwIC0xMCBtLTQ1NCAxMCB2MTQgbTQ0NCAwIHYtMTQgbS00NDQgMTQgcTAgMTAgMTAgMTAgbTQyNCAwIHExMCAwIDEwIC0xMCBtLTQzNCAxMCBoMTAgbTAgMCBoNDE0IG0yMiAtMzQgbDIgMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0tMzU4IDY2IGwyIDAgbTIgMCBsMiAwIG0yIDAgbDIgMCBtMjIgMCBoMTAgbTAgMCBoMTU0IG0tMTg0IDAgaDIwIG0xNjQgMCBoMjAgbS0yMDQgMCBxMTAgMCAxMCAxMCBtMTg0IDAgcTAgLTEwIDEwIC0xMCBtLTE5NCAxMCB2MTIgbTE4NCAwIHYtMTIgbS0xODQgMTIgcTAgMTAgMTAgMTAgbTE2NCAwIHExMCAwIDEwIC0xMCBtLTE3NCAxMCBoMTAgbTc2IDAgaDEwIG0wIDAgaDEwIG00OCAwIGgxMCBtMjIgLTMyIGwyIDAgbTIgMCBsMiAwIG0yIDAgbDIgMCBtLTQyNiAxNDIgbDIgMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0yMiAwIGgxMCBtNjggMCBoMTAgbTAgMCBoMTAgbTQwIDAgaDEwIG0yMCAwIGgxMCBtNjQgMCBoMTAgbTIwIDAgaDEwIG0wIDAgaDY4IG0tOTggMCBoMjAgbTc4IDAgaDIwIG0tMTE4IDAgcTEwIDAgMTAgMTAgbTk4IDAgcTAgLTEwIDEwIC0xMCBtLTEwOCAxMCB2MTIgbTk4IDAgdi0xMiBtLTk4IDEyIHEwIDEwIDEwIDEwIG03OCAwIHExMCAwIDEwIC0xMCBtLTg4IDEwIGgxMCBtNTAgMCBoMTAgbTAgMCBoOCBtLTg4IC0xMCB2MjAgbTk4IDAgdi0yMCBtLTk4IDIwIHYyNCBtOTggMCB2LTI0IG0tOTggMjQgcTAgMTAgMTAgMTAgbTc4IDAgcTEwIDAgMTAgLTEwIG0tODggMTAgaDEwIG01OCAwIGgxMCBtNDAgLTc2IGgxMCBtMCAwIGgxMjAgbS0xNTAgMCBoMjAgbTEzMCAwIGgyMCBtLTE3MCAwIHExMCAwIDEwIDEwIG0xNTAgMCBxMCAtMTAgMTAgLTEwIG0tMTYwIDEwIHYxMiBtMTUwIDAgdi0xMiBtLTE1MCAxMiBxMCAxMCAxMCAxMCBtMTMwIDAgcTEwIDAgMTAgLTEwIG0tMTQwIDEwIGgxMCBtMTA2IDAgaDEwIG0wIDAgaDQgbS0xNDAgLTEwIHYyMCBtMTUwIDAgdi0yMCBtLTE1MCAyMCB2MjQgbTE1MCAwIHYtMjQgbS0xNTAgMjQgcTAgMTAgMTAgMTAgbTEzMCAwIHExMCAwIDEwIC0xMCBtLTE0MCAxMCBoMTAgbTExMCAwIGgxMCBtLTM3MiAtNzYgbDIwIDAgbS0xIDAgcS05IDAgLTkgLTEwIGwwIC0yNCBxMCAtMTAgMTAgLTEwIG0zNzIgNDQgbDIwIDAgbS0yMCAwIHExMCAwIDEwIC0xMCBsMCAtMjQgcTAgLTEwIC0xMCAtMTAgbS0zNzIgMCBoMTAgbTI0IDAgaDEwIG0wIDAgaDMyOCBtLTU2MCA0NCBoMjAgbTU2MCAwIGgyMCBtLTYwMCAwIHExMCAwIDEwIDEwIG01ODAgMCBxMCAtMTAgMTAgLTEwIG0tNTkwIDEwIHY5MCBtNTgwIDAgdi05MCBtLTU4MCA5MCBxMCAxMCAxMCAxMCBtNTYwIDAgcTEwIDAgMTAgLTEwIG0tNTcwIDEwIGgxMCBtMCAwIGg1NTAgbTIyIC0xMTAgbDIgMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0tNTI3IDE0MiBsMiAwIG0yIDAgbDIgMCBtMiAwIGwyIDAgbTIyIDAgaDEwIG0wIDAgaDEzNiBtLTE2NiAwIGgyMCBtMTQ2IDAgaDIwIG0tMTg2IDAgcTEwIDAgMTAgMTAgbTE2NiAwIHEwIC0xMCAxMCAtMTAgbS0xNzYgMTAgdjEyIG0xNjYgMCB2LTEyIG0tMTY2IDEyIHEwIDEwIDEwIDEwIG0xNDYgMCBxMTAgMCAxMCAtMTAgbS0xNTYgMTAgaDEwIG01OCAwIGgxMCBtMCAwIGgxMCBtNDggMCBoMTAgbTQwIC0zMiBoMTAgbTAgMCBoMTcwIG0tMjAwIDAgaDIwIG0xODAgMCBoMjAgbS0yMjAgMCBxMTAgMCAxMCAxMCBtMjAwIDAgcTAgLTEwIDEwIC0xMCBtLTIxMCAxMCB2MTIgbTIwMCAwIHYtMTIgbS0yMDAgMTIgcTAgMTAgMTAgMTAgbTE4MCAwIHExMCAwIDEwIC0xMCBtLTE5MCAxMCBoMTAgbTc0IDAgaDEwIG0wIDAgaDEwIG02NiAwIGgxMCBtMjIgLTMyIGwyIDAgbTIgMCBsMiAwIG0yIDAgbDIgMCBtLTQ0OSA4NiBsMiAwIG0yIDAgbDIgMCBtMiAwIGwyIDAgbTIyIDAgaDEwIG0wIDAgaDQ2NiBtLTQ5NiAwIGgyMCBtNDc2IDAgaDIwIG0tNTE2IDAgcTEwIDAgMTAgMTAgbTQ5NiAwIHEwIC0xMCAxMCAtMTAgbS01MDYgMTAgdjEyIG00OTYgMCB2LTEyIG0tNDk2IDEyIHEwIDEwIDEwIDEwIG00NzYgMCBxMTAgMCAxMCAtMTAgbS00NjYgMTAgaDEwIG02NiAwIGgxMCBtMCAwIGgzMiBtLTEzOCAwIGgyMCBtMTE4IDAgaDIwIG0tMTU4IDAgcTEwIDAgMTAgMTAgbTEzOCAwIHEwIC0xMCAxMCAtMTAgbS0xNDggMTAgdjI0IG0xMzggMCB2LTI0IG0tMTM4IDI0IHEwIDEwIDEwIDEwIG0xMTggMCBxMTAgMCAxMCAtMTAgbS0xMjggMTAgaDEwIG05OCAwIGgxMCBtLTEyOCAtMTAgdjIwIG0xMzggMCB2LTIwIG0tMTM4IDIwIHYyNCBtMTM4IDAgdi0yNCBtLTEzOCAyNCBxMCAxMCAxMCAxMCBtMTE4IDAgcTEwIDAgMTAgLTEwIG0tMTI4IDEwIGgxMCBtNzYgMCBoMTAgbTAgMCBoMjIgbTQwIC04OCBoMTAgbTAgMCBoOTYgbS0xMjYgMCBoMjAgbTEwNiAwIGgyMCBtLTE0NiAwIHExMCAwIDEwIDEwIG0xMjYgMCBxMCAtMTAgMTAgLTEwIG0tMTM2IDEwIHYxMiBtMTI2IDAgdi0xMiBtLTEyNiAxMiBxMCAxMCAxMCAxMCBtMTA2IDAgcTEwIDAgMTAgLTEwIG0tMTE2IDEwIGgxMCBtNDYgMCBoMTAgbTAgMCBoNDAgbS0xMTYgLTEwIHYyMCBtMTI2IDAgdi0yMCBtLTEyNiAyMCB2MjQgbTEyNiAwIHYtMjQgbS0xMjYgMjQgcTAgMTAgMTAgMTAgbTEwNiAwIHExMCAwIDEwIC0xMCBtLTExNiAxMCBoMTAgbTg2IDAgaDEwIG0yMCAtNzYgaDEwIG0xNTIgMCBoMTAgbTIzIC0zMiBoLTMiIC8+CiAgIDxwb2x5Z29uIHBvaW50cz0iNjE3IDk4MyA2MjUgOTc5IDYyNSA5ODciPjwvcG9seWdvbj4KICAgPHBvbHlnb24gcG9pbnRzPSI2MTcgOTgzIDYwOSA5NzkgNjA5IDk4NyI+PC9wb2x5Z29uPgo8L3N2Zz4=)
+
+</div>
+
+<table>
+<colgroup>
+<col style="width: 50%" />
+<col style="width: 50%" />
+</colgroup>
+<thead>
+<tr>
+<th>Field</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><em>select_with_ctes</em>, <em>select_with_recursive_ctes</em></td>
+<td><a href="#common-table-expressions-ctes">Common table
+expressions</a> (CTEs) for this query.</td>
+</tr>
+<tr>
+<td><strong>(</strong> <em>col_ident</em>… <strong>)</strong></td>
+<td>Rename the CTE’s columns to the list of identifiers, both of which
+must be the same length.</td>
+</tr>
+<tr>
+<td><strong>ALL</strong></td>
+<td>Return all rows from query <em>(Default)</em>.</td>
+</tr>
+<tr>
+<td><strong>DISTINCT</strong></td>
+<td><span id="select-distinct"></span>Return only distinct values.</td>
+</tr>
+<tr>
+<td><strong>DISTINCT ON (</strong> <em>col_ref</em>…
+<strong>)</strong></td>
+<td><span id="select-distinct-on"></span>Return only the first row with
+a distinct value for <em>col_ref</em>. If an <code>ORDER BY</code>
+clause is also present, then <code>DISTINCT ON</code> will respect that
+ordering when choosing which row to return for each distinct value of
+<code>col_ref...</code>. Please note that in this case, you should start
+the <code>ORDER BY</code> clause with the same <code>col_ref...</code>
+as the <code>DISTINCT ON</code> clause. For an example, see <a
+href="/docs/self-managed/v25.2/transform-data/idiomatic-materialize-sql/top-k/#select-top-1-item">Top
+K</a>.</td>
+</tr>
+<tr>
+<td><em>target_elem</em></td>
+<td>Return identified columns or functions.</td>
+</tr>
+<tr>
+<td><strong>FROM</strong> <em>table_expr</em></td>
+<td>The tables you want to read from; note that these can also be other
+<code>SELECT</code> statements, <a
+href="#common-table-expressions-ctes">Common Table Expressions</a>
+(CTEs), or <a
+href="/docs/self-managed/v25.2/sql/functions/table-functions">table
+function calls</a>.</td>
+</tr>
+<tr>
+<td><em>join_expr</em></td>
+<td>A join expression; for more details, see the <a
+href="/docs/self-managed/v25.2/sql/select/join/"><code>JOIN</code>
+documentation</a>.</td>
+</tr>
+<tr>
+<td><strong>WHERE</strong> <em>expression</em></td>
+<td>Filter tuples by <em>expression</em>.</td>
+</tr>
+<tr>
+<td><strong>GROUP BY</strong> <em>col_ref</em></td>
+<td>Group aggregations by <em>col_ref</em>.</td>
+</tr>
+<tr>
+<td><strong>OPTIONS (</strong> <em>hint_list</em>
+<strong>)</strong></td>
+<td>Specify one or more <a href="#query-hints">query hints</a>.</td>
+</tr>
+<tr>
+<td><strong>HAVING</strong> <em>expression</em></td>
+<td>Filter aggregations by <em>expression</em>.</td>
+</tr>
+<tr>
+<td><strong>ORDER BY</strong> <em>col_ref</em>…</td>
+<td>Sort results in either <strong>ASC</strong> or <strong>DESC</strong>
+order (<em>default: <strong>ASC</strong></em>).<br />
+<br />
+Use the <strong>NULLS FIRST</strong> and <strong>NULLS LAST</strong>
+options to determine whether nulls appear before or after non-null
+values in the sort ordering <em>(default: <strong>NULLS LAST</strong>
+for <strong>ASC</strong>, <strong>NULLS FIRST</strong> for
+<strong>DESC</strong>)</em>.<br />
+<br />
+</td>
+</tr>
+<tr>
+<td><strong>LIMIT</strong> <em>expression</em></td>
+<td>Limit the number of returned results to <em>expression</em>.</td>
+</tr>
+<tr>
+<td><strong>OFFSET</strong> <em>integer</em></td>
+<td>Skip the first <em>integer</em> number of rows.</td>
+</tr>
+<tr>
+<td><strong>UNION</strong></td>
+<td>Records present in <code>select_stmt</code> or
+<code>another_select_stmt</code>.<br />
+<br />
+<strong>DISTINCT</strong> returns only unique rows from these results
+<em>(implied default)</em>.<br />
+<br />
+With <strong>ALL</strong> specified, each record occurs a number of
+times equal to the sum of the times it occurs in each input
+statement.</td>
+</tr>
+<tr>
+<td><strong>INTERSECT</strong></td>
+<td>Records present in both <code>select_stmt</code> and
+<code>another_select_stmt</code>.<br />
+<br />
+<strong>DISTINCT</strong> returns only unique rows from these results
+<em>(implied default)</em>.<br />
+<br />
+With <strong>ALL</strong> specified, each record occurs a number of
+times equal to the lesser of the times it occurs in each input
+statement.</td>
+</tr>
+<tr>
+<td><strong>EXCEPT</strong></td>
+<td>Records present in <code>select_stmt</code> but not in
+<code>another_select_stmt</code>.<br />
+<br />
+<strong>DISTINCT</strong> returns only unique rows from these results
+<em>(implied default)</em>.<br />
+<br />
+With <strong>ALL</strong> specified, each record occurs a number of
+times equal to the times it occurs in <code>select_stmt</code> less the
+times it occurs in <code>another_select_stmt</code>, or not at all if
+the former is greater than latter.</td>
+</tr>
+</tbody>
+</table>
+
+## Details
+
+Because Materialize works very differently from a traditional RDBMS,
+it’s important to understand the implications that certain features of
+`SELECT` will have on Materialize.
+
+### Creating materialized views
+
+Creating a [materialized
+view](/docs/self-managed/v25.2/sql/create-materialized-view) generates a
+persistent dataflow, which has a different performance profile from
+performing a `SELECT` in an RDBMS.
+
+A materialized view has resource and latency costs that should be
+carefully considered depending on its main usage. Materialize must
+maintain the results of the query in durable storage, but often it must
+also maintain additional intermediate state.
+
+### Creating indexes
+
+Creating an [index](/docs/self-managed/v25.2/sql/create-index) also
+generates a persistent dataflow. The difference from a materialized view
+is that the results are maintained in memory rather than on persistent
+storage. This allows ad hoc queries to perform efficient point-lookups
+in indexes.
+
+### Ad hoc queries
+
+An ad hoc query (a.k.a. one-off `SELECT`) simply performs the query once
+and returns the results. Ad hoc queries can either read from an existing
+index, or they can start an ephemeral dataflow to compute the results.
+
+Performing a `SELECT` on an **indexed** source, view or materialized
+view is Materialize’s ideal operation. When Materialize receives such a
+`SELECT` query, it quickly returns the maintained results from memory.
+Materialize also quickly returns results for queries that only filter,
+project, transform with scalar functions, and re-order data that is
+maintained by an index.
+
+Queries that can’t simply read out from an index will create an
+ephemeral dataflow to compute the results. These dataflows are bound to
+the active [cluster](/docs/self-managed/v25.2/concepts/clusters/), which
+you can change using:
+
+<div class="highlight">
+
+``` chroma
+SET cluster = <cluster name>;
+```
+
+</div>
+
+Materialize will remove the dataflow as soon as it has returned the
+query results to you.
+
+### Common table expressions (CTEs)
+
+Common table expressions, also known as CTEs or `WITH` queries, create
+aliases for statements.
+
+#### Regular CTEs
+
+<div class="rr-diagram">
+
+![](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIzODkiIGhlaWdodD0iODEiPgogICA8cG9seWdvbiBwb2ludHM9IjkgNjEgMSA1NyAxIDY1Ij48L3BvbHlnb24+CiAgIDxwb2x5Z29uIHBvaW50cz0iMTcgNjEgOSA1NyA5IDY1Ij48L3BvbHlnb24+CiAgIDxyZWN0IHg9IjMxIiB5PSI0NyIgd2lkdGg9IjU4IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjI5IiB5PSI0NSIgd2lkdGg9IjU4IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIzOSIgeT0iNjUiPldJVEg8L3RleHQ+CiAgIDxyZWN0IHg9IjEyOSIgeT0iNDciIHdpZHRoPSI5NiIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iMTI3IiB5PSI0NSIgd2lkdGg9Ijk2IiBoZWlnaHQ9IjMyIiBjbGFzcz0ibm9udGVybWluYWwiIC8+CiAgIDx0ZXh0IGNsYXNzPSJub250ZXJtaW5hbCIgeD0iMTM3IiB5PSI2NSI+Y3RlX2JpbmRpbmc8L3RleHQ+CiAgIDxyZWN0IHg9IjEyOSIgeT0iMyIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjEyNyIgeT0iMSIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIxMzciIHk9IjIxIj4sPC90ZXh0PgogICA8cmVjdCB4PSIyNjUiIHk9IjQ3IiB3aWR0aD0iOTYiIGhlaWdodD0iMzIiIC8+CiAgIDxyZWN0IHg9IjI2MyIgeT0iNDUiIHdpZHRoPSI5NiIgaGVpZ2h0PSIzMiIgY2xhc3M9Im5vbnRlcm1pbmFsIiAvPgogICA8dGV4dCBjbGFzcz0ibm9udGVybWluYWwiIHg9IjI3MyIgeT0iNjUiPnNlbGVjdF9zdG10PC90ZXh0PgogICA8cGF0aCBjbGFzcz0ibGluZSIgZD0ibTE3IDYxIGgyIG0wIDAgaDEwIG01OCAwIGgxMCBtMjAgMCBoMTAgbTk2IDAgaDEwIG0tMTM2IDAgbDIwIDAgbS0xIDAgcS05IDAgLTkgLTEwIGwwIC0yNCBxMCAtMTAgMTAgLTEwIG0xMTYgNDQgbDIwIDAgbS0yMCAwIHExMCAwIDEwIC0xMCBsMCAtMjQgcTAgLTEwIC0xMCAtMTAgbS0xMTYgMCBoMTAgbTI0IDAgaDEwIG0wIDAgaDcyIG0yMCA0NCBoMTAgbTk2IDAgaDEwIG0zIDAgaC0zIiAvPgogICA8cG9seWdvbiBwb2ludHM9IjM3OSA2MSAzODcgNTcgMzg3IDY1Ij48L3BvbHlnb24+CiAgIDxwb2x5Z29uIHBvaW50cz0iMzc5IDYxIDM3MSA1NyAzNzEgNjUiPjwvcG9seWdvbj4KPC9zdmc+)
+
+</div>
+
+##### cte_binding
+
+<div class="rr-diagram">
+
+![](data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI1MDkiIGhlaWdodD0iMTYzIj4KICAgPHBvbHlnb24gcG9pbnRzPSI5IDYxIDEgNTcgMSA2NSI+PC9wb2x5Z29uPgogICA8cG9seWdvbiBwb2ludHM9IjE3IDYxIDkgNTcgOSA2NSI+PC9wb2x5Z29uPgogICA8cmVjdCB4PSIzMSIgeT0iNDciIHdpZHRoPSI4MCIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iMjkiIHk9IjQ1IiB3aWR0aD0iODAiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIzOSIgeT0iNjUiPmN0ZV9pZGVudDwvdGV4dD4KICAgPHJlY3QgeD0iMTUxIiB5PSI0NyIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjE0OSIgeT0iNDUiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iMTU5IiB5PSI2NSI+KDwvdGV4dD4KICAgPHJlY3QgeD0iMjE3IiB5PSI0NyIgd2lkdGg9Ijc4IiBoZWlnaHQ9IjMyIiAvPgogICA8cmVjdCB4PSIyMTUiIHk9IjQ1IiB3aWR0aD0iNzgiIGhlaWdodD0iMzIiIGNsYXNzPSJub250ZXJtaW5hbCIgLz4KICAgPHRleHQgY2xhc3M9Im5vbnRlcm1pbmFsIiB4PSIyMjUiIHk9IjY1Ij5jb2xfaWRlbnQ8L3RleHQ+CiAgIDxyZWN0IHg9IjIxNyIgeT0iMyIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjIxNSIgeT0iMSIgd2lkdGg9IjI0IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIyMjUiIHk9IjIxIj4sPC90ZXh0PgogICA8cmVjdCB4PSIzMzUiIHk9IjQ3IiB3aWR0aD0iMjYiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMzMzIiB5PSI0NSIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSIzNDMiIHk9IjY1Ij4pPC90ZXh0PgogICA8cmVjdCB4PSI0MDEiIHk9IjQ3IiB3aWR0aD0iNDAiIGhlaWdodD0iMzIiIHJ4PSIxMCIgLz4KICAgPHJlY3QgeD0iMzk5IiB5PSI0NSIgd2lkdGg9IjQwIiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSI0MDkiIHk9IjY1Ij5BUzwvdGV4dD4KICAgPHJlY3QgeD0iNDYxIiB5PSI0NyIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiByeD0iMTAiIC8+CiAgIDxyZWN0IHg9IjQ1OSIgeT0iNDUiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgY2xhc3M9InRlcm1pbmFsIiByeD0iMTAiIC8+CiAgIDx0ZXh0IGNsYXNzPSJ0ZXJtaW5hbCIgeD0iNDY5IiB5PSI2NSI+KDwvdGV4dD4KICAgPHJlY3QgeD0iMzM5IiB5PSIxMjkiIHdpZHRoPSI5NiIgaGVpZ2h0PSIzMiIgLz4KICAgPHJlY3QgeD0iMzM3IiB5PSIxMjciIHdpZHRoPSI5NiIgaGVpZ2h0PSIzMiIgY2xhc3M9Im5vbnRlcm1pbmFsIiAvPgogICA8dGV4dCBjbGFzcz0ibm9udGVybWluYWwiIHg9IjM0NyIgeT0iMTQ3Ij5zZWxlY3Rfc3RtdDwvdGV4dD4KICAgPHJlY3QgeD0iNDU1IiB5PSIxMjkiIHdpZHRoPSIyNiIgaGVpZ2h0PSIzMiIgcng9IjEwIiAvPgogICA8cmVjdCB4PSI0NTMiIHk9IjEyNyIgd2lkdGg9IjI2IiBoZWlnaHQ9IjMyIiBjbGFzcz0idGVybWluYWwiIHJ4PSIxMCIgLz4KICAgPHRleHQgY2xhc3M9InRlcm1pbmFsIiB4PSI0NjMiIHk9IjE0NyI+KTwvdGV4dD4KICAgPHBhdGggY2xhc3M9ImxpbmUiIGQ9Im0xNyA2MSBoMiBtMCAwIGgxMCBtODAgMCBoMTAgbTIwIDAgaDEwIG0yNiAwIGgxMCBtMjAgMCBoMTAgbTc4IDAgaDEwIG0tMTE4IDAgbDIwIDAgbS0xIDAgcS05IDAgLTkgLTEwIGwwIC0yNCBxMCAtMTAgMTAgLTEwIG05OCA0NCBsMjAgMCBtLTIwIDAgcTEwIDAgMTAgLTEwIGwwIC0yNCBxMCAtMTAgLTEwIC0xMCBtLTk4IDAgaDEwIG0yNCAwIGgxMCBtMCAwIGg1NCBtMjAgNDQgaDEwIG0yNiAwIGgxMCBtLTI1MCAwIGgyMCBtMjMwIDAgaDIwIG0tMjcwIDAgcTEwIDAgMTAgMTAgbTI1MCAwIHEwIC0xMCAxMCAtMTAgbS0yNjAgMTAgdjE0IG0yNTAgMCB2LTE0IG0tMjUwIDE0IHEwIDEwIDEwIDEwIG0yMzAgMCBxMTAgMCAxMCAtMTAgbS0yNDAgMTAgaDEwIG0wIDAgaDIyMCBtMjAgLTM0IGgxMCBtNDAgMCBoMTAgbTAgMCBoMTAgbTI2IDAgaDEwIG0yIDAgbDIgMCBtMiAwIGwyIDAgbTIgMCBsMiAwIG0tMTkyIDgyIGwyIDAgbTIgMCBsMiAwIG0yIDAgbDIgMCBtMiAwIGgxMCBtOTYgMCBoMTAgbTAgMCBoMTAgbTI2IDAgaDEwIG0zIDAgaC0zIiAvPgogICA8cG9seWdvbiBwb2ludHM9IjQ5OSAxNDMgNTA3IDEzOSA1MDcgMTQ3Ij48L3BvbHlnb24+CiAgIDxwb2x5Z29uIHBvaW50cz0iNDk5IDE0MyA0OTEgMTM5IDQ5MSAxNDciPjwvcG9seWdvbj4KPC9zdmc+)
+
+</div>
+
+With *regular CTEs*, any `cte_ident` alias can be referenced in
+subsequent `cte_binding` definitions and in the final `select_stmt`.
+Regular CTEs can enhance legibility of complex queries, but doesn’t
+alter the queries’ semantics. For an example, see [Using regular
+CTEs](#using-regular-ctes).
+
+#### Recursive CTEs
+
+In addition, Materialize also provides support for *recursive CTEs* that
+can mutually reference each other. Recursive CTEs can be used to define
+computations on recursively defined structures (such as trees or graphs)
+implied by your data. For details and examples, see the [Recursive
+CTEs](/docs/self-managed/v25.2/sql/select/recursive-ctes) page.
+
+#### Known limitations
+
+CTEs have the following limitations, which we are working to improve:
+
+- `INSERT`/`UPDATE`/`DELETE` (with `RETURNING`) is not supported inside
+  a CTE.
+- SQL99-compliant `WITH RECURSIVE` CTEs are not supported (use the
+  [non-standard
+  flavor](/docs/self-managed/v25.2/sql/select/recursive-ctes) instead).
+
+### Query hints
+
+Users can specify query hints to help Materialize optimize queries.
+
+The following query hints are valid within the `OPTIONS` clause.
+
+| Hint | Value type | Description |
+|----|----|----|
+| `AGGREGATE INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in an aggregation. Materialize can render `min` and `max` expressions more efficiently with this information. |
+| `DISTINCT ON INPUT GROUP SIZE` | `uint8` | How many rows will have the same group key in a `DISTINCT ON` expression. Materialize can render [Top K patterns](/docs/self-managed/v25.2/transform-data/idiomatic-materialize-sql/top-k/) based on `DISTINCT ON` more efficiently with this information. To determine the query hint size, see [`EXPLAIN ANALYZE HINTS`](/docs/self-managed/v25.2/sql/explain-analyze/#explain-analyze-hints). |
+| `LIMIT INPUT GROUP SIZE` | `uint8` | How many rows will be given as a group to a `LIMIT` restriction. Materialize can render [Top K patterns](/docs/self-managed/v25.2/transform-data/idiomatic-materialize-sql/top-k/) based on `LIMIT` more efficiently with this information. |
+
+For examples, see the
+[Optimization](/docs/self-managed/v25.2/transform-data/optimization/#query-hints)
+page.
+
+### Column references
+
+Within a given `SELECT` statement, we refer to the columns from the
+tables in the `FROM` clause as the **input columns**, and columns in the
+`SELECT` list as the **output columns**.
+
+Expressions in the `SELECT` list, `WHERE` clause, and `HAVING` clause
+may refer only to input columns.
+
+Column references in the `ORDER BY` and `DISTINCT ON` clauses may be the
+name of an output column, the ordinal number of an output column, or an
+arbitrary expression of only input columns. If an unqualified name
+refers to both an input and output column, `ORDER BY` chooses the output
+column.
+
+Column references in the `GROUP BY` clause may be the name of an output
+column, the ordinal number of an output column, or an arbitrary
+expression of only input columns. If an unqualified name refers to both
+an input and output column, `GROUP BY` chooses the input column.
+
+## Examples
+
+### Creating an indexed view
+
+This assumes you’ve already [created a source](../create-source).
+
+The following query creates a view representing the total of all
+purchases made by users per region, and then creates an index on this
+view.
+
+<div class="highlight">
+
+``` chroma
+CREATE VIEW purchases_by_region AS
+    SELECT region.id, sum(purchase.total)
+    FROM mysql_simple_purchase AS purchase
+    JOIN mysql_simple_user AS user ON purchase.user_id = user.id
+    JOIN mysql_simple_region AS region ON user.region_id = region.id
+    GROUP BY region.id;
+
+CREATE INDEX purchases_by_region_idx ON purchases_by_region(id);
+```
+
+</div>
+
+In this case, Materialize will create a dataflow to maintain the results
+of this query, and that dataflow will live on until the index it’s
+maintaining is dropped.
+
+### Reading from a view
+
+Assuming you’ve created the indexed view listed above, named
+`purchases_by_region`, you can simply read from the index with an ad hoc
+`SELECT` query:
+
+<div class="highlight">
+
+``` chroma
+SELECT * FROM purchases_by_region;
+```
+
+</div>
+
+In this case, Materialize simply returns the results that the index is
+maintaining, by reading from memory.
+
+### Ad hoc querying
+
+<div class="highlight">
+
+``` chroma
+SELECT region.id, sum(purchase.total)
+FROM mysql_simple_purchase AS purchase
+JOIN mysql_simple_user AS user ON purchase.user_id = user.id
+JOIN mysql_simple_region AS region ON user.region_id = region.id
+GROUP BY region.id;
+```
+
+</div>
+
+In this case, Materialize will spin up a similar dataflow as it did for
+creating the above indexed view, but it will tear down the dataflow once
+it’s returned its results to the client. If you regularly want to view
+the results of this query, you may want to create an
+[index](/docs/self-managed/v25.2/sql/create-index) (in memory) and/or a
+[materialized
+view](/docs/self-managed/v25.2/sql/create-materialized-view) (on
+persistent storage) for it.
+
+### Using regular CTEs
+
+<div class="highlight">
+
+``` chroma
+WITH
+  regional_sales (region, total_sales) AS (
+    SELECT region, sum(amount)
+    FROM orders
+    GROUP BY region
+  ),
+  top_regions AS (
+    SELECT region
+    FROM regional_sales
+    ORDER BY total_sales DESC
+    LIMIT 5
+  )
+SELECT region,
+       product,
+       SUM(quantity) AS product_units,
+       SUM(amount) AS product_sales
+FROM orders
+WHERE region IN (SELECT region FROM top_regions)
+GROUP BY region, product;
+```
+
+</div>
+
+Both `regional_sales` and `top_regions` are CTEs. You could write a
+query that produces the same results by replacing references to the CTE
+with the query it names, but the CTEs make the entire query simpler to
+understand.
+
+With regard to dataflows, this is similar to [ad hoc
+querying](#ad-hoc-querying) above: Materialize tears down the created
+dataflow after returning the results.
+
+## Privileges
+
+The privileges required to execute this statement are:
+
+- `SELECT` privileges on all **directly** referenced relations in the
+  query. If the directly referenced relation is a view or materialized
+  view:
+
+  - `SELECT` privileges are required only on the directly referenced
+    view/materialized view. `SELECT` privileges are **not** required for
+    the underlying relations referenced in the view/materialized view
+    definition unless those relations themselves are directly referenced
+    in the query.
+
+  - However, the owner of the view/materialized view (including those
+    with **superuser** privileges) must have all required `SELECT` and
+    `USAGE` privileges to run the view definition regardless of who is
+    selecting from the view/materialized view.
+
+- `USAGE` privileges on the schemas that contain the relations in the
+  query.
+
+- `USAGE` privileges on the active cluster.
+
+## Related pages
+
+- [`CREATE VIEW`](../create-view)
+- [`CREATE MATERIALIZED VIEW`](../create-materialized-view)
+- [`SHOW FULL VIEWS`](../show-views)
+
+[JOIN](/docs/self-managed/v25.2/sql/select/join/)
+
+[Recursive CTEs](/docs/self-managed/v25.2/sql/select/recursive-ctes/)
+
+</div>
+
+<a href="#top" class="back-to-top">Back to top ↑</a>
+
+<div class="theme-switcher">
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzeXN0ZW0iIHZpZXdib3g9IjAgMCA1MTIgNTEyIj4KICAgICAgICA8dGl0bGU+U3lzdGVtIFRoZW1lPC90aXRsZT4KICAgICAgICA8cGF0aCBkPSJNMjU2IDE3NmE4MCA4MCAwIDEwODAgODAgODAuMjQgODAuMjQgMCAwMC04MC04MHptMTcyLjcyIDgwYTE2NS41MyAxNjUuNTMgMCAwMS0xLjY0IDIyLjM0bDQ4LjY5IDM4LjEyYTExLjU5IDExLjU5IDAgMDEyLjYzIDE0Ljc4bC00Ni4wNiA3OS41MmExMS42NCAxMS42NCAwIDAxLTE0LjE0IDQuOTNsLTU3LjI1LTIzYTE3Ni41NiAxNzYuNTYgMCAwMS0zOC44MiAyMi42N2wtOC41NiA2MC43OGExMS45MyAxMS45MyAwIDAxLTExLjUxIDkuODZoLTkyLjEyYTEyIDEyIDAgMDEtMTEuNTEtOS41M2wtOC41Ni02MC43OEExNjkuMyAxNjkuMyAwIDAxMTUxLjA1IDM5M0w5My44IDQxNmExMS42NCAxMS42NCAwIDAxLTE0LjE0LTQuOTJMMzMuNiAzMzEuNTdhMTEuNTkgMTEuNTkgMCAwMTIuNjMtMTQuNzhsNDguNjktMzguMTJBMTc0LjU4IDE3NC41OCAwIDAxODMuMjggMjU2YTE2NS41MyAxNjUuNTMgMCAwMTEuNjQtMjIuMzRsLTQ4LjY5LTM4LjEyYTExLjU5IDExLjU5IDAgMDEtMi42My0xNC43OGw0Ni4wNi03OS41MmExMS42NCAxMS42NCAwIDAxMTQuMTQtNC45M2w1Ny4yNSAyM2ExNzYuNTYgMTc2LjU2IDAgMDEzOC44Mi0yMi42N2w4LjU2LTYwLjc4QTExLjkzIDExLjkzIDAgMDEyMDkuOTQgMjZoOTIuMTJhMTIgMTIgMCAwMTExLjUxIDkuNTNsOC41NiA2MC43OEExNjkuMyAxNjkuMyAwIDAxMzYxIDExOWw1Ny4yLTIzYTExLjY0IDExLjY0IDAgMDExNC4xNCA0LjkybDQ2LjA2IDc5LjUyYTExLjU5IDExLjU5IDAgMDEtMi42MyAxNC43OGwtNDguNjkgMzguMTJhMTc0LjU4IDE3NC41OCAwIDAxMS42NCAyMi42NnoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="system" />
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJzdW4iIHZpZXdib3g9IjAgMCA1MTIgNTEyIj4KICAgICAgICA8dGl0bGU+TGlnaHQgVGhlbWU8L3RpdGxlPgogICAgICAgIDxwYXRoIGQ9Ik0yMzQgMjZoNDR2OTJoLTQ0ek0yMzQgMzk0aDQ0djkyaC00NHpNMzM4LjAyNSAxNDIuODU3bDY1LjA1NC02NS4wNTQgMzEuMTEzIDMxLjExMy02NS4wNTQgNjUuMDU0ek03Ny44MTUgNDAzLjA3NGw2NS4wNTQtNjUuMDU0IDMxLjExMyAzMS4xMTMtNjUuMDU0IDY1LjA1NHpNMzk0IDIzNGg5MnY0NGgtOTJ6TTI2IDIzNGg5MnY0NEgyNnpNMzM4LjAyOSAzNjkuMTRsMzEuMTEyLTMxLjExMyA2NS4wNTQgNjUuMDU0LTMxLjExMiAzMS4xMTJ6TTc3LjgwMiAxMDguOTJsMzEuMTEzLTMxLjExMyA2NS4wNTQgNjUuMDU0LTMxLjExMyAzMS4xMTJ6TTI1NiAzNThhMTAyIDEwMiAwIDExMTAyLTEwMiAxMDIuMTIgMTAyLjEyIDAgMDEtMTAyIDEwMnoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="sun" />
+
+<img
+src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIGNsYXNzPSJtb29uIiB2aWV3Ym94PSIwIDAgNTEyIDUxMiI+CiAgICAgICAgPHRpdGxlPkRhcmsgVGhlbWU8L3RpdGxlPgogICAgICAgIDxwYXRoIGQ9Ik0xNTIuNjIgMTI2Ljc3YzAtMzMgNC44NS02Ni4zNSAxNy4yMy05NC43N0M4Ny41NCA2Ny44MyAzMiAxNTEuODkgMzIgMjQ3LjM4IDMyIDM3NS44NSAxMzYuMTUgNDgwIDI2NC42MiA0ODBjOTUuNDkgMCAxNzkuNTUtNTUuNTQgMjE1LjM4LTEzNy44NS0yOC40MiAxMi4zOC02MS44IDE3LjIzLTk0Ljc3IDE3LjIzLTEyOC40NyAwLTIzMi42MS0xMDQuMTQtMjMyLjYxLTIzMi42MXoiIC8+CiAgICAgIDwvc3ZnPg=="
+class="moon" />
+
+</div>
+
+<div>
+
+<a
+href="//github.com/MaterializeInc/materialize/edit/main/doc/user/content/sql/select/_index.md"
+class="btn-ghost"><img
+src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHZpZXdib3g9IjAgMCAyMyAyMyIgZmlsbD0iY3VycmVudENvbG9yIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogICAgICAgIDxwYXRoIGQ9Ik0yMC44OTQ1IDExLjQ5NjhDMjAuODk0NSAxMC4yMzk0IDIwLjYxNTEgOS4wNTE5IDIwLjEyNjEgNy44NjQzN0MxOS42MzcxIDYuNzQ2NjkgMTguOTM4NSA1LjY5ODg4IDE4LjE3MDEgNC45MzA0N0MxNy40MDE3IDQuMTYyMDcgMTYuMzUzOSAzLjQ2MzUgMTUuMjM2MiAyLjk3NDUyQzE0LjExODUgMi40ODU1MyAxMi44NjExIDIuMjA2MTMgMTEuNjAzOCAyLjIwNjEzQzEwLjM0NjQgMi4yMDYxMyA5LjE1ODg0IDIuNDg1NTMgNy45NzEzIDIuOTc0NTJDNi44NTM2MiAzLjQ2MzUgNS44MDU3OSA0LjE2MjA3IDUuMDM3MzggNC45MzA0N0M0LjI2ODk4IDUuNjk4ODggMy41NzA0NCA2Ljc0NjY5IDMuMDgxNDUgNy44NjQzN0MyLjU5MjQ3IDguOTgyMDUgMi4zMTMwNCAxMC4yMzk0IDIuMzEzMDQgMTEuNDk2OEMyLjMxMzA0IDEzLjUyMjYgMi45NDE3NCAxNS4zMzg5IDQuMTI5MjggMTcuMDE1NEM1LjMxNjgxIDE4LjY5MTkgNi45MjM0NyAxOS44MDk2IDguODA5NTYgMjAuMzY4NFYxNy45MjM1QzguMjUwNzIgMTcuOTkzNCA3Ljk3MTI5IDE3Ljk5MzMgNy44MzE1OCAxNy45OTMzQzYuNzgzNzYgMTcuOTkzMyA2LjAxNTM1IDE3LjUwNDQgNS41OTYyMiAxNi41MjY0QzUuNDU2NTEgMTYuMTc3MSA1LjI0Njk1IDE1LjgyNzggNS4wMzczOCAxNS42MTgzQzQuOTY3NTMgMTUuNTQ4NCA0Ljg5NzY4IDE1LjQ3ODYgNC43NTc5NyAxNS4zMzg5QzQuNjE4MjYgMTUuMTk5MiA0LjQ3ODU0IDE1LjEyOTMgNC4zMzg4MyAxNC45ODk2QzQuMTk5MTIgMTQuODQ5OSA0LjEyOTI4IDE0Ljc4IDQuMTI5MjggMTQuNzhDNC4xMjkyOCAxNC42NDAzIDQuMjY4OTggMTQuNjQwMyA0LjU0ODQgMTQuNjQwM0M0LjgyNzgyIDE0LjY0MDMgNS4xMDcyNCAxNC43MTAyIDUuMzE2ODEgMTQuODQ5OUM1LjUyNjM3IDE0Ljk4OTYgNS43MzU5NCAxNS4xMjkzIDUuODc1NjUgMTUuMzM4OUM2LjAxNTM2IDE1LjU0ODQgNi4xNTUwNyAxNS43NTggNi4zNjQ2MyAxNS45Njc2QzYuNTA0MzQgMTYuMTc3MSA2LjcxMzkxIDE2LjMxNjggNi45MjM0OCAxNi40NTY1QzcuMTMzMDQgMTYuNTk2MyA3LjQxMjQ2IDE2LjY2NjEgNy43NjE3MyAxNi42NjYxQzguMTgwODYgMTYuNjY2MSA4LjUzMDE0IDE2LjU5NjMgOC45NDkyNyAxNi40NTY1QzkuMDg4OTggMTUuODk3NyA5LjQzODI1IDE1LjQ3ODYgOS44NTczOCAxNS4xMjkzQzguMjUwNzIgMTQuOTg5NiA3LjA2MzE4IDE0LjU3MDUgNi4yOTQ3NyAxMy45NDE4QzUuNTI2MzcgMTMuMzEzMSA1LjEwNzI0IDEyLjE5NTQgNS4xMDcyNCAxMC42NTg2QzUuMTA3MjQgOS41NDA4OSA1LjQ1NjUyIDguNTYyOTQgNi4xNTUwNyA3Ljc5NDUzQzYuMDE1MzYgNy4zNzU0IDUuOTQ1NSA2Ljk1NjI2IDUuOTQ1NSA2LjUzNzEzQzUuOTQ1NSA1Ljk3ODI5IDYuMDg1MjEgNS40MTk0NiA2LjM2NDYzIDQuOTMwNDdDNi45MjM0NyA0LjkzMDQ3IDcuNDEyNDUgNS4wMDAzMiA3LjgzMTU4IDUuMjA5ODlDOC4yNTA3MSA1LjQxOTQ1IDguNzM5NyA1LjY5ODg2IDkuMjk4NTQgNi4xMTc5OUMxMC4wNjY5IDUuOTc4MjggMTAuODM1NCA1LjgzODU4IDExLjc0MzUgNS44Mzg1OEMxMi41MTE5IDUuODM4NTggMTMuMjgwMyA1LjkwODQ1IDEzLjk3ODggNi4wNDgxNkMxNC41Mzc3IDUuNjI5MDMgMTUuMDI2NyA1LjM0OTYgMTUuNDQ1OCA1LjIwOTg5QzE1Ljg2NDkgNS4wMDAzMiAxNi4zNTM5IDQuOTMwNDcgMTYuOTEyNyA0LjkzMDQ3QzE3LjE5MjIgNS40MTk0NiAxNy4zMzE5IDUuOTc4MjkgMTcuMzMxOSA2LjUzNzEzQzE3LjMzMTkgNi45NTYyNiAxNy4yNjIgNy4zNzU0IDE3LjEyMjMgNy43MjQ2N0MxNy44MjA5IDguNDkzMDggMTguMTcwMSA5LjQ3MTA1IDE4LjE3MDEgMTAuNTg4N0MxOC4xNzAxIDEyLjEyNTUgMTcuNzUxIDEzLjE3MzQgMTYuOTgyNiAxMy44NzE5QzE2LjIxNDIgMTQuNTcwNSAxNS4wMjY2IDE0LjkxOTcgMTMuNDIgMTUuMDU5NEMxNC4xMTg1IDE1LjU0ODQgMTQuMzk4IDE2LjE3NzEgMTQuMzk4IDE2Ljk0NTVWMjAuMjI4N0MxNi4zNTM5IDE5LjYgMTcuODkwNyAxOC40ODIzIDE5LjA3ODIgMTYuODc1N0MyMC4yNjU4IDE1LjMzODkgMjAuODk0NSAxMy41MjI2IDIwLjg5NDUgMTEuNDk2OFpNMjIuNzEwNyAxMS40OTY4QzIyLjcxMDcgMTMuNTIyNiAyMi4yMjE3IDE1LjQwODcgMjEuMjQzOCAxNy4wODUyQzIwLjI2NTggMTguODMxNiAxOC44Njg3IDIwLjE1ODggMTcuMTkyMiAyMS4xMzY4QzE1LjQ0NTggMjIuMTE0OCAxMy42Mjk2IDIyLjYwMzggMTEuNjAzOCAyMi42MDM4QzkuNTc3OTYgMjIuNjAzOCA3LjY5MTg4IDIyLjExNDggNi4wMTUzNiAyMS4xMzY4QzQuMjY4OTggMjAuMTU4OCAyLjk0MTc0IDE4Ljc2MTggMS45NjM3NyAxNy4wODUyQzAuOTg1Nzk2IDE1LjMzODkgMC40OTY4MDcgMTMuNTIyNiAwLjQ5NjgwNyAxMS40OTY4QzAuNDk2ODA3IDkuNDcxMDQgMC45ODU3OTYgNy41ODQ5NiAxLjk2Mzc3IDUuOTA4NDRDMi45NDE3NCA0LjE2MjA2IDQuMzM4ODQgMi44MzQ4MyA2LjAxNTM2IDEuODU2ODZDNy43NjE3MyAwLjg3ODg4NiA5LjU3Nzk2IDAuMzg5ODk3IDExLjYwMzggMC4zODk4OTdDMTMuNjI5NiAwLjM4OTg5NyAxNS41MTU2IDAuODc4ODg2IDE3LjE5MjIgMS44NTY4NkMxOC45Mzg1IDIuODM0ODMgMjAuMjY1OCA0LjIzMTkyIDIxLjI0MzggNS45MDg0NEMyMi4yMjE3IDcuNTg0OTYgMjIuNzEwNyA5LjQ3MTA0IDIyLjcxMDcgMTEuNDk2OFoiIC8+CiAgICAgIDwvc3ZnPg==" />
+Edit this page</a>
+
+</div>
+
+<div class="footer-links">
+
+[Home](https://materialize.com) [Status](https://status.materialize.com)
+[GitHub](https://github.com/MaterializeInc/materialize)
+[Blog](https://materialize.com/blog)
+[Contact](https://materialize.com/contact)
+
+Cookie Preferences
+
+[Privacy Policy](https://materialize.com/privacy-policy/)
+
+</div>
+
+© 2025 Materialize Inc.
+
+</div>
