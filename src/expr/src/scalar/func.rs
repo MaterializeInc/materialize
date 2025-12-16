@@ -844,32 +844,20 @@ fn age_timestamp_tz(
     Ok(a.age(&b)?)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "Interval",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
-fn sub_timestamp<'a>(
-    a: CheckedTimestamp<chrono::NaiveDateTime>,
-    b: CheckedTimestamp<chrono::NaiveDateTime>,
-) -> Datum<'a> {
-    Datum::from(a - b)
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+fn sub_timestamp(
+    a: CheckedTimestamp<NaiveDateTime>,
+    b: CheckedTimestamp<NaiveDateTime>,
+) -> Interval {
+    Interval::from_chrono_duration_unchecked(a - b)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "Interval",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
-fn sub_timestamp_tz<'a>(
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+fn sub_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
-) -> Datum<'a> {
-    Datum::from(a - b)
+) -> Interval {
+    Interval::from_chrono_duration_unchecked(a - b)
 }
 
 #[sqlfunc(
@@ -882,15 +870,9 @@ fn sub_date(a: Date, b: Date) -> i32 {
     a - b
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "Interval",
-    is_infix_op = true,
-    sqlname = "-",
-    propagates_nulls = true
-)]
-fn sub_time<'a>(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Datum<'a> {
-    Datum::from(a - b)
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Interval {
+    Interval::from_chrono_duration_unchecked(a - b)
 }
 
 #[sqlfunc(
