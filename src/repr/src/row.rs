@@ -2643,7 +2643,7 @@ impl<'a> DatumList<'a> {
     }
 }
 
-impl<'a> IntoIterator for &'a DatumList<'a> {
+impl<'a> IntoIterator for &'_ DatumList<'a> {
     type Item = Datum<'a>;
     type IntoIter = DatumListIter<'a>;
     fn into_iter(self) -> DatumListIter<'a> {
