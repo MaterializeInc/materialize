@@ -202,7 +202,7 @@ Explained Query:
     cte l0 =
       Project (#1, #2) // { arity: 2 }
         Map (array_index(regexp_split_to_array[",", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
-          FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+          FlatMap generate_series(1, array_length(regexp_split_to_array[",", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Distinct project=[#0] // { arity: 1 }

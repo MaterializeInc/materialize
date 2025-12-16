@@ -320,10 +320,10 @@ Explained Query:
     cte l0 =
       Project (#0, #2, #3) // { arity: 3 }
         Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#1{block}), integer_to_bigint(#2{r}))) // { arity: 4 }
-          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#1{block}) array_length 1), 1) // { arity: 3 }
+          FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#1{block}), 1), 1) // { arity: 3 }
             Project (#1, #2) // { arity: 2 }
               Map (array_index(regexp_split_to_array["\n\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{b}))) // { arity: 3 }
-                FlatMap generate_series(1, (regexp_split_to_array["\n\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+                FlatMap generate_series(1, array_length(regexp_split_to_array["\n\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Project (#0, #1, #3, #4) // { arity: 4 }

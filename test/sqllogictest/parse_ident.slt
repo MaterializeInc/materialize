@@ -388,7 +388,7 @@ EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR SELECT m
 ----
 Explained Query:
   Project (#1)
-    Map (arraytostr(case when (#0{c}) IS NULL then null else case when ((parse_ident(#0{c}, true) array_length 1) > 3) then error_if_null(null, ("improper relation name (too many dotted names): " || #0{c})) else (array_fill(null, array[(3 - (parse_ident(#0{c}, true) array_length 1))]) || parse_ident(#0{c}, true)) end end))
+    Map (arraytostr(case when (#0{c}) IS NULL then null else case when (array_length(parse_ident(#0{c}, true), 1) > 3) then error_if_null(null, ("improper relation name (too many dotted names): " || #0{c})) else (array_fill(null, array[(3 - array_length(parse_ident(#0{c}, true), 1))]) || parse_ident(#0{c}, true)) end end))
       ReadStorage materialize.public.t
 
 Source materialize.public.t
