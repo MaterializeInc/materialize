@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -1940,6 +1941,40 @@ pub trait DatumType<'a, E>: Sized {
 #[derive(Debug)]
 pub struct ArrayRustType<T>(pub Vec<T>);
 
+impl<T> From<Vec<T>> for ArrayRustType<T> {
+    fn from(v: Vec<T>) -> Self {
+        Self(v)
+    }
+}
+
+impl<B: ToOwned<Owned: AsColumnType>> AsColumnType for Cow<'_, B> {
+    fn as_column_type() -> SqlColumnType {
+        <B::Owned>::as_column_type()
+    }
+}
+
+impl<'a, E, B: ToOwned> DatumType<'a, E> for Cow<'a, B>
+where
+    B::Owned: DatumType<'a, E>,
+    for<'b> &'b B: DatumType<'a, E>,
+{
+    fn nullable() -> bool {
+        B::Owned::nullable()
+    }
+    fn fallible() -> bool {
+        B::Owned::fallible()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        <&B>::try_from_result(res).map(|b| Cow::Borrowed(b))
+    }
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        match self {
+            Cow::Owned(b) => b.into_result(temp_storage),
+            Cow::Borrowed(b) => b.into_result(temp_storage),
+        }
+    }
+}
+
 impl<B: AsColumnType> AsColumnType for Option<B> {
     fn as_column_type() -> SqlColumnType {
         B::as_column_type().nullable(true)
@@ -2304,6 +2339,48 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
                         length: self.0.len(),
                     }],
                     self.0.iter().map(|elem| Datum::String(elem.as_str())),
+                )
+                .expect("self is 1 dimensional, and its length is used for the array length");
+        }))
+    }
+}
+
+impl AsColumnType for ArrayRustType<Cow<'_, str>> {
+    fn as_column_type() -> SqlColumnType {
+        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Array(arr)) => Ok(ArrayRustType(
+                arr.elements()
+                    .iter()
+                    .map(|d| Cow::Borrowed(d.unwrap_str()))
+                    .collect(),
+            )),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(temp_storage.make_datum(|packer| {
+            packer
+                .try_push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: self.0.len(),
+                    }],
+                    self.0.iter().map(|elem| Datum::String(elem.as_ref())),
                 )
                 .expect("self is 1 dimensional, and its length is used for the array length");
         }))

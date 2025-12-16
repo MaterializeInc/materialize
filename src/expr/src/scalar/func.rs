@@ -44,8 +44,8 @@ use mz_repr::adt::range::{Range, RangeOps};
 use mz_repr::adt::regex::Regex;
 use mz_repr::adt::timestamp::{CheckedTimestamp, TimestampLike};
 use mz_repr::{
-    Datum, DatumList, DatumMap, DatumType, ExcludeNull, Row, RowArena, SqlColumnType,
-    SqlScalarType, strconv,
+    ArrayRustType, Datum, DatumList, DatumMap, DatumType, ExcludeNull, Row, RowArena,
+    SqlColumnType, SqlScalarType, strconv,
 };
 use mz_sql_parser::ast::display::FormatMode;
 use mz_sql_pretty::{PrettyConfig, pretty_str};
@@ -2298,16 +2298,9 @@ fn mz_acl_item_contains_privilege(
     Ok(contains)
 }
 
-#[sqlfunc(
-    output_type = "mz_repr::ArrayRustType<String>",
-    propagates_nulls = true
-)]
+#[sqlfunc]
 // transliterated from postgres/src/backend/utils/adt/misc.c
-fn parse_ident<'a>(
-    ident: &str,
-    strict: bool,
-    temp_storage: &'a RowArena,
-) -> Result<Datum<'a>, EvalError> {
+fn parse_ident<'a>(ident: &'a str, strict: bool) -> Result<ArrayRustType<Cow<'a, str>>, EvalError> {
     fn is_ident_start(c: char) -> bool {
         matches!(c, 'A'..='Z' | 'a'..='z' | '_' | '\u{80}'..=char::MAX)
     }
@@ -2337,13 +2330,12 @@ fn parse_ident<'a>(
                     detail: Some("String has unclosed double quotes.".into()),
                 });
             }
-            elems.push(Datum::String(s));
+            elems.push(Cow::Borrowed(s));
             missing_ident = false;
         } else if c.map(is_ident_start).unwrap_or(false) {
             buf.prev();
             let s = buf.take_while(is_ident_cont);
-            let s = temp_storage.push_string(s.to_ascii_lowercase());
-            elems.push(Datum::String(s));
+            elems.push(Cow::Owned(s.to_ascii_lowercase()));
             missing_ident = false;
         }
 
@@ -2384,15 +2376,7 @@ fn parse_ident<'a>(
         }
     }
 
-    Ok(temp_storage.try_make_datum(|packer| {
-        packer.try_push_array(
-            &[ArrayDimension {
-                lower_bound: 1,
-                length: elems.len(),
-            }],
-            elems,
-        )
-    })?)
+    Ok(elems.into())
 }
 
 fn regexp_split_to_array_re<'a>(
