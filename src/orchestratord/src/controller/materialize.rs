@@ -732,7 +732,7 @@ impl k8s_controller::Context for Context {
             let balancer = apply_resource(&balancer_api, &balancer).await?;
             result = wait_for_balancer(&balancer)?;
         } else {
-            delete_resource(&balancer_api, &mz.name_prefixed("balancer")).await?;
+            delete_resource(&balancer_api, &mz.name_unchecked()).await?;
         }
 
         if let Some(action) = result {
@@ -789,7 +789,7 @@ impl k8s_controller::Context for Context {
             };
             apply_resource(&console_api, &console).await?;
         } else {
-            delete_resource(&console_api, &mz.name_prefixed("console")).await?;
+            delete_resource(&console_api, &mz.name_unchecked()).await?;
         }
 
         Ok(result)
