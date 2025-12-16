@@ -354,15 +354,10 @@ fn convert_from<'a>(a: &'a [u8], b: &str) -> Result<&'a str, EvalError> {
     }
 }
 
-#[sqlfunc(propagates_nulls = true)]
-fn encode<'a>(
-    bytes: &[u8],
-    format: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a str, EvalError> {
+#[sqlfunc]
+fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
     let format = encoding::lookup_format(format)?;
-    let out = format.encode(bytes);
-    Ok(temp_storage.push_string(out))
+    Ok(format.encode(bytes))
 }
 
 #[sqlfunc(propagates_nulls = true)]
