@@ -112,6 +112,10 @@ struct Args {
     /// Whether we skip coordinator and catalog consistency checks.
     #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
     consistency_checks: ConsistencyCheckLevel,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    #[clap(long, action = ArgAction::SetTrue)]
+    check_statement_logging: bool,
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
@@ -416,6 +420,7 @@ async fn main() {
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
         consistency_checks: args.consistency_checks,
+        check_statement_logging: args.check_statement_logging,
         rewrite_results: args.rewrite_results,
 
         // === Materialize options. ===
