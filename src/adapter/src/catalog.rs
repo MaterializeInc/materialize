@@ -2397,7 +2397,7 @@ mod tests {
 
     use crate::catalog::state::LocalExpressionCache;
     use crate::catalog::{Catalog, Op};
-    use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, ExprPrepStyleOneShot};
+    use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
     use crate::session::Session;
 
     /// System sessions have an empty `search_path` so it's necessary to
@@ -3444,7 +3444,7 @@ mod tests {
         session
             .start_transaction(to_datetime(0), None, None)
             .expect("must succeed");
-        let prep_style = ExprPrepStyleOneShot {
+        let prep_style = ExprPrepOneShot {
             logical_time: EvalTime::Time(Timestamp::MIN),
             session: &session,
             catalog_state: &catalog.state,

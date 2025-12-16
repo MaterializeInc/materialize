@@ -68,7 +68,7 @@ use crate::coord::{
 use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, ExprPrepStyleOneShot};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::peek;
 use crate::session::{
     EndTransactionAction, Session, StateRevision, TransactionOps, TransactionStatus, WriteOp,
@@ -1036,7 +1036,7 @@ pub fn eval_copy_to_uri(
     session: &Session,
     catalog_state: &CatalogState,
 ) -> Result<Uri, AdapterError> {
-    let style = ExprPrepStyleOneShot {
+    let style = ExprPrepOneShot {
         logical_time: EvalTime::NotAvailable,
         session,
         catalog_state,

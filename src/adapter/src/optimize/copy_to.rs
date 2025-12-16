@@ -39,7 +39,7 @@ use crate::TimestampContext;
 use crate::catalog::Catalog;
 use crate::coord::CopyToContext;
 use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrepStyle, ExprPrepStyleOneShot,
+    ComputeInstanceSnapshot, DataflowBuilder, EvalTime, ExprPrep, ExprPrepOneShot,
 };
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerConfig,
@@ -291,7 +291,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
         //
         // Resolve all unmaterializable function calls except mz_now(), because
         // we don't yet have a timestamp.
-        let style = ExprPrepStyleOneShot {
+        let style = ExprPrepOneShot {
             logical_time: EvalTime::Deferred,
             session,
             catalog_state: self.catalog.state(),
@@ -313,7 +313,7 @@ impl<'s> Optimize<LocalMirPlan<Resolved<'s>>> for Optimizer {
             .expect("unique as_of element");
 
         // Resolve all unmaterializable function calls including mz_now().
-        let style = ExprPrepStyleOneShot {
+        let style = ExprPrepOneShot {
             logical_time: EvalTime::Time(as_of),
             session,
             catalog_state: self.catalog.state(),

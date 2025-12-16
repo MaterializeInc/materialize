@@ -57,7 +57,7 @@ use crate::command::{
 use crate::coord::{Coordinator, ExecuteContextExtra};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyleOneShot};
+use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
@@ -866,7 +866,7 @@ impl SessionClient {
 
         // Collect optimizer parameters.
         let optimizer_config = optimize::OptimizerConfig::from(conn_catalog.system_vars());
-        let prep = ExprPrepStyleOneShot {
+        let prep = ExprPrepOneShot {
             logical_time: EvalTime::NotAvailable,
             session: &session_meta,
             catalog_state,

@@ -106,7 +106,7 @@ use crate::coord::{
 };
 use crate::error::AdapterError;
 use crate::notice::{AdapterNotice, DroppedInUseIndex};
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, ExprPrepStyleOneShot};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::optimize::{self, Optimize};
 use crate::session::{
     EndTransactionAction, RequireLinearization, Session, TransactionOps, TransactionStatus,
@@ -2742,7 +2742,7 @@ impl Coordinator {
                 timeout_dur = Duration::MAX;
             }
 
-            let style = ExprPrepStyleOneShot {
+            let style = ExprPrepOneShot {
                 logical_time: EvalTime::NotAvailable, // We already errored out on mz_now above.
                 session: ctx.session(),
                 catalog_state: catalog.state(),

@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::coord::sequencer::inner::return_if_err;
 use crate::coord::{ActiveCopyFrom, Coordinator, TargetCluster};
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, ExprPrepStyleOneShot};
+use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
 use crate::session::{TransactionOps, WriteOp};
 use crate::{AdapterError, ExecuteContext, ExecuteResponse};
 
@@ -47,7 +47,7 @@ impl Coordinator {
         } = plan;
 
         let eval_uri = |from: HirScalarExpr| -> Result<String, AdapterError> {
-            let style = ExprPrepStyleOneShot {
+            let style = ExprPrepOneShot {
                 logical_time: EvalTime::NotAvailable,
                 session: ctx.session(),
                 catalog_state: self.catalog().state(),

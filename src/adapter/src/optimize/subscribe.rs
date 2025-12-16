@@ -32,7 +32,7 @@ use timely::progress::Antichain;
 
 use crate::CollectionIdBundle;
 use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, ExprPrepStyleMaintained,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
     dataflow_import_id_bundle,
 };
 use crate::optimize::{
@@ -261,7 +261,7 @@ impl Optimize<SubscribeFrom> for Optimizer {
         };
 
         // Prepare expressions in the assembled dataflow.
-        let style = ExprPrepStyleMaintained;
+        let style = ExprPrepMaintained;
         df_desc.visit_children(
             |r| style.prep_relation_expr(r),
             |s| style.prep_scalar_expr(s),

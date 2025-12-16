@@ -48,7 +48,7 @@ use mz_transform::reprtypecheck::{
 use timely::progress::Antichain;
 
 use crate::optimize::dataflows::{
-    ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, ExprPrepStyleMaintained,
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
 };
 use crate::optimize::{
     LirDataflowDescription, MirDataflowDescription, Optimize, OptimizeMode, OptimizerCatalog,
@@ -276,7 +276,7 @@ impl Optimize<LocalMirPlan> for Optimizer {
         df_desc.export_sink(self.sink_id, sink_description);
 
         // Prepare expressions in the assembled dataflow.
-        let style = ExprPrepStyleMaintained;
+        let style = ExprPrepMaintained;
         df_desc.visit_children(
             |r| style.prep_relation_expr(r),
             |s| style.prep_scalar_expr(s),

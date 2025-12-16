@@ -10,7 +10,7 @@
 //! An Optimizer that
 //! 1. Optimistically calls `optimize_mir_constant`.
 //! 2. Then, if we haven't arrived at a constant, it does real optimization:
-//!    - applies a [`ExprPrepStyle`].
+//!    - applies an [`ExprPrep`].
 //!    - calls [`optimize_mir_local`], i.e., the logical optimizer.
 //!
 //! This is used for `CREATE VIEW` statements and in various other situations where no physical
@@ -30,7 +30,7 @@ use mz_transform::reprtypecheck::{
     SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
 };
 
-use crate::optimize::dataflows::{ExprPrepStyle, NoopExprPrepStyle};
+use crate::optimize::dataflows::{ExprPrep, ExprPrepNoop};
 use crate::optimize::{
     Optimize, OptimizerConfig, OptimizerError, optimize_mir_constant, optimize_mir_local,
     trace_plan,
@@ -53,7 +53,7 @@ pub struct Optimizer<S> {
     fold_constants_limit: bool,
 }
 
-impl Optimizer<NoopExprPrepStyle> {
+impl Optimizer<ExprPrepNoop> {
     /// Creates an optimizer instance that does not perform any expression
     /// preparation. Additionally, this instance calls constant folding with a size limit.
     pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
@@ -61,14 +61,14 @@ impl Optimizer<NoopExprPrepStyle> {
             repr_typecheck_ctx: empty_repr_context(),
             config,
             metrics,
-            expr_prep_style: NoopExprPrepStyle,
+            expr_prep_style: ExprPrepNoop,
             fold_constants_limit: true,
         }
     }
 }
 
 impl<S> Optimizer<S> {
-    /// Creates an optimizer instance that takes a [`ExprPrepStyle`] to handle
+    /// Creates an optimizer instance that takes an [`ExprPrep`] to handle
     /// unmaterializable functions. Additionally, this instance calls constant
     /// folding without a size limit.
     pub fn new_with_prep_no_limit(
@@ -86,7 +86,7 @@ impl<S> Optimizer<S> {
     }
 }
 
-impl<S: ExprPrepStyle> Optimize<HirRelationExpr> for Optimizer<S> {
+impl<S: ExprPrep> Optimize<HirRelationExpr> for Optimizer<S> {
     type To = OptimizedMirRelationExpr;
 
     fn optimize(&mut self, expr: HirRelationExpr) -> Result<Self::To, OptimizerError> {
