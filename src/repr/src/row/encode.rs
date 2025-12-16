@@ -439,7 +439,7 @@ impl DatumColumnEncoder {
 
                 // Store the values of the array.
                 let mut count = 0;
-                for datum in &array.elements() {
+                for datum in array.elements() {
                     count += 1;
                     vals.push(datum);
                 }
@@ -458,7 +458,7 @@ impl DatumColumnEncoder {
                 Datum::List(list),
             ) => {
                 let mut count = 0;
-                for datum in &list {
+                for datum in list {
                     count += 1;
                     values.push(datum);
                 }

@@ -196,7 +196,7 @@ impl ToJson for TypedDatum<'_> {
                 let list = datum.unwrap_list();
                 let fields: Map<String, serde_json::Value> = fields
                     .iter()
-                    .zip_eq(&list)
+                    .zip_eq(list)
                     .map(|((name, typ), datum)| {
                         let name = name.to_string();
                         let datum = TypedDatum::new(datum, typ);

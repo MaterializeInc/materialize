@@ -89,7 +89,7 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
                             let time = update.next().unwrap().unwrap_int64();
                             let diff = Diff::from(update.next().unwrap().unwrap_int64());
 
-                            row_buf.packer().extend(&data);
+                            row_buf.packer().extend(data);
                             let data = row_buf.clone();
                             let time = u64::try_from(time).expect("non-negative");
                             let time = mz_repr::Timestamp::from(time);
@@ -100,17 +100,17 @@ pub fn render_decode_cdcv2<G: Scope<Timestamp = mz_repr::Timestamp>, FromTime: T
                     (Datum::Null, Datum::List(progress)) => {
                         let mut progress = progress.iter();
                         let mut lower = vec![];
-                        for time in &progress.next().unwrap().unwrap_list() {
+                        for time in progress.next().unwrap().unwrap_list() {
                             let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
                             lower.push(mz_repr::Timestamp::from(time));
                         }
                         let mut upper = vec![];
-                        for time in &progress.next().unwrap().unwrap_list() {
+                        for time in progress.next().unwrap().unwrap_list() {
                             let time = u64::try_from(time.unwrap_int64()).expect("non-negative");
                             upper.push(mz_repr::Timestamp::from(time));
                         }
                         let mut counts = vec![];
-                        for pair in &progress.next().unwrap().unwrap_list() {
+                        for pair in progress.next().unwrap().unwrap_list() {
                             let mut pair = pair.unwrap_list().iter();
                             let time = pair.next().unwrap().unwrap_int64();
                             let count = pair.next().unwrap().unwrap_int64();
