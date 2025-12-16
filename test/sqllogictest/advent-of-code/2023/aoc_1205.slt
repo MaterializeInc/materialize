@@ -1241,7 +1241,7 @@ Explained Query:
           Union // { arity: 3 }
             Project (#6, #4, #5) // { arity: 3 }
               Map (regexp_split_to_array[" ", case_insensitive=false](btrim(#0{body})), (2 * #1{x}), text_to_bigint(array_index(#2, integer_to_bigint((#3 - 1)))), (#4 + text_to_bigint(array_index(#2, integer_to_bigint(#3)))), "seed") // { arity: 7 }
-                FlatMap generate_series(1, ((regexp_split_to_array[" ", case_insensitive=false](btrim(#0{body})) array_length 1) / 2), 1) // { arity: 2 }
+                FlatMap generate_series(1, (array_length(regexp_split_to_array[" ", case_insensitive=false](btrim(#0{body})), 1) / 2), 1) // { arity: 2 }
                   Get l3 // { arity: 1 }
             Project (#1, #10, #11) // { arity: 3 }
               Map ((#8{entry_dst} - #4{entry_start}), (#6{clipped_start} + #9), (#7{clipped_end} + #9)) // { arity: 12 }

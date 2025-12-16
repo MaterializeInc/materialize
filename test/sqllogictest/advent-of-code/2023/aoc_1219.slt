@@ -326,7 +326,7 @@ Explained Query:
     cte l0 =
       Project (#0, #2, #6..=#9) // { arity: 6 }
         Map (array_index(regexp_split_to_array[",", case_insensitive=false](#1{trans}), integer_to_bigint(#2{priority})), substr(#3{rule}, 2, 1), ((#4 = "<") OR (#4 = ">")), case when #5 then substr(#3, 1, 1) else "x" end, case when #5 then substr(#3, 2, 1) else ">" end, case when #5 then text_to_integer(array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 1)) else 0 end, case when #5 then array_index(regexp_split_to_array[":", case_insensitive=false](substr(#3, 3)), 2) else #3 end) // { arity: 10 }
-          FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1{trans}) array_length 1), 1) // { arity: 3 }
+          FlatMap generate_series(1, array_length(regexp_split_to_array[",", case_insensitive=false](#1{trans}), 1), 1) // { arity: 3 }
             Project (#3, #4) // { arity: 2 }
               Filter (#3) IS NOT NULL // { arity: 5 }
                 Map (regexp_split_to_array["\{", case_insensitive=false](#1{line}), array_index(#2, 1), btrim(array_index(#2, 2), "}")) // { arity: 5 }

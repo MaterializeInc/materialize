@@ -5092,7 +5092,6 @@ fn trim_trailing<'a>(a: &'a str, trim_chars: &str) -> &'a str {
 }
 
 #[sqlfunc(
-    is_infix_op = true,
     sqlname = "array_length",
     propagates_nulls = true,
     introduces_nulls = true

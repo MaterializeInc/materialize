@@ -96,7 +96,7 @@ Explained Query:
     cte l0 =
       Project (#1, #3, #4) // { arity: 3 }
         Map (regexp_split_to_array[" ", case_insensitive=false](array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{row_id}))), (array_index(#2, 1) || "."), array_index(#2, 2)) // { arity: 5 }
-          FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+          FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
             ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Project (#0, #2, #3) // { arity: 3 }
@@ -123,7 +123,7 @@ Explained Query:
             ArrangeBy keys=[[#0{r}, #1{pos}]] // { arity: 3 }
               Project (#0, #2, #3) // { arity: 3 }
                 Map (text_to_integer(array_index(regexp_split_to_array[",", case_insensitive=false](#1{springs}), integer_to_bigint(#2{pos})))) // { arity: 4 }
-                  FlatMap generate_series(1, (regexp_split_to_array[",", case_insensitive=false](#1{springs}) array_length 1), 1) // { arity: 3 }
+                  FlatMap generate_series(1, array_length(regexp_split_to_array[",", case_insensitive=false](#1{springs}), 1), 1) // { arity: 3 }
                     Project (#0, #2) // { arity: 2 }
                       Get l0 // { arity: 3 }
             Get l2 // { arity: 2 }

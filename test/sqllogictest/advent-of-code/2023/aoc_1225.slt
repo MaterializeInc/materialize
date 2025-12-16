@@ -133,10 +133,10 @@ Explained Query:
     cte l0 =
       Project (#3, #4) // { arity: 2 }
         Map (regexp_split_to_array[" ", case_insensitive=false](#0{line}), btrim(array_index(#2, 1), ":"), btrim(array_index(#2, integer_to_bigint(#1{x})), ",")) // { arity: 5 }
-          FlatMap generate_series(2, (regexp_split_to_array[" ", case_insensitive=false](#0{line}) array_length 1), 1) // { arity: 2 }
+          FlatMap generate_series(2, array_length(regexp_split_to_array[" ", case_insensitive=false](#0{line}), 1), 1) // { arity: 2 }
             Project (#2) // { arity: 1 }
               Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))) // { arity: 3 }
-                FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+                FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                   ReadStorage materialize.public.input // { arity: 1 }
     cte l1 =
       Map (case when (#0{src} < "n") then 1 else -1 end) // { arity: 2 }
