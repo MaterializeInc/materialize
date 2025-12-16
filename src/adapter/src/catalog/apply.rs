@@ -57,7 +57,7 @@ use mz_sql::session::vars::{VarError, VarInput};
 use mz_sql::{plan, rbac};
 use mz_sql_parser::ast::Expr;
 use mz_storage_types::sources::Timeline;
-use tracing::{Instrument, info_span, warn};
+use tracing::{info_span, warn};
 
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
@@ -1518,22 +1518,23 @@ impl CatalogState {
                     OpenTelemetryContext::obtain().attach_as_parent_to(&span);
                     let task_state = Arc::clone(&spawn_state);
                     let cached_expr = local_expression_cache.remove_cached_expression(&global_id);
-                    let handle = mz_ore::task::spawn(
+                    let handle = mz_ore::task::spawn_blocking(
                         || "parse view",
-                        async move {
-                            let res = task_state.parse_item_inner(
-                                global_id,
-                                &create_sql,
-                                &versions,
-                                None,
-                                false,
-                                None,
-                                cached_expr,
-                                None,
-                            );
-                            (id, global_id, res)
-                        }
-                        .instrument(span),
+                        move || {
+                            span.in_scope(|| {
+                                let res = task_state.parse_item_inner(
+                                    global_id,
+                                    &create_sql,
+                                    &versions,
+                                    None,
+                                    false,
+                                    None,
+                                    cached_expr,
+                                    None,
+                                );
+                                (id, global_id, res)
+                            })
+                        },
                     );
                     handles.push(handle);
                 }
