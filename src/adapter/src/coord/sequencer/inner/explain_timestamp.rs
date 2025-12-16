@@ -7,7 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use chrono::{DateTime, Utc};
 use itertools::Itertools;
+use mz_adapter_types::connection::ConnectionId;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::instrument;
@@ -214,7 +216,8 @@ impl Coordinator {
 
     pub(crate) fn explain_timestamp(
         &self,
-        session: &Session,
+        conn_id: &ConnectionId,
+        session_wall_time: DateTime<Utc>,
         cluster_id: ClusterId,
         id_bundle: &CollectionIdBundle,
         determination: TimestampDetermination<mz_repr::Timestamp>,
@@ -235,7 +238,7 @@ impl Coordinator {
                     .map(|item| item.name())
                     .map(|name| {
                         self.catalog()
-                            .resolve_full_name(name, Some(session.conn_id()))
+                            .resolve_full_name(name, Some(conn_id))
                             .to_string()
                     })
                     .unwrap_or_else(|| id.to_string());
@@ -258,11 +261,7 @@ impl Coordinator {
                     let name = catalog
                         .try_get_entry_by_global_id(id)
                         .map(|item| item.name())
-                        .map(|name| {
-                            catalog
-                                .resolve_full_name(name, Some(session.conn_id()))
-                                .to_string()
-                        })
+                        .map(|name| catalog.resolve_full_name(name, Some(conn_id)).to_string())
                         .unwrap_or_else(|| id.to_string());
                     sources.push(TimestampSource {
                         name: format!("{name} ({id}, compute)"),
@@ -276,7 +275,7 @@ impl Coordinator {
         TimestampExplanation {
             determination,
             sources,
-            session_wall_time: session.pcx().wall_time,
+            session_wall_time,
             respond_immediately,
         }
     }
@@ -331,7 +330,13 @@ impl Coordinator {
             real_time_recency_ts,
             RequireLinearization::NotRequired,
         )?;
-        let explanation = self.explain_timestamp(session, cluster_id, &id_bundle, determination);
+        let explanation = self.explain_timestamp(
+            session.conn_id(),
+            session.pcx().wall_time,
+            cluster_id,
+            &id_bundle,
+            determination,
+        );
 
         let s = if is_json {
             serde_json::to_string_pretty(&explanation).expect("failed to serialize explanation")

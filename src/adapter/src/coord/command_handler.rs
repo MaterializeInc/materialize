@@ -422,6 +422,23 @@ impl Coordinator {
                 Command::UnregisterFrontendPeek { uuid, tx } => {
                     self.handle_unregister_frontend_peek(uuid, tx);
                 }
+                Command::ExplainTimestamp {
+                    conn_id,
+                    session_wall_time,
+                    cluster_id,
+                    id_bundle,
+                    determination,
+                    tx,
+                } => {
+                    let explanation = self.explain_timestamp(
+                        &conn_id,
+                        session_wall_time,
+                        cluster_id,
+                        &id_bundle,
+                        determination,
+                    );
+                    let _ = tx.send(explanation);
+                }
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }

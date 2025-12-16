@@ -74,12 +74,6 @@ impl PeekClient {
         session: &mut Session,
         outer_ctx_extra: &mut Option<ExecuteContextExtra>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        if session.vars().emit_timestamp_notice() {
-            // TODO(peek-seq): implement this. See end of peek_finish
-            debug!("Bailing out from try_frontend_peek, because emit_timestamp_notice");
-            return Ok(None);
-        }
-
         // # From handle_execute
 
         if session.vars().emit_trace_id_notice() {
@@ -1142,6 +1136,14 @@ impl PeekClient {
 
                 let max_result_size = catalog.system_config().max_result_size();
 
+                // Clone determination if we need it for emit_timestamp_notice, since it may be
+                // moved into Command::ExecuteSlowPathPeek.
+                let determination_for_notice = if session.vars().emit_timestamp_notice() {
+                    Some(determination.clone())
+                } else {
+                    None
+                };
+
                 let response = match peek_plan {
                     PeekPlan::FastPath(fast_path_plan) => {
                         if let Some(logging_id) = &statement_logging_id {
@@ -1276,6 +1278,21 @@ impl PeekClient {
                         .await?
                     }
                 };
+
+                // Add timestamp notice if emit_timestamp_notice is enabled
+                if let Some(determination) = determination_for_notice {
+                    let explanation = self
+                        .call_coordinator(|tx| Command::ExplainTimestamp {
+                            conn_id: session.conn_id().clone(),
+                            session_wall_time: session.pcx().wall_time,
+                            cluster_id: target_cluster_id,
+                            id_bundle: input_id_bundle.clone(),
+                            determination,
+                            tx,
+                        })
+                        .await;
+                    session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                }
 
                 Ok(Some(match select_plan.copy_to {
                     None => response,

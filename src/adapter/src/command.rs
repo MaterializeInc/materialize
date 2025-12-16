@@ -13,6 +13,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::Stream;
@@ -21,6 +22,7 @@ use mz_auth::password::Password;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
+use mz_controller_types::ClusterId;
 use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
@@ -57,7 +59,9 @@ use crate::statement_logging::{
 };
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError, ReadHolds};
+use crate::{
+    AdapterNotice, AppendWebhookError, CollectionIdBundle, ReadHolds, TimestampExplanation,
+};
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -265,6 +269,17 @@ pub enum Command {
         tx: oneshot::Sender<()>,
     },
 
+    /// Generate a timestamp explanation.
+    /// This is used when `emit_timestamp_notice` is enabled.
+    ExplainTimestamp {
+        conn_id: ConnectionId,
+        session_wall_time: DateTime<Utc>,
+        cluster_id: ClusterId,
+        id_bundle: CollectionIdBundle,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
+        tx: oneshot::Sender<TimestampExplanation<mz_repr::Timestamp>>,
+    },
+
     /// Statement logging event from frontend peek sequencing.
     /// No response channel needed - this is fire-and-forget.
     FrontendStatementLogging(FrontendStatementLoggingEvent),
@@ -298,6 +313,7 @@ impl Command {
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
+            | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..) => None,
         }
     }
@@ -329,6 +345,7 @@ impl Command {
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::RegisterFrontendPeek { .. }
             | Command::UnregisterFrontendPeek { .. }
+            | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..) => None,
         }
     }

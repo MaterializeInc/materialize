@@ -1036,6 +1036,7 @@ impl SessionClient {
                 | Command::ExecuteSideEffectingFunc { .. }
                 | Command::RegisterFrontendPeek { .. }
                 | Command::UnregisterFrontendPeek { .. }
+                | Command::ExplainTimestamp { .. }
                 | Command::FrontendStatementLogging(..) => {}
             };
             cmd
