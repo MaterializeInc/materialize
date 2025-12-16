@@ -24,7 +24,16 @@
                                                 type='source') -%}
 
   {% if old_relation %}
-    {{ adapter.drop_relation(old_relation) }}
+    {% if var('strict_mode', False) %}
+      {# In strict_mode, skip recreation if relation exists #}
+      {{ log("Relation " ~ old_relation ~ " already exists, skipping creation.", info=True) }}
+      {% call statement('main') -%}
+        SELECT 1
+      {%- endcall %}
+      {{ return({'relations': [target_relation]}) }}
+    {% else %}
+      {{ adapter.drop_relation(old_relation) }}
+    {% endif %}
   {% endif %}
 
   {{ run_hooks(pre_hooks, inside_transaction=False) }}
