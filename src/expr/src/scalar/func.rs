@@ -392,18 +392,15 @@ fn encode<'a>(
     Ok(temp_storage.push_string(out))
 }
 
-#[sqlfunc(propagates_nulls = true)]
-fn decode<'a>(
-    string: &str,
-    format: &str,
-    temp_storage: &'a RowArena,
-) -> Result<&'a [u8], EvalError> {
+#[sqlfunc]
+fn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
     if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
-        return Err(EvalError::LengthTooLarge);
+        Err(EvalError::LengthTooLarge)
+    } else {
+        Ok(out)
     }
-    Ok(temp_storage.push_bytes(out))
 }
 
 #[sqlfunc(sqlname = "length", propagates_nulls = true)]
