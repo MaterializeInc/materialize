@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_monotone = \"(true, true)\",\n    output_type = \"CheckedTimestamp<NaiveDateTime>\",\n    is_infix_op = true,\n    sqlname = \"+\"\n)]\nfn add_timestamp_interval<'a>(\n    a: CheckedTimestamp<NaiveDateTime>,\n    b: Interval,\n) -> Result<Datum<'a>, EvalError> {\n    add_timestamplike_interval(a, b)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"+\")]\nfn add_timestamp_interval(\n    a: CheckedTimestamp<NaiveDateTime>,\n    b: Interval,\n) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {\n    add_timestamplike_interval(a, b)\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct AddTimestampInterval;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimestampInterval {
     type Input1 = CheckedTimestamp<NaiveDateTime>;
     type Input2 = Interval;
-    type Output = Result<Datum<'a>, EvalError>;
+    type Output = Result<CheckedTimestamp<NaiveDateTime>, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimestampInterval {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <CheckedTimestamp<NaiveDateTime>>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -45,9 +45,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for AddTimestampInterval {
                     || (propagates_nulls
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
-    }
-    fn introduces_nulls(&self) -> bool {
-        <CheckedTimestamp<NaiveDateTime> as ::mz_repr::DatumType<'_, ()>>::nullable()
     }
     fn is_infix_op(&self) -> bool {
         true
@@ -61,9 +58,9 @@ impl std::fmt::Display for AddTimestampInterval {
         f.write_str("+")
     }
 }
-fn add_timestamp_interval<'a>(
+fn add_timestamp_interval(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     add_timestamplike_interval(a, b)
 }
