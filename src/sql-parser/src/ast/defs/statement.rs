@@ -286,6 +286,7 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
 pub struct SelectStatement<T: AstInfo> {
     pub query: Query<T>,
     pub as_of: Option<AsOf<T>>,
+    pub in_cluster: Option<T::ClusterName>,
 }
 
 impl<T: AstInfo> AstDisplay for SelectStatement<T> {

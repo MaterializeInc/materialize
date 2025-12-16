@@ -2627,6 +2627,7 @@ fn generate_view_sql(
             offset: None,
         },
         as_of: query_as_of.clone(),
+        in_cluster: None,
     })
     .to_ast_string_stable();
 

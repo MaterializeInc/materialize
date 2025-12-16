@@ -477,6 +477,7 @@ impl<'a> Parser<'a> {
                     Ok(Statement::Select(SelectStatement {
                         query: self.parse_query().map_parser_err(StatementKind::Select)?,
                         as_of: None, // Only the outermost SELECT may have an AS OF clause.
+                        in_cluster: None, // Only the outermost SELECT may have a IN CLUSTER clause.
                     }))
                 }
                 unexpected => self
@@ -7440,7 +7441,17 @@ impl<'a> Parser<'a> {
         Ok(SelectStatement {
             query: self.parse_query()?,
             as_of: self.parse_optional_as_of()?,
+            in_cluster: self.parse_select_optional_in_cluster()?,
         })
+    }
+
+    fn parse_select_optional_in_cluster(&mut self) -> Result<Option<RawClusterName>, ParserError> {
+        let need_rparen = self.consume_token(&Token::LParen);
+        let res = self.parse_optional_in_cluster()?;
+        if need_rparen {
+            self.expect_token(&Token::RParen)?;
+        }
+        Ok(res)
     }
 
     /// Parse a query expression, i.e. a `SELECT` statement optionally

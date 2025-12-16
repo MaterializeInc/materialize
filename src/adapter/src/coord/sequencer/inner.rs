@@ -2699,6 +2699,7 @@ impl Coordinator {
                 when: QueryWhen::FreshestTableWrite,
                 finishing,
                 copy_to: None,
+                in_cluster: None,
             },
             TargetCluster::Active,
             None,

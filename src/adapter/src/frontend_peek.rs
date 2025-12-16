@@ -273,11 +273,20 @@ impl PeekClient {
         // We have checked the plan kind above.
         assert!(plan.allowed_in_read_only());
 
-        let target_cluster = match session.transaction().cluster() {
+        let target_cluster = match (
+            session.transaction().cluster(),
+            select_plan.in_cluster.clone(),
+        ) {
+            // Cannot override the transaction's target cluster.
+            (Some(_), Some(_)) => {
+                return Err(AdapterError::InvalidSelectInCluster);
+            }
             // Use the current transaction's cluster.
-            Some(cluster_id) => TargetCluster::Transaction(cluster_id),
+            (Some(cluster_id), None) => TargetCluster::Transaction(cluster_id),
+            // Use the select's cluster.
+            (None, Some(cluster_id)) => TargetCluster::Transaction(cluster_id),
             // If there isn't a current cluster set for a transaction, then try to auto route.
-            None => {
+            (None, None) => {
                 coord::catalog_serving::auto_run_on_catalog_server(&conn_catalog, session, &plan)
             }
         };

@@ -865,6 +865,8 @@ pub struct SelectPlan {
     pub finishing: RowSetFinishing,
     /// For `COPY TO STDOUT`, the format to use.
     pub copy_to: Option<CopyFormat>,
+    /// The cluster on which to run the query, if not the system default.
+    pub in_cluster: Option<ClusterId>,
 }
 
 impl SelectPlan {
@@ -876,6 +878,7 @@ impl SelectPlan {
             when: QueryWhen::Immediately,
             finishing: RowSetFinishing::trivial(arity),
             copy_to: None,
+            in_cluster: None,
         }
     }
 }

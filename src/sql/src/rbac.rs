@@ -802,6 +802,7 @@ fn generate_rbac_requirements(
             when: _,
             finishing: _,
             copy_to: _,
+            in_cluster,
         }) => {
             let items = source
                 .depends_on()
@@ -810,7 +811,7 @@ fn generate_rbac_requirements(
             let mut privileges = generate_read_privileges(catalog, items, role_id);
             if let Some(privilege) = generate_cluster_usage_privileges(
                 source.as_const().is_some(),
-                target_cluster_id,
+                in_cluster.clone().or(target_cluster_id),
                 role_id,
             ) {
                 privileges.push(privilege);
