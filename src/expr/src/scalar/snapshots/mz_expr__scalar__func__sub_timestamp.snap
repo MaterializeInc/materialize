@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"-\")]\nfn sub_timestamp(\n    a: CheckedTimestamp<NaiveDateTime>,\n    b: CheckedTimestamp<NaiveDateTime>,\n) -> Interval {\n    Interval::from_chrono_duration_unchecked(a - b)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"-\")]\nfn sub_timestamp(\n    a: CheckedTimestamp<NaiveDateTime>,\n    b: CheckedTimestamp<NaiveDateTime>,\n) -> Result<Interval, EvalError> {\n    Interval::from_chrono_duration(a - b)\n        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct SubTimestamp;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestamp {
     type Input1 = CheckedTimestamp<NaiveDateTime>;
     type Input2 = CheckedTimestamp<NaiveDateTime>;
-    type Output = Interval;
+    type Output = Result<Interval, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -61,6 +61,7 @@ impl std::fmt::Display for SubTimestamp {
 fn sub_timestamp(
     a: CheckedTimestamp<NaiveDateTime>,
     b: CheckedTimestamp<NaiveDateTime>,
-) -> Interval {
-    Interval::from_chrono_duration_unchecked(a - b)
+) -> Result<Interval, EvalError> {
+    Interval::from_chrono_duration(a - b)
+        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }

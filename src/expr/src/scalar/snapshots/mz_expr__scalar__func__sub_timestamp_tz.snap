@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"-\")]\nfn sub_timestamp_tz(\n    a: CheckedTimestamp<chrono::DateTime<Utc>>,\n    b: CheckedTimestamp<chrono::DateTime<Utc>>,\n) -> Interval {\n    Interval::from_chrono_duration_unchecked(a - b)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"-\")]\nfn sub_timestamp_tz(\n    a: CheckedTimestamp<chrono::DateTime<Utc>>,\n    b: CheckedTimestamp<chrono::DateTime<Utc>>,\n) -> Result<Interval, EvalError> {\n    Interval::from_chrono_duration(a - b)\n        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct SubTimestampTz;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTimestampTz {
     type Input1 = CheckedTimestamp<chrono::DateTime<Utc>>;
     type Input2 = CheckedTimestamp<chrono::DateTime<Utc>>;
-    type Output = Interval;
+    type Output = Result<Interval, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -61,6 +61,7 @@ impl std::fmt::Display for SubTimestampTz {
 fn sub_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
-) -> Interval {
-    Interval::from_chrono_duration_unchecked(a - b)
+) -> Result<Interval, EvalError> {
+    Interval::from_chrono_duration(a - b)
+        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }

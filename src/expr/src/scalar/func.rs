@@ -848,16 +848,18 @@ fn age_timestamp_tz(
 fn sub_timestamp(
     a: CheckedTimestamp<NaiveDateTime>,
     b: CheckedTimestamp<NaiveDateTime>,
-) -> Interval {
-    Interval::from_chrono_duration_unchecked(a - b)
+) -> Result<Interval, EvalError> {
+    Interval::from_chrono_duration(a - b)
+        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }
 
 #[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
 fn sub_timestamp_tz(
     a: CheckedTimestamp<chrono::DateTime<Utc>>,
     b: CheckedTimestamp<chrono::DateTime<Utc>>,
-) -> Interval {
-    Interval::from_chrono_duration_unchecked(a - b)
+) -> Result<Interval, EvalError> {
+    Interval::from_chrono_duration(a - b)
+        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }
 
 #[sqlfunc(
@@ -871,8 +873,9 @@ fn sub_date(a: Date, b: Date) -> i32 {
 }
 
 #[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
-fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Interval {
-    Interval::from_chrono_duration_unchecked(a - b)
+fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Result<Interval, EvalError> {
+    Interval::from_chrono_duration(a - b)
+        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }
 
 #[sqlfunc(

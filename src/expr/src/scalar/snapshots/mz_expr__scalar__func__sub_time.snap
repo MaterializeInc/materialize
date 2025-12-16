@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"-\")]\nfn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Interval {\n    Interval::from_chrono_duration_unchecked(a - b)\n}\n"
+expression: "#[sqlfunc(is_monotone = \"(true, true)\", is_infix_op = true, sqlname = \"-\")]\nfn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Result<Interval, EvalError> {\n    Interval::from_chrono_duration(a - b)\n        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -19,7 +19,7 @@ pub struct SubTime;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for SubTime {
     type Input1 = chrono::NaiveTime;
     type Input2 = chrono::NaiveTime;
-    type Output = Interval;
+    type Output = Result<Interval, EvalError>;
     fn call(
         &self,
         a: Self::Input1,
@@ -58,6 +58,7 @@ impl std::fmt::Display for SubTime {
         f.write_str("-")
     }
 }
-fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Interval {
-    Interval::from_chrono_duration_unchecked(a - b)
+fn sub_time(a: chrono::NaiveTime, b: chrono::NaiveTime) -> Result<Interval, EvalError> {
+    Interval::from_chrono_duration(a - b)
+        .map_err(|e| EvalError::IntervalOutOfRange(e.to_string().into()))
 }
