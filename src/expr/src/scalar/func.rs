@@ -30,7 +30,6 @@ use mz_ore::cast::{self, CastFrom};
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::lex::LexBuf;
 use mz_ore::option::OptionExt;
-use mz_ore::result::ResultExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::Type;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
@@ -186,36 +185,26 @@ fn add_float64(a: f64, b: f64) -> Result<f64, EvalError> {
     }
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
-fn add_timestamp_interval<'a>(
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+fn add_timestamp_interval(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     add_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "+"
-)]
-fn add_timestamp_tz_interval<'a>(
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+fn add_timestamp_tz_interval(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     add_timestamplike_interval(a, b)
 }
 
-fn add_timestamplike_interval<'a, T>(
+fn add_timestamplike_interval<T>(
     a: CheckedTimestamp<T>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<CheckedTimestamp<T>, EvalError>
 where
     T: TimestampLike,
 {
@@ -224,73 +213,57 @@ where
     let dt = dt
         .checked_add_signed(b.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    T::from_date_time(dt).try_into().err_into()
+    Ok(CheckedTimestamp::from_timestamplike(T::from_date_time(dt))?)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "-"
-)]
-fn sub_timestamp_interval<'a>(
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+fn sub_timestamp_interval(
     a: CheckedTimestamp<NaiveDateTime>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     sub_timestamplike_interval(a, b)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<DateTime<Utc>>",
-    is_infix_op = true,
-    sqlname = "-"
-)]
-fn sub_timestamp_tz_interval<'a>(
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "-")]
+fn sub_timestamp_tz_interval(
     a: CheckedTimestamp<DateTime<Utc>>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError> {
+) -> Result<CheckedTimestamp<DateTime<Utc>>, EvalError> {
     sub_timestamplike_interval(a, b)
 }
 
-fn sub_timestamplike_interval<'a, T>(
+fn sub_timestamplike_interval<T>(
     a: CheckedTimestamp<T>,
     b: Interval,
-) -> Result<Datum<'a>, EvalError>
+) -> Result<CheckedTimestamp<T>, EvalError>
 where
     T: TimestampLike,
 {
     neg_interval_inner(b).and_then(|i| add_timestamplike_interval(a, i))
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
-fn add_date_time<'a>(date: Date, time: chrono::NaiveTime) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+fn add_date_time(
+    date: Date,
+    time: chrono::NaiveTime,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     let dt = NaiveDate::from(date)
         .and_hms_nano_opt(time.hour(), time.minute(), time.second(), time.nanosecond())
         .unwrap();
-    Ok(dt.try_into()?)
+    Ok(CheckedTimestamp::from_timestamplike(dt)?)
 }
 
-#[sqlfunc(
-    is_monotone = "(true, true)",
-    output_type = "CheckedTimestamp<NaiveDateTime>",
-    is_infix_op = true,
-    sqlname = "+",
-    propagates_nulls = true
-)]
-fn add_date_interval<'a>(date: Date, interval: Interval) -> Result<Datum<'a>, EvalError> {
+#[sqlfunc(is_monotone = "(true, true)", is_infix_op = true, sqlname = "+")]
+fn add_date_interval(
+    date: Date,
+    interval: Interval,
+) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
     let dt = NaiveDate::from(date).and_hms_opt(0, 0, 0).unwrap();
     let dt = add_timestamp_months(&dt, interval.months)?;
     let dt = dt
         .checked_add_signed(interval.duration_as_chrono())
         .ok_or(EvalError::TimestampOutOfRange)?;
-    Ok(dt.try_into()?)
+    Ok(CheckedTimestamp::from_timestamplike(dt)?)
 }
 
 #[sqlfunc(
