@@ -348,6 +348,13 @@ RUN curl -fsSL https://amazon-inspector-sbomgen.s3.amazonaws.com/1.8.2/linux/$AR
     && mv inspector-sbomgen-1.8.2/linux/$ARCH_GO/inspector-sbomgen /usr/local/bin \
     && chmod +x /usr/local/bin/inspector-sbomgen
 
+RUN arch_zizmor=$(echo "$ARCH_GCC" | sed -e "s/amd64/x86_64/") \
+    && curl -fsSL https://github.com/zizmorcore/zizmor/releases/download/v1.18.0/zizmor-$arch_zizmor-unknown-linux-gnu.tar.gz > zizmor.tar.gz \
+    && if [ $arch_zizmor = x86_64 ]; then echo '8e7901319ab7b71c38d6d388a48e02ff65791e5971b2ee6577c9b5c3ab44c65f zizmor.tar.gz' | sha256sum --check; fi \
+    && if [ $arch_zizmor = aarch64 ]; then echo '4cd5d20dc43398ee229d65cd32a68725d396fe2b423030fb6a9971100ce54da5 zizmor.tar.gz' | sha256sum --check; fi \
+    && tar xvf zizmor.tar.gz \
+    && mv zizmor /usr/local/bin
+
 # Hardcode some known SSH hosts, or else SSH will ask whether the host is
 # trustworthy on the first connection.
 COPY ssh_known_hosts /etc/ssh/ssh_known_hosts
