@@ -164,6 +164,19 @@ impl Interval {
         })
     }
 
+    /// Converts a `chrono::Duration` to an `Interval`. The resulting `Interval` will only have
+    /// microseconds, with the nanoseconds truncated.
+    pub fn from_chrono_duration(duration: chrono::Duration) -> Result<Self, anyhow::Error> {
+        let Some(micros) = duration.num_microseconds() else {
+            bail!("cannot convert Duration to Interval due to overflowed microseconds");
+        };
+        Ok(Self {
+            months: 0,
+            days: 0,
+            micros,
+        })
+    }
+
     pub fn checked_add(&self, other: &Self) -> Option<Self> {
         let months = match self.months.checked_add(other.months) {
             Some(m) => m,
