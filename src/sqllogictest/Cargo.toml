@@ -46,7 +46,7 @@ mz-tracing = { path = "../tracing" }
 postgres-protocol = { version = "0.6.9" }
 regex = "1.12.2"
 reqwest = { version = "0.12.24", features = ["json"] }
-shell-words = "1.1.0"
+shell-words = "1.1.1"
 serde_json = "1.0.145"
 tempfile = "3.23.0"
 time = "0.3.17"

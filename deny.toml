@@ -20,6 +20,7 @@ skip = [
     { name = "arrayvec", version = "0.5.2" },
     # One-time exception for base64 due to its prevalence in the crate graph.
     { name = "base64", version = "0.13.1" },
+    { name = "base64", version = "0.21.5" },
     # `syn` is a core crate that a huge part of the ecosystem either directly, or
     # transitively depends on. They just released v2.0 which not all crates have
     # migrated to yet.
@@ -79,6 +80,10 @@ skip = [
     { name = "tungstenite", version = "0.24.0" },
     { name = "tokio-tungstenite", version = "0.24.0" },
 
+    # `axum 0.7.5` depends on both `sync_wrapper 1.*` and `axum-core 0.4.3`.
+    # The latter depends on `sync_wrapper 0.1.*`.
+    { name = "sync_wrapper", version = "0.1.2" },
+
     { name = "memmap2", version = "0.5.4" },
 
     { name = "async-channel", version = "1.9.0" },
@@ -93,7 +98,10 @@ skip = [
     { name = "rand_chacha", version = "0.3.0" },
     { name = "rand_core", version = "0.5.1" },
     { name = "rand_core", version = "0.6.2" },
+    { name = "reqwest", version = "0.11.24" },
     # Used by reqwest
+    { name = "system-configuration", version = "0.5.1" },
+    { name = "system-configuration-sys", version = "0.5.0" },
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
     { name = "twox-hash", version = "1.6.3" },
@@ -221,6 +229,7 @@ wrappers = [
     "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "prometheus",
+    "proptest",
     "rayon-core",
     "sharded-slab",
 ]
@@ -252,6 +261,8 @@ ignore = [
     "RUSTSEC-2024-0388",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
     "RUSTSEC-2024-0436",
+    # TODO: Remove once https://github.com/MaterializeInc/materialize/pull/34277 lands
+    "RUSTSEC-2025-0134",
 ]
 
 # Must be manually kept in sync with about.toml.
