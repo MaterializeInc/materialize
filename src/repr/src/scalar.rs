@@ -2364,7 +2364,7 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
         match res {
             Ok(Datum::Array(arr)) => Ok(ArrayRustType(
                 arr.elements()
-                    .iter()
+                    .into_iter()
                     .map(|d| Cow::Borrowed(d.unwrap_str()))
                     .collect(),
             )),
