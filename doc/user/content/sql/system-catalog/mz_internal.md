@@ -1374,10 +1374,10 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_objects_id_namespace_types -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview -->
 
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_class_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_type_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_namespace_all_databases -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_description_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attrdef_all_databases -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_attribute_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_authid_core -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_class_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_description_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_namespace_all_databases -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.pg_type_all_databases -->

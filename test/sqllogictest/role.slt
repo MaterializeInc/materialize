@@ -556,3 +556,31 @@ DROP ROLE role_without_password
 
 statement ok
 DROP ROLE role_with_password
+
+# Ensure `pg_authid` queries are efficient as long as they don't require the
+# `has_system_privilege` columns.
+#
+# The query used here is the default `auth_query` used by pgbouncer. We want to
+# make sure not to regress performance of this query.
+query T multiline
+EXPLAIN
+  SELECT
+    rolname,
+    CASE WHEN rolvaliduntil < '2025-12-16' THEN NULL ELSE rolpassword END
+  FROM pg_authid
+  WHERE rolname='user' AND rolcanlogin
+----
+Explained Query (fast path):
+  →Map/Filter/Project
+    Project: #0, #11
+    Filter: #4{rolcanlogin}
+    Map: case when (#9{rolvaliduntil} < 2025-12-16 00:00:00 UTC) then null else #8{rolpassword} end
+      →Index Lookup on mz_internal.pg_authid_core (using mz_internal.pg_authid_core_ind)
+        Lookup values: ("user")
+
+Used Indexes:
+  - mz_internal.pg_authid_core_ind (lookup)
+
+Target cluster: mz_catalog_server
+
+EOF
