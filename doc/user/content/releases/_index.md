@@ -16,7 +16,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.3.0
-*Released to Materialize Cloud and Self-Managed: 2025-12-12*
+*Released Cloud: 2025-12-12*<br>
+*Released Self-Managed: 2025-12-12*
 
 ### Improvements
 - For Self-Managed: added version upgrade window validation, to prevent skipping required intermediate versions during upgrades.
@@ -27,7 +28,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - Fixed frontend `SELECT` sequencing to gracefully handle collections that are dropped during real-time recent timestamp determination.
 
 ## v26.2.0
-*Released Cloud: 2025-12-05*
+
+*Released Cloud: 2025-12-05*<br>
 *Released Self-Managed: 2025-12-09*
 
 This release focuses primarily on bug fixes.
