@@ -33,12 +33,6 @@ use mz_sql::plan::{
 use mz_sql::session::vars::OwnedVarInput;
 use mz_storage_types::instances::StorageInstanceId;
 
-impl From<String> for crate::objects::StringWrapper {
-    fn from(value: String) -> Self {
-        crate::objects::StringWrapper { inner: value }
-    }
-}
-
 impl RustType<crate::objects::Duration> for Duration {
     fn into_proto(&self) -> crate::objects::Duration {
         crate::objects::Duration {

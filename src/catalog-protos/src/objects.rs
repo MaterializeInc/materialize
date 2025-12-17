@@ -278,11 +278,6 @@ pub struct TxnWalShardValue {
     pub shard: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct StringWrapper {
-    pub inner: String,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct Duration {
     pub secs: u64,
@@ -567,7 +562,7 @@ pub struct AuditLogEventV1 {
     pub id: u64,
     pub event_type: audit_log_event_v1::EventType,
     pub object_type: audit_log_event_v1::ObjectType,
-    pub user: Option<StringWrapper>,
+    pub user: Option<String>,
     pub occurred_at: EpochMillis,
     pub details: audit_log_event_v1::Details,
 }
@@ -620,7 +615,7 @@ pub mod audit_log_event_v1 {
     pub struct CreateClusterReplicaV1 {
         pub cluster_id: String,
         pub cluster_name: String,
-        pub replica_id: Option<StringWrapper>,
+        pub replica_id: Option<String>,
         pub replica_name: String,
         pub logical_size: String,
         pub disk: bool,
@@ -632,7 +627,7 @@ pub mod audit_log_event_v1 {
     pub struct CreateClusterReplicaV2 {
         pub cluster_id: String,
         pub cluster_name: String,
-        pub replica_id: Option<StringWrapper>,
+        pub replica_id: Option<String>,
         pub replica_name: String,
         pub logical_size: String,
         pub disk: bool,
@@ -646,7 +641,7 @@ pub mod audit_log_event_v1 {
     pub struct CreateClusterReplicaV3 {
         pub cluster_id: String,
         pub cluster_name: String,
-        pub replica_id: Option<StringWrapper>,
+        pub replica_id: Option<String>,
         pub replica_name: String,
         pub logical_size: String,
         pub disk: bool,
@@ -660,7 +655,7 @@ pub mod audit_log_event_v1 {
     pub struct CreateClusterReplicaV4 {
         pub cluster_id: String,
         pub cluster_name: String,
-        pub replica_id: Option<StringWrapper>,
+        pub replica_id: Option<String>,
         pub replica_name: String,
         pub logical_size: String,
         pub billed_as: Option<String>,
@@ -673,7 +668,7 @@ pub mod audit_log_event_v1 {
     pub struct DropClusterReplicaV1 {
         pub cluster_id: String,
         pub cluster_name: String,
-        pub replica_id: Option<StringWrapper>,
+        pub replica_id: Option<String>,
         pub replica_name: String,
     }
 
@@ -681,7 +676,7 @@ pub mod audit_log_event_v1 {
     pub struct DropClusterReplicaV2 {
         pub cluster_id: String,
         pub cluster_name: String,
-        pub replica_id: Option<StringWrapper>,
+        pub replica_id: Option<String>,
         pub replica_name: String,
         pub reason: CreateOrDropClusterReplicaReasonV1,
         pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV1>,
@@ -691,7 +686,7 @@ pub mod audit_log_event_v1 {
     pub struct DropClusterReplicaV3 {
         pub cluster_id: String,
         pub cluster_name: String,
-        pub replica_id: Option<StringWrapper>,
+        pub replica_id: Option<String>,
         pub replica_name: String,
         pub reason: CreateOrDropClusterReplicaReasonV1,
         pub scheduling_policies: Option<SchedulingDecisionsWithReasonsV2>,
@@ -741,14 +736,14 @@ pub mod audit_log_event_v1 {
     pub struct CreateSourceSinkV1 {
         pub id: String,
         pub name: FullNameV1,
-        pub size: Option<StringWrapper>,
+        pub size: Option<String>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
     pub struct CreateSourceSinkV2 {
         pub id: String,
         pub name: FullNameV1,
-        pub size: Option<StringWrapper>,
+        pub size: Option<String>,
         pub external_type: String,
     }
 
@@ -762,7 +757,7 @@ pub mod audit_log_event_v1 {
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
     pub struct CreateSourceSinkV4 {
         pub id: String,
-        pub cluster_id: Option<StringWrapper>,
+        pub cluster_id: Option<String>,
         pub name: FullNameV1,
         pub external_type: String,
     }
@@ -785,16 +780,16 @@ pub mod audit_log_event_v1 {
     pub struct AlterSourceSinkV1 {
         pub id: String,
         pub name: FullNameV1,
-        pub old_size: Option<StringWrapper>,
-        pub new_size: Option<StringWrapper>,
+        pub old_size: Option<String>,
+        pub new_size: Option<String>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
     pub struct AlterSetClusterV1 {
         pub id: String,
         pub name: FullNameV1,
-        pub old_cluster: Option<StringWrapper>,
-        pub new_cluster: Option<StringWrapper>,
+        pub old_cluster: Option<String>,
+        pub new_cluster: Option<String>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -837,8 +832,8 @@ pub mod audit_log_event_v1 {
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
     pub struct AlterDefaultPrivilegeV1 {
         pub role_id: String,
-        pub database_id: Option<StringWrapper>,
-        pub schema_id: Option<StringWrapper>,
+        pub database_id: Option<String>,
+        pub schema_id: Option<String>,
         pub grantee_id: String,
         pub privileges: String,
     }
@@ -861,7 +856,7 @@ pub mod audit_log_event_v1 {
     pub struct SchemaV2 {
         pub id: String,
         pub name: String,
-        pub database_name: Option<StringWrapper>,
+        pub database_name: Option<String>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]

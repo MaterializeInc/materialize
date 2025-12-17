@@ -311,12 +311,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV1> for Drop
         crate::objects::audit_log_event_v1::DropClusterReplicaV1 {
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
-            replica_id: self
-                .replica_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            replica_id: self.replica_id.clone(),
             replica_name: self.replica_name.to_string(),
         }
     }
@@ -327,7 +322,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV1> for Drop
         Ok(DropClusterReplicaV1 {
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
-            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_id: proto.replica_id,
             replica_name: proto.replica_name,
         })
     }
@@ -338,12 +333,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV2> for Drop
         crate::objects::audit_log_event_v1::DropClusterReplicaV2 {
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
-            replica_id: self
-                .replica_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            replica_id: self.replica_id.clone(),
             replica_name: self.replica_name.to_string(),
             reason: self.reason.into_proto(),
             scheduling_policies: self.scheduling_policies.into_proto(),
@@ -356,7 +346,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV2> for Drop
         Ok(DropClusterReplicaV2 {
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
-            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_id: proto.replica_id,
             replica_name: proto.replica_name,
             reason: proto.reason.into_rust()?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
@@ -369,12 +359,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV3> for Drop
         crate::objects::audit_log_event_v1::DropClusterReplicaV3 {
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
-            replica_id: self
-                .replica_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            replica_id: self.replica_id.clone(),
             replica_name: self.replica_name.to_string(),
             reason: self.reason.into_proto(),
             scheduling_policies: self.scheduling_policies.into_proto(),
@@ -387,7 +372,7 @@ impl RustType<crate::objects::audit_log_event_v1::DropClusterReplicaV3> for Drop
         Ok(DropClusterReplicaV3 {
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
-            replica_id: proto.replica_id.map(|s| s.inner),
+            replica_id: proto.replica_id,
             replica_name: proto.replica_name,
             reason: proto.reason.into_rust()?,
             scheduling_policies: proto.scheduling_policies.into_rust()?,
@@ -402,12 +387,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV1>
         crate::objects::audit_log_event_v1::CreateClusterReplicaV1 {
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
-            replica_id: self
-                .replica_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            replica_id: self.replica_id.clone(),
             replica_name: self.replica_name.to_string(),
             logical_size: self.logical_size.to_string(),
             disk: self.disk,
@@ -422,7 +402,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV1>
         Ok(CreateClusterReplicaV1 {
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
-            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_id: proto.replica_id,
             replica_name: proto.replica_name,
             logical_size: proto.logical_size,
             disk: proto.disk,
@@ -439,12 +419,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV2>
         crate::objects::audit_log_event_v1::CreateClusterReplicaV2 {
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
-            replica_id: self
-                .replica_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            replica_id: self.replica_id.clone(),
             replica_name: self.replica_name.to_string(),
             logical_size: self.logical_size.to_string(),
             disk: self.disk,
@@ -461,7 +436,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV2>
         Ok(CreateClusterReplicaV2 {
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
-            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_id: proto.replica_id,
             replica_name: proto.replica_name,
             logical_size: proto.logical_size,
             disk: proto.disk,
@@ -480,12 +455,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV3>
         crate::objects::audit_log_event_v1::CreateClusterReplicaV3 {
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
-            replica_id: self
-                .replica_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            replica_id: self.replica_id.clone(),
             replica_name: self.replica_name.to_string(),
             logical_size: self.logical_size.to_string(),
             disk: self.disk,
@@ -502,7 +472,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV3>
         Ok(CreateClusterReplicaV3 {
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
-            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_id: proto.replica_id,
             replica_name: proto.replica_name,
             logical_size: proto.logical_size,
             disk: proto.disk,
@@ -521,12 +491,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV4>
         crate::objects::audit_log_event_v1::CreateClusterReplicaV4 {
             cluster_id: self.cluster_id.to_string(),
             cluster_name: self.cluster_name.to_string(),
-            replica_id: self
-                .replica_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            replica_id: self.replica_id.clone(),
             replica_name: self.replica_name.to_string(),
             logical_size: self.logical_size.to_string(),
             billed_as: self.billed_as.clone(),
@@ -542,7 +507,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateClusterReplicaV4>
         Ok(CreateClusterReplicaV4 {
             cluster_id: proto.cluster_id,
             cluster_name: proto.cluster_name,
-            replica_id: proto.replica_id.map(|id| id.inner),
+            replica_id: proto.replica_id,
             replica_name: proto.replica_name,
             logical_size: proto.logical_size,
             billed_as: proto.billed_as,
@@ -690,9 +655,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV1> for Create
         crate::objects::audit_log_event_v1::CreateSourceSinkV1 {
             id: self.id.to_string(),
             name: self.name.into_proto(),
-            size: self.size.as_ref().map(|s| crate::objects::StringWrapper {
-                inner: s.to_string(),
-            }),
+            size: self.size.clone(),
         }
     }
 
@@ -702,7 +665,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV1> for Create
         Ok(CreateSourceSinkV1 {
             id: proto.id,
             name: proto.name.into_rust()?,
-            size: proto.size.map(|s| s.inner),
+            size: proto.size,
         })
     }
 }
@@ -712,9 +675,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV2> for Create
         crate::objects::audit_log_event_v1::CreateSourceSinkV2 {
             id: self.id.to_string(),
             name: self.name.into_proto(),
-            size: self.size.as_ref().map(|s| crate::objects::StringWrapper {
-                inner: s.to_string(),
-            }),
+            size: self.size.clone(),
             external_type: self.external_type.to_string(),
         }
     }
@@ -725,7 +686,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV2> for Create
         Ok(CreateSourceSinkV2 {
             id: proto.id,
             name: proto.name.into_rust()?,
-            size: proto.size.map(|s| s.inner),
+            size: proto.size,
             external_type: proto.external_type,
         })
     }
@@ -755,12 +716,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV4> for Create
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::CreateSourceSinkV4 {
         crate::objects::audit_log_event_v1::CreateSourceSinkV4 {
             id: self.id.to_string(),
-            cluster_id: self
-                .cluster_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            cluster_id: self.cluster_id.clone(),
             name: self.name.into_proto(),
             external_type: self.external_type.to_string(),
         }
@@ -771,7 +727,7 @@ impl RustType<crate::objects::audit_log_event_v1::CreateSourceSinkV4> for Create
     ) -> Result<Self, TryFromProtoError> {
         Ok(CreateSourceSinkV4 {
             id: proto.id,
-            cluster_id: proto.cluster_id.map(|s| s.inner),
+            cluster_id: proto.cluster_id,
             name: proto.name.into_rust()?,
             external_type: proto.external_type,
         })
@@ -825,18 +781,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSourceSinkV1> for AlterSo
         crate::objects::audit_log_event_v1::AlterSourceSinkV1 {
             id: self.id.to_string(),
             name: self.name.into_proto(),
-            old_size: self
-                .old_size
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
-            new_size: self
-                .new_size
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
+            old_size: self.old_size.clone(),
+            new_size: self.new_size.clone(),
         }
     }
 
@@ -846,8 +792,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSourceSinkV1> for AlterSo
         Ok(AlterSourceSinkV1 {
             id: proto.id,
             name: proto.name.into_rust()?,
-            old_size: proto.old_size.map(|s| s.inner),
-            new_size: proto.new_size.map(|s| s.inner),
+            old_size: proto.old_size,
+            new_size: proto.new_size,
         })
     }
 }
@@ -857,18 +803,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
         crate::objects::audit_log_event_v1::AlterSetClusterV1 {
             id: self.id.to_string(),
             name: self.name.into_proto(),
-            old_cluster: self
-                .old_cluster
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
-            new_cluster: self
-                .new_cluster
-                .as_ref()
-                .map(|s| crate::objects::StringWrapper {
-                    inner: s.to_string(),
-                }),
+            old_cluster: self.old_cluster.clone(),
+            new_cluster: self.new_cluster.clone(),
         }
     }
 
@@ -878,8 +814,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterSetClusterV1> for AlterSe
         Ok(Self {
             id: proto.id,
             name: proto.name.into_rust()?,
-            old_cluster: proto.old_cluster.map(|s| s.inner),
-            new_cluster: proto.new_cluster.map(|s| s.inner),
+            old_cluster: proto.old_cluster,
+            new_cluster: proto.new_cluster,
         })
     }
 }
@@ -994,18 +930,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterDefaultPrivilegeV1>
     fn into_proto(&self) -> crate::objects::audit_log_event_v1::AlterDefaultPrivilegeV1 {
         crate::objects::audit_log_event_v1::AlterDefaultPrivilegeV1 {
             role_id: self.role_id.to_string(),
-            database_id: self
-                .database_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
-            schema_id: self
-                .schema_id
-                .as_ref()
-                .map(|id| crate::objects::StringWrapper {
-                    inner: id.to_string(),
-                }),
+            database_id: self.database_id.clone(),
+            schema_id: self.schema_id.clone(),
             grantee_id: self.grantee_id.to_string(),
             privileges: self.privileges.to_string(),
         }
@@ -1016,8 +942,8 @@ impl RustType<crate::objects::audit_log_event_v1::AlterDefaultPrivilegeV1>
     ) -> Result<Self, TryFromProtoError> {
         Ok(AlterDefaultPrivilegeV1 {
             role_id: proto.role_id,
-            database_id: proto.database_id.map(|id| id.inner),
-            schema_id: proto.schema_id.map(|id| id.inner),
+            database_id: proto.database_id,
+            schema_id: proto.schema_id,
             grantee_id: proto.grantee_id,
             privileges: proto.privileges,
         })
@@ -1069,12 +995,7 @@ impl RustType<crate::objects::audit_log_event_v1::SchemaV2> for SchemaV2 {
         crate::objects::audit_log_event_v1::SchemaV2 {
             id: self.id.to_string(),
             name: self.name.to_string(),
-            database_name: self
-                .database_name
-                .as_ref()
-                .map(|d| crate::objects::StringWrapper {
-                    inner: d.to_string(),
-                }),
+            database_name: self.database_name.clone(),
         }
     }
 
@@ -1084,7 +1005,7 @@ impl RustType<crate::objects::audit_log_event_v1::SchemaV2> for SchemaV2 {
         Ok(SchemaV2 {
             id: proto.id,
             name: proto.name,
-            database_name: proto.database_name.map(|d| d.inner),
+            database_name: proto.database_name,
         })
     }
 }
@@ -1371,9 +1292,7 @@ impl RustType<crate::objects::AuditLogEventV1> for EventV1 {
             id: self.id,
             event_type: self.event_type.into_proto(),
             object_type: self.object_type.into_proto(),
-            user: self.user.as_ref().map(|u| crate::objects::StringWrapper {
-                inner: u.to_string(),
-            }),
+            user: self.user.clone(),
             occurred_at: crate::objects::EpochMillis {
                 millis: self.occurred_at,
             },
@@ -1387,7 +1306,7 @@ impl RustType<crate::objects::AuditLogEventV1> for EventV1 {
             event_type: proto.event_type.into_rust()?,
             object_type: proto.object_type.into_rust()?,
             details: proto.details.into_rust()?,
-            user: proto.user.map(|u| u.inner),
+            user: proto.user,
             occurred_at: proto.occurred_at.into_rust()?,
         })
     }
