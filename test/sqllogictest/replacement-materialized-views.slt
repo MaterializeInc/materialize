@@ -158,6 +158,9 @@ CREATE MATERIALIZED VIEW rp REPLACING t AS SELECT a, b FROM t
 statement error db error: ERROR: t is a table not a materialized view
 ALTER MATERIALIZED VIEW mv APPLY REPLACEMENT t
 
+statement error db error: ERROR: cannot replace mv because it is also a dependency
+CREATE MATERIALIZED VIEW rp REPLACING mv AS SELECT * FROM mv
+
 statement ok
 CREATE MATERIALIZED VIEW mv2 AS SELECT * FROM mv
 

@@ -2733,30 +2733,6 @@ pub fn plan_create_materialized_view(
     let partial_name = normalize::unresolved_item_name(stmt.name)?;
     let name = scx.allocate_qualified_name(partial_name.clone())?;
 
-    // Validate the replacement target, if one is given.
-    let replacement_target = if let Some(target_name) = &stmt.replacing {
-        scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
-
-        let target = scx.get_item_by_resolved_name(target_name)?;
-        if target.item_type() != CatalogItemType::MaterializedView {
-            return Err(PlanError::InvalidReplacement {
-                item_type: target.item_type(),
-                item_name: scx.catalog.minimal_qualification(target.name()),
-                replacement_type: CatalogItemType::MaterializedView,
-                replacement_name: partial_name,
-            });
-        }
-        if target.id().is_system() {
-            sql_bail!(
-                "cannot replace {} because it is required by the database system",
-                scx.catalog.minimal_qualification(target.name()),
-            );
-        }
-        Some(target.id())
-    } else {
-        None
-    };
-
     let query::PlannedRootQuery {
         expr,
         mut desc,
@@ -2953,7 +2929,7 @@ pub fn plan_create_materialized_view(
                 scx,
                 ObjectType::MaterializedView,
                 if_exists,
-                partial_name.into(),
+                partial_name.clone().into(),
                 cascade,
             )?;
 
@@ -2992,8 +2968,35 @@ pub fn plan_create_materialized_view(
         .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
 
-    if let Some(id) = replacement_target {
-        dependencies.insert(id);
+    // Validate the replacement target, if one is given.
+    let mut replacement_target = None;
+    if let Some(target_name) = &stmt.replacing {
+        scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
+
+        let target = scx.get_item_by_resolved_name(target_name)?;
+        if target.item_type() != CatalogItemType::MaterializedView {
+            return Err(PlanError::InvalidReplacement {
+                item_type: target.item_type(),
+                item_name: scx.catalog.minimal_qualification(target.name()),
+                replacement_type: CatalogItemType::MaterializedView,
+                replacement_name: partial_name,
+            });
+        }
+        if target.id().is_system() {
+            sql_bail!(
+                "cannot replace {} because it is required by the database system",
+                scx.catalog.minimal_qualification(target.name()),
+            );
+        }
+
+        if !dependencies.insert(target.id()) {
+            sql_bail!(
+                "cannot replace {} because it is also a dependency",
+                scx.catalog.minimal_qualification(target.name()),
+            );
+        }
+
+        replacement_target = Some(target.id());
     }
 
     // Check for an object in the catalog with this same name
