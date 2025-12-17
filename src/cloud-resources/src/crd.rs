@@ -33,6 +33,7 @@ use mz_ore::retry::Retry;
 
 pub mod balancer;
 pub mod console;
+pub mod environment;
 pub mod generated;
 pub mod materialize;
 #[cfg(feature = "vpc-endpoints")]

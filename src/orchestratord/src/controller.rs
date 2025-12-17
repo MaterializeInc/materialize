@@ -9,4 +9,5 @@
 
 pub mod balancer;
 pub mod console;
+pub mod environment;
 pub mod materialize;
