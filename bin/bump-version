@@ -58,8 +58,10 @@ if $console_bump; then
     echo "Bumping console version to v$version"
     (
         cd "$console_dir"
-        git tag -a "v$version" -m "v$version"
-        git push origin "v$version"
+        if [ -z "$(git tag -l "v$version")" ]; then
+            git tag -a "v$version" -m "v$version"
+            git push origin "v$version"
+        fi
     )
 
     echo "Waiting for console version to be released on DockerHub (~15 min)"
