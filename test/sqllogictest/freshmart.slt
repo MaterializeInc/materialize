@@ -291,7 +291,7 @@ Explained Query:
           Get l6
   Return
     Project (#0{product_id}, #13, #11{last_update_time})
-      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](#1{product_name}) then 0.8 else 1 end))
+      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](varchar_to_text(#1{product_name})) then 0.8 else 1 end))
         Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=delta
           ArrangeBy keys=[[#0{product_id}]]
             Get l6
@@ -951,6 +951,241 @@ Explained Query (fast path):
 
 Used Indexes:
   - materialize.public.category_totals_category_id_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+EOF
+
+# test to ensure that varchar_to_text can be eliminated
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_cast_elimination TO true;
+----
+COMPLETE 0
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+WITH recent_prices AS (
+	SELECT grp.product_id, AVG(price) AS avg_price
+	FROM (SELECT DISTINCT product_id FROM sales) grp,
+	LATERAL (
+		SELECT product_id, price
+		FROM sales
+		WHERE sales.product_id = grp.product_id
+		ORDER BY sale_date DESC LIMIT 10
+	) sub
+	GROUP BY grp.product_id
+),
+promotion_effect AS (
+	SELECT
+		p.product_id,
+		MIN(pr.promotion_discount) AS promotion_discount
+	FROM promotions pr
+	JOIN products p ON pr.product_id = p.product_id
+	WHERE pr.active = TRUE
+	GROUP BY p.product_id
+),
+popularity_score AS (
+	SELECT
+		s.product_id,
+		RANK() OVER (PARTITION BY p.category_id ORDER BY COUNT(s.sale_id) DESC) AS popularity_rank,
+		COUNT(s.sale_id) AS sale_count
+	FROM sales s
+	JOIN products p ON s.product_id = p.product_id
+	GROUP BY s.product_id, p.category_id
+),
+inventory_status AS (
+	SELECT
+		i.product_id,
+		SUM(i.stock) AS total_stock,
+		RANK() OVER (ORDER BY SUM(i.stock) DESC) AS stock_rank
+	FROM inventory i
+	GROUP BY i.product_id
+),
+high_demand_products AS (
+	SELECT
+		p.product_id,
+		AVG(s.sale_price) AS avg_sale_price,
+		COUNT(s.sale_id) AS total_sales
+	FROM products p
+	JOIN sales s ON p.product_id = s.product_id
+	GROUP BY p.product_id
+	HAVING COUNT(s.sale_id) > (SELECT AVG(total_sales) FROM (SELECT COUNT(*) AS total_sales FROM sales GROUP BY product_id) subquery)
+),
+dynamic_pricing AS (
+	SELECT
+		p.product_id,
+		p.base_price,
+		CASE
+			WHEN pop.popularity_rank <= 3 THEN 1.2
+			WHEN pop.popularity_rank BETWEEN 4 AND 10 THEN 1.1
+			ELSE 0.9
+		END AS popularity_adjustment,
+		rp.avg_price,
+		COALESCE(1.0 - (pe.promotion_discount / 100), 1) AS promotion_discount,
+		CASE
+			WHEN inv.stock_rank <= 3 THEN 1.1
+			WHEN inv.stock_rank BETWEEN 4 AND 10 THEN 1.05
+			ELSE 1
+		END AS stock_adjustment,
+		CASE
+			WHEN p.base_price > rp.avg_price THEN 1 + (p.base_price - rp.avg_price) / rp.avg_price
+			ELSE 1 - (rp.avg_price - p.base_price) / rp.avg_price
+		END AS demand_multiplier,
+		hd.avg_sale_price,
+		CASE
+			WHEN p.product_name ilike '%cheap%' THEN 0.8
+			ELSE 1.0
+		END AS additional_discount
+	FROM products p
+	LEFT JOIN recent_prices rp ON p.product_id = rp.product_id
+	LEFT JOIN promotion_effect pe ON p.product_id = pe.product_id
+	JOIN popularity_score pop ON p.product_id = pop.product_id
+	LEFT JOIN inventory_status inv ON p.product_id = inv.product_id
+	LEFT JOIN high_demand_products hd ON p.product_id = hd.product_id
+)
+SELECT
+	dp.product_id,
+	dp.base_price * dp.popularity_adjustment * dp.promotion_discount * dp.stock_adjustment * dp.demand_multiplier * dp.additional_discount AS adjusted_price,
+	p.last_update_time
+FROM dynamic_pricing dp
+JOIN products p ON dp.product_id = p.product_id;
+----
+Explained Query:
+  With
+    cte l0 =
+      Project (#0{product_id}, #3)
+        Map ((#1{sum_price} / bigint_to_numeric(case when (#2{count} = 0) then null else #2{count} end)))
+          Reduce group_by=[#0{product_id}] aggregates=[sum(#1{price}), count(*)]
+            Project (#0{product_id}, #2{price})
+              TopK group_by=[#0{product_id}] order_by=[#1{sale_date} desc nulls_first] limit=10
+                Project (#1{product_id}, #3{sale_date}, #4{price})
+                  ReadIndex on=sales idx_sales_product_id=[*** full scan ***]
+    cte l1 =
+      Project (#0{product_id})
+        ReadIndex on=products idx_products_product_name=[*** full scan ***]
+    cte l2 =
+      ArrangeBy keys=[[#0{product_id}]]
+        Get l1
+    cte l3 =
+      Reduce group_by=[#0{product_id}] aggregates=[min(#1{promotion_discount})]
+        Project (#1{product_id}, #2{promotion_discount})
+          Join on=(#1{product_id} = #8{product_id}) type=differential
+            ArrangeBy keys=[[#1{product_id}]]
+              ReadIndex on=materialize.public.promotions idx_promotions_active=[lookup value=(true)]
+            Get l2
+    cte l4 =
+      Distinct project=[#0{product_id}]
+        Get l1
+    cte l5 =
+      ArrangeBy keys=[[#1{product_id}]]
+        ReadIndex on=sales idx_sales_product_id=[differential join]
+    cte l6 =
+      Project (#0{product_id}..=#2{base_price}, #10..=#12)
+        Map (case when (#5) IS NULL then null else #4 end, case when (#8) IS NULL then null else #7{min_promotion_discount} end)
+          Join on=(#0{product_id} = #3{product_id} = #6{product_id} = #9{product_id}) type=delta
+            ArrangeBy keys=[[#0{product_id}]]
+              Project (#0{product_id}..=#2{base_price})
+                ReadIndex on=products idx_products_product_name=[*** full scan ***]
+            ArrangeBy keys=[[#0{product_id}]]
+              Union
+                Map (true)
+                  Get l0
+                Map (null, null)
+                  Threshold
+                    Union
+                      Negate
+                        Project (#0{product_id})
+                          Get l0
+                      Get l4
+            ArrangeBy keys=[[#0{product_id}]]
+              Union
+                Map (true)
+                  Get l3
+                Map (null, null)
+                  Threshold
+                    Union
+                      Negate
+                        Project (#0{product_id})
+                          Get l3
+                      Get l4
+            ArrangeBy keys=[[#0{product_id}]]
+              Project (#2, #3)
+                Filter (#2) IS NOT NULL
+                  Map (record_get[0](record_get[1](#1)), record_get[0](#1))
+                    FlatMap unnest_list(#0{rank})
+                      Project (#1{rank})
+                        Reduce group_by=[#1{category_id}] aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{category_id}, #2{count})], #2{count}))]
+                          Reduce group_by=[#0{product_id}, #1{category_id}] aggregates=[count(*)]
+                            Project (#1{product_id}, #6{category_id})
+                              Join on=(#1{product_id} = #5{product_id}) type=differential
+                                Get l5
+                                ArrangeBy keys=[[#0{product_id}]]
+                                  Project (#0{product_id}, #3{category_id})
+                                    ReadIndex on=products idx_products_product_name=[*** full scan ***]
+    cte l7 =
+      Project (#2, #3)
+        Filter (#2) IS NOT NULL
+          Map (record_get[0](record_get[1](#1)), record_get[0](#1))
+            FlatMap unnest_list(#0{rank})
+              Reduce aggregates=[rank[order_by=[#0{product_id} desc nulls_first]](row(list[row(#0{product_id}, #1{sum_stock})], #1{sum_stock}))]
+                Reduce group_by=[#0{product_id}] aggregates=[sum(#1{stock})]
+                  Project (#1{product_id}, #2{stock})
+                    ReadIndex on=inventory idx_inventory_product_id=[*** full scan ***]
+    cte l8 =
+      Project (#0{product_id})
+        Filter (bigint_to_numeric(#1{count}) > (#2{sum_count} / bigint_to_numeric(case when (#3{count} = 0) then null else #3{count} end)))
+          CrossJoin type=differential
+            ArrangeBy keys=[[]]
+              Reduce group_by=[#0{product_id}] aggregates=[count(*)]
+                Project (#0{product_id})
+                  Join on=(#0{product_id} = #2{product_id}) type=differential
+                    Get l2
+                    Get l5
+            ArrangeBy keys=[[]]
+              Reduce aggregates=[sum(#0{count}), count(*)]
+                Project (#1{count})
+                  Reduce group_by=[#0{product_id}] aggregates=[count(*)]
+                    Project (#1{product_id})
+                      ReadIndex on=sales idx_sales_product_id=[*** full scan ***]
+    cte l9 =
+      Distinct project=[#0{product_id}]
+        Project (#0{product_id})
+          Get l6
+  Return
+    Project (#0{product_id}, #13, #11{last_update_time})
+      Map (case when (#8) IS NULL then null else #7 end, (((((#2{base_price} * case when (#3{popularity_rank} <= 3) then 1.2 else case when ((#3{popularity_rank} <= 10) AND (#3{popularity_rank} >= 4)) then 1.1 else 0.9 end end) * coalesce((1 - (#5{promotion_discount} / 100)), 1)) * case when (#12{stock_rank} <= 3) then 1.1 else case when ((#12 <= 10) AND (#12 >= 4)) then 1.05 else 1 end end) * case when (#2{base_price} > #4{avg_price}) then (1 + ((#2{base_price} - #4{avg_price}) / #4{avg_price})) else (1 - ((#4{avg_price} - #2{base_price}) / #4{avg_price})) end) * case when ilike["%cheap%"](#1{product_name}) then 0.8 else 1 end))
+        Join on=(#0{product_id} = #6{product_id} = #9{product_id} = #10{product_id}) type=delta
+          ArrangeBy keys=[[#0{product_id}]]
+            Get l6
+          ArrangeBy keys=[[#0{product_id}]]
+            Union
+              Map (true)
+                Get l7
+              Map (null, null)
+                Threshold
+                  Union
+                    Negate
+                      Project (#0)
+                        Get l7
+                    Get l9
+          ArrangeBy keys=[[#0{product_id}]]
+            Union
+              Get l8
+              Threshold
+                Union
+                  Negate
+                    Get l8
+                  Get l9
+          ArrangeBy keys=[[#0{product_id}]]
+            Project (#0{product_id}, #6{last_update_time})
+              ReadIndex on=products idx_products_product_name=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.idx_products_product_name (*** full scan ***)
+  - materialize.public.idx_sales_product_id (*** full scan ***, differential join)
+  - materialize.public.idx_promotions_active (lookup)
+  - materialize.public.idx_inventory_product_id (*** full scan ***)
 
 Target cluster: quickstart
 
