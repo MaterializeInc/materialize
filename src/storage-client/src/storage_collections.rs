@@ -271,7 +271,7 @@ pub trait StorageCollections: Debug + Sync {
     ///
     /// NOTE: Ideally, [StorageCollections] would not care about these, but we
     /// have to learn about changes such that when new subsources are created we
-    /// can correctly determine a since based on its depenencies' sinces. This
+    /// can correctly determine a since based on its dependencies' sinces. This
     /// is really only relevant because newly created subsources depend on the
     /// remap shard, and we can't just have them start at since 0.
     async fn alter_ingestion_source_desc(
@@ -431,8 +431,8 @@ pub struct StorageCollectionsImpl<
     config: Arc<Mutex<StorageConfiguration>>,
 
     /// The upper of the txn shard as it was when we booted. We forward the
-    /// upper of created/registered tables to make sure that their uppers are at
-    /// least not less than the initially known txn upper.
+    /// upper of created/registered tables to make sure that their uppers are
+    /// not less than the initially known txn upper.
     ///
     /// NOTE: This works around a quirk in how the adapter chooses the as_of of
     /// existing indexes when bootstrapping, where tables that have an upper
