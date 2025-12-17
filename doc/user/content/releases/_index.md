@@ -31,7 +31,6 @@ v26.4.0 introduces several performance improvements and bugfixes.
 - Fixed timestamp determination logic to handle empty read holds correctly.
 - Fixed lazy creation of temporary schemas to prevent schema-related errors.
 - Reduced SCRAM iterations in scalability framework and fixed fallback image configuration.
-- Fixed `minimal_qualification` function to handle temporary objects gracefully instead of panicking.
 
 ## v26.3.0
 *Released to Materialize Cloud and Self-Managed: 2025-12-12*
