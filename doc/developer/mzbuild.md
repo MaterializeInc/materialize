@@ -312,15 +312,25 @@ SERVICES = [
 (Although, in a real composition, you'd use the built in `Zookeeper` service
 rather than inlining the service definition.)
 
-#### Release vs development builds
+#### Release vs Optimized vs development builds
 
-Via `mzbuild`, `mzcompose` supports building binaries in either release or
-development mode. By default, binaries are built using release mode. You can
-choose dev mode instead by passing the `--dev` flag to `mzcompose`:
+Via `mzbuild`, `mzcompose` supports building binaries in release, optimized or
+development mode (debug). By default, binaries are built using optimized mode.
+You can choose dev mode instead by passing the `--dev` flag to `mzcompose`:
 
 ```shell
 $ bin/mzcompose --dev --find fancy up
 ```
+
+You can choose release mod by passing `--release`:
+
+```shell
+$ bin/mzcompose --release --find fancy up
+```
+
+Optimized builds are recommended, since it allows you to reuse Docker images
+built in CI, is nearly as fast to build locally as Debug builds, and the
+resulting binaries run nearly as fast as Release builds.
 
 ## Input addressability
 
@@ -417,8 +427,8 @@ publish: true
      inputs to the build, plus the top-level `Cargo.toml`, `Cargo.lock`, and
      `.cargo/config` files.
 
-     Cargo is invoked with the `--release` flag unless the `--dev` flag is
-     specified.
+     Cargo is invoked with the `--optimized` flag unless `--release` or `--dev`
+     flags are specified.
 
      In rare cases, it may be necessary to extract files from the build
      directory of a dependency. The `extract` key specifies a mapping from a
