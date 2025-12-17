@@ -265,6 +265,7 @@ impl Client {
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
+            query_tracker,
         } = response;
 
         let peek_client = PeekClient::new(
@@ -274,6 +275,7 @@ impl Client {
             optimizer_metrics,
             persist_client,
             statement_logging_frontend,
+            query_tracker,
         );
 
         let mut client = SessionClient {
@@ -1034,8 +1036,6 @@ impl SessionClient {
                 | Command::ExecuteSlowPathPeek { .. }
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
-                | Command::RegisterFrontendPeek { .. }
-                | Command::UnregisterFrontendPeek { .. }
                 | Command::FrontendStatementLogging(..) => {}
             };
             cmd

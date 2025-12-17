@@ -215,7 +215,7 @@ impl PeekClient {
             // We take ownership and retire the outer context here. The end of execution will be
             // logged in one of the following ways:
             // - At the end of this function, if the execution is finished by then.
-            // - Later by the Coordinator, either due to RegisterFrontendPeek or ExecuteSlowPathPeek.
+            // - Later by the Coordinator, either due to peek tracking or ExecuteSlowPathPeek.
             outer_ctx_extra.take().and_then(|extra| extra.retire())
         };
 

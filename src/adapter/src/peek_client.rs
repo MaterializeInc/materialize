@@ -37,6 +37,7 @@ use crate::statement_logging::{
     FrontendStatementLoggingEvent, PreparedStatementEvent, StatementLoggingFrontend,
     StatementLoggingId,
 };
+use crate::query_tracker::QueryTrackerCmd;
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
@@ -50,6 +51,7 @@ pub type StorageCollectionsHandle = Arc<
 #[derive(Debug)]
 pub struct PeekClient {
     coordinator_client: Client,
+    query_tracker: crate::query_tracker::Handle,
     /// Channels to talk to each compute Instance task directly. Lazily populated.
     /// Note that these are never cleaned up. In theory, this could lead to a very slow memory leak
     /// if a long-running user session keeps peeking on clusters that are being created and dropped
@@ -77,9 +79,11 @@ impl PeekClient {
         optimizer_metrics: OptimizerMetrics,
         persist_client: PersistClient,
         statement_logging_frontend: StatementLoggingFrontend,
+        query_tracker: crate::query_tracker::Handle,
     ) -> Self {
         Self {
             coordinator_client,
+            query_tracker,
             compute_instances: Default::default(), // lazily populated
             storage_collections,
             transient_id_gen,
@@ -354,20 +358,18 @@ impl PeekClient {
             .await
             .map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
 
-        // Register coordinator tracking of this peek. This has to complete before issuing the peek.
-        //
-        // Warning: If we fail to actually issue the peek after this point, then we need to
-        // unregister it to avoid an orphaned registration.
-        self.call_coordinator(|tx| Command::RegisterFrontendPeek {
-            uuid,
-            conn_id: conn_id.clone(),
-            cluster_id: compute_instance,
-            depends_on,
-            execution_strategy: strategy,
-            watch_set,
-            tx,
-        })
-        .await?;
+        let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
+        self.query_tracker.send(QueryTrackerCmd::TrackPeek(
+            crate::query_tracker::TrackedPeek {
+                uuid,
+                conn_id: conn_id.clone(),
+                cluster_id: compute_instance,
+                depends_on,
+                ctx_extra: crate::ExecuteContextExtra::new(statement_logging_id),
+                execution_strategy: strategy,
+                watch_set,
+            },
+        ));
 
         let finishing_for_instance = finishing.clone();
         let peek_result = client
@@ -388,8 +390,7 @@ impl PeekClient {
         if let Err(err) = peek_result {
             // Clean up the registered peek since the peek failed to issue.
             // The frontend will handle statement logging for the error.
-            self.call_coordinator(|tx| Command::UnregisterFrontendPeek { uuid, tx })
-                .await;
+            self.query_tracker.send(QueryTrackerCmd::UntrackPeek { uuid });
             return Err(AdapterError::concurrent_dependency_drop_from_peek_error(
                 err,
                 compute_instance,

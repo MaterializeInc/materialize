@@ -55,6 +55,7 @@ use crate::statement_logging::{
     FrontendStatementLoggingEvent, StatementEndedExecutionReason, StatementExecutionStrategy,
     StatementLoggingFrontend,
 };
+use crate::query_tracker;
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError, ReadHolds};
@@ -241,30 +242,6 @@ pub enum Command {
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 
-    /// Register a pending peek initiated by frontend sequencing. This is needed for:
-    /// - statement logging
-    /// - query cancellation
-    RegisterFrontendPeek {
-        uuid: Uuid,
-        conn_id: ConnectionId,
-        cluster_id: mz_controller_types::ClusterId,
-        depends_on: BTreeSet<GlobalId>,
-        execution_strategy: StatementExecutionStrategy,
-        /// If statement logging is enabled, contains all info needed for installing watch sets
-        /// and logging the statement execution.
-        watch_set: Option<WatchSetCreation>,
-        tx: oneshot::Sender<Result<(), AdapterError>>,
-    },
-
-    /// Unregister a pending peek that was registered but failed to issue.
-    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    /// The `ExecuteContextExtra` is dropped without logging the statement retirement, because the
-    /// frontend will log the error.
-    UnregisterFrontendPeek {
-        uuid: Uuid,
-        tx: oneshot::Sender<()>,
-    },
-
     /// Statement logging event from frontend peek sequencing.
     /// No response channel needed - this is fire-and-forget.
     FrontendStatementLogging(FrontendStatementLoggingEvent),
@@ -296,8 +273,6 @@ impl Command {
             | Command::ExecuteSlowPathPeek { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
-            | Command::RegisterFrontendPeek { .. }
-            | Command::UnregisterFrontendPeek { .. }
             | Command::FrontendStatementLogging(..) => None,
         }
     }
@@ -327,8 +302,6 @@ impl Command {
             | Command::ExecuteSlowPathPeek { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
-            | Command::RegisterFrontendPeek { .. }
-            | Command::UnregisterFrontendPeek { .. }
             | Command::FrontendStatementLogging(..) => None,
         }
     }
@@ -363,6 +336,8 @@ pub struct StartupResponse {
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
     pub statement_logging_frontend: StatementLoggingFrontend,
+    #[derivative(Debug = "ignore")]
+    pub query_tracker: query_tracker::Handle,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).
