@@ -32,16 +32,23 @@ FOR ALL TABLES;
 source_in_default_schema = """
 {{ config(
     materialized='source',
-    database='materialize'
+    database='materialize',
+    cluster='quickstart'
 ) }}
 FROM LOAD GENERATOR COUNTER;
 """
 
-# Second source in default schema (for coexistence tests)
+# Second source in default schema with different cluster (for coexistence tests)
+# In strict_mode, each source must have its own dedicated cluster
 source_in_default_schema_2 = """
 {{ config(
     materialized='source',
-    database='materialize'
+    database='materialize',
+    cluster='source_cluster_2',
+    pre_hook=[
+        "DROP CLUSTER IF EXISTS source_cluster_2 CASCADE",
+        "CREATE CLUSTER source_cluster_2 SIZE = 'bootstrap'"
+    ]
 ) }}
 FROM LOAD GENERATOR AUCTION
 FOR ALL TABLES;
@@ -55,6 +62,69 @@ source_with_index = """
     indexes=[{'columns': ['counter']}]
 ) }}
 FROM LOAD GENERATOR COUNTER;
+"""
+
+# Cluster isolation fixtures - sources with specific clusters
+source_on_cluster_a = """
+{{ config(
+    materialized='source',
+    database='materialize',
+    schema='sources',
+    cluster='cluster_a'
+) }}
+FROM LOAD GENERATOR COUNTER;
+"""
+
+source_on_cluster_a_2 = """
+{{ config(
+    materialized='source',
+    database='materialize',
+    schema='sources',
+    cluster='cluster_a'
+) }}
+FROM LOAD GENERATOR AUCTION
+FOR ALL TABLES;
+"""
+
+mv_on_cluster_a = """
+{{ config(
+    materialized='materialized_view',
+    cluster='cluster_a'
+) }}
+SELECT 1 AS id;
+"""
+
+# Sinks on specific clusters - for cluster isolation tests
+# Both sinks use the default cluster (quickstart) to test that sinks can share clusters
+sink_on_cluster_b = """
+{{ config(
+    materialized='sink',
+    schema='sinks',
+    pre_hook="CREATE CONNECTION IF NOT EXISTS kafka_connection TO KAFKA (BROKER '{{ env_var('KAFKA_ADDR', 'localhost:9092') }}', SECURITY PROTOCOL PLAINTEXT)"
+) }}
+FROM {{ ref('sink_source_mv') }}
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink-cluster-1')
+FORMAT JSON
+ENVELOPE DEBEZIUM
+"""
+
+sink_on_cluster_b_2 = """
+{{ config(
+    materialized='sink',
+    schema='sinks'
+) }}
+FROM {{ ref('sink_source_mv') }}
+INTO KAFKA CONNECTION kafka_connection (TOPIC 'test-sink-cluster-2')
+FORMAT JSON
+ENVELOPE DEBEZIUM
+"""
+
+# MV on default cluster - used for sink/MV conflict tests
+mv_on_cluster_b = """
+{{ config(
+    materialized='materialized_view'
+) }}
+SELECT 1 AS id;
 """
 
 # Source table that creates its own source via pre_hook (for strict_mode tests)
@@ -111,10 +181,16 @@ SELECT 1 AS id
 """
 
 # Sink fixtures - sinks need a source materialized_view to read from
+# MV uses its own cluster so it doesn't conflict with sinks in strict_mode
 sink_source_mv = """
 {{ config(
     materialized='materialized_view',
-    schema='sink_sources'
+    schema='sink_sources',
+    cluster='mv_cluster',
+    pre_hook=[
+        "DROP CLUSTER IF EXISTS mv_cluster CASCADE",
+        "CREATE CLUSTER mv_cluster SIZE = 'bootstrap'"
+    ]
 ) }}
 
 SELECT 1 AS id
@@ -391,3 +467,100 @@ class TestStrictModeSourceIndexBlocked:
     def test_source_index_blocked_in_strict_mode(self, project):
         """With strict_mode, creating indexes on sources fails at compile time."""
         run_dbt(["run"], expect_pass=False)
+
+
+# =============================================================================
+# Cluster Isolation Tests
+# =============================================================================
+
+
+class TestStrictModeSourceDedicatedCluster:
+    """Test that sources must have dedicated clusters in strict_mode."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_source_dedicated_cluster",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_source_1.sql": source_on_cluster_a,
+            "test_source_2.sql": source_on_cluster_a_2,
+        }
+
+    def test_sources_cannot_share_cluster(self, project):
+        """With strict_mode, two sources cannot share the same cluster."""
+        run_dbt(["run"], expect_pass=False)
+
+
+class TestStrictModeSourceCannotShareWithMV:
+    """Test that sources cannot share cluster with MVs in strict_mode."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_source_mv_cluster_conflict",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_source.sql": source_on_cluster_a,
+            "test_mv.sql": mv_on_cluster_a,
+        }
+
+    def test_source_and_mv_cannot_share_cluster(self, project):
+        """With strict_mode, source and MV cannot share the same cluster."""
+        run_dbt(["run"], expect_pass=False)
+
+
+class TestStrictModeSinkCannotShareWithMV:
+    """Test that sinks cannot share cluster with MVs in strict_mode."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_sink_mv_cluster_conflict",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "sink_source_mv.sql": sink_source_mv,
+            "test_sink.sql": sink_on_cluster_b,
+            "test_mv.sql": mv_on_cluster_b,
+        }
+
+    def test_sink_and_mv_cannot_share_cluster(self, project):
+        """With strict_mode, sink and MV cannot share the same cluster."""
+        run_dbt(["run"], expect_pass=False)
+
+
+class TestStrictModeSinksCanShareCluster:
+    """Test that multiple sinks can share the same cluster in strict_mode."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_sinks_share_cluster",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "sink_source_mv.sql": sink_source_mv,
+            "test_sink_1.sql": sink_on_cluster_b,
+            "test_sink_2.sql": sink_on_cluster_b_2,
+        }
+
+    def test_multiple_sinks_can_share_cluster(self, project):
+        """With strict_mode, multiple sinks can share the same cluster."""
+        results = run_dbt(["run"])
+        # Should have 3 results: 1 MV (source for sinks) + 2 sinks
+        assert len(results) == 3

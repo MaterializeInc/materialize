@@ -25,6 +25,9 @@
 
   {{ validate_source_schema_isolation(schema, database) }}
 
+  {%- set cluster = config.get('cluster', target.cluster) -%}
+  {{ validate_source_cluster_isolation(cluster) }}
+
   {% if old_relation %}
     {% if var('strict_mode', False) %}
       {# In strict_mode, skip recreation if relation exists #}
