@@ -42,17 +42,13 @@ use mz_repr::{GlobalId, RelationDesc, RelationVersion, Row, TimestampManipulatio
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
-use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
 use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
-use mz_storage_types::sources::{
-    GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceExportDataConfig,
-    Timeline,
-};
+use mz_storage_types::sources::{GenericSourceConnection, SourceData, SourceEnvelope, Timeline};
 use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
 use mz_txn_wal::metrics::Metrics as TxnMetrics;
 use mz_txn_wal::txn_read::{DataSnapshot, TxnsRead};
@@ -264,34 +260,6 @@ pub trait StorageCollections: Debug + Sync {
         register_ts: Option<Self::Timestamp>,
         collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
         migrated_storage_collections: &BTreeSet<GlobalId>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Alters the identified ingestion to use the provided [`SourceDesc`].
-    ///
-    /// NOTE: Ideally, [StorageCollections] would not care about these, but we
-    /// have to learn about changes such that when new subsources are created we
-    /// can correctly determine a since based on its dependencies' sinces. This
-    /// is really only relevant because newly created subsources depend on the
-    /// remap shard, and we can't just have them start at since 0.
-    async fn alter_ingestion_source_desc(
-        &self,
-        ingestion_id: GlobalId,
-        source_desc: SourceDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Alters the data config for the specified source exports of the specified ingestions.
-    async fn alter_ingestion_export_data_configs(
-        &self,
-        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
-    ) -> Result<(), StorageError<Self::Timestamp>>;
-
-    /// Alters each identified collection to use the correlated
-    /// [`GenericSourceConnection`].
-    ///
-    /// See NOTE on [StorageCollections::alter_ingestion_source_desc].
-    async fn alter_ingestion_connections(
-        &self,
-        source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>>;
 
     /// Updates the [`RelationDesc`] for the specified table.
@@ -2115,28 +2083,6 @@ where
 
         self.synchronize_finalized_shards(storage_metadata);
 
-        Ok(())
-    }
-
-    async fn alter_ingestion_source_desc(
-        &self,
-        ingestion_id: GlobalId,
-        source_desc: SourceDesc,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        Ok(())
-    }
-
-    async fn alter_ingestion_export_data_configs(
-        &self,
-        source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
-        Ok(())
-    }
-
-    async fn alter_ingestion_connections(
-        &self,
-        source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
-    ) -> Result<(), StorageError<Self::Timestamp>> {
         Ok(())
     }
 
