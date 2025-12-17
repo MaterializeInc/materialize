@@ -39,15 +39,9 @@ Cloud Storage, or Cloudflare R2.
     );
     ```
 
-1. Validate the connection you created using the
-   [`VALIDATE CONNECTION`](/sql/validate-connection) command.
-
-   ```mzsql
-   VALIDATE CONNECTION bucket_connection;
-   ```
-
-   If no validation error is returned, you're ready to use this connection to
-   run a bulk export from Materialize to your target bucket.
+{{< warning >}}
+  `VALIDATE CONNECTION` only works for AWS S3 connections. Using `VALIDATE CONNECTION` to test a connection to S3 compatible object storage service will result in an error. However, you can still use the connection to copy data.
+{{< /warning >}}
 
 ## Step 2. Run a bulk export
 
