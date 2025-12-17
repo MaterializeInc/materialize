@@ -2029,8 +2029,46 @@ where
                 None => data_shard_since,
             };
 
+            // Determine the time dependence of the collection.
+            let time_dependence = {
+                use DataSource::*;
+                if let Some(timeline) = &description.timeline
+                    && *timeline != Timeline::EpochMilliseconds
+                {
+                    // Only the epoch timeline follows wall-clock.
+                    None
+                } else {
+                    match &description.data_source {
+                        Ingestion(ingestion) => {
+                            use GenericSourceConnection::*;
+                            match ingestion.desc.connection {
+                                // Kafka, Postgres, MySql, and SQL Server sources all
+                                // follow wall clock.
+                                Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
+                                    Some(TimeDependence::default())
+                                }
+                                // Load generators not further specified.
+                                LoadGenerator(_) => None,
+                            }
+                        }
+                        IngestionExport { ingestion_id, .. } => {
+                            let c = self_collections.get(ingestion_id).expect("known to exist");
+                            c.time_dependence.clone()
+                        }
+                        // Introspection, other, progress, table, and webhook sources follow wall clock.
+                        Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
+                            Some(TimeDependence::default())
+                        }
+                        // Materialized views, continual tasks, etc, aren't managed by storage.
+                        Other => None,
+                        Sink { .. } => None,
+                    }
+                }
+            };
+
             let mut collection_state = CollectionState::new(
                 description,
+                time_dependence,
                 initial_since,
                 write_frontier.clone(),
                 storage_dependencies,
@@ -2369,6 +2407,7 @@ where
             };
             let collection_state = CollectionState::new(
                 collection_desc,
+                existing.time_dependence.clone(),
                 implied_capability,
                 write_frontier,
                 Vec::new(),
@@ -2562,47 +2601,8 @@ where
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
         use TimeDependenceError::CollectionMissing;
         let collections = self.collections.lock().expect("lock poisoned");
-        let mut collection = Some(collections.get(&id).ok_or(CollectionMissing(id))?);
-
-        let mut result = None;
-
-        while let Some(c) = collection.take() {
-            use DataSource::*;
-            if let Some(timeline) = &c.description.timeline {
-                // Only the epoch timeline follows wall-clock.
-                if *timeline != Timeline::EpochMilliseconds {
-                    break;
-                }
-            }
-            match &c.description.data_source {
-                Ingestion(ingestion) => {
-                    use GenericSourceConnection::*;
-                    match ingestion.desc.connection {
-                        // Kafka, Postgres, MySql, and SQL Server sources all
-                        // follow wall clock.
-                        Kafka(_) | Postgres(_) | MySql(_) | SqlServer(_) => {
-                            result = Some(TimeDependence::default())
-                        }
-                        // Load generators not further specified.
-                        LoadGenerator(_) => {}
-                    }
-                }
-                IngestionExport { ingestion_id, .. } => {
-                    let c = collections
-                        .get(ingestion_id)
-                        .ok_or(CollectionMissing(*ingestion_id))?;
-                    collection = Some(c);
-                }
-                // Introspection, other, progress, table, and webhook sources follow wall clock.
-                Introspection(_) | Progress | Table { .. } | Webhook { .. } => {
-                    result = Some(TimeDependence::default())
-                }
-                // Materialized views, continual tasks, etc, aren't managed by storage.
-                Other => {}
-                Sink { .. } => {}
-            };
-        }
-        Ok(result)
+        let state = collections.get(&id).ok_or(CollectionMissing(id))?;
+        Ok(state.time_dependence.clone())
     }
 
     fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
@@ -2781,6 +2781,8 @@ struct CollectionState<T> {
     /// Description with which the collection was created
     pub description: CollectionDescription<T>,
 
+    time_dependence: Option<TimeDependence>,
+
     /// Accumulation of read capabilities for the collection.
     ///
     /// This accumulation will always contain `self.implied_capability`, but may
@@ -2810,6 +2812,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
     /// `since`.
     pub fn new(
         description: CollectionDescription<T>,
+        time_dependence: Option<TimeDependence>,
         since: Antichain<T>,
         write_frontier: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
@@ -2819,6 +2822,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {
             description,
+            time_dependence,
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::NoPolicy {
