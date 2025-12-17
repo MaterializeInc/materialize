@@ -2072,16 +2072,14 @@ mod tests {
     proptest! {
         // We run many cases because the data are _random_, and we want to be sure
         // that we have covered sufficient cases. We drop dummy data (behavior is different!) so we allow many more global rejects.
-        #![proptest_config(ProptestConfig { cases: 10000, max_global_rejects: 5000, ..Default::default() })]
+        #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn datum_type_difference_agrees_with_is_instance_of_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum()) {
+        fn datum_type_difference_agrees_with_is_instance_of_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum(false)) {
             let typ = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
 
-            if datum.contains_dummy() {
-                return Err(TestCaseError::reject("datum is a dummy"));
-            }
+            assert!(!datum.contains_dummy(), "datum contains a dummy (bug in arb_datum)");
 
             let diff = datum_difference_with_column_type(&datum, &typ);
             if datum.is_instance_of(&typ) {

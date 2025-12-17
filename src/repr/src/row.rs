@@ -312,7 +312,7 @@ impl Arbitrary for Row {
     type Strategy = BoxedStrategy<Row>;
 
     fn arbitrary_with(size: Self::Parameters) -> Self::Strategy {
-        prop::collection::vec(arb_datum(), size)
+        prop::collection::vec(arb_datum(true), size)
             .prop_map(|items| {
                 let mut row = Row::default();
                 let mut packer = row.packer();
