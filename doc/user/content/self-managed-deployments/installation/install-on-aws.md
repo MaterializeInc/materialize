@@ -191,7 +191,7 @@ An active AWS account with appropriate permissions to create:
    ```bash
    docker logout public.ecr.aws
    ```
-  
+
    Then, re-apply the Terraform configuration.
 
    {{< /tip >}}
