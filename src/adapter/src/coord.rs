@@ -107,6 +107,7 @@ use mz_compute_client::as_of_selection;
 use mz_compute_client::controller::error::{
     CollectionLookupError, DataflowCreationError, InstanceMissing,
 };
+use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -191,7 +192,6 @@ use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
-use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
 use crate::coord::timestamp_selection::{TimestampContext, TimestampDetermination};
@@ -209,6 +209,7 @@ use crate::statement_logging::{
     StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
 };
 use crate::util::{ClientTransmitter, ResultExt};
+use crate::query_tracker::{self, QueryTrackerCmd};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
 
@@ -266,6 +267,16 @@ pub enum Message {
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
+    },
+    /// Cancel a specific compute peek by UUID.
+    CancelComputePeek {
+        cluster_id: ClusterId,
+        uuid: Uuid,
+        response: PeekResponse,
+    },
+    /// Increment the canceled peeks metric.
+    IncrementCanceledPeeks {
+        by: u64,
     },
     LinearizeReads,
     StagedBatches {
@@ -401,6 +412,8 @@ impl Message {
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
+            Message::CancelComputePeek { .. } => "cancel_compute_peek",
+            Message::IncrementCanceledPeeks { .. } => "increment_canceled_peeks",
             Message::LinearizeReads => "linearize_reads",
             Message::StagedBatches { .. } => "staged_batches",
             Message::StorageUsageSchedule => "storage_usage_schedule",
@@ -1699,12 +1712,10 @@ pub struct Coordinator {
     /// Upon completing a transaction, these read holds should be dropped.
     txn_read_holds: BTreeMap<ConnectionId, read_policy::ReadHolds<Timestamp>>,
 
-    /// Access to the peek fields should be restricted to methods in the [`peek`] API.
-    /// A map from pending peek ids to the queue into which responses are sent, and
-    /// the connection id of the client that initiated the peek.
-    pending_peeks: BTreeMap<Uuid, PendingPeek>,
-    /// A map from client connection ids to a set of all pending peeks for that client.
-    client_pending_peeks: BTreeMap<ConnectionId, BTreeMap<Uuid, ClusterId>>,
+    /// Handle for tracking and canceling peeks.
+    query_tracker: query_tracker::Handle,
+    /// Receiver half used to spawn the QueryTracker task at startup.
+    query_tracker_rx: Option<mpsc::UnboundedReceiver<QueryTrackerCmd>>,
 
     /// A map from client connection ids to pending linearize read transaction.
     pending_linearize_read_txns: BTreeMap<ConnectionId, PendingReadTxn>,
@@ -3298,6 +3309,19 @@ impl Coordinator {
         read_holds
     }
 
+    fn spawn_query_tracker_task(&mut self) {
+        let Some(rx) = self.query_tracker_rx.take() else {
+            return;
+        };
+        let effects = QueryTrackerCoordinatorEffects {
+            internal_cmd_tx: self.internal_cmd_tx.clone(),
+        };
+        spawn(|| "query_tracker", async move {
+            let tracker = query_tracker::QueryTracker::new(effects);
+            tracker.run(rx).await;
+        });
+    }
+
     /// Serves the coordinator, receiving commands from users over `cmd_rx`
     /// and feedback from dataflow workers over `feedback_rx`.
     ///
@@ -3377,6 +3401,7 @@ impl Coordinator {
 
             self.schedule_storage_usage_collection().await;
             self.spawn_privatelink_vpc_endpoints_watch_task();
+            self.spawn_query_tracker_task();
             self.spawn_statement_logging_task();
             flags::tracing_config(self.catalog.system_config()).apply(&self.tracing_handle);
 
@@ -3830,22 +3855,14 @@ impl Coordinator {
             .iter()
             .map(|(id, capability)| (id.unhandled().to_string(), format!("{capability:?}")))
             .collect();
-        let pending_peeks: BTreeMap<_, _> = self
-            .pending_peeks
-            .iter()
-            .map(|(id, peek)| (id.to_string(), format!("{peek:?}")))
-            .collect();
-        let client_pending_peeks: BTreeMap<_, _> = self
-            .client_pending_peeks
-            .iter()
-            .map(|(id, peek)| {
-                let peek: BTreeMap<_, _> = peek
-                    .iter()
-                    .map(|(uuid, storage_id)| (uuid.to_string(), storage_id))
-                    .collect();
-                (id.to_string(), peek)
-            })
-            .collect();
+        let (tx, rx) = oneshot::channel();
+        self.query_tracker.send(QueryTrackerCmd::Dump { tx });
+        let dump = rx.await.unwrap_or_else(|_| query_tracker::QueryTrackerDump {
+            pending_peeks: BTreeMap::new(),
+            client_pending_peeks: BTreeMap::new(),
+        });
+        let pending_peeks = dump.pending_peeks;
+        let client_pending_peeks = dump.client_pending_peeks;
         let pending_linearize_read_txns: BTreeMap<_, _> = self
             .pending_linearize_read_txns
             .iter()
@@ -3962,6 +3979,40 @@ impl Coordinator {
 struct LastMessage {
     kind: &'static str,
     stmt: Option<Arc<Statement<Raw>>>,
+}
+
+#[derive(Debug, Clone)]
+struct QueryTrackerCoordinatorEffects {
+    internal_cmd_tx: mpsc::UnboundedSender<Message>,
+}
+
+impl query_tracker::QueryTrackerEffects for QueryTrackerCoordinatorEffects {
+    fn cancel_compute_peek(&self, cluster_id: ClusterId, uuid: Uuid, response: PeekResponse) {
+        let _ = self.internal_cmd_tx.send(Message::CancelComputePeek {
+            cluster_id,
+            uuid,
+            response,
+        });
+    }
+
+    fn inc_canceled_peeks(&self, by: u64) {
+        let _ = self
+            .internal_cmd_tx
+            .send(Message::IncrementCanceledPeeks { by });
+    }
+
+    fn retire_execute(
+        &self,
+        otel_ctx: OpenTelemetryContext,
+        reason: StatementEndedExecutionReason,
+        ctx_extra: ExecuteContextExtra,
+    ) {
+        let _ = self.internal_cmd_tx.send(Message::RetireExecute {
+            data: ctx_extra,
+            otel_ctx,
+            reason,
+        });
+    }
 }
 
 impl LastMessage {
@@ -4344,6 +4395,7 @@ pub fn serve(
                 let catalog = Arc::new(catalog);
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
+                let (query_tracker_tx, query_tracker_rx) = mpsc::unbounded_channel();
                 let mut coord = Coordinator {
                     controller,
                     catalog,
@@ -4354,8 +4406,8 @@ pub fn serve(
                     transient_id_gen: Arc::new(TransientIdGen::new()),
                     active_conns: BTreeMap::new(),
                     txn_read_holds: Default::default(),
-                    pending_peeks: BTreeMap::new(),
-                    client_pending_peeks: BTreeMap::new(),
+                    query_tracker: query_tracker::Handle::new(query_tracker_tx),
+                    query_tracker_rx: Some(query_tracker_rx),
                     pending_linearize_read_txns: BTreeMap::new(),
                     serialized_ddl: LockedVecDeque::new(),
                     active_compute_sinks: BTreeMap::new(),

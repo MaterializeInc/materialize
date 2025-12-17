@@ -12,7 +12,7 @@
 //! This module determines if a dataflow can be short-cut, by returning constant values
 //! or by reading out of existing arrangements, and implements the appropriate plan.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
@@ -23,13 +23,11 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_cluster_client::ReplicaId;
-use mz_compute_client::controller::PeekNotification;
 use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
 use mz_compute_types::sinks::ComputeSinkConnection;
-use mz_controller_types::ClusterId;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
 use mz_expr::{
@@ -39,7 +37,6 @@ use mz_expr::{
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
 use mz_ore::task;
-use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::Schemas;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::explain::text::DisplayText;
@@ -57,27 +54,12 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::query_tracker::QueryTrackerCmd;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
 use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
-
-/// A peek is a request to read data from a maintained arrangement.
-#[derive(Debug)]
-pub(crate) struct PendingPeek {
-    /// The connection that initiated the peek.
-    pub(crate) conn_id: ConnectionId,
-    /// The cluster that the peek is being executed on.
-    pub(crate) cluster_id: ClusterId,
-    /// All `GlobalId`s that the peek depend on.
-    pub(crate) depends_on: BTreeSet<GlobalId>,
-    /// Context about the execute that produced this peek,
-    /// needed by the coordinator for retiring it.
-    pub(crate) ctx_extra: ExecuteContextExtra,
-    /// Is this a fast-path peek, i.e. one that doesn't require a dataflow?
-    pub(crate) is_fast_path: bool,
-}
 
 /// The response from a `Peek`, with row multiplicities represented in unary.
 ///
@@ -715,7 +697,7 @@ impl crate::coord::Coordinator {
         // differently.
 
         // If we must build the view, ship the dataflow.
-        let (peek_command, drop_dataflow, is_fast_path, peek_target, strategy) = match fast_path {
+        let (peek_command, drop_dataflow, peek_target, strategy) = match fast_path {
             PeekPlan::FastPath(FastPathPlan::PeekExisting(
                 _coll_id,
                 idx_id,
@@ -724,7 +706,6 @@ impl crate::coord::Coordinator {
             )) => (
                 (literal_constraints, timestamp, map_filter_project),
                 None,
-                true,
                 PeekTarget::Index { id: idx_id },
                 StatementExecutionStrategy::FastPath,
             ),
@@ -747,7 +728,6 @@ impl crate::coord::Coordinator {
                 (
                     peek_command,
                     None,
-                    true,
                     PeekTarget::Persist {
                         id: coll_id,
                         metadata,
@@ -793,7 +773,6 @@ impl crate::coord::Coordinator {
                 (
                     (None, timestamp, map_filter_project),
                     Some(index_id),
-                    false,
                     PeekTarget::Index { id: index_id },
                     StatementExecutionStrategy::Standard,
                 )
@@ -806,29 +785,20 @@ impl crate::coord::Coordinator {
         // Endpoints for sending and receiving peek responses.
         let (rows_tx, rows_rx) = tokio::sync::oneshot::channel();
 
-        // Generate unique UUID. Guaranteed to be unique to all pending peeks, there's an very
-        // small but unlikely chance that it's not unique to completed peeks.
-        let mut uuid = Uuid::new_v4();
-        while self.pending_peeks.contains_key(&uuid) {
-            uuid = Uuid::new_v4();
-        }
+        // Generate UUID for the peek. Collisions are astronomically unlikely.
+        let uuid = Uuid::new_v4();
 
-        // The peek is ready to go for both cases, fast and non-fast.
-        // Stash the response mechanism, and broadcast dataflow construction.
-        self.pending_peeks.insert(
-            uuid,
-            PendingPeek {
-                conn_id: conn_id.clone(),
+        // Track the peek for cancellation and statement logging retirement.
+        self.query_tracker.send(QueryTrackerCmd::TrackPeek(
+            crate::query_tracker::TrackedPeek {
+                uuid,
+                conn_id,
                 cluster_id: compute_instance,
                 depends_on: source_ids,
                 ctx_extra: std::mem::take(ctx_extra),
-                is_fast_path,
+                execution_strategy: strategy,
             },
-        );
-        self.client_pending_peeks
-            .entry(conn_id)
-            .or_default()
-            .insert(uuid, compute_instance);
+        ));
         let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
         // At this stage we don't know column names for the result because we
@@ -1098,102 +1068,6 @@ impl crate::coord::Coordinator {
         })
     }
 
-    /// Cancel and remove all pending peeks that were initiated by the client with `conn_id`.
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) fn cancel_pending_peeks(&mut self, conn_id: &ConnectionId) {
-        if let Some(uuids) = self.client_pending_peeks.remove(conn_id) {
-            self.metrics
-                .canceled_peeks
-                .inc_by(u64::cast_from(uuids.len()));
-
-            let mut inverse: BTreeMap<ComputeInstanceId, BTreeSet<Uuid>> = Default::default();
-            for (uuid, compute_instance) in &uuids {
-                inverse.entry(*compute_instance).or_default().insert(*uuid);
-            }
-            for (compute_instance, uuids) in inverse {
-                // It's possible that this compute instance no longer exists because it was dropped
-                // while the peek was in progress. In this case we ignore the error and move on
-                // because the dataflow no longer exists.
-                // TODO(jkosh44) Dropping a cluster should actively cancel all pending queries.
-                for uuid in uuids {
-                    let _ = self.controller.compute.cancel_peek(
-                        compute_instance,
-                        uuid,
-                        PeekResponse::Canceled,
-                    );
-                }
-            }
-
-            let peeks = uuids
-                .iter()
-                .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
-                .collect::<Vec<_>>();
-            for peek in peeks {
-                self.retire_execution(StatementEndedExecutionReason::Canceled, peek.ctx_extra);
-            }
-        }
-    }
-
-    /// Handle a peek notification and retire the corresponding execution. Does nothing for
-    /// already-removed peeks.
-    pub(crate) fn handle_peek_notification(
-        &mut self,
-        uuid: Uuid,
-        notification: PeekNotification,
-        otel_ctx: OpenTelemetryContext,
-    ) {
-        // We expect exactly one peek response, which we forward. Then we clean up the
-        // peek's state in the coordinator.
-        if let Some(PendingPeek {
-            conn_id: _,
-            cluster_id: _,
-            depends_on: _,
-            ctx_extra,
-            is_fast_path,
-        }) = self.remove_pending_peek(&uuid)
-        {
-            let reason = match notification {
-                PeekNotification::Success {
-                    rows: num_rows,
-                    result_size,
-                } => {
-                    let strategy = if is_fast_path {
-                        StatementExecutionStrategy::FastPath
-                    } else {
-                        StatementExecutionStrategy::Standard
-                    };
-                    StatementEndedExecutionReason::Success {
-                        result_size: Some(result_size),
-                        rows_returned: Some(num_rows),
-                        execution_strategy: Some(strategy),
-                    }
-                }
-                PeekNotification::Error(error) => StatementEndedExecutionReason::Errored { error },
-                PeekNotification::Canceled => StatementEndedExecutionReason::Canceled,
-            };
-            otel_ctx.attach_as_parent();
-            self.retire_execution(reason, ctx_extra);
-        }
-        // Cancellation may cause us to receive responses for peeks no
-        // longer in `self.pending_peeks`, so we quietly ignore them.
-    }
-
-    /// Clean up a peek's state.
-    pub(crate) fn remove_pending_peek(&mut self, uuid: &Uuid) -> Option<PendingPeek> {
-        let pending_peek = self.pending_peeks.remove(uuid);
-        if let Some(pending_peek) = &pending_peek {
-            let uuids = self
-                .client_pending_peeks
-                .get_mut(&pending_peek.conn_id)
-                .expect("coord peek state is inconsistent");
-            uuids.remove(uuid);
-            if uuids.is_empty() {
-                self.client_pending_peeks.remove(&pending_peek.conn_id);
-            }
-        }
-        pending_peek
-    }
-
     /// Implements a slow-path peek by creating a transient dataflow.
     /// This is called from the command handler for ExecuteSlowPathPeek.
     ///
@@ -1410,6 +1284,8 @@ impl crate::coord::Coordinator {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use mz_expr::func::IsNull;
     use mz_expr::{MapFilterProject, UnaryFunc};
     use mz_ore::str::Indent;

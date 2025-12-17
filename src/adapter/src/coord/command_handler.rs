@@ -67,7 +67,6 @@ use crate::command::{
     SASLVerifyProofResponse, StartupResponse,
 };
 use crate::coord::appends::PendingWriteTxn;
-use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
     PurifiedStatementReady, validate_ip_with_policy_rules,
@@ -80,6 +79,7 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
+use crate::query_tracker::QueryTrackerCmd;
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
 use super::ExecuteContextExtra;
@@ -405,7 +405,7 @@ impl Coordinator {
                     conn_id,
                     cluster_id,
                     depends_on,
-                    is_fast_path,
+                    execution_strategy,
                     watch_set,
                     tx,
                 } => {
@@ -414,7 +414,7 @@ impl Coordinator {
                         conn_id,
                         cluster_id,
                         depends_on,
-                        is_fast_path,
+                        execution_strategy,
                         watch_set,
                         tx,
                     );
@@ -1676,7 +1676,8 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::Canceled));
         }
 
-        self.cancel_pending_peeks(&conn_id);
+        self.query_tracker
+            .send(QueryTrackerCmd::CancelConn { conn_id: conn_id.clone() });
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_compute_sinks_for_conn(&conn_id).await;
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
@@ -1719,7 +1720,8 @@ impl Coordinator {
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.cancel_pending_peeks(conn.conn_id());
+        self.query_tracker
+            .send(QueryTrackerCmd::CancelConn { conn_id: conn_id.clone() });
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
@@ -1872,7 +1874,7 @@ impl Coordinator {
         conn_id: ConnectionId,
         cluster_id: mz_controller_types::ClusterId,
         depends_on: BTreeSet<GlobalId>,
-        is_fast_path: bool,
+        execution_strategy: crate::statement_logging::StatementExecutionStrategy,
         watch_set: Option<WatchSetCreation>,
         tx: oneshot::Sender<Result<(), AdapterError>>,
     ) {
@@ -1888,23 +1890,16 @@ impl Coordinator {
             }
         }
 
-        // Store the peek in pending_peeks for later retrieval when results arrive
-        self.pending_peeks.insert(
-            uuid,
-            PendingPeek {
-                conn_id: conn_id.clone(),
+        self.query_tracker.send(QueryTrackerCmd::TrackPeek(
+            crate::query_tracker::TrackedPeek {
+                uuid,
+                conn_id,
                 cluster_id,
                 depends_on,
                 ctx_extra: ExecuteContextExtra::new(statement_logging_id),
-                is_fast_path,
+                execution_strategy,
             },
-        );
-
-        // Also track it by connection ID for cancellation support
-        self.client_pending_peeks
-            .entry(conn_id)
-            .or_default()
-            .insert(uuid, cluster_id);
+        ));
 
         let _ = tx.send(Ok(()));
     }
@@ -1912,11 +1907,8 @@ impl Coordinator {
     /// Handle unregistration of a frontend peek that was registered but failed to issue.
     /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
     fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<()>) {
-        // Remove from pending_peeks (this also removes from client_pending_peeks)
-        if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-            // Retire `ExecuteContextExtra`, because the frontend will log the peek's error result.
-            let _ = pending_peek.ctx_extra.retire();
-        }
+        self.query_tracker
+            .send(QueryTrackerCmd::UntrackPeek { uuid });
         let _ = tx.send(());
     }
 }

@@ -249,7 +249,7 @@ pub enum Command {
         conn_id: ConnectionId,
         cluster_id: mz_controller_types::ClusterId,
         depends_on: BTreeSet<GlobalId>,
-        is_fast_path: bool,
+        execution_strategy: StatementExecutionStrategy,
         /// If statement logging is enabled, contains all info needed for installing watch sets
         /// and logging the statement execution.
         watch_set: Option<WatchSetCreation>,
