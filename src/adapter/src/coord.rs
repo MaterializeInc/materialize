@@ -2744,26 +2744,17 @@ impl Coordinator {
         migrated_storage_collections: &BTreeSet<CatalogItemId>,
     ) {
         let catalog = self.catalog();
-        let source_status_collection_id = catalog
-            .resolve_builtin_storage_collection(&mz_catalog::builtin::MZ_SOURCE_STATUS_HISTORY);
-        let source_status_collection_id = catalog
-            .get_entry(&source_status_collection_id)
-            .latest_global_id();
 
         let source_desc = |object_id: GlobalId,
                            data_source: &DataSourceDesc,
                            desc: &RelationDesc,
                            timeline: &Timeline| {
-            let (data_source, status_collection_id) = match data_source.clone() {
+            let data_source = match data_source.clone() {
                 // Re-announce the source description.
                 DataSourceDesc::Ingestion { desc, cluster_id } => {
                     let desc = desc.into_inline_connection(catalog.state());
                     let ingestion = IngestionDescription::new(desc, cluster_id, object_id);
-
-                    (
-                        DataSource::Ingestion(ingestion),
-                        Some(source_status_collection_id),
-                    )
+                    DataSource::Ingestion(ingestion)
                 }
                 DataSourceDesc::OldSyntaxIngestion {
                     desc,
@@ -2787,10 +2778,7 @@ impl Coordinator {
                     };
                     ingestion.source_exports.insert(object_id, legacy_export);
 
-                    (
-                        DataSource::Ingestion(ingestion),
-                        Some(source_status_collection_id),
-                    )
+                    DataSource::Ingestion(ingestion)
                 }
                 DataSourceDesc::IngestionExport {
                     ingestion_id,
@@ -2801,28 +2789,23 @@ impl Coordinator {
                     // TODO(parkmycar): We should probably check the type here, but I'm not sure if
                     // this will always be a Source or a Table.
                     let ingestion_id = catalog.get_entry(&ingestion_id).latest_global_id();
-                    (
-                        DataSource::IngestionExport {
-                            ingestion_id,
-                            details,
-                            data_config: data_config.into_inline_connection(catalog.state()),
-                        },
-                        Some(source_status_collection_id),
-                    )
+
+                    DataSource::IngestionExport {
+                        ingestion_id,
+                        details,
+                        data_config: data_config.into_inline_connection(catalog.state()),
+                    }
                 }
-                DataSourceDesc::Webhook { .. } => {
-                    (DataSource::Webhook, Some(source_status_collection_id))
-                }
-                DataSourceDesc::Progress => (DataSource::Progress, None),
+                DataSourceDesc::Webhook { .. } => DataSource::Webhook,
+                DataSourceDesc::Progress => DataSource::Progress,
                 DataSourceDesc::Introspection(introspection) => {
-                    (DataSource::Introspection(introspection), None)
+                    DataSource::Introspection(introspection)
                 }
             };
             CollectionDescription {
                 desc: desc.clone(),
                 data_source,
                 since: None,
-                status_collection_id,
                 timeline: Some(timeline.clone()),
                 primary: None,
             }
@@ -2938,7 +2921,6 @@ impl Coordinator {
                             },
                         },
                         since: None,
-                        status_collection_id: None,
                         timeline: None,
                         primary: None,
                     };
