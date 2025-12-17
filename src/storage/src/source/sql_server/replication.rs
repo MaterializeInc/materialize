@@ -535,7 +535,8 @@ async fn handle_data_event(
                     );
                     continue;
                 }
-                (sql_server_row, Diff::ONE)
+                // this is overriden below when the updates are ordered
+                (sql_server_row, Diff::ZERO)
             }
             CdcOperation::UpdateOld(seqval, sql_server_row) => {
                 deferred_update = deferred_updates.remove(&(commit_lsn, seqval));
@@ -547,8 +548,8 @@ async fn handle_data_event(
                     );
                     continue;
                 }
-                // The old row is emitted conditionally. This [`Diff`] is for the new row.
-                (sql_server_row, Diff::ONE)
+                // this is overriden below when the updates are ordered
+                (sql_server_row, Diff::ZERO)
             }
         };
 
@@ -563,7 +564,7 @@ async fn handle_data_event(
                 continue;
             }
 
-            let message = if let Some(ref deferred_update) = deferred_update {
+            let (message, diff) = if let Some(ref deferred_update) = deferred_update {
                 let (old_row, new_row) = match deferred_update {
                     CdcOperation::UpdateOld(_seqval, row) => (row, &sql_server_row),
                     CdcOperation::UpdateNew(_seqval, row) => (&sql_server_row, row),
@@ -590,10 +591,17 @@ async fn handle_data_event(
                     )
                     .await;
 
-                decode(decoder, new_row, &mut mz_row, &arena, None)
+                (
+                    decode(decoder, new_row, &mut mz_row, &arena, None),
+                    Diff::ONE,
+                )
             } else {
-                decode(decoder, &sql_server_row, &mut mz_row, &arena, None)
+                (
+                    decode(decoder, &sql_server_row, &mut mz_row, &arena, None),
+                    diff,
+                )
             };
+            assert_ne!(Diff::ZERO, diff);
             if rewind.is_some_and(|(_, snapshot_lsn)| commit_lsn <= *snapshot_lsn) {
                 data_output
                     .give_fueled(
