@@ -29,7 +29,7 @@ use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::role_id::RoleId;
-use mz_repr::{Diff, GlobalId, SqlScalarType, Timestamp};
+use mz_repr::{Diff, SqlScalarType, Timestamp};
 use mz_sql::ast::{
     AlterConnectionAction, AlterConnectionStatement, AlterSinkAction, AlterSourceAction, AstInfo,
     ConstantVisitor, CopyRelation, CopyStatement, CreateSourceOptionName, Raw, Statement,
@@ -60,7 +60,6 @@ use opentelemetry::trace::TraceContextExt;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
-use uuid::Uuid;
 
 use crate::command::{
     AuthResponse, CatalogSnapshot, Command, ExecuteResponse, SASLChallengeResponse,
@@ -74,7 +73,6 @@ use crate::coord::{
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
-use crate::statement_logging::WatchSetCreation;
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
@@ -400,28 +398,6 @@ impl Coordinator {
                         .await;
                     let _ = tx.send(result);
                 }
-                Command::RegisterFrontendPeek {
-                    uuid,
-                    conn_id,
-                    cluster_id,
-                    depends_on,
-                    execution_strategy,
-                    watch_set,
-                    tx,
-                } => {
-                    self.handle_register_frontend_peek(
-                        uuid,
-                        conn_id,
-                        cluster_id,
-                        depends_on,
-                        execution_strategy,
-                        watch_set,
-                        tx,
-                    );
-                }
-                Command::UnregisterFrontendPeek { uuid, tx } => {
-                    self.handle_unregister_frontend_peek(uuid, tx);
-                }
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }
@@ -705,6 +681,7 @@ impl Coordinator {
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
                     statement_logging_frontend,
+                    query_tracker: self.query_tracker.clone(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -1866,49 +1843,4 @@ impl Coordinator {
         let _ = tx.send(response);
     }
 
-    /// Handle registration of a frontend peek, for statement logging and query cancellation
-    /// handling.
-    fn handle_register_frontend_peek(
-        &mut self,
-        uuid: Uuid,
-        conn_id: ConnectionId,
-        cluster_id: mz_controller_types::ClusterId,
-        depends_on: BTreeSet<GlobalId>,
-        execution_strategy: crate::statement_logging::StatementExecutionStrategy,
-        watch_set: Option<WatchSetCreation>,
-        tx: oneshot::Sender<Result<(), AdapterError>>,
-    ) {
-        let statement_logging_id = watch_set.as_ref().map(|ws| ws.logging_id);
-        if let Some(ws) = watch_set {
-            if let Err(e) = self.install_peek_watch_sets(conn_id.clone(), ws) {
-                let _ = tx.send(Err(
-                    AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
-                        e, cluster_id,
-                    ),
-                ));
-                return;
-            }
-        }
-
-        self.query_tracker.send(QueryTrackerCmd::TrackPeek(
-            crate::query_tracker::TrackedPeek {
-                uuid,
-                conn_id,
-                cluster_id,
-                depends_on,
-                ctx_extra: ExecuteContextExtra::new(statement_logging_id),
-                execution_strategy,
-            },
-        ));
-
-        let _ = tx.send(Ok(()));
-    }
-
-    /// Handle unregistration of a frontend peek that was registered but failed to issue.
-    /// This is used for cleanup when `client.peek()` fails after `RegisterFrontendPeek` succeeds.
-    fn handle_unregister_frontend_peek(&mut self, uuid: Uuid, tx: oneshot::Sender<()>) {
-        self.query_tracker
-            .send(QueryTrackerCmd::UntrackPeek { uuid });
-        let _ = tx.send(());
-    }
 }

@@ -797,6 +797,7 @@ impl crate::coord::Coordinator {
                 depends_on: source_ids,
                 ctx_extra: std::mem::take(ctx_extra),
                 execution_strategy: strategy,
+                watch_set: None,
             },
         ));
         let (literal_constraints, timestamp, map_filter_project) = peek_command;

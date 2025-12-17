@@ -206,7 +206,7 @@ use crate::optimize::dataflows::{
 use crate::optimize::{self, Optimize, OptimizerConfig};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
-    StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId,
+    StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId, WatchSetCreation,
 };
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::query_tracker::{self, QueryTrackerCmd};
@@ -267,6 +267,11 @@ pub enum Message {
     ClusterEvent(ClusterEvent),
     CancelPendingPeeks {
         conn_id: ConnectionId,
+    },
+    /// Install watch sets for statement lifecycle logging for a peek.
+    InstallPeekWatchSets {
+        conn_id: ConnectionId,
+        watch_set: crate::statement_logging::WatchSetCreation,
     },
     /// Cancel a specific compute peek by UUID.
     CancelComputePeek {
@@ -389,8 +394,6 @@ impl Message {
                 Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
                 Command::ExecuteCopyTo { .. } => "execute-copy-to",
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
-                Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
-                Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
             },
             Message::ControllerReady {
@@ -412,6 +415,7 @@ impl Message {
             Message::AdvanceTimelines => "advance_timelines",
             Message::ClusterEvent(_) => "cluster_event",
             Message::CancelPendingPeeks { .. } => "cancel_pending_peeks",
+            Message::InstallPeekWatchSets { .. } => "install_peek_watch_sets",
             Message::CancelComputePeek { .. } => "cancel_compute_peek",
             Message::IncrementCanceledPeeks { .. } => "increment_canceled_peeks",
             Message::LinearizeReads => "linearize_reads",
@@ -3999,6 +4003,12 @@ impl query_tracker::QueryTrackerEffects for QueryTrackerCoordinatorEffects {
         let _ = self
             .internal_cmd_tx
             .send(Message::IncrementCanceledPeeks { by });
+    }
+
+    fn install_peek_watch_sets(&self, conn_id: ConnectionId, watch_set: WatchSetCreation) {
+        let _ = self
+            .internal_cmd_tx
+            .send(Message::InstallPeekWatchSets { conn_id, watch_set });
     }
 
     fn retire_execute(

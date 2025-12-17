@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::coord::ExecuteContextExtra;
+use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 
 #[derive(Debug)]
@@ -37,6 +38,7 @@ pub struct TrackedPeek {
     pub depends_on: BTreeSet<GlobalId>,
     pub ctx_extra: ExecuteContextExtra,
     pub execution_strategy: StatementExecutionStrategy,
+    pub watch_set: Option<WatchSetCreation>,
 }
 
 #[derive(Debug)]
@@ -84,6 +86,7 @@ impl QueryTrackerHandle for Handle {
 pub trait QueryTrackerEffects: Send + Sync + 'static {
     fn cancel_compute_peek(&self, cluster_id: ClusterId, uuid: Uuid, response: PeekResponse);
     fn inc_canceled_peeks(&self, by: u64);
+    fn install_peek_watch_sets(&self, conn_id: ConnectionId, watch_set: WatchSetCreation);
     fn retire_execute(
         &self,
         otel_ctx: OpenTelemetryContext,
@@ -127,7 +130,11 @@ impl<E: QueryTrackerEffects> QueryTracker<E> {
         }
     }
 
-    fn track_peek(&mut self, peek: TrackedPeek) {
+    fn track_peek(&mut self, mut peek: TrackedPeek) {
+        if let Some(watch_set) = peek.watch_set.take() {
+            self.effects
+                .install_peek_watch_sets(peek.conn_id.clone(), watch_set);
+        }
         self.peeks_by_conn
             .entry(peek.conn_id.clone())
             .or_default()
@@ -328,6 +335,8 @@ mod tests {
             *self.canceled_metric.lock().unwrap() += by;
         }
 
+        fn install_peek_watch_sets(&self, _conn_id: ConnectionId, _watch_set: WatchSetCreation) {}
+
         fn retire_execute(
             &self,
             _otel_ctx: OpenTelemetryContext,
@@ -353,6 +362,7 @@ mod tests {
             depends_on: BTreeSet::new(),
             ctx_extra: ExecuteContextExtra::new(None),
             execution_strategy: StatementExecutionStrategy::FastPath,
+            watch_set: None,
         });
 
         tracker.cancel_conn(conn_id.clone());

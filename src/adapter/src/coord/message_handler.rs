@@ -110,6 +110,11 @@ impl Coordinator {
                 self.query_tracker
                     .send(QueryTrackerCmd::CancelConn { conn_id });
             }
+            Message::InstallPeekWatchSets { conn_id, watch_set } => {
+                if let Err(e) = self.install_peek_watch_sets(conn_id, watch_set) {
+                    tracing::debug!(?e, "failed to install peek watch sets");
+                }
+            }
             Message::CancelComputePeek {
                 cluster_id,
                 uuid,
