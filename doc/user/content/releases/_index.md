@@ -16,6 +16,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.4.0
+
 *Released to Materialize Self-Managed: 2025-12-17* <br>
 *Released to Materialize Cloud: 2025-12-18*
 
@@ -33,7 +34,9 @@ v26.4.0 introduces several performance improvements and bugfixes.
 - Reduced SCRAM iterations in scalability framework and fixed fallback image configuration.
 
 ## v26.3.0
-*Released to Materialize Cloud and Self-Managed: 2025-12-12*
+
+*Released Cloud: 2025-12-12*<br>
+*Released Self-Managed: 2025-12-12*
 
 ### Improvements
 - For Self-Managed: added version upgrade window validation, to prevent skipping required intermediate versions during upgrades.
@@ -44,7 +47,8 @@ v26.4.0 introduces several performance improvements and bugfixes.
 - Fixed frontend `SELECT` sequencing to gracefully handle collections that are dropped during real-time recent timestamp determination.
 
 ## v26.2.0
-*Released Cloud: 2025-12-05* <br>
+
+*Released Cloud: 2025-12-05*<br>
 *Released Self-Managed: 2025-12-09*
 
 This release focuses primarily on bug fixes.
