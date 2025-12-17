@@ -99,9 +99,8 @@ not suitable for full feature set evaluations or production workloads.
   Cloud
   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
   The full experience of Materialize is also available as a self-managed
-  offering. See [Self-managed Materialize].
+  offering. See [Self-managed Materialize](/self-managed-deployments/).
 
-[Self-managed Materialize]: https://materialize.com/docs/installation/
 
 ### Technical Support
 

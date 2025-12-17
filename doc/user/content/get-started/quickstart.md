@@ -53,9 +53,9 @@ Alternatively:
 Emulator](/get-started/install-materialize-emulator/). However, the Materialize
 Emulator does not provide the full experience of using Materialize.
 
-- You can run against your [Self-managed Materialize].
+- You can run against your [Self-managed
+  Materialize](/self-managed-deployments/).
 
-[Self-managed Materialize]: https://materialize.com/docs/installation/
 
 ## Step 0. Open the SQL Shell
 
