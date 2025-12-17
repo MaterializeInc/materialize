@@ -41,6 +41,7 @@ use crate::coord::{
     AlterConnectionValidationReady, ClusterReplicaStatuses, Coordinator,
     CreateConnectionValidationReady, Message, PurifiedStatementReady, WatchSetResponse,
 };
+use crate::query_tracker::QueryTrackerCmd;
 use crate::telemetry::{EventDetails, SegmentClientExt};
 use crate::{AdapterNotice, TimestampContext};
 
@@ -106,7 +107,21 @@ impl Coordinator {
             }
             Message::ClusterEvent(event) => self.message_cluster_event(event).boxed_local().await,
             Message::CancelPendingPeeks { conn_id } => {
-                self.cancel_pending_peeks(&conn_id);
+                self.query_tracker
+                    .send(QueryTrackerCmd::CancelConn { conn_id });
+            }
+            Message::CancelComputePeek {
+                cluster_id,
+                uuid,
+                response,
+            } => {
+                let _ = self
+                    .controller
+                    .compute
+                    .cancel_peek(cluster_id, uuid, response);
+            }
+            Message::IncrementCanceledPeeks { by } => {
+                self.metrics.canceled_peeks.inc_by(by);
             }
             Message::LinearizeReads => {
                 self.message_linearize_reads().boxed_local().await;
@@ -352,7 +367,11 @@ impl Coordinator {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
             ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
-                self.handle_peek_notification(uuid, response, otel_ctx);
+                self.query_tracker.send(QueryTrackerCmd::ObservePeekNotification {
+                    uuid,
+                    notification: response,
+                    otel_ctx,
+                });
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =

@@ -39,7 +39,6 @@ use mz_catalog::memory::objects::{
     MaterializedView, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
-use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -63,7 +62,8 @@ use crate::coord::catalog_implications::parsed_state_updates::{
     ParsedStateUpdate, ParsedStateUpdateKind,
 };
 use crate::coord::timeline::TimelineState;
-use crate::statement_logging::{StatementEndedExecutionReason, StatementLoggingId};
+use crate::statement_logging::StatementLoggingId;
+use crate::query_tracker::QueryTrackerCmd;
 use crate::{AdapterError, CollectionIdBundle, ExecuteContext, ResultExt};
 
 pub mod parsed_state_updates;
@@ -173,7 +173,6 @@ impl Coordinator {
         let mut clusters_to_drop = vec![];
         let mut cluster_replicas_to_drop = vec![];
         let mut compute_sinks_to_drop = BTreeMap::new();
-        let mut peeks_to_drop = vec![];
         let mut copies_to_drop = vec![];
 
         // Maps for storing names of dropped objects for error messages.
@@ -647,25 +646,32 @@ impl Coordinator {
             }
         }
 
-        // Clean up any pending peeks that rely on dropped relations or clusters.
-        for (uuid, pending_peek) in &self.pending_peeks {
-            if let Some(id) = pending_peek
-                .depends_on
+        // Cancel any pending peeks that rely on dropped relations or clusters.
+        if !(collections_to_drop.is_empty() && clusters_to_drop.is_empty()) {
+            let dropped_clusters: BTreeSet<_> = clusters_to_drop.iter().copied().collect();
+            let dropped_collection_names = collections_to_drop
                 .iter()
-                .find(|id| collections_to_drop.contains(id))
-            {
-                let name = dropped_item_names
-                    .get(id)
-                    .map(|n| format!("relation {}", n.quoted()))
-                    .expect("missing relation name");
-                peeks_to_drop.push((name, uuid.clone()));
-            } else if clusters_to_drop.contains(&pending_peek.cluster_id) {
-                let name = dropped_cluster_names
-                    .get(&pending_peek.cluster_id)
-                    .map(|n| format!("cluster {}", n.quoted()))
-                    .expect("missing cluster name");
-                peeks_to_drop.push((name, uuid.clone()));
-            }
+                .filter_map(|id| {
+                    let name = dropped_item_names.get(id)?;
+                    Some((*id, format!("relation {}", name.quoted())))
+                })
+                .collect();
+            let dropped_cluster_names = clusters_to_drop
+                .iter()
+                .filter_map(|cluster_id| {
+                    let name = dropped_cluster_names.get(cluster_id)?;
+                    Some((*cluster_id, format!("cluster {}", name.quoted())))
+                })
+                .collect();
+
+            self.query_tracker.send(QueryTrackerCmd::CancelByDrop(
+                crate::query_tracker::CancelByDrop {
+                    dropped_collections: collections_to_drop.clone(),
+                    dropped_clusters,
+                    dropped_collection_names,
+                    dropped_cluster_names,
+                },
+            ));
         }
 
         // Clean up any pending `COPY` statements that rely on dropped relations or clusters.
@@ -764,23 +770,7 @@ impl Coordinator {
                 self.retire_compute_sinks(compute_sinks_to_drop).await;
             }
 
-            if !peeks_to_drop.is_empty() {
-                for (dropped_name, uuid) in peeks_to_drop {
-                    if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
-                        let cancel_reason = PeekResponse::Error(format!(
-                            "query could not complete because {dropped_name} was dropped"
-                        ));
-                        self.controller
-                            .compute
-                            .cancel_peek(pending_peek.cluster_id, uuid, cancel_reason)
-                            .unwrap_or_terminate("unable to cancel peek");
-                        self.retire_execution(
-                            StatementEndedExecutionReason::Canceled,
-                            pending_peek.ctx_extra,
-                        );
-                    }
-                }
-            }
+            // QueryTracker handles canceling any dependent peeks.
 
             if !copies_to_drop.is_empty() {
                 for conn_id in copies_to_drop {

@@ -363,7 +363,7 @@ impl PeekClient {
             conn_id: conn_id.clone(),
             cluster_id: compute_instance,
             depends_on,
-            is_fast_path: true,
+            execution_strategy: strategy,
             watch_set,
             tx,
         })
