@@ -184,6 +184,17 @@ An active AWS account with appropriate permissions to create:
    If you are satisfied with the planned changes, type `yes` when prompted to
    proceed.
 
+   {{< tip >}}
+
+   If you previously logged in to Amazon ECR Public, a cached auth token may cause 403 errors even when pulling public images. To remove the token, run:
+
+   ```bash
+   docker logout public.ecr.aws
+   ```
+  
+   Then, re-apply the Terraform configuration.
+
+   {{< /tip >}}
 
 1. From the output, you will need the following fields to connect using the
    Materialize Console and PostgreSQL-compatible clients/drivers:

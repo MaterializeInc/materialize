@@ -214,7 +214,9 @@ A Google account with permission to:
 
 1. From the output, you will need the following field(s) to connect:
    - `console_load_balancer_ip` for the Materialize Console
-   - `balancerd_load_balancer_ip` to connect PostgreSQL-compatible clients/drivers.
+   - `balancerd_load_balancer_ip` to connect PostgreSQL-compatible
+     clients/drivers.
+   - `external_login_password_mz_system`.
 
    ```bash
    terraform output -raw <field_name>
@@ -257,31 +259,78 @@ A Google account with permission to:
 {{% include-from-yaml data="self_managed/installation"
 name="installation-access-methods" %}}
 
-Using the `console_load_balancer_ip` from the Terraform output, you can connect
-to Materialize via the Materialize Console.
+Using the `console_load_balancer_ip`  and `external_login_password_mz_system`
+from the Terraform output, you can connect to Materialize via the Materialize
+Console.
 
-To connect to the Materialize Console, open a browser to
-`https://<console_load_balancer_ip>:8080`, substituting your
-`<console_load_balancer_ip>`.
+1. To connect to the Materialize Console, open a browser to
+   `https://<console_load_balancer_ip>:8080`, substituting your
+   `<console_load_balancer_ip>`.
 
-From the terminal, you can type:
+   From the terminal, you can type:
 
-```sh
-open "https://$(terraform output -raw console_load_balancer_ip):8080/materialize"
-```
+   ```sh
+   open "https://$(terraform output -raw console_load_balancer_ip):8080/materialize"
+   ```
+
+   {{< tip >}}
+
+   {{% include-from-yaml data="self_managed/installation"
+   name="install-uses-self-signed-cluster-issuer" %}}
+
+   {{< /tip >}}
+
+1. Log in as `mz_system`, using `external_login_password_mz_system` as the
+   password.
+
+1. Create new users and log out.
+
+   In general, other than the initial login to create new users for new
+   deployments, avoid using `mz_system` since `mz_system` also used by the
+   Materialize Operator for upgrades and maintenance tasks.
+
+   For more information on authentication and authorization for Self-Managed
+   Materialize, see:
+
+   - [Authentication](/security/self-managed/authentication/)
+   - [Access Control](/security/self-managed/access-control/)
+
+1. Login as one of the created user.
 
 #### Connect using `psql`
 
 {{% include-from-yaml data="self_managed/installation"
 name="installation-access-methods" %}}
 
-Using the `balancerd_load_balancer_ip` value from the Terraform output, you can
-connect to Materialize via PostgreSQL-compatible clients/drivers, such as
-`psql`:
+Using the `balancerd_load_balancer_ip` and `external_login_password_mz_system`
+from the Terraform output, you can connect to Materialize via
+PostgreSQL-compatible clients/drivers, such as `psql`:
 
-```bash
-psql "postgres://$(terraform output -raw balancerd_load_balancer_ip):6875/materialize"
-```
+1. To connect using `psql`, in the connection string, specify:
+   - `mz_system` as the user
+   - `balancerd_load_balancer_ip` as the host
+   - `6875` as the port:
+
+   ```bash
+   psql "postgres://mz_system@$(terraform output -raw balancerd_load_balancer_ip):6875/materialize"
+   ```
+
+   When prompted for the password, enter the
+   `external_login_password_mz_system` value.
+
+1. Create new users and log out.
+
+   In general, other than the initial login to create new users for new
+   deployments, avoid using `mz_system` since `mz_system` also used by the
+   Materialize Operator for upgrades and maintenance tasks.
+
+   For more information on authentication and authorization for Self-Managed
+   Materialize, see:
+
+   - [Authentication](/security/self-managed/authentication/)
+   - [Access Control](/security/self-managed/access-control/)
+
+1. Login as one of the created user.
 
 ## Customizing Your Deployment
 
