@@ -269,12 +269,14 @@ impl TestHarness {
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
     pub fn start_blocking(self) -> TestServerWithRuntime {
-        stacker::grow(mz_ore::stack::STACK_SIZE, || {
-            let runtime = Runtime::new().expect("failed to spawn runtime for test");
-            let runtime = Arc::new(runtime);
-            let server = runtime.block_on(self.start());
-            TestServerWithRuntime { runtime, server }
-        })
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(mz_ore::stack::STACK_SIZE)
+            .build()
+            .expect("failed to spawn runtime for test");
+        let runtime = Arc::new(runtime);
+        let server = runtime.block_on(self.start());
+        TestServerWithRuntime { runtime, server }
     }
 
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
