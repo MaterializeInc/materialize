@@ -134,7 +134,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query (fast path):
   Project (#1{b}, #2{c})
-    Filter (#1{b} = "this")
+    Filter ("this" = varchar_to_text(#1{b}))
       ReadIndex on=materialize.public.foo foo_idx=[lookup value=(5)]
 
 Used Indexes:

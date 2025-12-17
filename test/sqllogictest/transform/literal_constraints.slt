@@ -1024,7 +1024,7 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 WHERE v = 'xxx';
 ----
 Explained Query (fast path):
-  Project (#1{a}..=#3{c}, #0{v})
+  Project (#1{a}..=#4{v})
     ReadIndex on=materialize.public.foo idx_foo_v_cast=[lookup value=("xxx")]
 
 Used Indexes:
