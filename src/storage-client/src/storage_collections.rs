@@ -897,7 +897,6 @@ where
 
     /// Returns the given collection's dependencies.
     fn determine_collection_dependencies(
-        &self,
         self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
         source_id: GlobalId,
         collection_desc: &CollectionDescription<T>,
@@ -1966,7 +1965,7 @@ where
 
             // Determine if this collection has any dependencies.
             let storage_dependencies =
-                self.determine_collection_dependencies(&*self_collections, id, &description)?;
+                Self::determine_collection_dependencies(&*self_collections, id, &description)?;
 
             // Determine the initial since of the collection.
             let initial_since = match storage_dependencies
