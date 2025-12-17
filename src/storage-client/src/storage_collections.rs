@@ -1328,7 +1328,7 @@ where
             if !changes.is_empty() {
                 // If the collection has a "primary" collection, let that primary drive compaction.
                 let collection = collections.get(&key).expect("must still exist");
-                let should_emit_persist_compaction = collection.description.primary.is_none();
+                let should_emit_persist_compaction = collection.primary.is_none();
 
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
@@ -2071,7 +2071,8 @@ where
             };
 
             let mut collection_state = CollectionState::new(
-                description,
+                description.clone(),
+                description.primary,
                 time_dependence,
                 ingestion_remap_collection_id,
                 initial_since,
@@ -2375,10 +2376,11 @@ where
                 .expect("existing collection missing");
 
             // A higher level should already be asserting this, but let's make sure.
-            assert_none!(existing.description.primary);
+            assert_none!(existing.primary);
 
             // The existing version of the table will depend on the new version.
             existing.description.primary = Some(new_collection);
+            existing.primary = Some(new_collection);
             existing.storage_dependencies.push(new_collection);
 
             // Copy over the frontiers from the previous version.
@@ -2406,6 +2408,7 @@ where
             };
             let collection_state = CollectionState::new(
                 collection_desc,
+                None,
                 existing.time_dependence.clone(),
                 existing.ingestion_remap_collection_id.clone(),
                 implied_capability,
@@ -2781,6 +2784,7 @@ struct CollectionState<T> {
     /// Description with which the collection was created
     pub description: CollectionDescription<T>,
 
+    primary: Option<GlobalId>,
     time_dependence: Option<TimeDependence>,
     ingestion_remap_collection_id: Option<GlobalId>,
 
@@ -2813,6 +2817,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
     /// `since`.
     pub fn new(
         description: CollectionDescription<T>,
+        primary: Option<GlobalId>,
         time_dependence: Option<TimeDependence>,
         ingestion_remap_collection_id: Option<GlobalId>,
         since: Antichain<T>,
@@ -2824,6 +2829,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
         read_capabilities.update_iter(since.iter().map(|time| (time.clone(), 1)));
         Self {
             description,
+            primary,
             time_dependence,
             ingestion_remap_collection_id,
             read_capabilities,
