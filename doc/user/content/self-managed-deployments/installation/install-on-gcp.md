@@ -254,6 +254,11 @@ A Google account with permission to:
 
 ### Step 5: Connect to Materialize
 
+You can connect to Materialize via the Materialize Console or
+PostgreSQL-compatible tools/drivers using the following ports:
+
+{{< yaml-table data="self_managed/default_ports" >}}
+
 #### Connect using the Materialize Console
 
 {{% include-from-yaml data="self_managed/installation"
