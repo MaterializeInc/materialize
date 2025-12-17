@@ -884,6 +884,8 @@ where
 
 #[cfg(test)]
 mod test {
+    use std::sync::mpsc;
+
     use mz_ore::metrics::MetricsRegistry;
     use mz_persist_types::ShardId;
     use mz_repr::{Datum, Timestamp as MzTimestamp};
@@ -1061,9 +1063,11 @@ mod test {
     fn gh_9540_repro() {
         // Helper to wrap timestamps in the appropriate types
         let mz_ts = |ts| (MzTimestamp::new(ts), Subtime::minimum());
+        let (tx, rx) = mpsc::channel::<std::thread::JoinHandle<()>>();
 
         let rocksdb_dir = tempfile::tempdir().unwrap();
         let output_handle = timely::execute_directly(move |worker| {
+            let tx = tx.clone();
             let (mut input_handle, mut persist_handle, output_probe, output_handle) =
                 worker.dataflow::<MzTimestamp, _, _>(|scope| {
                     // Enter a subscope since the upsert operator expects to work a backpressure
@@ -1129,23 +1133,25 @@ mod test {
                             ));
                             let rocksdb_cleanup_tries = 5;
                             let tuning = RocksDBConfig::new(Default::default(), None);
-                            crate::upsert::rocksdb::RocksDB::new(
-                                mz_rocksdb::RocksDBInstance::new(
-                                    rocksdb_dir.path(),
-                                    mz_rocksdb::InstanceOptions::new(
-                                        Env::mem_env().unwrap(),
-                                        rocksdb_cleanup_tries,
-                                        merge_operator,
-                                        // For now, just use the same config as the one used for
-                                        // merging snapshots.
-                                        upsert_bincode_opts(),
-                                    ),
-                                    tuning,
-                                    rocksdb_shared_metrics,
-                                    rocksdb_instance_metrics,
-                                )
-                                .unwrap(),
+                            let mut rocksdb_inst = mz_rocksdb::RocksDBInstance::new(
+                                rocksdb_dir.path(),
+                                mz_rocksdb::InstanceOptions::new(
+                                    Env::mem_env().unwrap(),
+                                    rocksdb_cleanup_tries,
+                                    merge_operator,
+                                    // For now, just use the same config as the one used for
+                                    // merging snapshots.
+                                    upsert_bincode_opts(),
+                                ),
+                                tuning,
+                                rocksdb_shared_metrics,
+                                rocksdb_instance_metrics,
                             )
+                            .unwrap();
+
+                            let handle = rocksdb_inst.core_loop_handle().expect("join handle");
+                            tx.send(handle).expect("sent joinhandle");
+                            crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
                         };
 
                         let (output, _, _, button) = upsert_inner(
@@ -1245,5 +1251,9 @@ mod test {
             (Ok(value1), mz_ts(1), Diff::MINUS_ONE),
         ];
         assert_eq!(actual_output, expected_output);
+
+        while let Ok(handle) = rx.recv() {
+            handle.join().expect("threads completed successfully");
+        }
     }
 }
