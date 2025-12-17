@@ -2286,11 +2286,6 @@ where
                 .get(&existing_collection)
                 .ok_or_else(|| StorageError::IdentifierMissing(existing_collection))?;
 
-            // TODO(alter_table): Support changes to sources.
-            if existing.description.data_source != DataSource::Table {
-                return Err(StorageError::IdentifierInvalid(existing_collection));
-            }
-
             existing.collection_metadata.data_shard
         };
 
@@ -2374,7 +2369,6 @@ where
                 .expect("existing collection missing");
 
             // A higher level should already be asserting this, but let's make sure.
-            assert_eq!(existing.description.data_source, DataSource::Table);
             assert_none!(existing.description.primary);
 
             // The existing version of the table will depend on the new version.
