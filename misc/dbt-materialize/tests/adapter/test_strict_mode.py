@@ -16,7 +16,7 @@
 import pytest
 from dbt.tests.util import run_dbt
 
-# Source materialization (only used when strict_mode is disabled)
+# Source materialization in dedicated schema (for non-strict tests)
 load_gen_source = """
 {{ config(
     materialized='source',
@@ -26,6 +26,35 @@ load_gen_source = """
 }}
 FROM LOAD GENERATOR AUCTION
 FOR ALL TABLES;
+"""
+
+# Source materialization in default schema (for strict mode conflict tests)
+source_in_default_schema = """
+{{ config(
+    materialized='source',
+    database='materialize'
+) }}
+FROM LOAD GENERATOR COUNTER;
+"""
+
+# Second source in default schema (for coexistence tests)
+source_in_default_schema_2 = """
+{{ config(
+    materialized='source',
+    database='materialize'
+) }}
+FROM LOAD GENERATOR AUCTION
+FOR ALL TABLES;
+"""
+
+# Source with index (for strict_mode index blocking tests)
+source_with_index = """
+{{ config(
+    materialized='source',
+    database='materialize',
+    indexes=[{'columns': ['counter']}]
+) }}
+FROM LOAD GENERATOR COUNTER;
 """
 
 # Source table that creates its own source via pre_hook (for strict_mode tests)
@@ -275,3 +304,90 @@ class TestStrictModeSinksCanCoexist:
         assert len(results) == 3
 
 
+class TestStrictModeSourceBlocked:
+    """Test that source is blocked when schema contains views (strict_mode enabled)."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_source_blocked",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_view.sql": view_model,
+            "test_source.sql": source_in_default_schema,
+        }
+
+    def test_source_blocked_in_schema_with_view(self, project):
+        """With strict_mode, mixing source and view in same schema fails at compile time."""
+        run_dbt(["run"], expect_pass=False)
+
+
+class TestStrictModeViewBlockedBySource:
+    """Test that view is blocked when schema contains sources (strict_mode enabled)."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_view_blocked_by_source",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_source.sql": source_in_default_schema,
+            "test_view.sql": view_model,
+        }
+
+    def test_view_blocked_in_schema_with_source(self, project):
+        """With strict_mode, mixing view and source in same schema fails at compile time."""
+        run_dbt(["run"], expect_pass=False)
+
+
+class TestStrictModeSourcesCanCoexist:
+    """Test that multiple sources can coexist in the same schema (strict_mode enabled)."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_sources_coexist",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_source.sql": source_in_default_schema,
+            "test_source_2.sql": source_in_default_schema_2,
+        }
+
+    def test_multiple_sources_allowed(self, project):
+        """With strict_mode, multiple sources can coexist in the same schema."""
+        results = run_dbt(["run"])
+        # Should have 2 results: 2 sources
+        assert len(results) == 2
+
+
+class TestStrictModeSourceIndexBlocked:
+    """Test that source index creation is blocked in strict_mode."""
+
+    @pytest.fixture(scope="class")
+    def project_config_update(self):
+        return {
+            "name": "strict_mode_source_index_blocked",
+            "vars": {"strict_mode": True},
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "test_source_with_index.sql": source_with_index,
+        }
+
+    def test_source_index_blocked_in_strict_mode(self, project):
+        """With strict_mode, creating indexes on sources fails at compile time."""
+        run_dbt(["run"], expect_pass=False)

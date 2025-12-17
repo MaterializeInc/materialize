@@ -24,6 +24,8 @@
                                                 database=database,
                                                 type='sink') -%}
 
+  {{ validate_sink_schema_isolation(schema, database) }}
+
   {% if old_relation %}
     {{ adapter.drop_relation(old_relation) }}
   {% endif %}

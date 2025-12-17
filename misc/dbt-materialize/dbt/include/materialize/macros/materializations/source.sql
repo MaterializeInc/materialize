@@ -23,6 +23,8 @@
                                                 database=database,
                                                 type='source') -%}
 
+  {{ validate_source_schema_isolation(schema, database) }}
+
   {% if old_relation %}
     {% if var('strict_mode', False) %}
       {# In strict_mode, skip recreation if relation exists #}
@@ -42,6 +44,14 @@
   {% call statement('main') -%}
     {{ materialize__create_source(target_relation, sql) }}
   {%- endcall %}
+
+  {# In strict_mode, disallow index creation on sources #}
+  {% if var('strict_mode', False) and config.get('indexes') %}
+    {{ exceptions.raise_compiler_error(
+      "Cannot create indexes on sources when strict_mode is enabled. " ~
+      "Create indexes on the source_tables built from this source instead."
+    ) }}
+  {% endif %}
 
   {{ create_indexes(target_relation) }}
   {% do persist_docs(target_relation, model) %}

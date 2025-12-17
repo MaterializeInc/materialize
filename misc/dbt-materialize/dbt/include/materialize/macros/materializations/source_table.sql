@@ -24,6 +24,8 @@
                                                 database=database,
                                                 type='table') -%}
 
+  {{ validate_source_table_schema_isolation(schema, database) }}
+
   {% if old_relation %}
     {% if var('strict_mode', False) and not force_recreate %}
       {# In strict_mode, skip recreation if relation exists (unless force_recreate is set) #}

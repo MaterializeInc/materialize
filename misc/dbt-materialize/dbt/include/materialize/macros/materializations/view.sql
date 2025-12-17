@@ -24,6 +24,8 @@
                                                 database=database,
                                                 type='view') -%}
 
+  {{ validate_non_source_table_schema_isolation(schema, database) }}
+
   {% if old_relation %}
     {{ adapter.drop_relation(old_relation) }}
   {% endif %}
