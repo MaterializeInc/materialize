@@ -923,13 +923,13 @@ where
                 let source = self_collections
                     .get(ingestion_id)
                     .ok_or(StorageError::IdentifierMissing(*ingestion_id))?;
-                let DataSource::Ingestion(ingestion) = &source.description.data_source else {
+                let Some(remap_collection_id) = &source.ingestion_remap_collection_id else {
                     panic!("SourceExport must refer to a primary source that already exists");
                 };
 
                 match data_config.envelope {
                     SourceEnvelope::CdcV2 => (),
-                    _ => dependencies.push(ingestion.remap_collection_id),
+                    _ => dependencies.push(*remap_collection_id),
                 }
             }
             // Ingestions depend on their remap collection.
@@ -2065,9 +2065,15 @@ where
                 }
             };
 
+            let ingestion_remap_collection_id = match &description.data_source {
+                DataSource::Ingestion(desc) => Some(desc.remap_collection_id),
+                _ => None,
+            };
+
             let mut collection_state = CollectionState::new(
                 description,
                 time_dependence,
+                ingestion_remap_collection_id,
                 initial_since,
                 write_frontier.clone(),
                 storage_dependencies,
@@ -2401,6 +2407,7 @@ where
             let collection_state = CollectionState::new(
                 collection_desc,
                 existing.time_dependence.clone(),
+                existing.ingestion_remap_collection_id.clone(),
                 implied_capability,
                 write_frontier,
                 Vec::new(),
@@ -2775,6 +2782,7 @@ struct CollectionState<T> {
     pub description: CollectionDescription<T>,
 
     time_dependence: Option<TimeDependence>,
+    ingestion_remap_collection_id: Option<GlobalId>,
 
     /// Accumulation of read capabilities for the collection.
     ///
@@ -2806,6 +2814,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
     pub fn new(
         description: CollectionDescription<T>,
         time_dependence: Option<TimeDependence>,
+        ingestion_remap_collection_id: Option<GlobalId>,
         since: Antichain<T>,
         write_frontier: Antichain<T>,
         storage_dependencies: Vec<GlobalId>,
@@ -2816,6 +2825,7 @@ impl<T: TimelyTimestamp> CollectionState<T> {
         Self {
             description,
             time_dependence,
+            ingestion_remap_collection_id,
             read_capabilities,
             implied_capability: since.clone(),
             read_policy: ReadPolicy::NoPolicy {
