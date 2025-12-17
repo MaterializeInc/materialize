@@ -1243,7 +1243,7 @@ impl crate::coord::Coordinator {
         // relevant parts of the old `implement_peek_plan` into this method, and remove the old
         // `implement_peek_plan`.
         self.implement_peek_plan(
-            &mut ExecuteContextExtra::new(statement_logging_id),
+            &mut ExecuteContextExtra::new(statement_logging_id, self.internal_cmd_tx.clone()),
             planned_peek,
             finishing,
             compute_instance,

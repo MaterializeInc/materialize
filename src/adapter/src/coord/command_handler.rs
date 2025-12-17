@@ -948,7 +948,7 @@ impl Coordinator {
                     lifecycle_timestamps,
                 );
 
-                ExecuteContextExtra::new(maybe_uuid)
+                ExecuteContextExtra::new(maybe_uuid, self.internal_cmd_tx.clone())
             };
             let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
             (stmt, ctx, params)
@@ -1934,7 +1934,10 @@ impl Coordinator {
                 conn_id: conn_id.clone(),
                 cluster_id,
                 depends_on,
-                ctx_extra: ExecuteContextExtra::new(statement_logging_id),
+                ctx_extra: ExecuteContextExtra::new(
+                    statement_logging_id,
+                    self.internal_cmd_tx.clone(),
+                ),
                 is_fast_path,
             },
         );

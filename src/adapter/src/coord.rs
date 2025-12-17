@@ -127,9 +127,7 @@ use mz_ore::task::{JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
-use mz_ore::{
-    assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, soft_panic_or_log, stack,
-};
+use mz_ore::{assert_none, instrument, soft_assert_eq_or_log, soft_assert_or_log, stack};
 use mz_persist_client::PersistClient;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_client::usage::{ShardsUsageReferenced, StorageUsageClient};
@@ -1315,48 +1313,65 @@ impl PendingRead {
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
 ///
-/// This struct must not be dropped if it contains non-trivial
-/// state. The only valid way to get rid of it is to pass it to the
-/// coordinator for retirement. To enforce this, we assert in the
-/// `Drop` implementation.
+/// If this struct is dropped with Some `statement_uuid`, the `Drop`
+/// implementation will automatically send a `Message::RetireExecute` to log
+/// the statement ending (with `Canceled` reason). This handles cases like
+/// connection drops where the context cannot be explicitly retired.
+/// See <https://github.com/MaterializeInc/database-issues/issues/7304>
 #[derive(Debug, Default)]
 #[must_use]
 pub struct ExecuteContextExtra {
     statement_uuid: Option<StatementLoggingId>,
+    /// Channel for sending messages to the coordinator. Used for auto-retiring on drop.
+    /// If `None`, dropping will not send a retire message (this can happen for `Default` instances).
+    coordinator_tx: Option<mpsc::UnboundedSender<Message>>,
 }
 
 impl ExecuteContextExtra {
-    pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
-        Self { statement_uuid }
+    pub(crate) fn new(
+        statement_uuid: Option<StatementLoggingId>,
+        coordinator_tx: mpsc::UnboundedSender<Message>,
+    ) -> Self {
+        Self {
+            statement_uuid,
+            coordinator_tx: Some(coordinator_tx),
+        }
     }
     pub fn is_trivial(&self) -> bool {
-        let Self { statement_uuid } = self;
-        statement_uuid.is_none()
+        self.statement_uuid.is_none()
     }
     pub fn contents(&self) -> Option<StatementLoggingId> {
-        let Self { statement_uuid } = self;
-        *statement_uuid
+        self.statement_uuid
     }
     /// Take responsibility for the contents.  This should only be
     /// called from code that knows what to do to finish up logging
     /// based on the inner value.
     #[must_use]
     pub(crate) fn retire(mut self) -> Option<StatementLoggingId> {
-        let Self { statement_uuid } = &mut self;
-        statement_uuid.take()
+        self.coordinator_tx = None;
+        self.statement_uuid.take()
     }
 }
 
 impl Drop for ExecuteContextExtra {
     fn drop(&mut self) {
-        let Self { statement_uuid } = &*self;
-        if let Some(statement_uuid) = statement_uuid {
-            // Note: the impact when this error hits
-            // is that the statement will never be marked
-            // as finished in the statement log.
-            soft_panic_or_log!(
-                "execute context for statement {statement_uuid:?} dropped without being properly retired."
-            );
+        if let Some(statement_uuid) = self.statement_uuid.take() {
+            if let Some(tx) = &self.coordinator_tx {
+                // Auto-retire since the context was dropped without explicit retirement (likely due
+                // to connection drop).
+                let msg = Message::RetireExecute {
+                    data: ExecuteContextExtra {
+                        statement_uuid: Some(statement_uuid),
+                        coordinator_tx: None, // Prevent recursion
+                    },
+                    otel_ctx: OpenTelemetryContext::obtain(),
+                    reason: StatementEndedExecutionReason::Aborted,
+                };
+                let _ = tx.send(msg);
+            }
+            // If no channel is available (e.g., Default instance), we silently
+            // drop. This is acceptable because Default instances should only be
+            // used for non-logged statements.
         }
     }
 }
@@ -4456,7 +4471,7 @@ pub fn serve(
                 };
                 let client = Client::new(
                     build_info,
-                    cmd_tx.clone(),
+                    cmd_tx,
                     metrics_clone,
                     now,
                     environment_id,
