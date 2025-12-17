@@ -322,7 +322,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     console_image_tag_default: args.console_image_tag_default,
                     console_image_tag_map: args.console_image_tag_map,
                     aws_account_id: args.aws_account_id,
-                    environmentd_iam_role_arn: args.environmentd_iam_role_arn.clone(),
                     environmentd_connection_role_arn: args.environmentd_connection_role_arn,
                     aws_secrets_controller_tags: args.aws_secrets_controller_tags,
                     environmentd_availability_zones: args.environmentd_availability_zones,
@@ -331,9 +330,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     enable_security_context: args.enable_security_context,
                     enable_internal_statement_logging: args.enable_internal_statement_logging,
                     disable_statement_logging: args.disable_statement_logging,
-                    orchestratord_pod_selector_labels: args
-                        .orchestratord_pod_selector_labels
-                        .clone(),
                     environmentd_node_selector: args.environmentd_node_selector,
                     environmentd_affinity: args.environmentd_affinity,
                     environmentd_tolerations: args.environmentd_tolerations,
@@ -342,11 +338,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     clusterd_affinity: args.clusterd_affinity,
                     clusterd_tolerations: args.clusterd_tolerations,
                     image_pull_policy: args.image_pull_policy,
-                    network_policies_internal_enabled: args.network_policies_internal_enabled,
-                    network_policies_ingress_enabled: args.network_policies_ingress_enabled,
-                    network_policies_ingress_cidrs: args.network_policies_ingress_cidrs.clone(),
-                    network_policies_egress_enabled: args.network_policies_egress_enabled,
-                    network_policies_egress_cidrs: args.network_policies_egress_cidrs.clone(),
                     environmentd_cluster_replica_sizes: args.environmentd_cluster_replica_sizes,
                     bootstrap_default_cluster_replica_size: args
                         .bootstrap_default_cluster_replica_size,
@@ -379,7 +370,6 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
                     default_certificate_specs: args.default_certificate_specs.clone(),
                     disable_license_key_checks: args.disable_license_key_checks,
                     tracing: args.tracing,
-                    orchestratord_namespace: namespace.clone(),
                 },
                 Arc::clone(&metrics),
                 client.clone(),
