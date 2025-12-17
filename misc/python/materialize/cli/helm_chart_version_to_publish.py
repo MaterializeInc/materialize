@@ -33,7 +33,8 @@ def main():
         only_publish_helm_chart=True,
     ).all_versions()[-1]
     published_versions = get_all_self_managed_versions()
-    if version not in published_versions:
+    # We generally don't want to publish release candidates
+    if version not in published_versions and not version.prerelease:
         assert docker.image_of_release_version_exists(
             version, quiet=True
         ), f"Version {version} not found on DockerHub"
