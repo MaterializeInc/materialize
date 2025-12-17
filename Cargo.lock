@@ -4463,9 +4463,9 @@ dependencies = [
 
 [[package]]
 name = "k8s-controller"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b99ed10ec81d75006ca38992b59e254e980e619a24cf421c147f42868a0e804"
+checksum = "6be3655c8e864565ffdaf32d4cf3b8878adb97c464c697259eb2d2cd74be43f2"
 dependencies = [
  "async-trait",
  "futures",
