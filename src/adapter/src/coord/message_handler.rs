@@ -372,11 +372,12 @@ impl Coordinator {
         event!(Level::TRACE, message = format!("{:?}", message));
         match message {
             ControllerResponse::PeekNotification(uuid, response, otel_ctx) => {
-                self.query_tracker.send(QueryTrackerCmd::ObservePeekNotification {
-                    uuid,
-                    notification: response,
-                    otel_ctx,
-                });
+                self.query_tracker
+                    .send(QueryTrackerCmd::ObservePeekNotification {
+                        uuid,
+                        notification: response,
+                        otel_ctx,
+                    });
             }
             ControllerResponse::SubscribeResponse(sink_id, response) => {
                 if let Some(ActiveComputeSink::Subscribe(active_subscribe)) =

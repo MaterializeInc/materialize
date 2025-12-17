@@ -17,8 +17,12 @@ use crate::statement_logging::{StatementEndedExecutionReason, StatementExecution
 #[derive(Debug)]
 pub enum QueryTrackerCmd {
     TrackPeek(TrackedPeek),
-    UntrackPeek { uuid: Uuid },
-    CancelConn { conn_id: ConnectionId },
+    UntrackPeek {
+        uuid: Uuid,
+    },
+    CancelConn {
+        conn_id: ConnectionId,
+    },
     CancelByDrop(CancelByDrop),
     ObservePeekNotification {
         uuid: Uuid,
@@ -156,18 +160,14 @@ impl<E: QueryTrackerEffects> QueryTracker<E> {
             return;
         };
 
-        self.effects
-            .inc_canceled_peeks(u64::cast_from(uuids.len()));
+        self.effects.inc_canceled_peeks(u64::cast_from(uuids.len()));
 
         for uuid in uuids {
             let Some(peek) = self.peeks_by_uuid.remove(&uuid) else {
                 continue;
             };
-            self.effects.cancel_compute_peek(
-                peek.cluster_id,
-                uuid,
-                PeekResponse::Canceled,
-            );
+            self.effects
+                .cancel_compute_peek(peek.cluster_id, uuid, PeekResponse::Canceled);
             self.effects.retire_execute(
                 OpenTelemetryContext::obtain(),
                 StatementEndedExecutionReason::Canceled,
@@ -328,7 +328,10 @@ mod tests {
 
     impl QueryTrackerEffects for RecordingEffects {
         fn cancel_compute_peek(&self, cluster_id: ClusterId, uuid: Uuid, response: PeekResponse) {
-            self.canceled.lock().unwrap().push((cluster_id, uuid, response));
+            self.canceled
+                .lock()
+                .unwrap()
+                .push((cluster_id, uuid, response));
         }
 
         fn inc_canceled_peeks(&self, by: u64) {

@@ -72,12 +72,12 @@ use crate::coord::{
 };
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
+use crate::query_tracker::QueryTrackerCmd;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
-use crate::query_tracker::QueryTrackerCmd;
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
 use super::ExecuteContextExtra;
@@ -1653,8 +1653,9 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::Canceled));
         }
 
-        self.query_tracker
-            .send(QueryTrackerCmd::CancelConn { conn_id: conn_id.clone() });
+        self.query_tracker.send(QueryTrackerCmd::CancelConn {
+            conn_id: conn_id.clone(),
+        });
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_compute_sinks_for_conn(&conn_id).await;
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
@@ -1697,8 +1698,9 @@ impl Coordinator {
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.query_tracker
-            .send(QueryTrackerCmd::CancelConn { conn_id: conn_id.clone() });
+        self.query_tracker.send(QueryTrackerCmd::CancelConn {
+            conn_id: conn_id.clone(),
+        });
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());
@@ -1842,5 +1844,4 @@ impl Coordinator {
         });
         let _ = tx.send(response);
     }
-
 }

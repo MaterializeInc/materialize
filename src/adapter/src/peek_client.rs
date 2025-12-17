@@ -32,12 +32,12 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command};
 use crate::coord::Coordinator;
 use crate::coord::peek::FastPathPlan;
+use crate::query_tracker::QueryTrackerCmd;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{
     FrontendStatementLoggingEvent, PreparedStatementEvent, StatementLoggingFrontend,
     StatementLoggingId,
 };
-use crate::query_tracker::QueryTrackerCmd;
 use crate::{AdapterError, Client, CollectionIdBundle, ReadHolds, statement_logging};
 
 /// Storage collections trait alias we need to consult for since/frontiers.
@@ -390,7 +390,8 @@ impl PeekClient {
         if let Err(err) = peek_result {
             // Clean up the registered peek since the peek failed to issue.
             // The frontend will handle statement logging for the error.
-            self.query_tracker.send(QueryTrackerCmd::UntrackPeek { uuid });
+            self.query_tracker
+                .send(QueryTrackerCmd::UntrackPeek { uuid });
             return Err(AdapterError::concurrent_dependency_drop_from_peek_error(
                 err,
                 compute_instance,
@@ -406,6 +407,7 @@ impl PeekClient {
             self.persist_client.clone(),
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
+            None,
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {

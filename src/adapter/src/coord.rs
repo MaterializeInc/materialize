@@ -204,12 +204,12 @@ use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, dataflow_import_id_bundle,
 };
 use crate::optimize::{self, Optimize, OptimizerConfig};
+use crate::query_tracker::{self, QueryTrackerCmd};
 use crate::session::{EndTransactionAction, Session};
 use crate::statement_logging::{
     StatementEndedExecutionReason, StatementLifecycleEvent, StatementLoggingId, WatchSetCreation,
 };
 use crate::util::{ClientTransmitter, ResultExt};
-use crate::query_tracker::{self, QueryTrackerCmd};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
 
@@ -3861,10 +3861,12 @@ impl Coordinator {
             .collect();
         let (tx, rx) = oneshot::channel();
         self.query_tracker.send(QueryTrackerCmd::Dump { tx });
-        let dump = rx.await.unwrap_or_else(|_| query_tracker::QueryTrackerDump {
-            pending_peeks: BTreeMap::new(),
-            client_pending_peeks: BTreeMap::new(),
-        });
+        let dump = rx
+            .await
+            .unwrap_or_else(|_| query_tracker::QueryTrackerDump {
+                pending_peeks: BTreeMap::new(),
+                client_pending_peeks: BTreeMap::new(),
+            });
         let pending_peeks = dump.pending_peeks;
         let client_pending_peeks = dump.client_pending_peeks;
         let pending_linearize_read_txns: BTreeMap<_, _> = self

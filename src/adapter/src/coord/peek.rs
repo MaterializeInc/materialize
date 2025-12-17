@@ -54,8 +54,8 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::coord::timestamp_selection::TimestampDetermination;
-use crate::query_tracker::QueryTrackerCmd;
 use crate::optimize::OptimizerError;
+use crate::query_tracker::QueryTrackerCmd;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
@@ -841,6 +841,7 @@ impl crate::coord::Coordinator {
             mz_compute_types::dyncfgs::PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES
                 .get(self.catalog().system_config().dyncfgs());
 
+        let cluster_name = self.catalog().get_cluster(compute_instance).name.clone();
         let peek_response_stream = Self::create_peek_response_stream(
             rows_rx,
             finishing,
@@ -850,6 +851,10 @@ impl crate::coord::Coordinator {
             persist_client,
             peek_stash_read_batch_size_bytes,
             peek_stash_read_memory_budget_bytes,
+            Some(format!(
+                "query could not complete because cluster \"{}\" was dropped",
+                cluster_name
+            )),
         );
 
         Ok(crate::ExecuteResponse::SendingRowsStreaming {
@@ -872,6 +877,7 @@ impl crate::coord::Coordinator {
         mut persist_client: mz_persist_client::PersistClient,
         peek_stash_read_batch_size_bytes: usize,
         peek_stash_read_memory_budget_bytes: usize,
+        rows_rx_err: Option<String>,
     ) -> impl futures::Stream<Item = PeekResponseUnary> {
         async_stream::stream!({
             let result = rows_rx.await;
@@ -879,7 +885,11 @@ impl crate::coord::Coordinator {
             let rows = match result {
                 Ok(rows) => rows,
                 Err(e) => {
-                    yield PeekResponseUnary::Error(e.to_string());
+                    if let Some(msg) = rows_rx_err {
+                        yield PeekResponseUnary::Error(msg);
+                    } else {
+                        yield PeekResponseUnary::Error(e.to_string());
+                    }
                     return;
                 }
             };

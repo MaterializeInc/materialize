@@ -49,13 +49,13 @@ use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::error::AdapterError;
+use crate::query_tracker;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{
     FrontendStatementLoggingEvent, StatementEndedExecutionReason, StatementExecutionStrategy,
     StatementLoggingFrontend,
 };
-use crate::query_tracker;
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
 use crate::{AdapterNotice, AppendWebhookError, ReadHolds};
