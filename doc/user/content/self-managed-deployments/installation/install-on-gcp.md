@@ -81,7 +81,7 @@ This example provisions the following infrastructure:
 |----------|-------------|
 | Operator | Materialize Kubernetes operator in the `materialize` namespace |
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
-| Load Balancers | GCP Load Balancers for Materialize access {{< yaml-table data="self_managed/default_ports" >}} |
+| Load Balancers | GCP Load Balancers for access to Materialize {{< yaml-table data="self_managed/default_ports" >}} |
 
 ## Prerequisites
 
@@ -186,7 +186,13 @@ A Google account with permission to:
      environment = "demo"
      created_by  = "terraform"
    }
+   # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
+   # ingress_cidr_blocks = ["x.x.x.x/n", ...]
+   # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
    ```
+
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-variables-optional" %}}
 
 ### Step 3: Apply the Terraform
 
@@ -199,16 +205,8 @@ A Google account with permission to:
 
 1. Apply the Terraform configuration to create the infrastructure.
 
-   - To deploy with the default **internal NLB** for Materialize access:
-
    ```bash
    terraform apply
-   ```
-
-   - To deploy with <red>**public NLB**</red> for Materialize access:
-
-   ```bash
-   terraform apply -var="internal=false"
    ```
 
    If you are satisfied with the planned changes, type `yes` when prompted
@@ -254,15 +252,10 @@ A Google account with permission to:
 
 ### Step 5: Connect to Materialize
 
-{{< note >}}
-
-If using an **internal Network Load Balancer (NLB)** for your Materialize
-access, you can connect from inside the same VPC or from networks that are
-privately connected to it.
-
-{{< /note >}}
-
 #### Connect using the Materialize Console
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-access-methods" %}}
 
 Using the `console_load_balancer_ip` from the Terraform output, you can connect
 to Materialize via the Materialize Console.
@@ -277,14 +270,10 @@ From the terminal, you can type:
 open "https://$(terraform output -raw console_load_balancer_ip):8080/materialize"
 ```
 
-{{< tip >}}
+#### Connect using `psql`
 
 {{% include-from-yaml data="self_managed/installation"
-name="install-uses-self-signed-cluster-issuer" %}}
-
-{{< /tip >}}
-
-#### Connect using the `psql`
+name="installation-access-methods" %}}
 
 Using the `balancerd_load_balancer_ip` value from the Terraform output, you can
 connect to Materialize via PostgreSQL-compatible clients/drivers, such as

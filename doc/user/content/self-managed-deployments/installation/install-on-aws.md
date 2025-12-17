@@ -86,7 +86,7 @@ This example provisions the following infrastructure:
 |----------|-------------|
 | Operator | Materialize Kubernetes operator in the `materialize` namespace |
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
-| Network Load Balancer | Dedicated internal NLB for Materialize access {{< yaml-table data="self_managed/default_ports" >}} |
+| Network Load Balancer | Dedicated NLB for access to Materialize {{< yaml-table data="self_managed/default_ports" >}} |
 
 
 ## Prerequisites
@@ -158,7 +158,13 @@ An active AWS account with appropriate permissions to create:
    tags = {
      environment = "demo"
    }
+   # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
+   # ingress_cidr_blocks = ["x.x.x.x/n", ...]
+   # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
    ```
+
+   {{% include-from-yaml data="self_managed/installation"
+   name="installation-tfvars-variables-optional" %}}
 
 ### Step 3: Apply the Terraform
 
@@ -171,20 +177,12 @@ An active AWS account with appropriate permissions to create:
 
 1. Apply the Terraform configuration to create the infrastructure.
 
-    - To deploy with the default **internal NLB** for Materialize access:
+   ```bash
+   terraform apply
+   ```
 
-        ```bash
-        terraform apply
-        ```
-
-    - To deploy with <red>**public NLB**</red> for Materialize access:
-
-        ```bash
-        terraform apply -var="internal=false"
-        ```
-
-    If you are satisfied with the planned changes, type `yes` when prompted
-    to proceed.
+   If you are satisfied with the planned changes, type `yes` when prompted to
+   proceed.
 
 
 1. From the output, you will need the following fields to connect using the
@@ -231,15 +229,11 @@ PostgreSQL-compatible tools/drivers using the following ports:
 
 {{< yaml-table data="self_managed/default_ports" >}}
 
-{{< note >}}
-
-If using an **internal Network Load Balancer (NLB)** for your Materialize
-access, you can connect from inside the same VPC or from networks that are
-privately connected to it.
-
-{{< /note >}}
 
 #### Connect to the Materialize Console
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-access-methods" %}}
 
 1. To connect to the Materialize Console, open a browser to
     `https://<nlb_dns_name>:8080`, substituting your `<nlb_dns_name>`.
@@ -275,6 +269,9 @@ privately connected to it.
 1. Login as one of the created user.
 
 #### Connect using `psql`
+
+{{% include-from-yaml data="self_managed/installation"
+name="installation-access-methods" %}}
 
 1. To connect using `psql`, in the connection string, specify:
 

@@ -83,3 +83,31 @@
 
     If you run into an error during deployment, refer to the
     [Troubleshooting](/self-managed-deployments/troubleshooting/).
+
+- name: installation-tfvars-variables-optional
+  content: |
+    **Optional variables**:
+
+    - `internal_load_balancer`: Flag that determines whether the load balancer
+      is internal (default) or public.
+    - `ingress_cidr_blocks`: List of CIDR blocks allowed to reach the load
+      balancer if the load balancer is public (`internal_load_balancer: false`).
+      If unset, defaults to `["0.0.0.0/0"]` (i.e., <red>**all**</red> IPv4
+      addresses on the internet). **Only applied when the load balancer is public**.
+    - `k8s_apiserver_authorized_networks`: List of CIDR
+      blocks allowed to access your cluster endpoint. If unset, defaults to
+      `["0.0.0.0/0"]` (<red>**all**</red> IPv4 addresses on the internet).
+
+    {{< note >}}
+    Refer to your organization's security practices to set these values accordingly.
+    {{< /note >}}
+
+- name: installation-access-methods
+  content: |
+    {{< note >}}
+    - **If using a public NLB:** Both SQL and Console are available via the
+    public NLB. You can connect directly using the NLB's DNS name from anywhere
+    on the internet (subject to your `ingress_cidr_blocks` configuration).
+
+    - **If using a private (internal) NLB:** You can connect from inside the same VPC or from networks that are privately connected to it. Alternatively, use Kubernetes port-forwarding for both SQL and Console.
+    {{< /note >}}
