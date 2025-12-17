@@ -76,19 +76,19 @@ Run testdrive against all files in `test/testdrive` using Confluent Platform and
 Localstack:
 
 ```
-./mzcompose --dev run default
+./mzcompose run default
 ```
 
 Run using Redpanda instead of the Confluent Platform:
 
 ```
-./mzcompose --dev run default --redpanda
+./mzcompose run default --redpanda
 ```
 
 Run testdrive against a single file:
 
 ```
-./mzcompose --dev run default FILE.td
+./mzcompose run default FILE.td
 ```
 
 ## Running tests locally without mzcompose
