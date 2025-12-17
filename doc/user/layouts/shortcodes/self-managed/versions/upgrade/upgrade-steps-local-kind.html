@@ -61,13 +61,13 @@ deployment has not been configured with a license key:
       kubectl -n materialize-environment patch secret materialize-backend -p '{"stringData":{"license_key":"<your license key goes here>"}}' --type=merge
       ```
 
-1. Create a new `upgrade-materialize.yaml` file with the following content:
+1. Create a new `upgrade-materialize.yaml` file, updating the following fields:
 
    | Field | Description |
    |-------|-------------|
    | `environmentdImageRef` | Update the version to the new version. This should be the same as the operator version: `{{ $operator_version }}`. |
    | `requestRollout` or `forceRollout`| Enter a new UUID. Can be generated with `uuidgen`. <br> <ul><li>`requestRollout` triggers a rollout only if changes exist. </li><li>`forceRollout` triggers a rollout even if no changes exist.</li></ul> |
-   | `inPlaceRollout` | Set to `false` to perform a rolling upgrade. For rolling upgrades, ensure you have enough resources to support having both the old and new Materialize instances running during the upgrade. |
+
 
    ```yaml
    apiVersion: materialize.cloud/v1alpha1
@@ -78,13 +78,10 @@ deployment has not been configured with a license key:
    spec:
      environmentdImageRef: materialize/environmentd:{{ $environmentd_version }} # Update version
      requestRollout: 22222222-2222-2222-2222-222222222222    # Enter a new UUID
-     # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
-     inPlaceRollout: false                                   # When false, performs a rolling upgrade rather than in-place
+   # forceRollout: 33333333-3333-3333-3333-333333333333    # For forced rollouts
+     rolloutStrategy: WaitUntilReady                         # The mechanism to use when rolling out the new version.
      backendSecretName: materialize-backend
    ```
-   <div class="warning">
-      <strong class="gutter">WARNING!</strong> Please consult the Materialize team before setting inPlaceRollout to true and performing an in-place rollout. In almost all cases a rolling upgrade is preferred.
-   </div>
 
 1. Apply the upgrade-materialize.yaml file to your Materialize instance:
 

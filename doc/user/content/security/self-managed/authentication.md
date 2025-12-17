@@ -162,7 +162,7 @@ spec:
   forceRollout: <SOME_NEW_UUID> # Rollout without requiring a version change
 ```
 
-For more information on rollout configuration, view our [installation overview](/installation/#rollout-configuration).
+For more information on rollout configuration, view our [upgrade overview](/self-managed-deployments/upgrading/#rollout-configuration).
 
 {{< include-md file="shared-content/auth-kind-warning.md" >}}
 
