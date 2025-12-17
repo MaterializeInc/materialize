@@ -17,6 +17,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ## v26.4.0
 *Released to Materialize Self-Managed: 2025-12-17*
+<br>
 *Released to Materialize Cloud: 2025-12-18*
 
 v26.4.0 introduces several performance improvements and bugfixes.
@@ -45,6 +46,7 @@ v26.4.0 introduces several performance improvements and bugfixes.
 
 ## v26.2.0
 *Released Cloud: 2025-12-05*
+<br>
 *Released Self-Managed: 2025-12-09*
 
 This release focuses primarily on bug fixes.
