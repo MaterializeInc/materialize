@@ -485,6 +485,10 @@ impl k8s_controller::Context for Context {
         client: Client,
         console: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
+        if console.meta().deletion_timestamp.is_some() {
+            return Ok(Some(Action::await_change()));
+        }
+
         if console.status.is_none() {
             let console_api: Api<Console> =
                 Api::namespaced(client.clone(), &console.meta().namespace.clone().unwrap());
