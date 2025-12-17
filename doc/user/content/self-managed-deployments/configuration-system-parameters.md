@@ -5,7 +5,7 @@ aliases:
   - /self-managed/configuration-system-parameters/
 menu:
   main:
-    parent: "installation"
+    parent: "sm-deployments"
     weight: 71
 draft: true
 ---
