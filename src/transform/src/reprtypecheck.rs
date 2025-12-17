@@ -21,10 +21,11 @@ use mz_expr::{
 };
 use mz_ore::soft_panic_or_log;
 use mz_ore::stack::{CheckedRecursion, RecursionGuard, RecursionLimitError};
+use mz_repr::adt::range::Range;
 use mz_repr::explain::{DummyHumanizer, ExprHumanizer};
 use mz_repr::{
-    ColumnName, ReprColumnType, ReprRelationType, ReprScalarBaseType, ReprScalarType, Row,
-    SqlColumnType,
+    ColumnName, Datum, DatumKind, ReprColumnType, ReprRelationType, ReprScalarBaseType,
+    ReprScalarType, SqlColumnType,
 };
 
 /// Typechecking contexts as shared by various typechecking passes.
@@ -89,11 +90,20 @@ pub enum TypeError<'a> {
         message: String,
     },
     /// A constant row does not have the correct type
-    BadConstantRow {
+    BadConstantRowLen {
         /// Expression with the bug
         source: &'a MirRelationExpr,
         /// A constant row
-        got: Row,
+        got: usize,
+        /// The expected type (which that row does not have)
+        expected: Vec<ReprColumnType>,
+    },
+    /// A constant row does not have the correct type
+    BadConstantRow {
+        /// Expression with the bug
+        source: &'a MirRelationExpr,
+        /// The columns that mismatched, with the DatumKind and the expected type
+        mismatches: Vec<(usize, DatumTypeDifference)>,
         /// The expected type (which that row does not have)
         expected: Vec<ReprColumnType>,
         // TODO(mgree) with a good way to get the type of a Datum, we could give a diff here
@@ -523,6 +533,276 @@ pub fn is_subtype_of(sub: &[ReprColumnType], sup: &[ReprColumnType]) -> bool {
     })
 }
 
+/// Characterizes how a Datum differs from a ReprColumnType
+#[derive(Clone, Debug)]
+pub enum DatumTypeDifference {
+    /// Datum was null, but expected a non-null value (i.e., a ReprScalarType)
+    Null,
+    /// Datum's kind doesn't match the expected ReprScalarType
+    Mismatch {
+        /// The kind of the datum that we got
+        got: DatumKind,
+        /// The representation scalar type that we expected
+        expected: ReprScalarType,
+    },
+    /// Datum's dimensions didn't match the type's dimensions
+    MismatchDimensions {
+        /// The type constructor (list, array, int2vector, etc.)
+        ctor: String,
+        /// The dimension of the datum that we got
+        got: usize,
+        /// The dimension of the type that we expected
+        expected: usize,
+    },
+    /// There was a nested difference in the element type of some container type
+    ElementType {
+        /// The type constructor (list, array, int2vector, etc.)
+        ctor: String,
+        /// The difference in the element type
+        element_type: Box<DatumTypeDifference>,
+    },
+}
+
+/// Computes the difference between this datum and the specified (representation) column type.
+///
+/// See [`Datum<'a>::is_instance_of`] for just getting a yes/no answer.
+///
+/// See [`Datum<'a>::is_instance_of_sql`] for comparing `Datum`s to `SqlColumnType`s.
+fn datum_difference_with_column_type(
+    datum: &Datum<'_>,
+    column_type: &ReprColumnType,
+) -> Result<(), DatumTypeDifference> {
+    fn difference_with_scalar_type(
+        datum: &Datum<'_>,
+        scalar_type: &ReprScalarType,
+    ) -> Result<(), DatumTypeDifference> {
+        if let ReprScalarType::Jsonb = scalar_type {
+            // json type checking
+            match datum {
+                Datum::Dummy => Ok(()), // allow dummys (unlike is_instance_of)
+                Datum::Null => Err(DatumTypeDifference::Null),
+                Datum::JsonNull
+                | Datum::False
+                | Datum::True
+                | Datum::Numeric(_)
+                | Datum::String(_) => Ok(()),
+                Datum::List(list) => {
+                    for elem in list.iter() {
+                        difference_with_scalar_type(&elem, scalar_type)?;
+                    }
+                    Ok(())
+                }
+                Datum::Map(dict) => {
+                    for (_, val) in dict.iter() {
+                        difference_with_scalar_type(&val, scalar_type)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(DatumTypeDifference::Mismatch {
+                    got: DatumKind::from(datum),
+                    expected: scalar_type.clone(),
+                }),
+            }
+        } else {
+            fn mismatch(
+                got: &Datum<'_>,
+                expected: &ReprScalarType,
+            ) -> Result<(), DatumTypeDifference> {
+                Err(DatumTypeDifference::Mismatch {
+                    got: DatumKind::from(got),
+                    expected: expected.clone(),
+                })
+            }
+            fn element_type_difference(
+                ctor: &str,
+                element_type: DatumTypeDifference,
+            ) -> DatumTypeDifference {
+                DatumTypeDifference::ElementType {
+                    ctor: ctor.to_string(),
+                    element_type: Box::new(element_type),
+                }
+            }
+            match (datum, scalar_type) {
+                (Datum::Dummy, _) => Ok(()), // allow dummys (unlike is_instance_of)
+                (Datum::Null, _) => Err(DatumTypeDifference::Null),
+                (Datum::False, ReprScalarType::Bool) => Ok(()),
+                (Datum::False, _) => mismatch(datum, scalar_type),
+                (Datum::True, ReprScalarType::Bool) => Ok(()),
+                (Datum::True, _) => mismatch(datum, scalar_type),
+                (Datum::Int16(_), ReprScalarType::Int16) => Ok(()),
+                (Datum::Int16(_), _) => mismatch(datum, scalar_type),
+                (Datum::Int32(_), ReprScalarType::Int32) => Ok(()),
+                (Datum::Int32(_), _) => mismatch(datum, scalar_type),
+                (Datum::Int64(_), ReprScalarType::Int64) => Ok(()),
+                (Datum::Int64(_), _) => mismatch(datum, scalar_type),
+                (Datum::UInt8(_), ReprScalarType::UInt8) => Ok(()),
+                (Datum::UInt8(_), _) => mismatch(datum, scalar_type),
+                (Datum::UInt16(_), ReprScalarType::UInt16) => Ok(()),
+                (Datum::UInt16(_), _) => mismatch(datum, scalar_type),
+                (Datum::UInt32(_), ReprScalarType::UInt32) => Ok(()),
+                (Datum::UInt32(_), _) => mismatch(datum, scalar_type),
+                (Datum::UInt64(_), ReprScalarType::UInt64) => Ok(()),
+                (Datum::UInt64(_), _) => mismatch(datum, scalar_type),
+                (Datum::Float32(_), ReprScalarType::Float32) => Ok(()),
+                (Datum::Float32(_), _) => mismatch(datum, scalar_type),
+                (Datum::Float64(_), ReprScalarType::Float64) => Ok(()),
+                (Datum::Float64(_), _) => mismatch(datum, scalar_type),
+                (Datum::Date(_), ReprScalarType::Date) => Ok(()),
+                (Datum::Date(_), _) => mismatch(datum, scalar_type),
+                (Datum::Time(_), ReprScalarType::Time) => Ok(()),
+                (Datum::Time(_), _) => mismatch(datum, scalar_type),
+                (Datum::Timestamp(_), ReprScalarType::Timestamp { .. }) => Ok(()),
+                (Datum::Timestamp(_), _) => mismatch(datum, scalar_type),
+                (Datum::TimestampTz(_), ReprScalarType::TimestampTz { .. }) => Ok(()),
+                (Datum::TimestampTz(_), _) => mismatch(datum, scalar_type),
+                (Datum::Interval(_), ReprScalarType::Interval) => Ok(()),
+                (Datum::Interval(_), _) => mismatch(datum, scalar_type),
+                (Datum::Bytes(_), ReprScalarType::Bytes) => Ok(()),
+                (Datum::Bytes(_), _) => mismatch(datum, scalar_type),
+                (Datum::String(_), ReprScalarType::String) => Ok(()),
+                (Datum::String(_), _) => mismatch(datum, scalar_type),
+                (Datum::Uuid(_), ReprScalarType::Uuid) => Ok(()),
+                (Datum::Uuid(_), _) => mismatch(datum, scalar_type),
+                (Datum::Array(array), ReprScalarType::Array(t)) => {
+                    for e in array.elements().iter() {
+                        if let Datum::Null = e {
+                            continue;
+                        }
+
+                        difference_with_scalar_type(&e, t)
+                            .map_err(|e| element_type_difference("array", e))?;
+                    }
+                    Ok(())
+                }
+                (Datum::Array(array), ReprScalarType::Int2Vector) => {
+                    if array.dims().len() != 1 {
+                        return Err(DatumTypeDifference::MismatchDimensions {
+                            ctor: "int2vector".to_string(),
+                            got: array.dims().len(),
+                            expected: 1,
+                        });
+                    }
+
+                    for e in array.elements().iter() {
+                        difference_with_scalar_type(&e, &ReprScalarType::Int16)
+                            .map_err(|e| element_type_difference("int2vector", e))?;
+                    }
+
+                    Ok(())
+                }
+                (Datum::Array(_), _) => mismatch(datum, scalar_type),
+                (Datum::List(list), ReprScalarType::List { element_type, .. }) => {
+                    for e in list.iter() {
+                        if let Datum::Null = e {
+                            continue;
+                        }
+
+                        difference_with_scalar_type(&e, element_type)
+                            .map_err(|e| element_type_difference("list", e))?;
+                    }
+                    Ok(())
+                }
+                (Datum::List(list), ReprScalarType::Record { fields, .. }) => {
+                    let len = list.iter().count();
+                    if len != fields.len() {
+                        return Err(DatumTypeDifference::MismatchDimensions {
+                            ctor: "record".to_string(),
+                            got: len,
+                            expected: fields.len(),
+                        });
+                    }
+
+                    for (e, t) in list.iter().zip_eq(fields) {
+                        if let Datum::Null = e {
+                            continue;
+                        }
+
+                        difference_with_scalar_type(&e, &t.scalar_type)
+                            .map_err(|e| element_type_difference("record", e))?;
+                    }
+                    Ok(())
+                }
+                (Datum::List(_), _) => mismatch(datum, scalar_type),
+                (Datum::Map(map), ReprScalarType::Map { value_type, .. }) => {
+                    for (_, v) in map.iter() {
+                        if let Datum::Null = v {
+                            continue;
+                        }
+
+                        difference_with_scalar_type(&v, value_type)
+                            .map_err(|e| element_type_difference("map", e))?;
+                    }
+                    Ok(())
+                }
+                (Datum::Map(_), _) => mismatch(datum, scalar_type),
+                (Datum::JsonNull, _) => mismatch(datum, scalar_type),
+                (Datum::Numeric(_), ReprScalarType::Numeric) => Ok(()),
+                (Datum::Numeric(_), _) => mismatch(datum, scalar_type),
+                (Datum::MzTimestamp(_), ReprScalarType::MzTimestamp) => Ok(()),
+                (Datum::MzTimestamp(_), _) => mismatch(datum, scalar_type),
+                (Datum::Range(Range { inner }), ReprScalarType::Range { element_type }) => {
+                    match inner {
+                        None => Ok(()),
+                        Some(inner) => {
+                            if let Some(b) = inner.lower.bound {
+                                difference_with_scalar_type(&b.datum(), element_type)
+                                    .map_err(|e| element_type_difference("range", e))?;
+                            }
+                            if let Some(b) = inner.upper.bound {
+                                difference_with_scalar_type(&b.datum(), element_type)
+                                    .map_err(|e| element_type_difference("range", e))?;
+                            }
+                            Ok(())
+                        }
+                    }
+                }
+                (Datum::Range(_), _) => mismatch(datum, scalar_type),
+                (Datum::MzAclItem(_), ReprScalarType::MzAclItem) => Ok(()),
+                (Datum::MzAclItem(_), _) => mismatch(datum, scalar_type),
+                (Datum::AclItem(_), ReprScalarType::AclItem) => Ok(()),
+                (Datum::AclItem(_), _) => mismatch(datum, scalar_type),
+            }
+        }
+    }
+    if column_type.nullable {
+        if let Datum::Null = datum {
+            return Ok(());
+        }
+    }
+    difference_with_scalar_type(&datum, &column_type.scalar_type)
+}
+
+fn row_difference_with_column_types<'a>(
+    source: &'a MirRelationExpr,
+    datums: &Vec<Datum<'_>>,
+    column_types: &[ReprColumnType],
+) -> Result<(), TypeError<'a>> {
+    // correct length
+    if datums.len() != column_types.len() {
+        return Err(TypeError::BadConstantRowLen {
+            source,
+            got: datums.len(),
+            expected: column_types.to_vec(),
+        });
+    }
+
+    // correct types
+    let mut mismatches = Vec::new();
+    for (i, (d, ty)) in datums.iter().zip_eq(column_types.iter()).enumerate() {
+        if let Err(e) = datum_difference_with_column_type(d, ty) {
+            mismatches.push((i, e));
+        }
+    }
+    if !mismatches.is_empty() {
+        return Err(TypeError::BadConstantRow {
+            source,
+            mismatches,
+            expected: column_types.to_vec(),
+        });
+    }
+
+    Ok(())
+}
 /// Check that the visible type of each query has not been changed
 #[derive(Debug)]
 pub struct Typecheck {
@@ -602,27 +882,7 @@ impl Typecheck {
                     for (row, _id) in rows {
                         let datums = row.unpack();
 
-                        // correct length
-                        if datums.len() != typ.column_types.len() {
-                            return Err(TypeError::BadConstantRow {
-                                source: expr,
-                                got: row.clone(),
-                                expected: typ.column_types.iter().map(ReprColumnType::from).collect(),
-                            });
-                        }
-
-                        // correct types
-                        if datums
-                            .iter()
-                            .zip_eq(typ.column_types.iter())
-                            .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of_sql(ty))
-                        {
-                            return Err(TypeError::BadConstantRow {
-                                source: expr,
-                                got: row.clone(),
-                                expected: typ.column_types.iter().map(ReprColumnType::from).collect(),
-                            });
-                        }
+                        row_difference_with_column_types(expr, &datums, &typ.column_types.iter().map(ReprColumnType::from).collect_vec())?;
 
                         if self.disallow_dummy && datums.iter().any(|d| d == &mz_repr::Datum::Dummy) {
                             return Err(TypeError::DisallowedDummy {
@@ -870,27 +1130,7 @@ impl Typecheck {
                         for row in consts {
                             let datums = row.unpack();
 
-                            // correct length
-                            if datums.len() != typ.len() {
-                                return Err(TypeError::BadConstantRow {
-                                    source: expr,
-                                    got: row.clone(),
-                                    expected: typ,
-                                });
-                            }
-
-                            // correct types
-                            if datums
-                                .iter()
-                                .zip_eq(typ.iter())
-                                .any(|(d, ty)| d != &mz_repr::Datum::Dummy && !d.is_instance_of(ty))
-                            {
-                                return Err(TypeError::BadConstantRow {
-                                    source: expr,
-                                    got: row.clone(),
-                                    expected: typ,
-                                });
-                            }
+                            row_difference_with_column_types(expr, &datums, &typ)?;
                         }
                     }
                     JoinImplementation::Unimplemented => (),
@@ -1226,15 +1466,7 @@ impl Typecheck {
                 if let Ok(row) = row {
                     let datums = row.unpack();
 
-                    if datums.len() != 1
-                        || (datums[0] != mz_repr::Datum::Dummy && !datums[0].is_instance_of(&typ))
-                    {
-                        return Err(TypeError::BadConstantRow {
-                            source,
-                            got: row.clone(),
-                            expected: vec![typ],
-                        });
-                    }
+                    row_difference_with_column_types(source, &datums, &[typ.clone()])?;
                 }
 
                 Ok(typ)
@@ -1529,6 +1761,46 @@ impl ReprColumnTypeDifference {
     }
 }
 
+impl DatumTypeDifference {
+    /// Pretty prints a type difference at a given indentation level
+    pub fn humanize<H>(
+        &self,
+        indent: usize,
+        h: &H,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result
+    where
+        H: ExprHumanizer,
+    {
+        // indent
+        write!(f, "{:indent$}", "")?;
+
+        match self {
+            DatumTypeDifference::Null => writeln!(f, "unexpected null")?,
+            DatumTypeDifference::Mismatch { got, expected } => {
+                let expected = h.humanize_scalar_type_repr(expected, false);
+                writeln!(f, "got datum of kind {got:?}, expected {expected}")?;
+            }
+            DatumTypeDifference::MismatchDimensions {
+                ctor,
+                got,
+                expected,
+            } => {
+                writeln!(
+                    f,
+                    "{ctor} dimensions differ: got datum with dimension {got}, expected {expected}"
+                )?;
+            }
+            DatumTypeDifference::ElementType { ctor, element_type } => {
+                writeln!(f, "{ctor} element types differ:")?;
+                element_type.humanize(indent + 4, h, f)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 /// Wrapper struct for a `Display` instance for `TypeError`s with a given `ExprHumanizer`
 #[allow(missing_debug_implementations)]
 pub struct TypeErrorHumanizer<'a, 'b, H>
@@ -1577,6 +1849,7 @@ impl<'a> TypeError<'a> {
             | NoSuchColumn { source, .. }
             | MismatchColumn { source, .. }
             | MismatchColumns { source, .. }
+            | BadConstantRowLen { source, .. }
             | BadConstantRow { source, .. }
             | BadProject { source, .. }
             | BadJoinEquivalence { source, .. }
@@ -1645,17 +1918,38 @@ impl<'a> TypeError<'a> {
                     diff.humanize(humanizer, f)?;
                 }
             }
-            BadConstantRow {
+            BadConstantRowLen {
                 source: _,
                 got,
                 expected,
             } => {
                 let expected = columns_pretty(expected, humanizer);
-
                 writeln!(
                     f,
-                    "bad constant row\n      got {got}\nexpected row of type {expected}"
+                    "bad constant row\n      row has length {got}\nexpected row of type {expected}"
                 )?
+            }
+            BadConstantRow {
+                source: _,
+                mismatches,
+                expected,
+            } => {
+                let expected = columns_pretty(expected, humanizer);
+
+                let num_mismatches = mismatches.len();
+                let plural = if num_mismatches == 1 { "" } else { "es" };
+                writeln!(
+                    f,
+                    "bad constant row\n      got {num_mismatches} mismatch{plural}\nexpected row of type {expected}"
+                )?;
+
+                if num_mismatches > 0 {
+                    writeln!(f, "")?;
+                    for (col, diff) in mismatches.iter() {
+                        writeln!(f, "      column #{col}:")?;
+                        diff.humanize(8, humanizer, f)?;
+                    }
+                }
             }
             BadProject {
                 source: _,
@@ -1719,5 +2013,82 @@ impl<'a> TypeError<'a> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_ore::{assert_err, assert_ok};
+    use mz_repr::{arb_datum, arb_datum_for_column};
+    use proptest::prelude::*;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_datum_type_difference() {
+        let datum = Datum::Int16(1);
+
+        assert_ok!(datum_difference_with_column_type(
+            &datum,
+            &ReprColumnType {
+                scalar_type: ReprScalarType::Int16,
+                nullable: true,
+            }
+        ));
+
+        assert_err!(datum_difference_with_column_type(
+            &datum,
+            &ReprColumnType {
+                scalar_type: ReprScalarType::Int32,
+                nullable: false,
+            }
+        ));
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig { cases: 5000, max_global_rejects: 2500, ..Default::default() })]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn datum_type_difference_with_instance_of_on_valid_data((src, datum) in any::<SqlColumnType>().prop_flat_map(|src| {
+            let datum = arb_datum_for_column(src.clone());
+            (Just(src), datum) }
+        )) {
+            let typ = ReprColumnType::from(&src);
+            let datum = Datum::from(&datum);
+
+            if datum.contains_dummy() {
+                return Err(TestCaseError::reject("datum contains a dummy"));
+            }
+
+            let diff = datum_difference_with_column_type(&datum, &typ);
+            if datum.is_instance_of(&typ) {
+                assert_ok!(diff);
+            } else {
+                assert_err!(diff);
+            }
+        }
+    }
+
+    proptest! {
+        // We run many cases because the data are _random_, and we want to be sure
+        // that we have covered sufficient cases. We drop dummy data (behavior is different!) so we allow many more global rejects.
+        #![proptest_config(ProptestConfig { cases: 10000, max_global_rejects: 5000, ..Default::default() })]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn datum_type_difference_agrees_with_is_instance_of_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum()) {
+            let typ = ReprColumnType::from(&src);
+            let datum = Datum::from(&datum);
+
+            if datum.contains_dummy() {
+                return Err(TestCaseError::reject("datum is a dummy"));
+            }
+
+            let diff = datum_difference_with_column_type(&datum, &typ);
+            if datum.is_instance_of(&typ) {
+                assert_ok!(diff);
+            } else {
+                assert_err!(diff);
+            }
+        }
     }
 }
