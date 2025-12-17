@@ -16,85 +16,22 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.4.0
+*Released to Materialize Self-Managed: 2025-12-17*
+*Released to Materialize Cloud: 2025-12-18*
 
-v26.4.0 introduces manual promotion support for Self-Managed deployments, Iceberg sink upsert rendering, and various bug fixes and improvements.
+v26.4.0 introduces several performance improvements and bugfixes.
 
-### Manual Promotion Support for Self-Managed
-
-For Self-Managed Materialize deployments, you can now manually control the promotion of new environment versions during upgrades. This feature gives operators direct control over when a new version becomes active after it has been deployed and validated.
-
-Previously, the upgrade process would automatically promote a new version once it reached a ready state. With manual promotion, you can:
-
-- Deploy a new version in a read-only state
-- Validate that the new version is performing correctly
-- Manually trigger the promotion when you're ready
-- Cancel the deployment if issues are detected
-
-This is particularly useful for organizations with strict change control requirements or those who want additional validation before finalizing an upgrade.
-
-
-
-To use manual promotion, configure the `rolloutStrategy` setting to control how upgrades are performed. The available strategies are:
-- `ManualPromote`: Deploy the new version and wait for manual promotion
-- `WaitUntilReady` (Default): Automatically promote once the new version is ready
-- `ImmediatelyPromoteCausingDowntime`: Immediately replace the old version with the new one
-
-For more details, see the Self-Managed installation documentation.
-
-### Iceberg Sink: Upsert Rendering
-
-The Iceberg sink now includes upsert rendering support, enabling more sophisticated data integration patterns with Iceberg tables. The Iceberg sink is a multi-stage dataflow that writes Materialize data to Iceberg format:
-
-
-
-- **Batch description minting**: Determines time bounds for data batches
-- **Iceberg writer**: Writes data files in Parquet format within the specified time bounds
-- **Iceberg committer**: Coalesces files from all writers and commits them to the catalog
-
-This enhancement expands the capabilities of the Iceberg sink to handle upsert workloads, allowing you to maintain tables with primary key semantics in your Iceberg data lake.
-
-### Features
-
-
-
-Added the `mz_replacements` system relation to track materialized view replacements created with the `CREATE MATERIALIZED VIEW ... REPLACING` syntax.
-
-
-Enabled `persist_rollup_use_active_rollup` by default, which improves performance for persist layer operations.
-
-
-Type checking now defaults to repr typechecking for improved type safety.
-
-
-Added support for dumping internal storage state, which aids in debugging and diagnostics.
-
-
-Added launch darkly configuration to control error behavior on timeline switch for PostgreSQL sources.
+### Improvements
+- **Over 2x higher connections per second (CPS)**: We've optimized how Materialize handles inbound connection requests. In our tests, we've observed 2x - 4x improvements to the rate at which new client connections can be established. This is especially beneficial when spinning up new environments or using connection pools that frequently establish new connections.
+- **Up to 3x faster hydration times for large PostgreSQL tables**: We've reduced the overhead incurred by communication between multiple *workers* on a large cluster. We've observed up to 3x throughput improvement when ingesting 1 TB PostgreSQL tables on large clusters.
+- **More efficient source ingestion batching**: Sources now batch writes more effectively. This can result in improved freshness and lower resource utilization, especially when a source is doing a large number of writes.
+- **CloudSQL HA failover support** (Materialize Self-Managed only): Materialize Self-Managed now offers better support for handling failovers in CloudSQL HA sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
 
 ### Bug Fixes
-
-
-Fixed timestamp determination logic to handle empty read holds correctly.
-
-
-Fixed creation of storage collections for replacement materialized views to ensure proper initialization.
-
-
-Removed incorrect assertion for primary dependencies in storage layer that was causing unnecessary failures.
-
-
-Fixed lazy creation of temporary schemas to prevent schema-related errors.
-
-
-Reduced SCRAM iterations in scalability framework and fixed fallback image configuration.
-
-
-Fixed `minimal_qualification` function to handle temporary objects gracefully instead of panicking.
-
-
-Fixed Self-Managed Helm chart publishing to correctly update operator compatibility YAML.
-
-Fixed bump-version script to correctly replace console image references.
+- Fixed timestamp determination logic to handle empty read holds correctly.
+- Fixed lazy creation of temporary schemas to prevent schema-related errors.
+- Reduced SCRAM iterations in scalability framework and fixed fallback image configuration.
+- Fixed `minimal_qualification` function to handle temporary objects gracefully instead of panicking.
 
 ## v26.3.0
 *Released to Materialize Cloud and Self-Managed: 2025-12-12*
