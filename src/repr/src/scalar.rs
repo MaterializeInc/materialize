@@ -4464,9 +4464,8 @@ impl Ord for PropDatum {
 }
 
 /// Generate an arbitrary [`PropDatum`].
-pub fn arb_datum() -> BoxedStrategy<PropDatum> {
-    let leaf = Union::new(vec![
-        Just(PropDatum::Dummy).boxed(),
+pub fn arb_datum(allow_dummy: bool) -> BoxedStrategy<PropDatum> {
+    let mut leaf_options = vec![
         any::<bool>().prop_map(PropDatum::Bool).boxed(),
         any::<i16>().prop_map(PropDatum::Int16).boxed(),
         any::<i32>().prop_map(PropDatum::Int32).boxed(),
@@ -4500,7 +4499,12 @@ pub fn arb_datum() -> BoxedStrategy<PropDatum> {
             .prop_map(PropDatum::Range)
             .boxed(),
         Just(PropDatum::Dummy).boxed(),
-    ]);
+    ];
+
+    if allow_dummy {
+        leaf_options.push(Just(PropDatum::Dummy).boxed());
+    }
+    let leaf = Union::new(leaf_options);
 
     leaf.prop_recursive(3, 8, 16, |inner| {
         Union::new(vec![
@@ -5097,7 +5101,7 @@ mod tests {
         #![proptest_config(ProptestConfig::with_cases(10000))]
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)]
-        fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum()) {
+        fn sql_repr_types_agree_on_random_data(src in any::<SqlColumnType>(), datum in arb_datum(true)) {
             let tgt = ReprColumnType::from(&src);
             let datum = Datum::from(&datum);
 
@@ -5135,7 +5139,7 @@ mod tests {
     proptest! {
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
+        fn array_packing_unpacks_correctly(array in arb_array(arb_datum(true))) {
             let PropArray(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
             let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_array().elements().iter().collect();
@@ -5144,7 +5148,7 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
-        fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
+        fn list_packing_unpacks_correctly(array in arb_list(arb_datum(true))) {
             let PropList(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
             let unpacked_datums: Vec<Datum<'_>> = row.unpack_first().unwrap_list().iter().collect();
@@ -5153,7 +5157,7 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
-        fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum())) {
+        fn dict_packing_unpacks_correctly(array in arb_dict(arb_datum(true))) {
             let PropDict(row, elts) = array;
             let datums: Vec<(&str, Datum<'_>)> = elts.iter().map(|(k, e)| (k.as_str(), e.into())).collect();
             let unpacked_datums: Vec<(&str, Datum<'_>)> = row.unpack_first().unwrap_map().iter().collect();
@@ -5162,7 +5166,7 @@ mod tests {
 
         #[mz_ore::test]
         #[cfg_attr(miri, ignore)] // too slow
-        fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(), 1..100)) {
+        fn row_packing_roundtrips_single_valued(prop_datums in prop::collection::vec(arb_datum(true), 1..100)) {
             let datums: Vec<Datum<'_>> = prop_datums.iter().map(|pd| pd.into()).collect();
             let row = Row::pack(&datums);
             let unpacked = row.unpack();
