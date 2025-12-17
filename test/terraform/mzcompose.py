@@ -1202,6 +1202,18 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 f"orchestratord_version={get_tag(tag)}",
             ]
 
+        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
+        if license_key:
+            vars += [
+                "-var",
+                f"license_key={license_key}",
+            ]
+
+        vars += [
+            "-var",
+            f"environmentd_version={tag}",
+        ]
+
         if args.setup:
             print("--- Setup")
             spawn.runv(
@@ -1210,8 +1222,12 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
             )
             spawn.runv(["terraform", "init"], cwd=path)
             spawn.runv(["terraform", "validate"], cwd=path)
-            spawn.runv(["terraform", "plan"], cwd=path)
-            spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
+            spawn.runv(["terraform", "plan", *vars], cwd=path)
+            try:
+                spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
+            except:
+                # Sometimes fails for unknown reason, so just retry
+                spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=path)
 
         gke_cluster = json.loads(
             spawn.capture(
@@ -1239,12 +1255,15 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
         )
 
         if args.setup:
-            print("--- Setup")
+            # For gcp-temporary, Terraform creates the Materialize instance
             state.kubectl_setup(
                 tag,
                 connection_strings["metadata_backend_url"],
                 connection_strings["persist_backend_url"],
+                skip_materialize_cr=True,
             )
+            print("--- Waiting for Materialize to fully initialize...")
+            time.sleep(90)
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
