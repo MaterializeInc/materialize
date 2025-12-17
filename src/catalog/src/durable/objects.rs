@@ -362,16 +362,16 @@ pub struct IntrospectionSourceIndex {
 }
 
 impl DurableType for IntrospectionSourceIndex {
-    type Key = ClusterIntrospectionSourceIndexKey;
-    type Value = ClusterIntrospectionSourceIndexValue;
+    type Key = IntrospectionSourceIndexKey;
+    type Value = IntrospectionSourceIndexValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            ClusterIntrospectionSourceIndexKey {
+            IntrospectionSourceIndexKey {
                 cluster_id: self.cluster_id,
                 name: self.name,
             },
-            ClusterIntrospectionSourceIndexValue {
+            IntrospectionSourceIndexValue {
                 catalog_id: self
                     .item_id
                     .try_into()
@@ -396,7 +396,7 @@ impl DurableType for IntrospectionSourceIndex {
     }
 
     fn key(&self) -> Self::Key {
-        ClusterIntrospectionSourceIndexKey {
+        IntrospectionSourceIndexKey {
             cluster_id: self.cluster_id,
             name: self.name.clone(),
         }
@@ -754,17 +754,17 @@ pub struct SystemObjectMapping {
 }
 
 impl DurableType for SystemObjectMapping {
-    type Key = GidMappingKey;
-    type Value = GidMappingValue;
+    type Key = SystemObjectMappingKey;
+    type Value = SystemObjectMappingValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            GidMappingKey {
+            SystemObjectMappingKey {
                 schema_name: self.description.schema_name,
                 object_type: self.description.object_type,
                 object_name: self.description.object_name,
             },
-            GidMappingValue {
+            SystemObjectMappingValue {
                 catalog_id: self
                     .unique_identifier
                     .catalog_id
@@ -796,7 +796,7 @@ impl DurableType for SystemObjectMapping {
     }
 
     fn key(&self) -> Self::Key {
-        GidMappingKey {
+        SystemObjectMappingKey {
             schema_name: self.description.schema_name.clone(),
             object_type: self.description.object_type.clone(),
             object_name: self.description.object_name.clone(),
@@ -811,19 +811,19 @@ pub struct DefaultPrivilege {
 }
 
 impl DurableType for DefaultPrivilege {
-    type Key = DefaultPrivilegesKey;
-    type Value = DefaultPrivilegesValue;
+    type Key = DefaultPrivilegeKey;
+    type Value = DefaultPrivilegeValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            DefaultPrivilegesKey {
+            DefaultPrivilegeKey {
                 role_id: self.object.role_id,
                 database_id: self.object.database_id,
                 schema_id: self.object.schema_id,
                 object_type: self.object.object_type,
                 grantee: self.acl_item.grantee,
             },
-            DefaultPrivilegesValue {
+            DefaultPrivilegeValue {
                 privileges: self.acl_item.acl_mode,
             },
         )
@@ -845,7 +845,7 @@ impl DurableType for DefaultPrivilege {
     }
 
     fn key(&self) -> Self::Key {
-        DefaultPrivilegesKey {
+        DefaultPrivilegeKey {
             role_id: self.object.role_id,
             database_id: self.object.database_id,
             schema_id: self.object.schema_id,
@@ -895,19 +895,19 @@ impl DurableType for Comment {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IdAlloc {
+pub struct IdAllocator {
     pub name: String,
     pub next_id: u64,
 }
 
-impl DurableType for IdAlloc {
-    type Key = IdAllocKey;
-    type Value = IdAllocValue;
+impl DurableType for IdAllocator {
+    type Key = IdAllocatorKey;
+    type Value = IdAllocatorValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            IdAllocKey { name: self.name },
-            IdAllocValue {
+            IdAllocatorKey { name: self.name },
+            IdAllocatorValue {
                 next_id: self.next_id,
             },
         )
@@ -921,7 +921,7 @@ impl DurableType for IdAlloc {
     }
 
     fn key(&self) -> Self::Key {
-        IdAllocKey {
+        IdAllocatorKey {
             name: self.name.clone(),
         }
     }
@@ -996,13 +996,13 @@ pub struct SystemConfiguration {
 }
 
 impl DurableType for SystemConfiguration {
-    type Key = ServerConfigurationKey;
-    type Value = ServerConfigurationValue;
+    type Key = SystemConfigurationKey;
+    type Value = SystemConfigurationValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            ServerConfigurationKey { name: self.name },
-            ServerConfigurationValue { value: self.value },
+            SystemConfigurationKey { name: self.name },
+            SystemConfigurationValue { value: self.value },
         )
     }
 
@@ -1014,23 +1014,23 @@ impl DurableType for SystemConfiguration {
     }
 
     fn key(&self) -> Self::Key {
-        ServerConfigurationKey {
+        SystemConfigurationKey {
             name: self.name.clone(),
         }
     }
 }
 
 impl DurableType for MzAclItem {
-    type Key = SystemPrivilegesKey;
-    type Value = SystemPrivilegesValue;
+    type Key = SystemPrivilegeKey;
+    type Value = SystemPrivilegeValue;
 
     fn into_key_value(self) -> (Self::Key, Self::Value) {
         (
-            SystemPrivilegesKey {
+            SystemPrivilegeKey {
                 grantee: self.grantee,
                 grantor: self.grantor,
             },
-            SystemPrivilegesValue {
+            SystemPrivilegeValue {
                 acl_mode: self.acl_mode,
             },
         )
@@ -1045,7 +1045,7 @@ impl DurableType for MzAclItem {
     }
 
     fn key(&self) -> Self::Key {
-        SystemPrivilegesKey {
+        SystemPrivilegeKey {
             grantee: self.grantee,
             grantor: self.grantor,
         }
@@ -1143,19 +1143,18 @@ pub struct Snapshot {
     pub clusters: BTreeMap<proto::ClusterKey, proto::ClusterValue>,
     pub network_policies: BTreeMap<proto::NetworkPolicyKey, proto::NetworkPolicyValue>,
     pub cluster_replicas: BTreeMap<proto::ClusterReplicaKey, proto::ClusterReplicaValue>,
-    pub introspection_sources: BTreeMap<
-        proto::ClusterIntrospectionSourceIndexKey,
-        proto::ClusterIntrospectionSourceIndexValue,
-    >,
-    pub id_allocator: BTreeMap<proto::IdAllocKey, proto::IdAllocValue>,
+    pub introspection_sources:
+        BTreeMap<proto::IntrospectionSourceIndexKey, proto::IntrospectionSourceIndexValue>,
+    pub id_allocator: BTreeMap<proto::IdAllocatorKey, proto::IdAllocatorValue>,
     pub configs: BTreeMap<proto::ConfigKey, proto::ConfigValue>,
     pub settings: BTreeMap<proto::SettingKey, proto::SettingValue>,
-    pub system_object_mappings: BTreeMap<proto::GidMappingKey, proto::GidMappingValue>,
+    pub system_object_mappings:
+        BTreeMap<proto::SystemObjectMappingKey, proto::SystemObjectMappingValue>,
     pub system_configurations:
-        BTreeMap<proto::ServerConfigurationKey, proto::ServerConfigurationValue>,
-    pub default_privileges: BTreeMap<proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue>,
+        BTreeMap<proto::SystemConfigurationKey, proto::SystemConfigurationValue>,
+    pub default_privileges: BTreeMap<proto::DefaultPrivilegeKey, proto::DefaultPrivilegeValue>,
     pub source_references: BTreeMap<proto::SourceReferencesKey, proto::SourceReferencesValue>,
-    pub system_privileges: BTreeMap<proto::SystemPrivilegesKey, proto::SystemPrivilegesValue>,
+    pub system_privileges: BTreeMap<proto::SystemPrivilegeKey, proto::SystemPrivilegeValue>,
     pub storage_collection_metadata:
         BTreeMap<proto::StorageCollectionMetadataKey, proto::StorageCollectionMetadataValue>,
     pub unfinalized_shards: BTreeMap<proto::UnfinalizedShardKey, ()>,
@@ -1203,24 +1202,24 @@ pub struct SettingValue {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct IdAllocKey {
+pub struct IdAllocatorKey {
     pub(crate) name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct IdAllocValue {
+pub struct IdAllocatorValue {
     pub(crate) next_id: u64,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct GidMappingKey {
+pub struct SystemObjectMappingKey {
     pub(crate) schema_name: String,
     pub(crate) object_type: CatalogItemType,
     pub(crate) object_name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct GidMappingValue {
+pub struct SystemObjectMappingValue {
     pub(crate) catalog_id: SystemCatalogItemId,
     pub(crate) global_id: SystemGlobalId,
     pub(crate) fingerprint: String,
@@ -1240,13 +1239,13 @@ pub struct ClusterValue {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct ClusterIntrospectionSourceIndexKey {
+pub struct IntrospectionSourceIndexKey {
     pub(crate) cluster_id: ClusterId,
     pub(crate) name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct ClusterIntrospectionSourceIndexValue {
+pub struct IntrospectionSourceIndexValue {
     pub(crate) catalog_id: IntrospectionSourceIndexCatalogItemId,
     pub(crate) global_id: IntrospectionSourceIndexGlobalId,
     pub(crate) oid: u32,
@@ -1442,17 +1441,17 @@ pub struct TxnWalShardValue {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct ServerConfigurationKey {
+pub struct SystemConfigurationKey {
     pub(crate) name: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord)]
-pub struct ServerConfigurationValue {
+pub struct SystemConfigurationValue {
     pub(crate) value: String,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct DefaultPrivilegesKey {
+pub struct DefaultPrivilegeKey {
     pub(crate) role_id: RoleId,
     pub(crate) database_id: Option<DatabaseId>,
     pub(crate) schema_id: Option<SchemaId>,
@@ -1461,18 +1460,18 @@ pub struct DefaultPrivilegesKey {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct DefaultPrivilegesValue {
+pub struct DefaultPrivilegeValue {
     pub(crate) privileges: AclMode,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct SystemPrivilegesKey {
+pub struct SystemPrivilegeKey {
     pub(crate) grantee: RoleId,
     pub(crate) grantor: RoleId,
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Ord, Hash)]
-pub struct SystemPrivilegesValue {
+pub struct SystemPrivilegeValue {
     pub(crate) acl_mode: AclMode,
 }
 

@@ -48,17 +48,17 @@ use crate::durable::initialize::{
 };
 use crate::durable::objects::serialization::proto;
 use crate::durable::objects::{
-    AuditLogKey, Cluster, ClusterConfig, ClusterIntrospectionSourceIndexKey,
-    ClusterIntrospectionSourceIndexValue, ClusterKey, ClusterReplica, ClusterReplicaKey,
+    AuditLogKey, Cluster, ClusterConfig, ClusterKey, ClusterReplica, ClusterReplicaKey,
     ClusterReplicaValue, ClusterValue, CommentKey, CommentValue, Config, ConfigKey, ConfigValue,
-    Database, DatabaseKey, DatabaseValue, DefaultPrivilegesKey, DefaultPrivilegesValue,
-    DurableType, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndex, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
-    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemObjectDescription, SystemObjectMapping,
-    SystemPrivilegesKey, SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    Database, DatabaseKey, DatabaseValue, DefaultPrivilegeKey, DefaultPrivilegeValue, DurableType,
+    IdAllocatorKey, IdAllocatorValue, IntrospectionSourceIndex, IntrospectionSourceIndexKey,
+    IntrospectionSourceIndexValue, Item, ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue,
+    ReplicaConfig, Role, RoleKey, RoleValue, Schema, SchemaKey, SchemaValue, SettingKey,
+    SettingValue, SourceReference, SourceReferencesKey, SourceReferencesValue,
+    StorageCollectionMetadataKey, StorageCollectionMetadataValue, SystemConfigurationKey,
+    SystemConfigurationValue, SystemObjectDescription, SystemObjectMapping, SystemObjectMappingKey,
+    SystemObjectMappingValue, SystemPrivilegeKey, SystemPrivilegeValue, TxnWalShardValue,
+    UnfinalizedShardKey,
 };
 use crate::durable::{
     AUDIT_LOG_ID_ALLOC_KEY, BUILTIN_MIGRATION_SHARD_KEY, CATALOG_CONTENT_VERSION_KEY, CatalogError,
@@ -90,15 +90,15 @@ pub struct Transaction<'a> {
     clusters: TableTransaction<ClusterKey, ClusterValue>,
     cluster_replicas: TableTransaction<ClusterReplicaKey, ClusterReplicaValue>,
     introspection_sources:
-        TableTransaction<ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue>,
-    id_allocator: TableTransaction<IdAllocKey, IdAllocValue>,
+        TableTransaction<IntrospectionSourceIndexKey, IntrospectionSourceIndexValue>,
+    id_allocator: TableTransaction<IdAllocatorKey, IdAllocatorValue>,
     configs: TableTransaction<ConfigKey, ConfigValue>,
     settings: TableTransaction<SettingKey, SettingValue>,
-    system_gid_mapping: TableTransaction<GidMappingKey, GidMappingValue>,
-    system_configurations: TableTransaction<ServerConfigurationKey, ServerConfigurationValue>,
-    default_privileges: TableTransaction<DefaultPrivilegesKey, DefaultPrivilegesValue>,
+    system_gid_mapping: TableTransaction<SystemObjectMappingKey, SystemObjectMappingValue>,
+    system_configurations: TableTransaction<SystemConfigurationKey, SystemConfigurationValue>,
+    default_privileges: TableTransaction<DefaultPrivilegeKey, DefaultPrivilegeValue>,
     source_references: TableTransaction<SourceReferencesKey, SourceReferencesValue>,
-    system_privileges: TableTransaction<SystemPrivilegesKey, SystemPrivilegesValue>,
+    system_privileges: TableTransaction<SystemPrivilegeKey, SystemPrivilegeValue>,
     network_policies: TableTransaction<NetworkPolicyKey, NetworkPolicyValue>,
     storage_collection_metadata:
         TableTransaction<StorageCollectionMetadataKey, StorageCollectionMetadataValue>,
@@ -750,20 +750,20 @@ impl<'a> Transaction<'a> {
         let current_id = self
             .id_allocator
             .items()
-            .get(&IdAllocKey { name: key.clone() })
+            .get(&IdAllocatorKey { name: key.clone() })
             .unwrap_or_else(|| panic!("{key} id allocator missing"))
             .next_id;
         let next_id = current_id
             .checked_add(amount)
             .ok_or(SqlCatalogError::IdExhaustion)?;
         let prev = self.id_allocator.set(
-            IdAllocKey { name: key },
-            Some(IdAllocValue { next_id }),
+            IdAllocatorKey { name: key },
+            Some(IdAllocatorValue { next_id }),
             self.op_id,
         )?;
         assert_eq!(
             prev,
-            Some(IdAllocValue {
+            Some(IdAllocatorValue {
                 next_id: current_id
             })
         );
@@ -974,7 +974,7 @@ impl<'a> Transaction<'a> {
         let start_oid: u32 = self
             .id_allocator
             .items()
-            .get(&IdAllocKey {
+            .get(&IdAllocatorKey {
                 name: OID_ALLOC_KEY.to_string(),
             })
             .unwrap_or_else(|| panic!("{OID_ALLOC_KEY} id allocator missing"))
@@ -998,17 +998,17 @@ impl<'a> Transaction<'a> {
 
         let next_id = current_oid.0;
         let prev = self.id_allocator.set(
-            IdAllocKey {
+            IdAllocatorKey {
                 name: OID_ALLOC_KEY.to_string(),
             },
-            Some(IdAllocValue {
+            Some(IdAllocatorValue {
                 next_id: next_id.into(),
             }),
             self.op_id,
         )?;
         assert_eq!(
             prev,
-            Some(IdAllocValue {
+            Some(IdAllocatorValue {
                 next_id: start_oid.into(),
             })
         );
@@ -1029,8 +1029,8 @@ impl<'a> Transaction<'a> {
         next_id: u64,
     ) -> Result<(), CatalogError> {
         match self.id_allocator.insert(
-            IdAllocKey { name: name.clone() },
-            IdAllocValue { next_id },
+            IdAllocatorKey { name: name.clone() },
+            IdAllocatorValue { next_id },
             self.op_id,
         ) {
             Ok(_) => Ok(()),
@@ -1365,7 +1365,7 @@ impl<'a> Transaction<'a> {
         let ks: Vec<_> = descriptions
             .clone()
             .into_iter()
-            .map(|desc| GidMappingKey {
+            .map(|desc| SystemObjectMappingKey {
                 schema_name: desc.schema_name,
                 object_type: desc.object_type,
                 object_name: desc.object_name,
@@ -1413,7 +1413,7 @@ impl<'a> Transaction<'a> {
         let ks: Vec<_> = introspection_source_indexes
             .clone()
             .into_iter()
-            .map(|(cluster_id, name)| ClusterIntrospectionSourceIndexKey { cluster_id, name })
+            .map(|(cluster_id, name)| IntrospectionSourceIndexKey { cluster_id, name })
             .collect();
         let n = self
             .introspection_sources
@@ -1766,14 +1766,14 @@ impl<'a> Transaction<'a> {
         privileges: Option<AclMode>,
     ) -> Result<(), CatalogError> {
         self.default_privileges.set(
-            DefaultPrivilegesKey {
+            DefaultPrivilegeKey {
                 role_id,
                 database_id,
                 schema_id,
                 object_type,
                 grantee,
             },
-            privileges.map(|privileges| DefaultPrivilegesValue { privileges }),
+            privileges.map(|privileges| DefaultPrivilegeValue { privileges }),
             self.op_id,
         )?;
         Ok(())
@@ -1808,8 +1808,8 @@ impl<'a> Transaction<'a> {
         acl_mode: Option<AclMode>,
     ) -> Result<(), CatalogError> {
         self.system_privileges.set(
-            SystemPrivilegesKey { grantee, grantor },
-            acl_mode.map(|acl_mode| SystemPrivilegesValue { acl_mode }),
+            SystemPrivilegeKey { grantee, grantor },
+            acl_mode.map(|acl_mode| SystemPrivilegeValue { acl_mode }),
             self.op_id,
         )?;
         Ok(())
@@ -2101,10 +2101,10 @@ impl<'a> Transaction<'a> {
 
     /// Upserts persisted system configuration `name` to `value`.
     pub fn upsert_system_config(&mut self, name: &str, value: String) -> Result<(), CatalogError> {
-        let key = ServerConfigurationKey {
+        let key = SystemConfigurationKey {
             name: name.to_string(),
         };
-        let value = ServerConfigurationValue { value };
+        let value = SystemConfigurationValue { value };
         self.system_configurations
             .set(key, Some(value), self.op_id)?;
         Ok(())
@@ -2112,7 +2112,7 @@ impl<'a> Transaction<'a> {
 
     /// Removes persisted system configuration `name`.
     pub fn remove_system_config(&mut self, name: &str) {
-        let key = ServerConfigurationKey {
+        let key = SystemConfigurationKey {
             name: name.to_string(),
         };
         self.system_configurations
@@ -2713,22 +2713,26 @@ pub struct TransactionBatch {
     pub(crate) cluster_replicas: Vec<(proto::ClusterReplicaKey, proto::ClusterReplicaValue, Diff)>,
     pub(crate) network_policies: Vec<(proto::NetworkPolicyKey, proto::NetworkPolicyValue, Diff)>,
     pub(crate) introspection_sources: Vec<(
-        proto::ClusterIntrospectionSourceIndexKey,
-        proto::ClusterIntrospectionSourceIndexValue,
+        proto::IntrospectionSourceIndexKey,
+        proto::IntrospectionSourceIndexValue,
         Diff,
     )>,
-    pub(crate) id_allocator: Vec<(proto::IdAllocKey, proto::IdAllocValue, Diff)>,
+    pub(crate) id_allocator: Vec<(proto::IdAllocatorKey, proto::IdAllocatorValue, Diff)>,
     pub(crate) configs: Vec<(proto::ConfigKey, proto::ConfigValue, Diff)>,
     pub(crate) settings: Vec<(proto::SettingKey, proto::SettingValue, Diff)>,
-    pub(crate) system_gid_mapping: Vec<(proto::GidMappingKey, proto::GidMappingValue, Diff)>,
+    pub(crate) system_gid_mapping: Vec<(
+        proto::SystemObjectMappingKey,
+        proto::SystemObjectMappingValue,
+        Diff,
+    )>,
     pub(crate) system_configurations: Vec<(
-        proto::ServerConfigurationKey,
-        proto::ServerConfigurationValue,
+        proto::SystemConfigurationKey,
+        proto::SystemConfigurationValue,
         Diff,
     )>,
     pub(crate) default_privileges: Vec<(
-        proto::DefaultPrivilegesKey,
-        proto::DefaultPrivilegesValue,
+        proto::DefaultPrivilegeKey,
+        proto::DefaultPrivilegeValue,
         Diff,
     )>,
     pub(crate) source_references: Vec<(
@@ -2736,11 +2740,8 @@ pub struct TransactionBatch {
         proto::SourceReferencesValue,
         Diff,
     )>,
-    pub(crate) system_privileges: Vec<(
-        proto::SystemPrivilegesKey,
-        proto::SystemPrivilegesValue,
-        Diff,
-    )>,
+    pub(crate) system_privileges:
+        Vec<(proto::SystemPrivilegeKey, proto::SystemPrivilegeValue, Diff)>,
     pub(crate) storage_collection_metadata: Vec<(
         proto::StorageCollectionMetadataKey,
         proto::StorageCollectionMetadataValue,
@@ -2862,17 +2863,17 @@ mod unique_name {
 
     impl_no_unique_name!(
         (),
-        ClusterIntrospectionSourceIndexValue,
+        IntrospectionSourceIndexValue,
         CommentValue,
         ConfigValue,
-        DefaultPrivilegesValue,
-        GidMappingValue,
-        IdAllocValue,
-        ServerConfigurationValue,
+        DefaultPrivilegeValue,
+        SystemObjectMappingValue,
+        IdAllocatorValue,
+        SystemConfigurationValue,
         SettingValue,
         SourceReferencesValue,
         StorageCollectionMetadataValue,
-        SystemPrivilegesValue,
+        SystemPrivilegeValue,
         TxnWalShardValue,
         RoleAuthValue,
     );

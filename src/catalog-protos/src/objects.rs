@@ -32,24 +32,24 @@ pub struct SettingValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct IdAllocKey {
+pub struct IdAllocatorKey {
     pub name: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct IdAllocValue {
+pub struct IdAllocatorValue {
     pub next_id: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct GidMappingKey {
+pub struct SystemObjectMappingKey {
     pub schema_name: String,
     pub object_type: CatalogItemType,
     pub object_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct GidMappingValue {
+pub struct SystemObjectMappingValue {
     pub catalog_id: SystemCatalogItemId,
     pub global_id: SystemGlobalId,
     pub fingerprint: String,
@@ -69,13 +69,13 @@ pub struct ClusterValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct ClusterIntrospectionSourceIndexKey {
+pub struct IntrospectionSourceIndexKey {
     pub cluster_id: ClusterId,
     pub name: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct ClusterIntrospectionSourceIndexValue {
+pub struct IntrospectionSourceIndexValue {
     pub catalog_id: IntrospectionSourceIndexCatalogItemId,
     pub global_id: IntrospectionSourceIndexGlobalId,
     pub oid: u32,
@@ -184,12 +184,12 @@ pub struct NetworkPolicyValue {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct ServerConfigurationKey {
+pub struct SystemConfigurationKey {
     pub name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct ServerConfigurationValue {
+pub struct SystemConfigurationValue {
     pub value: String,
 }
 
@@ -538,7 +538,7 @@ pub struct MzAclItem {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct DefaultPrivilegesKey {
+pub struct DefaultPrivilegeKey {
     pub role_id: RoleId,
     pub database_id: Option<DatabaseId>,
     pub schema_id: Option<SchemaId>,
@@ -547,18 +547,18 @@ pub struct DefaultPrivilegesKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct DefaultPrivilegesValue {
+pub struct DefaultPrivilegeValue {
     pub privileges: AclMode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct SystemPrivilegesKey {
+pub struct SystemPrivilegeKey {
     pub grantee: RoleId,
     pub grantor: RoleId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct SystemPrivilegesValue {
+pub struct SystemPrivilegeValue {
     pub acl_mode: AclMode,
 }
 
@@ -1023,10 +1023,10 @@ pub enum StateUpdateKind {
     Comment(Comment),
     Config(Config),
     Database(Database),
-    DefaultPrivilege(DefaultPrivileges),
+    DefaultPrivilege(DefaultPrivilege),
     FenceToken(FenceToken),
-    IdAllocator(IdAlloc),
-    IntrospectionSourceIndex(ClusterIntrospectionSourceIndex),
+    IdAllocator(IdAllocator),
+    IntrospectionSourceIndex(IntrospectionSourceIndex),
     Item(Item),
     NetworkPolicy(NetworkPolicy),
     Role(Role),
@@ -1034,9 +1034,9 @@ pub enum StateUpdateKind {
     Schema(Schema),
     Setting(Setting),
     SourceReferences(SourceReferences),
-    SystemConfiguration(ServerConfiguration),
-    SystemObjectMapping(GidMapping),
-    SystemPrivilege(SystemPrivileges),
+    SystemConfiguration(SystemConfiguration),
+    SystemObjectMapping(SystemObjectMapping),
+    SystemPrivilege(SystemPrivilege),
     StorageCollectionMetadata(StorageCollectionMetadata),
     UnfinalizedShard(UnfinalizedShard),
     TxnWalShard(TxnWalShard),
@@ -1078,9 +1078,9 @@ pub struct Database {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct DefaultPrivileges {
-    pub key: DefaultPrivilegesKey,
-    pub value: DefaultPrivilegesValue,
+pub struct DefaultPrivilege {
+    pub key: DefaultPrivilegeKey,
+    pub value: DefaultPrivilegeValue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -1090,15 +1090,15 @@ pub struct FenceToken {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct IdAlloc {
-    pub key: IdAllocKey,
-    pub value: IdAllocValue,
+pub struct IdAllocator {
+    pub key: IdAllocatorKey,
+    pub value: IdAllocatorValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct ClusterIntrospectionSourceIndex {
-    pub key: ClusterIntrospectionSourceIndexKey,
-    pub value: ClusterIntrospectionSourceIndexValue,
+pub struct IntrospectionSourceIndex {
+    pub key: IntrospectionSourceIndexKey,
+    pub value: IntrospectionSourceIndexValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -1138,9 +1138,9 @@ pub struct Setting {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct ServerConfiguration {
-    pub key: ServerConfigurationKey,
-    pub value: ServerConfigurationValue,
+pub struct SystemConfiguration {
+    pub key: SystemConfigurationKey,
+    pub value: SystemConfigurationValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -1150,15 +1150,15 @@ pub struct SourceReferences {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct GidMapping {
-    pub key: GidMappingKey,
-    pub value: GidMappingValue,
+pub struct SystemObjectMapping {
+    pub key: SystemObjectMappingKey,
+    pub value: SystemObjectMappingValue,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct SystemPrivileges {
-    pub key: SystemPrivilegesKey,
-    pub value: SystemPrivilegesValue,
+pub struct SystemPrivilege {
+    pub key: SystemPrivilegeKey,
+    pub value: SystemPrivilegeValue,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]

@@ -224,12 +224,12 @@ pub enum StateUpdateKind {
     Comment(proto::CommentKey, proto::CommentValue),
     Config(proto::ConfigKey, proto::ConfigValue),
     Database(proto::DatabaseKey, proto::DatabaseValue),
-    DefaultPrivilege(proto::DefaultPrivilegesKey, proto::DefaultPrivilegesValue),
+    DefaultPrivilege(proto::DefaultPrivilegeKey, proto::DefaultPrivilegeValue),
     FenceToken(FenceToken),
-    IdAllocator(proto::IdAllocKey, proto::IdAllocValue),
+    IdAllocator(proto::IdAllocatorKey, proto::IdAllocatorValue),
     IntrospectionSourceIndex(
-        proto::ClusterIntrospectionSourceIndexKey,
-        proto::ClusterIntrospectionSourceIndexValue,
+        proto::IntrospectionSourceIndexKey,
+        proto::IntrospectionSourceIndexValue,
     ),
     Item(proto::ItemKey, proto::ItemValue),
     NetworkPolicy(proto::NetworkPolicyKey, proto::NetworkPolicyValue),
@@ -239,11 +239,14 @@ pub enum StateUpdateKind {
     Setting(proto::SettingKey, proto::SettingValue),
     SourceReferences(proto::SourceReferencesKey, proto::SourceReferencesValue),
     SystemConfiguration(
-        proto::ServerConfigurationKey,
-        proto::ServerConfigurationValue,
+        proto::SystemConfigurationKey,
+        proto::SystemConfigurationValue,
     ),
-    SystemObjectMapping(proto::GidMappingKey, proto::GidMappingValue),
-    SystemPrivilege(proto::SystemPrivilegesKey, proto::SystemPrivilegesValue),
+    SystemObjectMapping(
+        proto::SystemObjectMappingKey,
+        proto::SystemObjectMappingValue,
+    ),
+    SystemPrivilege(proto::SystemPrivilegeKey, proto::SystemPrivilegeValue),
     StorageCollectionMetadata(
         proto::StorageCollectionMetadataKey,
         proto::StorageCollectionMetadataValue,
@@ -261,11 +264,11 @@ impl StateUpdateKind {
             StateUpdateKind::Comment(_, _) => Some(CollectionType::Comments),
             StateUpdateKind::Config(_, _) => Some(CollectionType::Config),
             StateUpdateKind::Database(_, _) => Some(CollectionType::Database),
-            StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivileges),
+            StateUpdateKind::DefaultPrivilege(_, _) => Some(CollectionType::DefaultPrivilege),
             StateUpdateKind::FenceToken(_) => None,
-            StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAlloc),
+            StateUpdateKind::IdAllocator(_, _) => Some(CollectionType::IdAllocator),
             StateUpdateKind::IntrospectionSourceIndex(_, _) => {
-                Some(CollectionType::ComputeIntrospectionSourceIndex)
+                Some(CollectionType::IntrospectionSourceIndex)
             }
             StateUpdateKind::Item(_, _) => Some(CollectionType::Item),
             StateUpdateKind::NetworkPolicy(_, _) => Some(CollectionType::NetworkPolicy),
@@ -275,8 +278,8 @@ impl StateUpdateKind {
             StateUpdateKind::Setting(_, _) => Some(CollectionType::Setting),
             StateUpdateKind::SourceReferences(_, _) => Some(CollectionType::SourceReferences),
             StateUpdateKind::SystemConfiguration(_, _) => Some(CollectionType::SystemConfiguration),
-            StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemGidMapping),
-            StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivileges),
+            StateUpdateKind::SystemObjectMapping(_, _) => Some(CollectionType::SystemObjectMapping),
+            StateUpdateKind::SystemPrivilege(_, _) => Some(CollectionType::SystemPrivilege),
             StateUpdateKind::StorageCollectionMetadata(_, _) => {
                 Some(CollectionType::StorageCollectionMetadata)
             }
@@ -619,7 +622,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 proto::StateUpdateKind::Database(proto::Database { key, value })
             }
             StateUpdateKind::DefaultPrivilege(key, value) => {
-                proto::StateUpdateKind::DefaultPrivilege(proto::DefaultPrivileges { key, value })
+                proto::StateUpdateKind::DefaultPrivilege(proto::DefaultPrivilege { key, value })
             }
             StateUpdateKind::FenceToken(fence_token) => {
                 proto::StateUpdateKind::FenceToken(proto::FenceToken {
@@ -628,12 +631,13 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 })
             }
             StateUpdateKind::IdAllocator(key, value) => {
-                proto::StateUpdateKind::IdAllocator(proto::IdAlloc { key, value })
+                proto::StateUpdateKind::IdAllocator(proto::IdAllocator { key, value })
             }
             StateUpdateKind::IntrospectionSourceIndex(key, value) => {
-                proto::StateUpdateKind::IntrospectionSourceIndex(
-                    proto::ClusterIntrospectionSourceIndex { key, value },
-                )
+                proto::StateUpdateKind::IntrospectionSourceIndex(proto::IntrospectionSourceIndex {
+                    key,
+                    value,
+                })
             }
             StateUpdateKind::Item(key, value) => {
                 proto::StateUpdateKind::Item(proto::Item { key, value })
@@ -657,16 +661,19 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                 proto::StateUpdateKind::SourceReferences(proto::SourceReferences { key, value })
             }
             StateUpdateKind::SystemConfiguration(key, value) => {
-                proto::StateUpdateKind::SystemConfiguration(proto::ServerConfiguration {
+                proto::StateUpdateKind::SystemConfiguration(proto::SystemConfiguration {
                     key,
                     value,
                 })
             }
             StateUpdateKind::SystemObjectMapping(key, value) => {
-                proto::StateUpdateKind::SystemObjectMapping(proto::GidMapping { key, value })
+                proto::StateUpdateKind::SystemObjectMapping(proto::SystemObjectMapping {
+                    key,
+                    value,
+                })
             }
             StateUpdateKind::SystemPrivilege(key, value) => {
-                proto::StateUpdateKind::SystemPrivilege(proto::SystemPrivileges { key, value })
+                proto::StateUpdateKind::SystemPrivilege(proto::SystemPrivilege { key, value })
             }
             StateUpdateKind::StorageCollectionMetadata(key, value) => {
                 proto::StateUpdateKind::StorageCollectionMetadata(
@@ -702,7 +709,7 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::Database(proto::Database { key, value }) => {
                 StateUpdateKind::Database(key, value)
             }
-            proto::StateUpdateKind::DefaultPrivilege(proto::DefaultPrivileges { key, value }) => {
+            proto::StateUpdateKind::DefaultPrivilege(proto::DefaultPrivilege { key, value }) => {
                 StateUpdateKind::DefaultPrivilege(key, value)
             }
             proto::StateUpdateKind::FenceToken(proto::FenceToken {
@@ -714,12 +721,13 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
                     TryFromProtoError::missing_field("state_update_kind::Epoch::epoch")
                 })?,
             }),
-            proto::StateUpdateKind::IdAllocator(proto::IdAlloc { key, value }) => {
+            proto::StateUpdateKind::IdAllocator(proto::IdAllocator { key, value }) => {
                 StateUpdateKind::IdAllocator(key, value)
             }
-            proto::StateUpdateKind::IntrospectionSourceIndex(
-                proto::ClusterIntrospectionSourceIndex { key, value },
-            ) => StateUpdateKind::IntrospectionSourceIndex(key, value),
+            proto::StateUpdateKind::IntrospectionSourceIndex(proto::IntrospectionSourceIndex {
+                key,
+                value,
+            }) => StateUpdateKind::IntrospectionSourceIndex(key, value),
             proto::StateUpdateKind::Item(proto::Item { key, value }) => {
                 StateUpdateKind::Item(key, value)
             }
@@ -735,14 +743,15 @@ impl RustType<proto::StateUpdateKind> for StateUpdateKind {
             proto::StateUpdateKind::Setting(proto::Setting { key, value }) => {
                 StateUpdateKind::Setting(key, value)
             }
-            proto::StateUpdateKind::SystemConfiguration(proto::ServerConfiguration {
+            proto::StateUpdateKind::SystemConfiguration(proto::SystemConfiguration {
                 key,
                 value,
             }) => StateUpdateKind::SystemConfiguration(key, value),
-            proto::StateUpdateKind::SystemObjectMapping(proto::GidMapping { key, value }) => {
-                StateUpdateKind::SystemObjectMapping(key, value)
-            }
-            proto::StateUpdateKind::SystemPrivilege(proto::SystemPrivileges { key, value }) => {
+            proto::StateUpdateKind::SystemObjectMapping(proto::SystemObjectMapping {
+                key,
+                value,
+            }) => StateUpdateKind::SystemObjectMapping(key, value),
+            proto::StateUpdateKind::SystemPrivilege(proto::SystemPrivilege { key, value }) => {
                 StateUpdateKind::SystemPrivilege(key, value)
             }
             proto::StateUpdateKind::StorageCollectionMetadata(

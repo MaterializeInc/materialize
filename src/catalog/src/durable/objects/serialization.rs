@@ -14,16 +14,16 @@ use mz_proto::{ProtoType, RustType, TryFromProtoError};
 
 use crate::durable::objects::state_update::StateUpdateKindJson;
 use crate::durable::objects::{
-    AuditLogKey, ClusterIntrospectionSourceIndexKey, ClusterIntrospectionSourceIndexValue,
-    ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey, CommentValue,
-    ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegesKey,
-    DefaultPrivilegesValue, GidMappingKey, GidMappingValue, IdAllocKey, IdAllocValue,
-    IntrospectionSourceIndexCatalogItemId, IntrospectionSourceIndexGlobalId, ItemKey, ItemValue,
-    NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey, SchemaValue,
-    ServerConfigurationKey, ServerConfigurationValue, SettingKey, SettingValue, SourceReference,
-    SourceReferencesKey, SourceReferencesValue, StorageCollectionMetadataKey,
-    StorageCollectionMetadataValue, SystemCatalogItemId, SystemGlobalId, SystemPrivilegesKey,
-    SystemPrivilegesValue, TxnWalShardValue, UnfinalizedShardKey,
+    AuditLogKey, ClusterKey, ClusterReplicaKey, ClusterReplicaValue, ClusterValue, CommentKey,
+    CommentValue, ConfigKey, ConfigValue, DatabaseKey, DatabaseValue, DefaultPrivilegeKey,
+    DefaultPrivilegeValue, IdAllocatorKey, IdAllocatorValue, IntrospectionSourceIndexCatalogItemId,
+    IntrospectionSourceIndexGlobalId, IntrospectionSourceIndexKey, IntrospectionSourceIndexValue,
+    ItemKey, ItemValue, NetworkPolicyKey, NetworkPolicyValue, RoleKey, RoleValue, SchemaKey,
+    SchemaValue, SettingKey, SettingValue, SourceReference, SourceReferencesKey,
+    SourceReferencesValue, StorageCollectionMetadataKey, StorageCollectionMetadataValue,
+    SystemCatalogItemId, SystemConfigurationKey, SystemConfigurationValue, SystemGlobalId,
+    SystemObjectMappingKey, SystemObjectMappingValue, SystemPrivilegeKey, SystemPrivilegeValue,
+    TxnWalShardValue, UnfinalizedShardKey,
 };
 use crate::durable::{
     ClusterConfig, ClusterVariant, ClusterVariantManaged, ReplicaConfig, ReplicaLocation,
@@ -185,43 +185,43 @@ impl RustType<proto::SettingValue> for SettingValue {
     }
 }
 
-impl RustType<proto::IdAllocKey> for IdAllocKey {
-    fn into_proto(&self) -> proto::IdAllocKey {
-        proto::IdAllocKey {
+impl RustType<proto::IdAllocatorKey> for IdAllocatorKey {
+    fn into_proto(&self) -> proto::IdAllocatorKey {
+        proto::IdAllocatorKey {
             name: self.name.to_string(),
         }
     }
 
-    fn from_proto(proto: proto::IdAllocKey) -> Result<Self, TryFromProtoError> {
-        Ok(IdAllocKey { name: proto.name })
+    fn from_proto(proto: proto::IdAllocatorKey) -> Result<Self, TryFromProtoError> {
+        Ok(IdAllocatorKey { name: proto.name })
     }
 }
 
-impl RustType<proto::IdAllocValue> for IdAllocValue {
-    fn into_proto(&self) -> proto::IdAllocValue {
-        proto::IdAllocValue {
+impl RustType<proto::IdAllocatorValue> for IdAllocatorValue {
+    fn into_proto(&self) -> proto::IdAllocatorValue {
+        proto::IdAllocatorValue {
             next_id: self.next_id,
         }
     }
 
-    fn from_proto(proto: proto::IdAllocValue) -> Result<Self, TryFromProtoError> {
-        Ok(IdAllocValue {
+    fn from_proto(proto: proto::IdAllocatorValue) -> Result<Self, TryFromProtoError> {
+        Ok(IdAllocatorValue {
             next_id: proto.next_id,
         })
     }
 }
 
-impl RustType<proto::GidMappingKey> for GidMappingKey {
-    fn into_proto(&self) -> proto::GidMappingKey {
-        proto::GidMappingKey {
+impl RustType<proto::SystemObjectMappingKey> for SystemObjectMappingKey {
+    fn into_proto(&self) -> proto::SystemObjectMappingKey {
+        proto::SystemObjectMappingKey {
             schema_name: self.schema_name.to_string(),
             object_type: self.object_type.into_proto(),
             object_name: self.object_name.to_string(),
         }
     }
 
-    fn from_proto(proto: proto::GidMappingKey) -> Result<Self, TryFromProtoError> {
-        Ok(GidMappingKey {
+    fn from_proto(proto: proto::SystemObjectMappingKey) -> Result<Self, TryFromProtoError> {
+        Ok(SystemObjectMappingKey {
             schema_name: proto.schema_name,
             object_type: proto.object_type.into_rust()?,
             object_name: proto.object_name,
@@ -229,17 +229,17 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
     }
 }
 
-impl RustType<proto::GidMappingValue> for GidMappingValue {
-    fn into_proto(&self) -> proto::GidMappingValue {
-        proto::GidMappingValue {
+impl RustType<proto::SystemObjectMappingValue> for SystemObjectMappingValue {
+    fn into_proto(&self) -> proto::SystemObjectMappingValue {
+        proto::SystemObjectMappingValue {
             catalog_id: self.catalog_id.into_proto(),
             global_id: self.global_id.into_proto(),
             fingerprint: self.fingerprint.to_string(),
         }
     }
 
-    fn from_proto(proto: proto::GidMappingValue) -> Result<Self, TryFromProtoError> {
-        Ok(GidMappingValue {
+    fn from_proto(proto: proto::SystemObjectMappingValue) -> Result<Self, TryFromProtoError> {
+        Ok(SystemObjectMappingValue {
             catalog_id: proto.catalog_id.into_rust()?,
             global_id: proto.global_id.into_rust()?,
             fingerprint: proto.fingerprint,
@@ -281,39 +281,33 @@ impl RustType<proto::ClusterValue> for ClusterValue {
     }
 }
 
-impl RustType<proto::ClusterIntrospectionSourceIndexKey> for ClusterIntrospectionSourceIndexKey {
-    fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexKey {
-        proto::ClusterIntrospectionSourceIndexKey {
+impl RustType<proto::IntrospectionSourceIndexKey> for IntrospectionSourceIndexKey {
+    fn into_proto(&self) -> proto::IntrospectionSourceIndexKey {
+        proto::IntrospectionSourceIndexKey {
             cluster_id: self.cluster_id.into_proto(),
             name: self.name.to_string(),
         }
     }
 
-    fn from_proto(
-        proto: proto::ClusterIntrospectionSourceIndexKey,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(ClusterIntrospectionSourceIndexKey {
+    fn from_proto(proto: proto::IntrospectionSourceIndexKey) -> Result<Self, TryFromProtoError> {
+        Ok(IntrospectionSourceIndexKey {
             cluster_id: proto.cluster_id.into_rust()?,
             name: proto.name,
         })
     }
 }
 
-impl RustType<proto::ClusterIntrospectionSourceIndexValue>
-    for ClusterIntrospectionSourceIndexValue
-{
-    fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexValue {
-        proto::ClusterIntrospectionSourceIndexValue {
+impl RustType<proto::IntrospectionSourceIndexValue> for IntrospectionSourceIndexValue {
+    fn into_proto(&self) -> proto::IntrospectionSourceIndexValue {
+        proto::IntrospectionSourceIndexValue {
             catalog_id: self.catalog_id.into_proto(),
             global_id: self.global_id.into_proto(),
             oid: self.oid,
         }
     }
 
-    fn from_proto(
-        proto: proto::ClusterIntrospectionSourceIndexValue,
-    ) -> Result<Self, TryFromProtoError> {
-        Ok(ClusterIntrospectionSourceIndexValue {
+    fn from_proto(proto: proto::IntrospectionSourceIndexValue) -> Result<Self, TryFromProtoError> {
+        Ok(IntrospectionSourceIndexValue {
             catalog_id: proto.catalog_id.into_rust()?,
             global_id: proto.global_id.into_rust()?,
             oid: proto.oid,
@@ -725,27 +719,27 @@ impl RustType<proto::TxnWalShardValue> for TxnWalShardValue {
     }
 }
 
-impl RustType<proto::ServerConfigurationKey> for ServerConfigurationKey {
-    fn into_proto(&self) -> proto::ServerConfigurationKey {
-        proto::ServerConfigurationKey {
+impl RustType<proto::SystemConfigurationKey> for SystemConfigurationKey {
+    fn into_proto(&self) -> proto::SystemConfigurationKey {
+        proto::SystemConfigurationKey {
             name: self.name.clone(),
         }
     }
 
-    fn from_proto(proto: proto::ServerConfigurationKey) -> Result<Self, TryFromProtoError> {
-        Ok(ServerConfigurationKey { name: proto.name })
+    fn from_proto(proto: proto::SystemConfigurationKey) -> Result<Self, TryFromProtoError> {
+        Ok(SystemConfigurationKey { name: proto.name })
     }
 }
 
-impl RustType<proto::ServerConfigurationValue> for ServerConfigurationValue {
-    fn into_proto(&self) -> proto::ServerConfigurationValue {
-        proto::ServerConfigurationValue {
+impl RustType<proto::SystemConfigurationValue> for SystemConfigurationValue {
+    fn into_proto(&self) -> proto::SystemConfigurationValue {
+        proto::SystemConfigurationValue {
             value: self.value.clone(),
         }
     }
 
-    fn from_proto(proto: proto::ServerConfigurationValue) -> Result<Self, TryFromProtoError> {
-        Ok(ServerConfigurationValue { value: proto.value })
+    fn from_proto(proto: proto::SystemConfigurationValue) -> Result<Self, TryFromProtoError> {
+        Ok(SystemConfigurationValue { value: proto.value })
     }
 }
 
@@ -804,9 +798,9 @@ impl RustType<proto::SourceReference> for SourceReference {
     }
 }
 
-impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
-    fn into_proto(&self) -> proto::DefaultPrivilegesKey {
-        proto::DefaultPrivilegesKey {
+impl RustType<proto::DefaultPrivilegeKey> for DefaultPrivilegeKey {
+    fn into_proto(&self) -> proto::DefaultPrivilegeKey {
+        proto::DefaultPrivilegeKey {
             role_id: self.role_id.into_proto(),
             database_id: self.database_id.map(|database_id| database_id.into_proto()),
             schema_id: self.schema_id.map(|schema_id| schema_id.into_proto()),
@@ -815,8 +809,8 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
         }
     }
 
-    fn from_proto(proto: proto::DefaultPrivilegesKey) -> Result<Self, TryFromProtoError> {
-        Ok(DefaultPrivilegesKey {
+    fn from_proto(proto: proto::DefaultPrivilegeKey) -> Result<Self, TryFromProtoError> {
+        Ok(DefaultPrivilegeKey {
             role_id: proto.role_id.into_rust()?,
             database_id: proto.database_id.into_rust()?,
             schema_id: proto.schema_id.into_rust()?,
@@ -826,45 +820,45 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
     }
 }
 
-impl RustType<proto::DefaultPrivilegesValue> for DefaultPrivilegesValue {
-    fn into_proto(&self) -> proto::DefaultPrivilegesValue {
-        proto::DefaultPrivilegesValue {
+impl RustType<proto::DefaultPrivilegeValue> for DefaultPrivilegeValue {
+    fn into_proto(&self) -> proto::DefaultPrivilegeValue {
+        proto::DefaultPrivilegeValue {
             privileges: self.privileges.into_proto(),
         }
     }
 
-    fn from_proto(proto: proto::DefaultPrivilegesValue) -> Result<Self, TryFromProtoError> {
-        Ok(DefaultPrivilegesValue {
+    fn from_proto(proto: proto::DefaultPrivilegeValue) -> Result<Self, TryFromProtoError> {
+        Ok(DefaultPrivilegeValue {
             privileges: proto.privileges.into_rust()?,
         })
     }
 }
 
-impl RustType<proto::SystemPrivilegesKey> for SystemPrivilegesKey {
-    fn into_proto(&self) -> proto::SystemPrivilegesKey {
-        proto::SystemPrivilegesKey {
+impl RustType<proto::SystemPrivilegeKey> for SystemPrivilegeKey {
+    fn into_proto(&self) -> proto::SystemPrivilegeKey {
+        proto::SystemPrivilegeKey {
             grantee: self.grantee.into_proto(),
             grantor: self.grantor.into_proto(),
         }
     }
 
-    fn from_proto(proto: proto::SystemPrivilegesKey) -> Result<Self, TryFromProtoError> {
-        Ok(SystemPrivilegesKey {
+    fn from_proto(proto: proto::SystemPrivilegeKey) -> Result<Self, TryFromProtoError> {
+        Ok(SystemPrivilegeKey {
             grantee: proto.grantee.into_rust()?,
             grantor: proto.grantor.into_rust()?,
         })
     }
 }
 
-impl RustType<proto::SystemPrivilegesValue> for SystemPrivilegesValue {
-    fn into_proto(&self) -> proto::SystemPrivilegesValue {
-        proto::SystemPrivilegesValue {
+impl RustType<proto::SystemPrivilegeValue> for SystemPrivilegeValue {
+    fn into_proto(&self) -> proto::SystemPrivilegeValue {
+        proto::SystemPrivilegeValue {
             acl_mode: self.acl_mode.into_proto(),
         }
     }
 
-    fn from_proto(proto: proto::SystemPrivilegesValue) -> Result<Self, TryFromProtoError> {
-        Ok(SystemPrivilegesValue {
+    fn from_proto(proto: proto::SystemPrivilegeValue) -> Result<Self, TryFromProtoError> {
+        Ok(SystemPrivilegeValue {
             acl_mode: proto.acl_mode.into_rust()?,
         })
     }
