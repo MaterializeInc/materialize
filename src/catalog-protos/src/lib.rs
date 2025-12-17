@@ -11,13 +11,6 @@
 
 pub mod audit_log;
 pub mod objects;
-pub mod objects_v67;
-pub mod objects_v68;
-pub mod objects_v69;
-pub mod objects_v70;
-pub mod objects_v71;
-pub mod objects_v72;
-pub mod objects_v73;
 pub mod objects_v74;
 pub mod objects_v75;
 pub mod objects_v76;
@@ -35,7 +28,7 @@ pub const CATALOG_VERSION: u64 = 78;
 /// The minimum `Catalog` version number that we support migrating from.
 ///
 /// After bumping this we can delete the old migrations.
-pub const MIN_CATALOG_VERSION: u64 = 67;
+pub const MIN_CATALOG_VERSION: u64 = 74;
 
 #[cfg(test)]
 mod tests {
