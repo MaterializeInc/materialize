@@ -769,7 +769,7 @@ fn datum_difference_with_column_type(
             return Ok(());
         }
     }
-    difference_with_scalar_type(&datum, &column_type.scalar_type)
+    difference_with_scalar_type(datum, &column_type.scalar_type)
 }
 
 fn row_difference_with_column_types<'a>(
@@ -1466,7 +1466,7 @@ impl Typecheck {
                 if let Ok(row) = row {
                     let datums = row.unpack();
 
-                    row_difference_with_column_types(source, &datums, &[typ.clone()])?;
+                    row_difference_with_column_types(source, &datums, std::slice::from_ref(&typ))?;
                 }
 
                 Ok(typ)
