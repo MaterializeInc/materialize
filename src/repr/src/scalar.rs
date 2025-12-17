@@ -71,7 +71,7 @@ use crate::{CatalogItemId, ColumnName, DatumList, DatumMap, Row, RowArena, SqlCo
 /// functions on `repr::row::RowPacker` prefixed with `push_`.
 ///
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Ord, PartialOrd, EnumKind)]
-#[enum_kind(DatumKind)]
+#[enum_kind(DatumKind, derive(Hash))]
 pub enum Datum<'a> {
     /// The `false` boolean value.
     False,
@@ -1016,7 +1016,7 @@ impl<'a> Datum<'a> {
                     _ => false,
                 }
             } else {
-                // sql type checking
+                // general scalar repr type checking
                 match (datum, scalar_type) {
                     (Datum::Dummy, _) => false,
                     (Datum::Null, _) => false,
@@ -4385,6 +4385,26 @@ impl Datum<'_> {
 
     pub fn empty_map() -> Datum<'static> {
         EMPTY_MAP_ROW.unpack_first()
+    }
+
+    pub fn contains_dummy(&self) -> bool {
+        match self {
+            Datum::Dummy => true,
+            Datum::List(list) => list.iter().any(|d| d.contains_dummy()),
+            Datum::Map(map) => map.iter().any(|(_, d)| d.contains_dummy()),
+            Datum::Array(array) => array.elements().iter().any(|d| d.contains_dummy()),
+            Datum::Range(range) => range.inner.map_or(false, |range| {
+                range
+                    .lower
+                    .bound
+                    .map_or(false, |d| d.datum().contains_dummy())
+                    || range
+                        .upper
+                        .bound
+                        .map_or(false, |d| d.datum().contains_dummy())
+            }),
+            _ => false,
+        }
     }
 }
 

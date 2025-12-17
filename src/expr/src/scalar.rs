@@ -2057,7 +2057,7 @@ impl MirScalarExpr {
         self.visit_pre(|e| {
             if let MirScalarExpr::Literal(row, _) = e {
                 if let Ok(row) = row {
-                    contains |= row.iter().any(|d| d == Datum::Dummy);
+                    contains |= row.iter().any(|d| d.contains_dummy());
                 }
             }
         });
