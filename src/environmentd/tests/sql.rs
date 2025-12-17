@@ -2182,6 +2182,14 @@ fn test_support_user_permissions() {
 
 #[mz_ore::test]
 fn test_idle_in_transaction_session_timeout() {
+    #[track_caller]
+    fn assert_db_error(error: tokio_postgres::Error, message: &str) {
+        match error.as_db_error() {
+            Some(e) => assert_eq!(e.message(), message),
+            None => panic!("unexpected error: {error:?}"),
+        }
+    }
+
     let server = test_util::TestHarness::default()
         .unsafe_mode()
         .start_blocking();
@@ -2189,28 +2197,14 @@ fn test_idle_in_transaction_session_timeout() {
 
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
-        .batch_execute("SET idle_in_transaction_session_timeout TO '4ms'")
+        .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    std::thread::sleep(Duration::from_millis(5));
-    // Retry because sleep might be woken up early.
-    Retry::default()
-        .max_duration(Duration::from_secs(1))
-        .retry(|_| {
-            let res = client.query("SELECT 1", &[]);
-            if let Err(error) = res {
-                if error.is_closed() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "error should indicates that the connection is closed: {error:?}"
-                    ))
-                }
-            } else {
-                Err(format!("query should return error: {res:?}"))
-            }
-        })
-        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_db_error(
+        client.query("SELECT 1", &[]).unwrap_err(),
+        "terminating connection due to idle-in-transaction timeout",
+    );
 
     // session should be timed out even if transaction has failed.
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2218,30 +2212,15 @@ fn test_idle_in_transaction_session_timeout() {
         .batch_execute("SET idle_in_transaction_session_timeout TO '50ms'")
         .unwrap();
     client.batch_execute("BEGIN").unwrap();
-    let error = client.batch_execute("SELECT 1/0").unwrap_err();
-    assert!(
-        !error.is_closed(),
-        "failing a transaction should not close the connection: {error:?}"
+    assert_db_error(
+        client.batch_execute("SELECT 1/0").unwrap_err(),
+        "division by zero",
     );
-    std::thread::sleep(Duration::from_millis(51));
-    // Retry because sleep might be woken up early.
-    Retry::default()
-        .max_duration(Duration::from_secs(1))
-        .retry(|_| {
-            let res = client.query("SELECT 1", &[]);
-            if let Err(error) = res {
-                if error.is_closed() {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "error should indicates that the connection is closed: {error:?}"
-                    ))
-                }
-            } else {
-                Err(format!("query should return error: {res:?}"))
-            }
-        })
-        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_db_error(
+        client.query("SELECT 1", &[]).unwrap_err(),
+        "terminating connection due to idle-in-transaction timeout",
+    );
 
     // session should not be timed out if it's not idle.
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -2253,7 +2232,7 @@ fn test_idle_in_transaction_session_timeout() {
     client.query("SELECT 1", &[]).unwrap();
     client.batch_execute("COMMIT").unwrap();
 
-    // 0 timeout indicated no timeout.
+    // 0 timeout indicates no timeout.
     let mut client = server.connect(postgres::NoTls).unwrap();
     client
         .batch_execute("SET idle_in_transaction_session_timeout TO 0")
