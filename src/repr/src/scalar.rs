@@ -4498,7 +4498,6 @@ pub fn arb_datum(allow_dummy: bool) -> BoxedStrategy<PropDatum> {
         arb_range(arb_range_data())
             .prop_map(PropDatum::Range)
             .boxed(),
-        Just(PropDatum::Dummy).boxed(),
     ];
 
     if allow_dummy {
