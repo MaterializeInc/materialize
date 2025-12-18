@@ -48,8 +48,11 @@ spec:
     # Note: Not all JWT providers support .well-known/openid-configuration,
     # so use jwks directly if the provider doesn't support it.
     jwksFetchFromIssuer: true
-    # Where Materialize will request tokens from the IdP using the refresh token
-    # if it exists. Optional.
+    # The OAuth 2.0 token endpoint where Materialize will request new access
+    # tokens using a refresh token (https://www.rfc-editor.org/rfc/rfc6749.html#section-6).
+    # Requires `grant_type` of `refresh_token` in the client.
+    # Optional. If not provided, sessions will expire when the access token expires
+    # and refresh tokens in the password field will be ignored.
     tokenEndpoint: https://dev-123456.okta.com/oauth2/default/v1/token
 ```
 
