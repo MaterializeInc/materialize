@@ -107,35 +107,40 @@ The following table lists the configurable parameters of the Materialize operato
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `balancerd.affinity` | Affinity to use for balancerd pods spawned by the operator | ``nil`` |
-| `balancerd.defaultResources` | Default resources if not set in the Materialize CR | ``{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`` |
+| `balancerd.affinity` | Affinity to use for balancerd pods spawned by the operator | ``{}`` |
+| `balancerd.defaultResources.limits` | Default resource limits for balancerd's CPU and memory if not set in the Materialize CR | ``{"memory":"256Mi"}`` |
+| `balancerd.defaultResources.requests` | Default resources requested for balancerd's CPU and memory if not set in the Materialize CR | ``{"cpu":"500m","memory":"256Mi"}`` |
 | `balancerd.enabled` | Flag to indicate whether to create balancerd pods for the environments | ``true`` |
-| `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``nil`` |
-| `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``nil`` |
-| `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``nil`` |
+| `balancerd.nodeSelector` | Node selector to use for balancerd pods spawned by the operator | ``{}`` |
+| `balancerd.tolerations` | Tolerations to use for balancerd pods spawned by the operator | ``{}`` |
+| `clusterd.affinity` | Affinity to use for clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.nodeSelector` | Node selector to use for all clusterd pods spawned by the operator | ``{}`` |
 | `clusterd.scratchfsNodeSelector` | Additional node selector to use for clusterd pods when using an LVM scratch disk. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/scratch-fs":"true"}`` |
 | `clusterd.swapNodeSelector` | Additional node selector to use for clusterd pods when using swap. This will be merged with the values in `nodeSelector`. | ``{"materialize.cloud/swap":"true"}`` |
-| `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``nil`` |
-| `console.affinity` | Affinity to use for console pods spawned by the operator | ``nil`` |
-| `console.defaultResources` | Default resources if not set in the Materialize CR | ``{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`` |
+| `clusterd.tolerations` | Tolerations to use for clusterd pods spawned by the operator | ``{}`` |
+| `console.affinity` | Affinity to use for console pods spawned by the operator | ``{}`` |
+| `console.defaultResources.limits` | Default resource limits for the console's CPU and memory if not set in the Materialize CR | ``{"memory":"256Mi"}`` |
+| `console.defaultResources.requests` | Default resources requested for the console's CPU and memory if not set in the Materialize CR | ``{"cpu":"500m","memory":"256Mi"}`` |
 | `console.enabled` | Flag to indicate whether to create console pods for the environments | ``true`` |
 | `console.imageTagMapOverride` | Override the mapping of environmentd versions to console versions | ``{}`` |
-| `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``nil`` |
-| `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``nil`` |
-| `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``nil`` |
-| `environmentd.defaultResources` | Default resources if not set in the Materialize CR | ``{"limits":{"memory":"4Gi"},"requests":{"cpu":"1","memory":"4095Mi"}}`` |
+| `console.nodeSelector` | Node selector to use for console pods spawned by the operator | ``{}`` |
+| `console.tolerations` | Tolerations to use for console pods spawned by the operator | ``{}`` |
+| `environmentd.affinity` | Affinity to use for environmentd pods spawned by the operator | ``{}`` |
+| `environmentd.defaultResources.limits` | Default resource limits for environmentd's CPU and memory if not set in the Materialize CR | ``{"memory":"4Gi"}`` |
+| `environmentd.defaultResources.requests` | Default resources requested for environmentd's CPU and memory if not set in the Materialize CR | ``{"cpu":"1","memory":"4095Mi"}`` |
 | `environmentd.nodeSelector` | Node selector to use for environmentd pods spawned by the operator | ``{}`` |
-| `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``nil`` |
-| `networkPolicies.egress` | egress from Materialize pods to sources and sinks | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
+| `environmentd.tolerations` | Tolerations to use for environmentd pods spawned by the operator | ``{}`` |
+| `networkPolicies.egress.cidrs` | CIDR blocks to allow egress to | ``["0.0.0.0/0"]`` |
+| `networkPolicies.egress.enabled` | Whether to enable egress network policies to sources and sinks | ``false`` |
 | `networkPolicies.enabled` | Whether to enable network policies for securing communication between pods | ``false`` |
-| `networkPolicies.ingress` | Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd | ``{"cidrs":["0.0.0.0/0"],"enabled":false}`` |
-| `networkPolicies.internal` | Whether to enable internal communication between Materialize pods | ``{"enabled":false}`` |
+| `networkPolicies.ingress.cidrs` | CIDR blocks to allow ingress from | ``["0.0.0.0/0"]`` |
+| `networkPolicies.ingress.enabled` | Whether to enable ingress network policies to the SQL and HTTP interfaces on environmentd and balancerd | ``false`` |
+| `networkPolicies.internal.enabled` | Whether to enable network policies for internal communication between Materialize pods | ``false`` |
 | `observability.enabled` | Whether to enable observability features | ``true`` |
 | `observability.podMetrics.enabled` | Whether to enable the pod metrics scraper which populates the Environment Overview Monitoring tab in the web console (requires metrics-server to be installed) | ``false`` |
 | `observability.prometheus.scrapeAnnotations.enabled` | Whether to annotate pods with common keys used for prometheus scraping. | ``true`` |
-| `operator.additionalMaterializeCRDColumns` | Additional columns to display when printing the Materialize CRD in table format. | ``nil`` |
-| `operator.affinity` | Affinity to use for the operator pod | ``nil`` |
+| `operator.additionalMaterializeCRDColumns` | Additional columns to display when printing the Materialize CRD in table format. | ``{}`` |
+| `operator.affinity` | Affinity to use for the operator pod | ``{}`` |
 | `operator.args.enableInternalStatementLogging` |  | ``true`` |
 | `operator.args.enableLicenseKeyChecks` |  | ``false`` |
 | `operator.args.startupLogFilter` | Log filtering settings for startup logs | ``"INFO,mz_orchestratord=TRACE"`` |
@@ -160,11 +165,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
 | `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.3.0"`` |
-| `operator.nodeSelector` | Node selector to use for the operator pod | ``nil`` |
+| `operator.nodeSelector` | Node selector to use for the operator pod | ``{}`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
 | `operator.secretsController` | Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions. | ``"kubernetes"`` |
-| `operator.tolerations` | Tolerations to use for the operator pod | ``nil`` |
+| `operator.tolerations` | Tolerations to use for the operator pod | ``{}`` |
 | `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
 | `schedulerName` | Optionally use a non-default kubernetes scheduler. | ``nil`` |
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
