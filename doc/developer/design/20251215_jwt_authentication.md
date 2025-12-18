@@ -37,10 +37,17 @@ spec:
     # The key for the `groups` claim. Optional and defaults to "groups"
     groupClaim: groups
     # The expected issuer URL, must correspond to the `iss` field of the JWT.
-    # Implicitly fetch JWKS from
-    # https://{ domain }/.well-known/openid-configuration and allow override
-    # if we need to. Required.
+    # Required.
     issuer: https://dev-123456.okta.com/oauth2/default
+    # The JWKS (JSON Web Key Set) used to validate JWT signatures. Optional.
+    # If not provided, jwksFetchFromIssuer must be true.
+    # Format: {"keys": [{"kty": "RSA", "kid": "...", "n": "...", "e": "..."}]}
+    jwks: '{"keys": [...]}'
+    # If true, fetches JWKS from https://{issuer}/.well-known/openid-configuration.
+    # Overrides jwks if both are specified. Defaults to false.
+    # Note: Not all JWT providers support .well-known/openid-configuration,
+    # so use jwks directly if the provider doesn't support it.
+    jwksFetchFromIssuer: true
     # Where Materialize will request tokens from the IdP using the refresh token
     # if it exists. Optional.
     tokenEndpoint: https://dev-123456.okta.com/oauth2/default/v1/token
@@ -51,7 +58,7 @@ Where in environmentd, it’ll look like so:
 ```bash
 bin/environmentd -- \
 --listeners-config-path='/listeners/jwt.json' \
---jwt-authentication-setting="{\"audience\":\"060a4f3d-1cac-46e4-b5a5-6b9c66cd9431\",\"authentication_claim\":\"email\",\"group_claim\":\"groups\",\"issuer\":\"https://dev-123456.okta.com/oauth2/default\",\"token_endpoint\":\"https://dev-123456.okta.com/oauth2/default/v1/token\"}"
+--jwt-authentication-setting="{\"audience\":\"060a4f3d-1cac-46e4-b5a5-6b9c66cd9431\",\"authentication_claim\":\"email\",\"group_claim\":\"groups\",\"issuer\":\"https://dev-123456.okta.com/oauth2/default\",\"jwks\":{\"keys\":[...]},\"jwks_fetch_from_issuer\":true,\"token_endpoint\":\"https://dev-123456.okta.com/oauth2/default/v1/token\"}"
 ```
 
 ## Testing Frameworks
