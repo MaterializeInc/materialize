@@ -15,6 +15,21 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.5.0
+
+### Features
+
+- Added memory protection for string functions like `replace`, `translate`, and `pad` to prevent out-of-memory errors when operations would produce excessively large results.
+- Reduced Kafka sink creation time by optimizing the progress topic configuration, addressing delays during source and sink initialization.
+
+### Bug Fixes
+
+- Fixed a crash that could occur when modifying database objects that depend on experimental feature flags after system startup.
+- Fixed a panic when using temporary objects in certain query contexts.
+- Fixed validation for replacement materialized views to properly reject replacements whose queries reference the view being replaced, which would create a circular dependency.
+- **(Self-Managed)** Fixed an issue where disabling console or balancers would fail if they were already running.
+- **(Self-Managed)** Improved deployment visibility by showing both active and desired service versions in Kubernetes resource listings.
+
 ## v26.4.0
 
 *Released to Materialize Self-Managed: 2025-12-17* <br>
