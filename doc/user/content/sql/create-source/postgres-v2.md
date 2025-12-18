@@ -24,11 +24,8 @@ name="postgres-source-prereq" %}}
 
 ## Syntax
 
-{{% include-example file="examples/create_source/example_postgres_source"
- example="syntax" %}}
-
-{{% include-example file="examples/create_source/example_postgres_source"
- example="syntax-options" %}}
+{{% include-syntax file="examples/create_source/example_postgres_source"
+example="syntax" %}}
 
 ## Details
 

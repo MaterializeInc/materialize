@@ -20,19 +20,17 @@ the system.
 {{< tab "Cloud" >}}
 
 ### Cloud
-{{% include-example file="examples/rbac-cloud/create_roles" example="create-role-syntax" %}}
 
-{{% include-example file="examples/rbac-cloud/create_roles" example="create-role-options" %}}
+{{% include-syntax file="examples/rbac-cloud/create_roles"
+example="create-role-syntax" %}}
 
 **Note:**
 {{% include-example file="examples/rbac-cloud/create_roles" example="create-role-details" %}}
 {{< /tab >}}
 {{< tab "Self-Managed" >}}
 ### Self-Managed
-{{% include-example file="examples/rbac-sm/create_roles" example="create-role-syntax" %}}
 
-{{% include-example file="examples/rbac-sm/create_roles"
-example="create-role-options" %}}
+{{% include-syntax file="examples/rbac-sm/create_roles" example="create-role-syntax" %}}
 
 **Note:**
 {{% include-example file="examples/rbac-sm/create_roles" example="create-role-details" %}}

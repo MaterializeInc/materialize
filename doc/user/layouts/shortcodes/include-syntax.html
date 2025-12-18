@@ -7,6 +7,9 @@
 {{- $indent := .Get "indent" -}}
 {{- range $data }}
 {{- if eq .name $example -}}
+{{- if .description -}}
+{{ .description | markdownify -}}
+{{- end -}}
 {{- if .code -}}
 {{- $code := .code -}}
 {{- if $indent }}

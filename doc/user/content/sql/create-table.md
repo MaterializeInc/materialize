@@ -39,9 +39,8 @@ clarity around best practices."
 {{< tab "Read-write table" >}}
 ### Read-write table
 
-{{% include-example file="examples/create_table/example_user_populated_table" example="syntax" %}}
-
-{{% include-example file="examples/create_table/example_user_populated_table" example="syntax-options" %}}
+{{% include-syntax file="examples/create_table/example_user_populated_table"
+example="syntax" %}}
 
 {{< /tab >}}
 {{< tab "PostgreSQL source table" >}}
@@ -54,9 +53,12 @@ clarity around best practices."
 example="syntax-version-requirement" %}}
 {{< /note >}}
 
-{{% include-example file="examples/create_table/example_postgres_table" example="syntax" %}}
+{{% include-syntax file="examples/create_table/example_postgres_table"
+example="syntax" %}}
 
-{{% include-example file="examples/create_table/example_postgres_table" example="syntax-options" %}}
+For an example, see [Create a table (PostgreSQL
+source)](/sql/create-table/#create-a-table-postgresql-source).
+
 {{< /tab >}}
 
 {{< /tabs >}}

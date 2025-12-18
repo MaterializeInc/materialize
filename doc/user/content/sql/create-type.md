@@ -14,17 +14,17 @@ see [SQL Data Types: Custom types](../types/#custom-types).
 
 {{< tabs >}}
 {{< tab "Row type" >}}
-
+### Row type
 {{% include-syntax file="examples/create_type" example="syntax-row" %}}
 
 {{< /tab >}}
 {{< tab "List type" >}}
-
+### List type
 {{% include-syntax file="examples/create_type" example="syntax-list" %}}
 
 {{< /tab >}}
 {{< tab "Map type" >}}
-
+### Map type
 {{% include-syntax file="examples/create_type" example="syntax-map" %}}
 
 {{< /tab >}}

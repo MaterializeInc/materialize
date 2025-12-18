@@ -3,10 +3,11 @@
     The following syntax is used to create a role in Materialize Cloud.
   code: |
     CREATE ROLE <role_name> [[WITH] INHERIT];
-
-- name: "create-role-options"
-  description: |
-    {{< yaml-table data="syntax_options/create_role_cloud_options" >}}
+  syntax_elements:
+    - name: "`INHERIT`"
+      description: |
+        *Optional.* If specified, grants the role the ability to inherit
+        privileges of other roles. *Default.*
 
 - name: "create-role-details"
   description: |
