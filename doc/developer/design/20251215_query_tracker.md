@@ -15,6 +15,27 @@ an internal command queue and performs side effects through a small, injected **
 The intent is to decouple components, minimize blocking (callers are fire-and-forget), and make
 the lifecycle logic easy to test in isolation.
 
+## Practical learnings (races we must handle)
+
+In practice, several races show up quickly once peek tracking becomes “fire-and-forget” and
+cross-thread:
+
+- **Drop-before-track / cancel-before-track**: a cluster/collection can be dropped while a peek is
+  being planned/issued, and the cancellation signal may arrive before QueryTracker ever observes
+  the `TrackPeek`.
+- **Track-before-issue, but cancel-after-drop**: even if we send `TrackPeek` “before issuing” a
+  compute peek, the *cluster can be dropped* before cancellation reaches compute. In that case the
+  compute instance disappears and the peek response channel may be dropped without an explicit
+  `PeekNotification`.
+- **Out-of-order statement logging events**: frontend statement logging “setters” (e.g.
+  `SetTimestamp`) can arrive after `EndedExecution`. These must be treated as best-effort updates
+  and **must not panic** when the execution has already ended.
+- **Debugging/dump paths can be observable**: `ExecuteContextExtra` is `#[must_use]` and asserts on
+  drop if it contains non-trivial state. Any debug/dump rendering must avoid constructing
+  temporary `ExecuteContextExtra` values that then get dropped.
+
+The design below intentionally calls these out, because they affect invariants and error handling.
+
 ## Goals
 
 - Centralize peek tracking state and cancellation decisions in QueryTracker.
@@ -98,7 +119,7 @@ The concrete handle is typically a wrapper around an `mpsc::UnboundedSender<Quer
 pub enum QueryTrackerCmd {
     TrackPeek(TrackedPeek),
     UntrackPeek { uuid: Uuid },
-    CancelConn { conn_id: ConnectionId, reason: CancelReason },
+    CancelConn { conn_id: ConnectionId },
     CancelByDrop(CancelByDrop),
     ObservePeekNotification {
         uuid: Uuid,
@@ -117,8 +138,10 @@ pub struct TrackedPeek {
     pub cluster_id: ClusterId,
     pub depends_on: BTreeSet<GlobalId>,
 
-    /// If present, QueryTracker will end statement execution on completion/cancel.
-    pub statement_logging_id: Option<StatementLoggingId>,
+    /// Non-trivial execution state that must be retired on completion/cancel.
+    ///
+    /// This must never be dropped without calling `retire`, including in error/dump paths.
+    pub ctx_extra: ExecuteContextExtra,
 
     /// Used to log the correct execution strategy on completion.
     pub execution_strategy: StatementExecutionStrategy,
@@ -127,18 +150,13 @@ pub struct TrackedPeek {
     pub watch_set: Option<WatchSetCreation>,
 }
 
-pub enum CancelReason {
-    User,
-    Terminate,
-    Timeout,
-}
-
 pub struct CancelByDrop {
     pub dropped_collections: BTreeSet<GlobalId>,
     pub dropped_clusters: BTreeSet<ClusterId>,
-    /// Optional “human-readable” explanation fragments keyed by dropped objects.
-    /// Used to construct the same error strings the system emits today.
-    pub dropped_names: BTreeMap<GlobalId, String>,
+    /// Pre-formatted “relation …” names keyed by GlobalId.
+    pub dropped_collection_names: BTreeMap<GlobalId, String>,
+    /// Pre-formatted “cluster …” names keyed by ClusterId.
+    pub dropped_cluster_names: BTreeMap<ClusterId, String>,
 }
 ```
 
@@ -183,6 +201,22 @@ This is intentionally small to keep QueryTracker isolated and easy to mock.
 - `peeks_by_uuid: HashMap<Uuid, TrackedPeek>`
 - `peeks_by_conn: HashMap<ConnectionId, HashSet<Uuid>>`
 
+### Additional “tombstone” state
+
+To handle `CancelByDrop` arriving before `TrackPeek`, QueryTracker maintains short-lived
+“tombstones” describing recently dropped clusters/collections (or a monotonically growing set
+bounded by catalog IDs, if acceptable), and apply them to newly tracked peeks:
+
+- If `TrackPeek` arrives and its `cluster_id` is in `dropped_clusters`, immediately cancel/retire
+  it.
+- If `TrackPeek` arrives and any `depends_on` is in `dropped_collections`, immediately
+  cancel/retire it.
+
+This makes cancellation by drop robust to message reordering.
+
+Implementation note: the tombstones are time-bounded (TTL) and are expired opportunistically when
+processing commands.
+
 ### Invariants
 
 - If a peek exists in `peeks_by_uuid`, it is present in `peeks_by_conn[conn_id]`.
@@ -197,7 +231,8 @@ This is intentionally small to keep QueryTracker isolated and easy to mock.
   - installs watch sets if provided (best-effort; see failure semantics),
   - records state.
 - `UntrackPeek`:
-  - removes state without retiring statement execution (frontend already logs/returns the error).
+  - removes state and retires `ExecuteContextExtra` without ending execution (frontend already
+    logs/returns the error, but we must not drop non-trivial state).
 - `CancelConn`:
   - cancels all peeks for connection, retires statement executions as canceled.
 - `CancelByDrop`:
@@ -222,8 +257,14 @@ drop. QueryTracker should:
 
 Important ordering requirement:
 
-- Callers that issue compute peeks must send `TrackPeek` **before** issuing the compute peek so
-  completion notifications can be correlated without an ack.
+- Callers should send `TrackPeek` as early as possible, but the system must not rely on strict
+  ordering between:
+  - `TrackPeek` and `CancelByDrop`, and
+  - compute “peek issued” and compute “peek canceled” when a cluster is dropped.
+
+In particular, **the absence of an explicit `PeekNotification` is possible** when a compute
+instance is dropped; the adapter must treat that as a best-effort cancellation outcome rather than
+hang or crash.
 
 ## Implementation plan (mechanical changes)
 
@@ -313,6 +354,19 @@ replace the direct insertion into `pending_peeks`/`client_pending_peeks` with
 
 Once this is done, pending peek state in Coordinator can be removed.
 
+## Statement logging robustness (must not panic)
+
+Statement logging events are intentionally fire-and-forget and can be reordered. The Coordinator
+must treat “mutation” events for already-ended executions as **no-ops** (optionally with debug
+logging), rather than panicking. This applies at least to:
+
+- `SetTimestamp`
+- `SetCluster`
+- `SetTransientIndex`
+
+Similarly, any debug/dump/introspection rendering must avoid constructing temporary
+`ExecuteContextExtra` values that then get dropped without retirement.
+
 ## Testing strategy
 
 Unit test QueryTracker in isolation by:
@@ -347,4 +401,8 @@ Include tests for:
   - **Dedicated controller-response dispatcher task**: introduce a separate component that drains
     `ControllerResponse` and fans out (peeks → QueryTracker, everything else → Coordinator). This
     relocates, but does not eliminate, routing, and changes Coordinator’s “single owner” handling of
-    controller responses.
+  controller responses.
+
+- Should the compute controller actively synthesize cancellations for outstanding peeks when
+  dropping a compute instance (instead of dropping channels)? This would make downstream behavior
+  more uniform, but requires controller/instance API changes.
