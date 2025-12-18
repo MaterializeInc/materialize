@@ -33,7 +33,6 @@ use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
-use mz_ore::netio::DUMMY_DNS_PORT;
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
 use mz_repr::{CatalogItemId, GlobalId};
@@ -1309,7 +1308,7 @@ impl CsrConnection {
                     host,
                     &resolved
                         .iter()
-                        .map(|addr| SocketAddr::new(*addr, DUMMY_DNS_PORT))
+                        .map(|addr| SocketAddr::new(*addr, 0))
                         .collect::<Vec<_>>(),
                 )
             }
@@ -1336,14 +1335,9 @@ impl CsrConnection {
                     // at the DNS level, which means the TCP connection is
                     // correctly routed through the tunnel, but TLS verification
                     // is still performed against the remote hostname.
-                    // Unfortunately the port here is ignored...
-                    .resolve_to_addrs(
-                        host,
-                        &[SocketAddr::new(
-                            ssh_tunnel.local_addr().ip(),
-                            DUMMY_DNS_PORT,
-                        )],
-                    )
+                    // Unfortunately the port here is ignored if the URL also
+                    // specifies a port...
+                    .resolve_to_addrs(host, &[SocketAddr::new(ssh_tunnel.local_addr().ip(), 0)])
                     // ...so we also dynamically rewrite the URL to use the
                     // current port for the SSH tunnel.
                     //
@@ -1371,7 +1365,7 @@ impl CsrConnection {
                     connection.connection_id,
                     connection.availability_zone.as_deref(),
                 );
-                let addrs: Vec<_> = net::lookup_host((privatelink_host, DUMMY_DNS_PORT))
+                let addrs: Vec<_> = net::lookup_host((privatelink_host, 0))
                     .await
                     .context("resolving PrivateLink host")?
                     .collect();
