@@ -28,7 +28,6 @@ use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
-use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_controller_types::ClusterId;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
@@ -1255,12 +1254,14 @@ impl crate::coord::Coordinator {
         .await
     }
 
-    /// Implements a COPY TO command by installing peek watch sets, validating S3 connection,
+    /// Implements a `COPY TO` command by installing peek watch sets,
     /// shipping the dataflow, and spawning a background task to wait for completion.
     /// This is called from the command handler for ExecuteCopyTo.
     ///
-    /// This method inlines the logic from peek_copy_to_preflight and peek_copy_to_dataflow
-    /// to avoid the complexity of the staging mechanism for the frontend peek sequencing path.
+    /// (The S3 preflight check must be completed successfully via the
+    /// `CopyToPreflight` command _before_ calling this method. The preflight is
+    /// handled separately to avoid blocking the coordinator's main task with
+    /// slow S3 network operations.)
     ///
     /// This method does NOT block waiting for completion. Instead, it spawns a background task that
     /// will send the response through the provided tx channel when the COPY TO completes.
@@ -1299,49 +1300,6 @@ impl crate::coord::Coordinator {
         // all statement logging for COPY TO operations.
 
         let sink_id = df_desc.sink_id();
-
-        // # Inlined from peek_copy_to_preflight
-
-        let connection_context = self.connection_context().clone();
-        let sinks = &df_desc.sink_exports;
-
-        if sinks.len() != 1 {
-            send_err(
-                tx,
-                AdapterError::Internal("expected exactly one copy to s3 sink".into()),
-            );
-            return;
-        }
-        let (sink_id_check, sink_desc) = sinks
-            .first_key_value()
-            .expect("known to be exactly one copy to s3 sink");
-        assert_eq!(sink_id, *sink_id_check);
-
-        match &sink_desc.connection {
-            ComputeSinkConnection::CopyToS3Oneshot(conn) => {
-                if let Err(e) = mz_storage_types::sinks::s3_oneshot_sink::preflight(
-                    connection_context,
-                    &conn.aws_connection,
-                    &conn.upload_info,
-                    conn.connection_id,
-                    sink_id,
-                )
-                .await
-                {
-                    send_err(tx, e.into());
-                    return;
-                }
-            }
-            _ => {
-                send_err(
-                    tx,
-                    AdapterError::Internal("expected copy to s3 oneshot sink".into()),
-                );
-                return;
-            }
-        }
-
-        // # Inlined from peek_copy_to_dataflow
 
         // Create and register ActiveCopyTo.
         // Note: sink_tx/sink_rx is the channel for the compute sink to notify completion

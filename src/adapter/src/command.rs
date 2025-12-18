@@ -224,6 +224,18 @@ pub enum Command {
         tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
     },
 
+    /// Preflight check for COPY TO S3 operation. This runs the slow S3 operations
+    /// (loading SDK config, checking bucket path, verifying permissions, uploading sentinel)
+    /// in a background task to avoid blocking the coordinator.
+    CopyToPreflight {
+        /// The S3 connection info needed for preflight checks.
+        s3_sink_connection: mz_compute_types::sinks::CopyToS3OneshotSinkConnection,
+        /// The sink ID for logging and S3 key management.
+        sink_id: GlobalId,
+        /// Response channel for the preflight result.
+        tx: oneshot::Sender<Result<(), AdapterError>>,
+    },
+
     ExecuteCopyTo {
         df_desc: Box<DataflowDescription<mz_compute_types::plan::Plan>>,
         compute_instance: ComputeInstanceId,
@@ -309,6 +321,7 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
+            | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::RegisterFrontendPeek { .. }
@@ -341,6 +354,7 @@ impl Command {
             | Command::GetTransactionReadHoldsBundle { .. }
             | Command::StoreTransactionReadHolds { .. }
             | Command::ExecuteSlowPathPeek { .. }
+            | Command::CopyToPreflight { .. }
             | Command::ExecuteCopyTo { .. }
             | Command::ExecuteSideEffectingFunc { .. }
             | Command::RegisterFrontendPeek { .. }

@@ -365,6 +365,28 @@ impl Coordinator {
                     let _ = tx.send(result);
                 }
 
+                Command::CopyToPreflight {
+                    s3_sink_connection,
+                    sink_id,
+                    tx,
+                } => {
+                    // Spawn a background task to perform the slow S3 preflight operations.
+                    // This avoids blocking the coordinator's main task.
+                    let connection_context = self.connection_context().clone();
+                    task::spawn(|| "copy_to_preflight", async move {
+                        let result = mz_storage_types::sinks::s3_oneshot_sink::preflight(
+                            connection_context,
+                            &s3_sink_connection.aws_connection,
+                            &s3_sink_connection.upload_info,
+                            s3_sink_connection.connection_id,
+                            sink_id,
+                        )
+                        .await
+                        .map_err(AdapterError::from);
+                        let _ = tx.send(result);
+                    });
+                }
+
                 Command::ExecuteCopyTo {
                     df_desc,
                     compute_instance,

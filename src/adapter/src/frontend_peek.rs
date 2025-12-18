@@ -1316,6 +1316,38 @@ impl PeekClient {
                     &df_meta.optimizer_notices,
                 );
 
+                // Extract S3 sink connection info for preflight check
+                let sink_id = df_desc.sink_id();
+                let sinks = &df_desc.sink_exports;
+                if sinks.len() != 1 {
+                    return Err(AdapterError::Internal(
+                        "expected exactly one copy to s3 sink".into(),
+                    ));
+                }
+                let (_, sink_desc) = sinks
+                    .first_key_value()
+                    .expect("known to be exactly one copy to s3 sink");
+                let s3_sink_connection = match &sink_desc.connection {
+                    mz_compute_types::sinks::ComputeSinkConnection::CopyToS3Oneshot(conn) => {
+                        conn.clone()
+                    }
+                    _ => {
+                        return Err(AdapterError::Internal(
+                            "expected copy to s3 oneshot sink".into(),
+                        ));
+                    }
+                };
+
+                // Perform S3 preflight check in background task (via coordinator).
+                // This runs slow S3 operations without blocking the coordinator's main task.
+                self.call_coordinator(|tx| Command::CopyToPreflight {
+                    s3_sink_connection,
+                    sink_id,
+                    tx,
+                })
+                .await?;
+
+                // Preflight succeeded, now execute the actual COPY TO dataflow
                 let watch_set = statement_logging_id.map(|logging_id| {
                     WatchSetCreation::new(
                         logging_id,

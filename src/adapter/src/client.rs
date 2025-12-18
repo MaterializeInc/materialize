@@ -1034,6 +1034,7 @@ impl SessionClient {
                 | Command::GetTransactionReadHoldsBundle { .. }
                 | Command::StoreTransactionReadHolds { .. }
                 | Command::ExecuteSlowPathPeek { .. }
+                | Command::CopyToPreflight { .. }
                 | Command::ExecuteCopyTo { .. }
                 | Command::ExecuteSideEffectingFunc { .. }
                 | Command::RegisterFrontendPeek { .. }
