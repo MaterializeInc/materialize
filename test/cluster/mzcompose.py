@@ -3710,16 +3710,6 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
             user="mz_system",
         )
 
-        # TODO(peek-seq): enable_frontend_peek_sequencing when it supports statement logging.
-        c.testdrive(
-            input=dedent(
-                """
-                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
-                ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
-                """
-            )
-        )
-
         c.run_testdrive_files("statement-logging/statement-logging.td")
 
 

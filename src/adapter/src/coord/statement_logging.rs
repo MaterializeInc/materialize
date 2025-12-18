@@ -8,120 +8,40 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use bytes::BytesMut;
+use mz_adapter_types::connection::ConnectionId;
+use mz_compute_client::controller::error::CollectionLookupError;
 use mz_controller_types::ClusterId;
-use mz_ore::now::{NowFn, epoch_to_uuid_v7, to_datetime};
+use mz_ore::now::{EpochMillis, NowFn, epoch_to_uuid_v7, to_datetime};
 use mz_ore::task::spawn;
-use mz_ore::{cast::CastFrom, cast::CastInto, now::EpochMillis};
-use mz_repr::adt::array::ArrayDimension;
+use mz_ore::{cast::CastFrom, cast::CastInto};
 use mz_repr::adt::timestamp::TimestampLike;
-use mz_repr::{Datum, Diff, GlobalId, Row, RowPacker, Timestamp};
-use mz_sql::ast::display::AstDisplay;
-use mz_sql::ast::{AstInfo, Statement};
+use mz_repr::{Datum, Diff, GlobalId, Row, Timestamp};
 use mz_sql::plan::Params;
 use mz_sql::session::metadata::SessionMetadata;
-use mz_sql_parser::ast::{StatementKind, statement_kind_label_value};
 use mz_storage_client::controller::IntrospectionType;
 use qcell::QCell;
 use rand::SeedableRng;
-use rand::distr::{Bernoulli, Distribution};
 use sha2::{Digest, Sha256};
 use tokio::time::MissedTickBehavior;
-use tracing::debug;
 use uuid::Uuid;
 
-use crate::coord::{ConnMeta, Coordinator};
+use crate::coord::{ConnMeta, Coordinator, WatchSetResponse};
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
+    FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
     SessionHistoryEvent, StatementBeganExecutionRecord, StatementEndedExecutionReason,
-    StatementEndedExecutionRecord, StatementLifecycleEvent, StatementPreparedRecord,
+    StatementEndedExecutionRecord, StatementLifecycleEvent, StatementLoggingFrontend,
+    StatementLoggingId, StatementPreparedRecord, ThrottlingState, WatchSetCreation,
+    create_began_execution_record, effective_sample_rate, pack_statement_began_execution_update,
+    pack_statement_execution_inner, pack_statement_prepared_update, should_sample_statement,
 };
 
 use super::Message;
 
-/// Metadata required for logging a prepared statement.
-#[derive(Debug)]
-pub enum PreparedStatementLoggingInfo {
-    /// The statement has already been logged; we don't need to log it
-    /// again if a future execution hits the sampling rate; we merely
-    /// need to reference the corresponding UUID.
-    AlreadyLogged { uuid: Uuid },
-    /// The statement has not yet been logged; if a future execution
-    /// hits the sampling rate, we need to log it at that point.
-    StillToLog {
-        /// The SQL text of the statement.
-        sql: String,
-        /// The SQL text of the statement, redacted to follow our data management
-        /// policy
-        redacted_sql: String,
-        /// When the statement was prepared
-        prepared_at: EpochMillis,
-        /// The name with which the statement was prepared
-        name: String,
-        /// The ID of the session that prepared the statement
-        session_id: Uuid,
-        /// Whether we have already recorded this in the "would have logged" metric
-        accounted: bool,
-        /// The top-level kind of the statement (e.g., `Select`), or `None` for an empty statement
-        kind: Option<StatementKind>,
-
-        /// Private type that forces use of the [`PreparedStatementLoggingInfo::still_to_log`]
-        /// constructor.
-        _sealed: sealed::Private,
-    },
-}
-
-impl PreparedStatementLoggingInfo {
-    /// Constructor for the [`PreparedStatementLoggingInfo::StillToLog`] variant that ensures SQL
-    /// statements are properly redacted.
-    pub fn still_to_log<A: AstInfo>(
-        raw_sql: String,
-        stmt: Option<&Statement<A>>,
-        prepared_at: EpochMillis,
-        name: String,
-        session_id: Uuid,
-        accounted: bool,
-    ) -> Self {
-        let kind = stmt.map(StatementKind::from);
-        let sql = match kind {
-            // Always redact SQL statements that may contain sensitive information.
-            // CREATE SECRET and ALTER SECRET statements can contain secret values, so we redact them.
-            // INSERT, UPDATE, and EXECUTE statements can include large amounts of user data, so we redact them for both
-            // data privacy and to avoid logging excessive data.
-            Some(
-                StatementKind::CreateSecret
-                | StatementKind::AlterSecret
-                | StatementKind::Insert
-                | StatementKind::Update
-                | StatementKind::Execute,
-            ) => stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default(),
-            _ => raw_sql,
-        };
-
-        PreparedStatementLoggingInfo::StillToLog {
-            sql,
-            redacted_sql: stmt.map(|s| s.to_ast_string_redacted()).unwrap_or_default(),
-            prepared_at,
-            name,
-            session_id,
-            accounted,
-            kind,
-            _sealed: sealed::Private,
-        }
-    }
-}
-
-#[derive(Copy, Clone, Debug, Ord, Eq, PartialOrd, PartialEq)]
-pub struct StatementLoggingId(Uuid);
-
-#[derive(Debug)]
-pub(crate) struct PreparedStatementEvent {
-    prepared_statement: Row,
-    sql_text: Row,
-}
-
+/// Statement logging state in the Coordinator.
 #[derive(Debug)]
 pub(crate) struct StatementLogging {
     /// Information about statement executions that have been logged
@@ -140,87 +60,146 @@ pub(crate) struct StatementLogging {
     /// A reproducible RNG for deciding whether to sample statement executions.
     /// Only used by tests; otherwise, `rand::rng()` is used.
     /// Controlled by the system var `statement_logging_use_reproducible_rng`.
-    reproducible_rng: rand_chacha::ChaCha8Rng,
+    /// This same instance will be used by all frontend tasks.
+    reproducible_rng: Arc<Mutex<rand_chacha::ChaCha8Rng>>,
 
+    /// Events to be persisted periodically.
     pending_statement_execution_events: Vec<(Row, Diff)>,
     pending_prepared_statement_events: Vec<PreparedStatementEvent>,
     pending_session_events: Vec<Row>,
     pending_statement_lifecycle_events: Vec<Row>,
 
-    now: NowFn,
+    /// Shared throttling state for rate-limiting statement logging.
+    pub(crate) throttling_state: Arc<ThrottlingState>,
 
-    /// The number of bytes that we are allowed to emit for statement logging without being throttled.
-    /// Increases at a rate of [`mz_sql::session::vars::STATEMENT_LOGGING_TARGET_DATA_RATE`] per second,
-    /// up to a max value of [`mz_sql::session::vars::STATEMENT_LOGGING_MAX_DATA_CREDIT`].
-    tokens: u64,
-    /// The last time at which a statement was logged.
-    last_logged_ts_seconds: u64,
-    /// The number of statements that have been throttled since the last successfully logged statement.
-    throttled_count: usize,
+    /// Function to get the current time.
+    pub(crate) now: NowFn,
 }
 
 impl StatementLogging {
+    const REPRODUCIBLE_RNG_SEED: u64 = 42;
+
     pub(crate) fn new(now: NowFn) -> Self {
-        let last_logged_ts_seconds = (now)() / 1000;
         Self {
             executions_begun: BTreeMap::new(),
             unlogged_sessions: BTreeMap::new(),
-            reproducible_rng: rand_chacha::ChaCha8Rng::seed_from_u64(42),
+            reproducible_rng: Arc::new(Mutex::new(rand_chacha::ChaCha8Rng::seed_from_u64(
+                Self::REPRODUCIBLE_RNG_SEED,
+            ))),
             pending_statement_execution_events: Vec::new(),
             pending_prepared_statement_events: Vec::new(),
             pending_session_events: Vec::new(),
             pending_statement_lifecycle_events: Vec::new(),
-            tokens: 0,
-            last_logged_ts_seconds,
-            now: now.clone(),
-            throttled_count: 0,
+            throttling_state: Arc::new(ThrottlingState::new(&now)),
+            now,
         }
     }
 
-    /// Check if we need to drop a statement
-    /// due to throttling, and update the number of available tokens appropriately.
+    /// Create a `StatementLoggingFrontend` for use by frontend peek sequencing.
     ///
-    /// Returns `false` if we must throttle this statement, and `true` otherwise.
-    fn throttling_check(
-        &mut self,
-        cost: u64,
-        target_data_rate: u64,
-        max_data_credit: Option<u64>,
-    ) -> bool {
-        let ts = (self.now)() / 1000;
-        // We use saturating_sub here because system time isn't monotonic, causing cases
-        // when last_logged_ts_seconds is greater than ts.
-        let elapsed = ts.saturating_sub(self.last_logged_ts_seconds);
-        self.last_logged_ts_seconds = ts;
-        self.tokens = self
-            .tokens
-            .saturating_add(target_data_rate.saturating_mul(elapsed));
-        if let Some(max_data_credit) = max_data_credit {
-            self.tokens = self.tokens.min(max_data_credit);
-        }
-        if let Some(remaining) = self.tokens.checked_sub(cost) {
-            debug!("throttling check passed. tokens remaining: {remaining}; cost: {cost}");
-            self.tokens = remaining;
-            true
-        } else {
-            debug!(
-                "throttling check failed. tokens available: {}; cost: {cost}",
-                self.tokens
-            );
-            false
+    /// This provides the frontend with all the state it needs to perform statement
+    /// logging without direct access to the Coordinator.
+    pub(crate) fn create_frontend(
+        &self,
+        build_info_human_version: String,
+    ) -> StatementLoggingFrontend {
+        StatementLoggingFrontend {
+            throttling_state: Arc::clone(&self.throttling_state),
+            reproducible_rng: Arc::clone(&self.reproducible_rng),
+            build_info_human_version,
+            now: self.now.clone(),
         }
     }
 }
 
 impl Coordinator {
+    /// Helper to write began execution events to pending buffers.
+    /// Can be called from both old and new peek sequencing.
+    fn write_began_execution_events(
+        &mut self,
+        record: StatementBeganExecutionRecord,
+        mseh_update: Row,
+        prepared_statement: Option<PreparedStatementEvent>,
+    ) {
+        // `mz_statement_execution_history`
+        self.statement_logging
+            .pending_statement_execution_events
+            .push((mseh_update, Diff::ONE));
+
+        // Track the execution for later updates
+        self.statement_logging
+            .executions_begun
+            .insert(record.id, record);
+
+        // If we have a prepared statement, log it and possibly its session
+        if let Some(ps_event) = prepared_statement {
+            let session_id = ps_event.session_id;
+            self.statement_logging
+                .pending_prepared_statement_events
+                .push(ps_event);
+
+            // Check if we need to log the session for this prepared statement
+            if let Some(sh) = self.statement_logging.unlogged_sessions.remove(&session_id) {
+                let sh_update = Self::pack_session_history_update(&sh);
+                self.statement_logging
+                    .pending_session_events
+                    .push(sh_update);
+            }
+        }
+    }
+
+    /// Handle a statement logging event from frontend peek sequencing.
+    pub(crate) fn handle_frontend_statement_logging_event(
+        &mut self,
+        event: FrontendStatementLoggingEvent,
+    ) {
+        match event {
+            FrontendStatementLoggingEvent::BeganExecution {
+                record,
+                mseh_update,
+                prepared_statement,
+            } => {
+                self.record_statement_lifecycle_event(
+                    &StatementLoggingId(record.id),
+                    &StatementLifecycleEvent::ExecutionBegan,
+                    record.began_at,
+                );
+                self.write_began_execution_events(record, mseh_update, prepared_statement);
+            }
+            FrontendStatementLoggingEvent::EndedExecution(ended_record) => {
+                self.end_statement_execution(
+                    StatementLoggingId(ended_record.id),
+                    ended_record.reason,
+                );
+            }
+            FrontendStatementLoggingEvent::SetCluster { id, cluster_id } => {
+                self.set_statement_execution_cluster(id, cluster_id);
+            }
+            FrontendStatementLoggingEvent::SetTimestamp { id, timestamp } => {
+                self.set_statement_execution_timestamp(id, timestamp);
+            }
+            FrontendStatementLoggingEvent::SetTransientIndex {
+                id,
+                transient_index_id,
+            } => {
+                self.set_transient_index_id(id, transient_index_id);
+            }
+            FrontendStatementLoggingEvent::Lifecycle { id, event, when } => {
+                self.record_statement_lifecycle_event(&id, &event, when);
+            }
+        }
+    }
+
+    // TODO[btv] make this configurable via LD?
+    // Although... Logging every 5 seconds seems like it
+    // should have acceptable cost for now, since we do a
+    // group commit for tables every 1s anyway.
+    const STATEMENT_LOGGING_WRITE_INTERVAL: Duration = Duration::from_secs(5);
+
     pub(crate) fn spawn_statement_logging_task(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         spawn(|| "statement_logging", async move {
-            // TODO[btv] make this configurable via LD?
-            // Although... Logging every 5 seconds seems like it
-            // should have acceptable cost for now, since we do a
-            // group commit for tables every 1s anyway.
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            let mut interval = tokio::time::interval(Coordinator::STATEMENT_LOGGING_WRITE_INTERVAL);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 interval.tick().await;
@@ -242,6 +221,7 @@ impl Coordinator {
                     |PreparedStatementEvent {
                          prepared_statement,
                          sql_text,
+                         ..
                      }| {
                         ((prepared_statement, Diff::ONE), (sql_text, Diff::ONE))
                     },
@@ -278,7 +258,7 @@ impl Coordinator {
     /// byte lengths of the rows.
     ///
     /// Returns `false` if we must throttle this statement, and `true` otherwise.
-    fn statement_logging_throttling_check<'a, I>(&mut self, rows: I) -> bool
+    fn statement_logging_throttling_check<'a, I>(&self, rows: I) -> bool
     where
         I: IntoIterator<Item = Option<&'a Row>>,
     {
@@ -298,10 +278,12 @@ impl Coordinator {
             .catalog
             .system_config()
             .statement_logging_max_data_credit();
-        self.statement_logging.throttling_check(
+
+        self.statement_logging.throttling_state.throttling_check(
             cost.cast_into(),
             target_data_rate.cast_into(),
             max_data_credit.map(CastInto::cast_into),
+            &self.statement_logging.now,
         )
     }
 
@@ -320,16 +302,16 @@ impl Coordinator {
     }
 
     /// Returns any statement logging events needed for a particular
-    /// prepared statement. Possibly mutates the `PreparedStatementLoggingInfo` metadata.
+    /// prepared statement. This is a read-only operation that does not mutate
+    /// the `PreparedStatementLoggingInfo` metadata.
     ///
     /// This function does not do a sampling check, and assumes we did so in a higher layer.
+    /// It also does not do a throttling check - that is done separately in `begin_statement_execution`.
     ///
-    ///
-    /// Returns A tuple containing:
+    /// Returns a tuple containing:
     /// - `Option<(StatementPreparedRecord, PreparedStatementEvent)>`: If the prepared statement
-    ///   has not yet been logged, returns the prepared statement record, the packed row of the
-    ///   prepared statement record, and a row for the SQL text.
-    /// - `Uuid`: The UUID of the prepared statement if the prepared statement has been logged
+    ///   has not yet been logged, returns the prepared statement record and the packed rows.
+    /// - `Uuid`: The UUID of the prepared statement.
     pub(crate) fn get_prepared_statement_info(
         &self,
         session: &Session,
@@ -366,9 +348,17 @@ impl Coordinator {
                     prepared_at: *prepared_at,
                     kind: *kind,
                 };
+
+                // `mz_prepared_statement_history`
                 let mut mpsh_row = Row::default();
                 let mut mpsh_packer = mpsh_row.packer();
-                Self::pack_statement_prepared_update(&record, &mut mpsh_packer);
+                pack_statement_prepared_update(&record, &mut mpsh_packer);
+                let throttled_count = self
+                    .statement_logging
+                    .throttling_state
+                    .get_throttled_count();
+                mpsh_packer.push(Datum::UInt64(CastFrom::cast_from(throttled_count)));
+
                 let sql_row = Row::pack([
                     Datum::TimestampTz(
                         to_datetime(*prepared_at)
@@ -381,15 +371,13 @@ impl Coordinator {
                     Datum::String(redacted_sql.as_str()),
                 ]);
 
-                let throttled_count = self.statement_logging.throttled_count;
-                mpsh_packer.push(Datum::UInt64(throttled_count.try_into().expect("must fit")));
-
                 (
                     Some((
                         record,
                         PreparedStatementEvent {
                             prepared_statement: mpsh_row,
                             sql_text: sql_row,
+                            session_id: *session_id,
                         },
                     )),
                     uuid,
@@ -397,30 +385,13 @@ impl Coordinator {
             }
         }
     }
-    /// The rate at which statement execution should be sampled.
-    /// This is the value of the session var `statement_logging_sample_rate`,
-    /// constrained by the system var `statement_logging_max_sample_rate`.
-    pub fn statement_execution_sample_rate(&self, session: &Session) -> f64 {
-        let system: f64 = self
-            .catalog()
-            .system_config()
-            .statement_logging_max_sample_rate()
-            .try_into()
-            .expect("value constrained to be convertible to f64");
-        let user: f64 = session
-            .vars()
-            .get_statement_logging_sample_rate()
-            .try_into()
-            .expect("value constrained to be convertible to f64");
-        f64::min(system, user)
-    }
 
     /// Record the end of statement execution for a statement whose beginning was logged.
     /// It is an error to call this function for a statement whose beginning was not logged
     /// (because it was not sampled). Requiring the opaque `StatementLoggingId` type,
     /// which is only instantiated by `begin_statement_execution` if the statement is actually logged,
     /// should prevent this.
-    pub fn end_statement_execution(
+    pub(crate) fn end_statement_execution(
         &mut self,
         id: StatementLoggingId,
         reason: StatementEndedExecutionReason,
@@ -454,109 +425,6 @@ impl Coordinator {
         );
     }
 
-    fn pack_statement_execution_inner(
-        record: &StatementBeganExecutionRecord,
-        packer: &mut RowPacker,
-    ) {
-        let StatementBeganExecutionRecord {
-            id,
-            prepared_statement_id,
-            sample_rate,
-            params,
-            began_at,
-            cluster_id,
-            cluster_name,
-            database_name,
-            search_path,
-            application_name,
-            transaction_isolation,
-            execution_timestamp,
-            transaction_id,
-            transient_index_id,
-            mz_version,
-        } = record;
-
-        let cluster = cluster_id.map(|id| id.to_string());
-        let transient_index_id = transient_index_id.map(|id| id.to_string());
-        packer.extend([
-            Datum::Uuid(*id),
-            Datum::Uuid(*prepared_statement_id),
-            Datum::Float64((*sample_rate).into()),
-            match &cluster {
-                None => Datum::Null,
-                Some(cluster_id) => Datum::String(cluster_id),
-            },
-            Datum::String(&*application_name),
-            cluster_name.as_ref().map(String::as_str).into(),
-            Datum::String(database_name),
-        ]);
-        packer.push_list(search_path.iter().map(|s| Datum::String(s)));
-        packer.extend([
-            Datum::String(&*transaction_isolation),
-            (*execution_timestamp).into(),
-            Datum::UInt64(*transaction_id),
-            match &transient_index_id {
-                None => Datum::Null,
-                Some(transient_index_id) => Datum::String(transient_index_id),
-            },
-        ]);
-        packer
-            .try_push_array(
-                &[ArrayDimension {
-                    lower_bound: 1,
-                    length: params.len(),
-                }],
-                params
-                    .iter()
-                    .map(|p| Datum::from(p.as_ref().map(String::as_str))),
-            )
-            .expect("correct array dimensions");
-        packer.push(Datum::from(mz_version.as_str()));
-        packer.push(Datum::TimestampTz(
-            to_datetime(*began_at).try_into().expect("Sane system time"),
-        ));
-    }
-
-    fn pack_statement_began_execution_update(record: &StatementBeganExecutionRecord) -> Row {
-        let mut row = Row::default();
-        let mut packer = row.packer();
-        Self::pack_statement_execution_inner(record, &mut packer);
-        packer.extend([
-            // finished_at
-            Datum::Null,
-            // finished_status
-            Datum::Null,
-            // error_message
-            Datum::Null,
-            // result_size
-            Datum::Null,
-            // rows_returned
-            Datum::Null,
-            // execution_status
-            Datum::Null,
-        ]);
-        row
-    }
-
-    fn pack_statement_prepared_update(record: &StatementPreparedRecord, packer: &mut RowPacker) {
-        let StatementPreparedRecord {
-            id,
-            session_id,
-            name,
-            sql_hash,
-            prepared_at,
-            kind,
-        } = record;
-        packer.extend([
-            Datum::Uuid(*id),
-            Datum::Uuid(*session_id),
-            Datum::String(name.as_str()),
-            Datum::Bytes(sql_hash.as_slice()),
-            Datum::TimestampTz(to_datetime(*prepared_at).try_into().expect("must fit")),
-            kind.map(statement_kind_label_value).into(),
-        ]);
-    }
-
     fn pack_session_history_update(event: &SessionHistoryEvent) -> Row {
         let SessionHistoryEvent {
             id,
@@ -566,11 +434,7 @@ impl Coordinator {
         } = event;
         Row::pack_slice(&[
             Datum::Uuid(*id),
-            Datum::TimestampTz(
-                mz_ore::now::to_datetime(*connected_at)
-                    .try_into()
-                    .expect("must fit"),
-            ),
+            Datum::TimestampTz(to_datetime(*connected_at).try_into().expect("must fit")),
             Datum::String(&*application_name),
             Datum::String(&*authenticated_user),
         ])
@@ -584,17 +448,17 @@ impl Coordinator {
         Row::pack_slice(&[
             Datum::Uuid(*uuid),
             Datum::String(event.as_str()),
-            Datum::TimestampTz(mz_ore::now::to_datetime(when).try_into().expect("must fit")),
+            Datum::TimestampTz(to_datetime(when).try_into().expect("must fit")),
         ])
     }
 
-    pub fn pack_full_statement_execution_update(
+    fn pack_full_statement_execution_update(
         began_record: &StatementBeganExecutionRecord,
         ended_record: &StatementEndedExecutionRecord,
     ) -> Row {
         let mut row = Row::default();
         let mut packer = row.packer();
-        Self::pack_statement_execution_inner(began_record, &mut packer);
+        pack_statement_execution_inner(began_record, &mut packer);
         let (status, error_message, result_size, rows_returned, execution_strategy) =
             match &ended_record.reason {
                 StatementEndedExecutionReason::Success {
@@ -629,11 +493,11 @@ impl Coordinator {
         row
     }
 
-    pub fn pack_statement_ended_execution_updates(
+    fn pack_statement_ended_execution_updates(
         began_record: &StatementBeganExecutionRecord,
         ended_record: &StatementEndedExecutionRecord,
     ) -> [(Row, Diff); 2] {
-        let retraction = Self::pack_statement_began_execution_update(began_record);
+        let retraction = pack_statement_began_execution_update(began_record);
         let new = Self::pack_full_statement_execution_update(began_record, ended_record);
         [(retraction, Diff::MINUS_ONE), (new, Diff::ONE)]
     }
@@ -649,19 +513,22 @@ impl Coordinator {
             .executions_begun
             .get_mut(&id)
             .expect("mutate_record must not be called after execution ends");
-        let retraction = Self::pack_statement_began_execution_update(record);
+        let retraction = pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
             .push((retraction, Diff::MINUS_ONE));
         f(record);
-        let update = Self::pack_statement_began_execution_update(record);
+        let update = pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
             .push((update, Diff::ONE));
     }
 
     /// Set the `cluster_id` for a statement, once it's known.
-    pub fn set_statement_execution_cluster(
+    ///
+    /// TODO(peek-seq): We could do cluster resolution and packing in the frontend task, and just
+    /// send over the rows.
+    pub(crate) fn set_statement_execution_cluster(
         &mut self,
         id: StatementLoggingId,
         cluster_id: ClusterId,
@@ -674,7 +541,7 @@ impl Coordinator {
     }
 
     /// Set the `execution_timestamp` for a statement, once it's known
-    pub fn set_statement_execution_timestamp(
+    pub(crate) fn set_statement_execution_timestamp(
         &mut self,
         id: StatementLoggingId,
         timestamp: Timestamp,
@@ -684,7 +551,11 @@ impl Coordinator {
         });
     }
 
-    pub fn set_transient_index_id(&mut self, id: StatementLoggingId, transient_index_id: GlobalId) {
+    pub(crate) fn set_transient_index_id(
+        &mut self,
+        id: StatementLoggingId,
+        transient_index_id: GlobalId,
+    ) {
         self.mutate_record(id, |record| {
             record.transient_index_id = Some(transient_index_id)
         });
@@ -696,7 +567,7 @@ impl Coordinator {
     ///
     /// `lifecycle_timestamps` has timestamps that come from the Adapter frontend (`mz-pgwire`) part
     /// of the lifecycle.
-    pub fn begin_statement_execution(
+    pub(crate) fn begin_statement_execution(
         &mut self,
         session: &mut Session,
         params: &Params,
@@ -710,17 +581,22 @@ impl Coordinator {
         if session.user().is_internal() && !enable_internal_statement_logging {
             return None;
         }
-        let sample_rate = self.statement_execution_sample_rate(session);
 
-        let distribution = Bernoulli::new(sample_rate).expect("rate must be in range [0, 1]");
-        let sample = if self
+        let sample_rate = effective_sample_rate(session, self.catalog().system_config());
+        let use_reproducible_rng = self
             .catalog()
             .system_config()
-            .statement_logging_use_reproducible_rng()
-        {
-            distribution.sample(&mut self.statement_logging.reproducible_rng)
+            .statement_logging_use_reproducible_rng();
+        // Only lock the RNG when we actually need reproducible sampling (tests only)
+        let sample = if use_reproducible_rng {
+            let mut rng = self
+                .statement_logging
+                .reproducible_rng
+                .lock()
+                .expect("rng lock poisoned");
+            should_sample_statement(sample_rate, Some(&mut *rng))
         } else {
-            distribution.sample(&mut rand::rng())
+            should_sample_statement(sample_rate, None)
         };
 
         // Figure out the cost of everything before we log.
@@ -764,49 +640,24 @@ impl Coordinator {
         let now = self.now();
         let execution_uuid = epoch_to_uuid_v7(&now);
 
-        let params = std::iter::zip(params.execute_types.iter(), params.datums.iter())
-            .map(|(r#type, datum)| {
-                mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
-                    let mut buf = BytesMut::new();
-                    val.encode_text(&mut buf);
-                    String::from_utf8(Into::<Vec<u8>>::into(buf))
-                        .expect("Serialization shouldn't produce non-UTF-8 strings.")
-                })
-            })
-            .collect();
-        let record = StatementBeganExecutionRecord {
-            id: execution_uuid,
-            prepared_statement_id: ps_uuid,
+        let build_info_version = self
+            .catalog()
+            .state()
+            .config()
+            .build_info
+            .human_version(None);
+        let record = create_began_execution_record(
+            execution_uuid,
+            ps_uuid,
             sample_rate,
             params,
+            session,
             began_at,
-            application_name: session.application_name().to_string(),
-            transaction_isolation: session.vars().transaction_isolation().to_string(),
-            transaction_id: session
-                .transaction()
-                .inner()
-                .expect("Every statement runs in an explicit or implicit transaction")
-                .id,
-            mz_version: self
-                .catalog()
-                .state()
-                .config()
-                .build_info
-                .human_version(None),
-            // These are not known yet; we'll fill them in later.
-            cluster_id: None,
-            cluster_name: None,
-            execution_timestamp: None,
-            transient_index_id: None,
-            database_name: session.vars().database().into(),
-            search_path: session
-                .vars()
-                .search_path()
-                .iter()
-                .map(|s| s.as_str().to_string())
-                .collect(),
-        };
-        let mseh_update = Self::pack_statement_began_execution_update(&record);
+            build_info_version,
+        );
+
+        // `mz_statement_execution_history`
+        let mseh_update = pack_statement_began_execution_update(&record);
 
         let (maybe_ps_event, maybe_sh_event) = if let Some((ps_record, ps_event)) = maybe_ps {
             if let Some(sh) = self
@@ -834,7 +685,10 @@ impl Coordinator {
             maybe_ps_sql_text,
             maybe_sh_event.as_ref().map(|(row, _)| row),
         ]) {
-            self.statement_logging.throttled_count += 1;
+            // Increment throttled_count in shared state
+            self.statement_logging
+                .throttling_state
+                .increment_throttled_count();
             return None;
         }
         // When we successfully log the first instance of a prepared statement
@@ -842,7 +696,9 @@ impl Coordinator {
         // throttled statement executions in the builtin prepared statement history table above,
         // and then reset the throttled count for future tracking.
         else if let PreparedStatementLoggingInfo::StillToLog { .. } = session.qcell_ro(logging) {
-            self.statement_logging.throttled_count = 0;
+            self.statement_logging
+                .throttling_state
+                .reset_throttled_count();
         }
 
         self.record_prepared_statement_as_logged(ps_uuid, session, logging);
@@ -872,11 +728,12 @@ impl Coordinator {
                 .pending_prepared_statement_events
                 .push(ps_event);
         }
+
         Some(StatementLoggingId(execution_uuid))
     }
 
     /// Record a new connection event
-    pub fn begin_session_for_statement_logging(&mut self, session: &ConnMeta) {
+    pub(crate) fn begin_session_for_statement_logging(&mut self, session: &ConnMeta) {
         let id = session.uuid();
         let session_role = session.authenticated_role_id();
         let event = SessionHistoryEvent {
@@ -888,11 +745,11 @@ impl Coordinator {
         self.statement_logging.unlogged_sessions.insert(id, event);
     }
 
-    pub fn end_session_for_statement_logging(&mut self, uuid: Uuid) {
+    pub(crate) fn end_session_for_statement_logging(&mut self, uuid: Uuid) {
         self.statement_logging.unlogged_sessions.remove(&uuid);
     }
 
-    pub fn record_statement_lifecycle_event(
+    pub(crate) fn record_statement_lifecycle_event(
         &mut self,
         id: &StatementLoggingId,
         event: &StatementLifecycleEvent,
@@ -907,11 +764,43 @@ impl Coordinator {
                 .push(row);
         }
     }
-}
 
-mod sealed {
-    /// A struct that is purposefully private so folks are forced to use the constructor of an
-    /// enum.
-    #[derive(Debug, Copy, Clone)]
-    pub struct Private;
+    /// Install watch sets for statement lifecycle logging.
+    ///
+    /// This installs both storage and compute watch sets that will fire
+    /// `StatementLifecycleEvent::StorageDependenciesFinished` and
+    /// `StatementLifecycleEvent::ComputeDependenciesFinished` respectively
+    /// when the dependencies are ready at the given timestamp.
+    pub(crate) fn install_peek_watch_sets(
+        &mut self,
+        conn_id: ConnectionId,
+        watch_set: WatchSetCreation,
+    ) -> Result<(), CollectionLookupError> {
+        let WatchSetCreation {
+            logging_id,
+            timestamp,
+            storage_ids,
+            compute_ids,
+        } = watch_set;
+
+        self.install_storage_watch_set(
+            conn_id.clone(),
+            storage_ids,
+            timestamp,
+            WatchSetResponse::StatementDependenciesReady(
+                logging_id,
+                StatementLifecycleEvent::StorageDependenciesFinished,
+            ),
+        )?;
+        self.install_compute_watch_set(
+            conn_id,
+            compute_ids,
+            timestamp,
+            WatchSetResponse::StatementDependenciesReady(
+                logging_id,
+                StatementLifecycleEvent::ComputeDependenciesFinished,
+            ),
+        )?;
+        Ok(())
+    }
 }

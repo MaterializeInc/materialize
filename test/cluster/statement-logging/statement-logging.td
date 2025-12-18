@@ -33,6 +33,10 @@ ALTER SYSTEM SET enable_statement_lifecycle_logging = true
 # so we can be sure that their `began_at` is different.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="1s"
 
+# This should fail due to RBAC checks.
+! SELECT count(*) FROM mz_internal.mz_statement_execution_history;
+contains: permission denied
+
 # Make it so we can query the tables later
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_rbac_checks = false
@@ -46,6 +50,11 @@ ALTER SYSTEM SET enable_compute_peek_response_stash = false
 # This will be executed on `mz_catalog_server`, due to auto-routing of "simple" queries.
 > SELECT 'beginning real test!'
 "beginning real test!"
+
+> SHOW OBJECTS;
+
+! SELECT 1/0;
+contains: division by zero
 
 > PREPARE p AS values ($1)
 
@@ -130,6 +139,7 @@ serializable
 <null> <null> my_app 1 {} success <null> <null> <null> <null> true "SET transaction_isolation TO serializable" "strict serializable" <null> materialize {public}
 <null> c my_app 1 {} success <null> 18 1 standard true "SELECT count(*) FROM t" "strict serializable" true materialize {public}
 <null> c my_app 1 {} success <null> <null> <null> <null> true "DROP CLUSTER c" "strict serializable" <null> materialize {public}
+quickstart quickstart my_app 1 {} error "division by zero" <null> <null> <null> true "SELECT 1/0" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} error "Evaluation error: division by zero" <null> <null> <null> true "SELECT f/0 FROM t" "strict serializable" true materialize {public}
 quickstart quickstart my_app 1 {} success <null> 13 1 constant true "EXECUTE p ('<REDACTED>')" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> 18 1 fast-path true "SELECT * FROM t" "strict serializable" <null> materialize {public}
@@ -146,6 +156,7 @@ quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "FETC
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "INSERT INTO t VALUES ('<REDACTED>')" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "PREPARE p AS values ($1)" "strict serializable" <null> materialize {public}
 quickstart quickstart my_app 1 {} success <null> <null> <null> <null> true "SET cluster TO c" "strict serializable" <null> materialize {public}
+mz_catalog_server mz_catalog_server my_app 1 {} success <null> 0 0 fast-path true "SHOW OBJECTS" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 22 1 constant true "SELECT 'beginning real test!'" "strict serializable" <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 14 1 constant true "SELECT 'serializable'" serializable <null> materialize {public}
 mz_catalog_server mz_catalog_server my_app 1 {} success <null> 17 1 standard true "SELECT count(*) > 0 FROM mz_internal.mz_cluster_replica_metrics" "strict serializable" true materialize {public}
@@ -225,6 +236,16 @@ COMMIT execution-finished
 "SET cluster TO c" execution-finished
 "SET transaction_isolation TO serializable" execution-began
 "SET transaction_isolation TO serializable" execution-finished
+"SELECT 1/0" compute-dependencies-finished
+"SELECT 1/0" execution-began
+"SELECT 1/0" execution-finished
+"SELECT 1/0" optimization-finished
+"SELECT 1/0" storage-dependencies-finished
+"SHOW OBJECTS" compute-dependencies-finished
+"SHOW OBJECTS" execution-began
+"SHOW OBJECTS" execution-finished
+"SHOW OBJECTS" optimization-finished
+"SHOW OBJECTS" storage-dependencies-finished
 
 # Test that everything in a transaction has the same transaction ID
 
