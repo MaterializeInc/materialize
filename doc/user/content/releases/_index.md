@@ -11,9 +11,14 @@ aliases:
 ---
 
 {{< note >}}
-Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
-both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
-{{</ note >}}
+
+- Starting with the v26.1.0 release, Materialize releases on a weekly schedule
+for both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for
+details.
+
+- New Terraform modules for Self-Managed are now GA. For details, see [Terraform
+releases](/self-managed-deployments/release-versions/#terraform-releases). {{</
+note >}}
 
 ## v26.8.0
 *Released to Materialize Cloud: 2026-01-22* <br>
