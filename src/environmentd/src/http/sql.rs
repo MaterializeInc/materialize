@@ -30,7 +30,7 @@ use mz_adapter::client::RecordFirstRowStream;
 use mz_adapter::session::{EndTransactionAction, TransactionStatus};
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, ExecuteResponseKind,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, ExecuteResponseKind,
     PeekResponseUnary, SessionClient, verify_datum_desc,
 };
 use mz_auth::password::Password;
@@ -560,7 +560,7 @@ enum StatementResult {
         desc: RelationDesc,
         tag: String,
         rx: RecordFirstRowStream,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     },
 }
 
@@ -839,7 +839,7 @@ trait ResultSender: Send {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     );
 
     /// Returns a future that resolves only when the client connection has gone away.
@@ -870,7 +870,7 @@ impl ResultSender for SqlResponse {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     ) {
         let (res, stmt_logging) = match res {
             StatementResult::SqlResult(res) => {
@@ -923,7 +923,7 @@ impl ResultSender for WebSocket {
         res: StatementResult,
     ) -> (
         Result<Result<(), ()>, Error>,
-        Option<(StatementEndedExecutionReason, ExecuteContextExtra)>,
+        Option<(StatementEndedExecutionReason, ExecuteContextGuard)>,
     ) {
         let (has_rows, is_streaming) = match res {
             StatementResult::SqlResult(SqlResult::Err { .. }) => (false, false),

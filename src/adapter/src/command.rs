@@ -45,11 +45,11 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
-use crate::coord::ExecuteContextExtra;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
+use crate::coord::{ExecuteContextExtra, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::WatchSetCreation;
@@ -109,7 +109,7 @@ pub enum Command {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
-        outer_ctx_extra: Option<ExecuteContextExtra>,
+        outer_ctx_extra: Option<ExecuteContextGuard>,
     },
 
     /// Attempts to commit or abort the session's transaction. Guarantees that the Coordinator's
@@ -490,7 +490,7 @@ pub enum ExecuteResponse {
         target_name: String,
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'static>,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     },
     /// The requested connection was created.
     CreatedConnection,
@@ -552,7 +552,7 @@ pub enum ExecuteResponse {
         count: Option<FetchDirection>,
         /// How long to wait for results to arrive.
         timeout: ExecuteTimeout,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     },
     /// The requested privilege was granted.
     GrantedPrivilege,
@@ -595,7 +595,7 @@ pub enum ExecuteResponse {
     /// contained receiver.
     Subscribing {
         rx: RowBatchStream,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
         instance_id: ComputeInstanceId,
     },
     /// The active transaction committed.

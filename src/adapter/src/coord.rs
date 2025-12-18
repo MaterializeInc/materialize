@@ -1313,44 +1313,18 @@ impl PendingRead {
 /// is intended for use by code that invokes the execution processing flow
 /// (i.e., `sequence_plan`) without actually being a statement execution.
 ///
-/// If this struct is dropped with Some `statement_uuid`, the `Drop`
-/// implementation will automatically send a `Message::RetireExecute` to log
-/// the statement ending (with `Canceled` reason). This handles cases like
-/// connection drops where the context cannot be explicitly retired.
-/// See <https://github.com/MaterializeInc/database-issues/issues/7304>
-#[derive(Debug)]
+/// This is a pure data struct containing only the statement logging ID.
+/// For auto-retire-on-drop behavior, use `ExecuteContextGuard` which wraps
+/// this struct and owns the channel for sending retirement messages.
+#[derive(Debug, Default)]
 #[must_use]
 pub struct ExecuteContextExtra {
     statement_uuid: Option<StatementLoggingId>,
-    /// Channel for sending messages to the coordinator. Used for auto-retiring on drop.
-    /// For `Default` instances, this is a dummy sender (receiver already dropped), so
-    /// sends will fail silently - which is the desired behavior since Default instances
-    /// should only be used for non-logged statements.
-    coordinator_tx: mpsc::UnboundedSender<Message>,
-}
-
-impl Default for ExecuteContextExtra {
-    fn default() -> Self {
-        // Create a dummy sender by immediately dropping the receiver.
-        // Any send on this channel will fail silently, which is the desired
-        // behavior for Default instances (non-logged statements).
-        let (tx, _rx) = mpsc::unbounded_channel();
-        Self {
-            statement_uuid: None,
-            coordinator_tx: tx,
-        }
-    }
 }
 
 impl ExecuteContextExtra {
-    pub(crate) fn new(
-        statement_uuid: Option<StatementLoggingId>,
-        coordinator_tx: mpsc::UnboundedSender<Message>,
-    ) -> Self {
-        Self {
-            statement_uuid,
-            coordinator_tx,
-        }
+    pub(crate) fn new(statement_uuid: Option<StatementLoggingId>) -> Self {
+        Self { statement_uuid }
     }
     pub fn is_trivial(&self) -> bool {
         self.statement_uuid.is_none()
@@ -1358,28 +1332,84 @@ impl ExecuteContextExtra {
     pub fn contents(&self) -> Option<StatementLoggingId> {
         self.statement_uuid
     }
-    /// Take responsibility for the contents.  This should only be
-    /// called from code that knows what to do to finish up logging
-    /// based on the inner value.
+    /// Consume this extra and return the statement UUID for retirement.
+    /// This should only be called from code that knows what to do to finish
+    /// up logging based on the inner value.
     #[must_use]
-    pub(crate) fn retire(mut self) -> Option<StatementLoggingId> {
-        // Taking statement_uuid prevents the Drop impl from sending a retire message
-        self.statement_uuid.take()
+    pub(crate) fn retire(self) -> Option<StatementLoggingId> {
+        self.statement_uuid
     }
 }
 
-impl Drop for ExecuteContextExtra {
+/// A guard that wraps `ExecuteContextExtra` and owns a channel for sending
+/// retirement messages to the coordinator.
+///
+/// If this guard is dropped with a `Some` `statement_uuid` in its inner
+/// `ExecuteContextExtra`, the `Drop` implementation will automatically send a
+/// `Message::RetireExecute` to log the statement ending.
+/// This handles cases like connection drops where the context cannot be
+/// explicitly retired.
+/// See <https://github.com/MaterializeInc/database-issues/issues/7304>
+#[derive(Debug)]
+#[must_use]
+pub struct ExecuteContextGuard {
+    extra: ExecuteContextExtra,
+    /// Channel for sending messages to the coordinator. Used for auto-retiring on drop.
+    /// For `Default` instances, this is a dummy sender (receiver already dropped), so
+    /// sends will fail silently - which is the desired behavior since Default instances
+    /// should only be used for non-logged statements.
+    coordinator_tx: mpsc::UnboundedSender<Message>,
+}
+
+impl Default for ExecuteContextGuard {
+    fn default() -> Self {
+        // Create a dummy sender by immediately dropping the receiver.
+        // Any send on this channel will fail silently, which is the desired
+        // behavior for Default instances (non-logged statements).
+        let (tx, _rx) = mpsc::unbounded_channel();
+        Self {
+            extra: ExecuteContextExtra::default(),
+            coordinator_tx: tx,
+        }
+    }
+}
+
+impl ExecuteContextGuard {
+    pub(crate) fn new(
+        statement_uuid: Option<StatementLoggingId>,
+        coordinator_tx: mpsc::UnboundedSender<Message>,
+    ) -> Self {
+        Self {
+            extra: ExecuteContextExtra::new(statement_uuid),
+            coordinator_tx,
+        }
+    }
+    pub fn is_trivial(&self) -> bool {
+        self.extra.is_trivial()
+    }
+    pub fn contents(&self) -> Option<StatementLoggingId> {
+        self.extra.contents()
+    }
+    /// Take responsibility for the contents.  This should only be
+    /// called from code that knows what to do to finish up logging
+    /// based on the inner value.
+    ///
+    /// Returns the inner `ExecuteContextExtra`, consuming the guard without
+    /// triggering the auto-retire behavior.
+    pub(crate) fn defuse(mut self) -> ExecuteContextExtra {
+        // Taking statement_uuid prevents the Drop impl from sending a retire message
+        std::mem::take(&mut self.extra)
+    }
+}
+
+impl Drop for ExecuteContextGuard {
     fn drop(&mut self) {
-        if let Some(statement_uuid) = self.statement_uuid.take() {
-            // Auto-retire since the context was dropped without explicit retirement (likely due
+        if let Some(statement_uuid) = self.extra.statement_uuid.take() {
+            // Auto-retire since the guard was dropped without explicit retirement (likely due
             // to connection drop).
-            // Create a dummy sender for the inner ExecuteContextExtra to prevent recursion.
-            // The dummy sender's receiver is immediately dropped, so any send will fail silently.
-            let (dummy_tx, _) = mpsc::unbounded_channel();
             let msg = Message::RetireExecute {
                 data: ExecuteContextExtra {
                     statement_uuid: Some(statement_uuid),
-                    coordinator_tx: dummy_tx,
                 },
                 otel_ctx: OpenTelemetryContext::obtain(),
                 reason: StatementEndedExecutionReason::Aborted,
@@ -1401,7 +1431,7 @@ impl Drop for ExecuteContextExtra {
 /// performing some work on the main coordinator thread
 /// (e.g., recording the time at which the statement finished
 /// executing). The state necessary to perform this work is bundled in
-/// the `ExecuteContextExtra` object.
+/// the `ExecuteContextGuard` object.
 #[derive(Debug)]
 pub struct ExecuteContext {
     inner: Box<ExecuteContextInner>,
@@ -1425,7 +1455,7 @@ pub struct ExecuteContextInner {
     tx: ClientTransmitter<ExecuteResponse>,
     internal_cmd_tx: mpsc::UnboundedSender<Message>,
     session: Session,
-    extra: ExecuteContextExtra,
+    extra: ExecuteContextGuard,
 }
 
 impl ExecuteContext {
@@ -1449,7 +1479,7 @@ impl ExecuteContext {
         tx: ClientTransmitter<ExecuteResponse>,
         internal_cmd_tx: mpsc::UnboundedSender<Message>,
         session: Session,
-        extra: ExecuteContextExtra,
+        extra: ExecuteContextGuard,
     ) -> Self {
         Self {
             inner: ExecuteContextInner {
@@ -1463,11 +1493,11 @@ impl ExecuteContext {
     }
 
     /// By calling this function, the caller takes responsibility for
-    /// dealing with the instance of `ExecuteContextExtra`. This is
+    /// dealing with the instance of `ExecuteContextGuard`. This is
     /// intended to support protocols (like `COPY FROM`) that involve
     /// multiple passes of sending the session back and forth between
     /// the coordinator and the pgwire layer. As part of any such
-    /// protocol, we must ensure that the `ExecuteContextExtra`
+    /// protocol, we must ensure that the `ExecuteContextGuard`
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
     /// eventual retirement.
     pub fn into_parts(
@@ -1476,7 +1506,7 @@ impl ExecuteContext {
         ClientTransmitter<ExecuteResponse>,
         mpsc::UnboundedSender<Message>,
         Session,
-        ExecuteContextExtra,
+        ExecuteContextGuard,
     ) {
         let ExecuteContextInner {
             tx,
@@ -1503,6 +1533,8 @@ impl ExecuteContext {
         };
         tx.send(result, session);
         if let Some(reason) = reason {
+            // Retire the guard to get the inner ExecuteContextExtra without triggering auto-retire
+            let extra = extra.defuse();
             if let Err(e) = internal_cmd_tx.send(Message::RetireExecute {
                 otel_ctx: OpenTelemetryContext::obtain(),
                 data: extra,
@@ -1513,11 +1545,11 @@ impl ExecuteContext {
         }
     }
 
-    pub fn extra(&self) -> &ExecuteContextExtra {
+    pub fn extra(&self) -> &ExecuteContextGuard {
         &self.extra
     }
 
-    pub fn extra_mut(&mut self) -> &mut ExecuteContextExtra {
+    pub fn extra_mut(&mut self) -> &mut ExecuteContextGuard {
         &mut self.extra
     }
 }

@@ -44,7 +44,7 @@ use crate::coord::sequencer::{eval_copy_to_uri, statistics_oracle};
 use crate::coord::timeline::timedomain_for;
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{
-    Coordinator, CopyToContext, ExecuteContextExtra, ExplainContext, ExplainPlanContext,
+    Coordinator, CopyToContext, ExecuteContextGuard, ExplainContext, ExplainPlanContext,
     TargetCluster,
 };
 use crate::explain::insights::PlanInsightsContext;
@@ -72,7 +72,7 @@ impl PeekClient {
         &mut self,
         portal_name: &str,
         session: &mut Session,
-        outer_ctx_extra: &mut Option<ExecuteContextExtra>,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         // # From handle_execute
 
@@ -100,7 +100,9 @@ impl PeekClient {
         // Extract things from the portal.
         let (stmt, params, logging, lifecycle_timestamps) = {
             if let Err(err) = Coordinator::verify_portal(&*catalog, session, portal_name) {
-                outer_ctx_extra.take().and_then(|extra| extra.retire());
+                outer_ctx_extra
+                    .take()
+                    .and_then(|guard| guard.defuse().retire());
                 return Err(err);
             }
             let portal = session
@@ -212,7 +214,9 @@ impl PeekClient {
             // logged in one of the following ways:
             // - At the end of this function, if the execution is finished by then.
             // - Later by the Coordinator, either due to RegisterFrontendPeek or ExecuteSlowPathPeek.
-            outer_ctx_extra.take().and_then(|extra| extra.retire())
+            outer_ctx_extra
+                .take()
+                .and_then(|guard| guard.defuse().retire())
         };
 
         let result = self

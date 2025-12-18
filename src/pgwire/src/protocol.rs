@@ -26,7 +26,7 @@ use mz_adapter::session::{
 };
 use mz_adapter::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use mz_adapter::{
-    AdapterError, AdapterNotice, ExecuteContextExtra, ExecuteResponse, PeekResponseUnary, metrics,
+    AdapterError, AdapterNotice, ExecuteContextGuard, ExecuteResponse, PeekResponseUnary, metrics,
     verify_datum_desc,
 };
 use mz_auth::password::Password;
@@ -1349,7 +1349,7 @@ where
         get_response: GetResponse,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-        outer_ctx_extra: Option<ExecuteContextExtra>,
+        outer_ctx_extra: Option<ExecuteContextGuard>,
         received: Option<EpochMillis>,
     ) -> BoxFuture<'_, Result<State, io::Error>> {
         async move {
@@ -1612,7 +1612,7 @@ where
         max_rows: ExecuteCount,
         fetch_portal_name: Option<String>,
         timeout: ExecuteTimeout,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     ) -> Result<State, io::Error> {
         // Unlike Execute, no count specified in FETCH returns 1 row, and 0 means 0
         // instead of All.
@@ -2503,7 +2503,7 @@ where
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
-        mut ctx_extra: ExecuteContextExtra,
+        mut ctx_extra: ExecuteContextGuard,
     ) -> Result<State, io::Error> {
         let res = self
             .copy_from_inner(
@@ -2547,7 +2547,7 @@ where
         columns: Vec<ColumnIndex>,
         params: CopyFormatParams<'_>,
         row_desc: RelationDesc,
-        ctx_extra: &mut ExecuteContextExtra,
+        ctx_extra: &mut ExecuteContextGuard,
     ) -> Result<State, io::Error> {
         let typ = row_desc.typ();
         let column_formats = vec![Format::Text; typ.column_types.len()];
