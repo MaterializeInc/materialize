@@ -345,15 +345,16 @@ def main() -> int:
         if args.build_only:
             return build_retcode
 
-        command = _cargo_command(args, "nextest")
         try:
             subprocess.check_output(
-                command + ["--version"], env=env, stderr=subprocess.PIPE
+                _cargo_command(args, "nextest") + ["--version"],
+                env=env,
+                stderr=subprocess.PIPE,
             )
         except subprocess.CalledProcessError:
             raise UIError("cargo nextest not found, run `cargo install cargo-nextest`")
 
-        command += ["run"]
+        command = _cargo_command(args, "nextest", "run")
 
         for package in args.package:
             command += ["--package", package]
@@ -482,15 +483,18 @@ def _cargo_build(
     return (completed_proc.returncode, artifacts)
 
 
-def _cargo_command(args: argparse.Namespace, subcommand: str) -> list[str]:
+def _cargo_command(args: argparse.Namespace, *subcommands: str) -> list[str]:
     command = ["cargo"]
     if args.channel:
         command += [args.channel]
-    command += [subcommand]
+    command += subcommands
     if args.release:
         command += ["--release"]
     if args.optimized:
-        command += ["--profile", "optimized"]
+        command += [
+            "--cargo-profile" if subcommands == ("nextest", "run") else "--profile",
+            "optimized",
+        ]
     if args.timings:
         command += ["--timings"]
     if args.no_default_features:
