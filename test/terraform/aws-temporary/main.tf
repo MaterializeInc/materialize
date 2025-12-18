@@ -78,9 +78,6 @@ module "karpenter" {
   cluster_oidc_issuer_url = module.eks.cluster_oidc_issuer_url
   node_selector           = local.base_node_labels
 
-  helm_repo_username = data.aws_ecrpublic_authorization_token.token.user_name
-  helm_repo_password = data.aws_ecrpublic_authorization_token.token.password
-
   depends_on = [
     module.eks,
     module.base_node_group,
