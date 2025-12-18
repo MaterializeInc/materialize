@@ -110,16 +110,6 @@ create_source_sql-server ::=
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   with_options?
-insert ::=
-  'INSERT' 'INTO' table_name ('AS'? alias)
-  ( '(' (col_name) ( ',' col_name )* ')' )?
-  (
-    'VALUES' ( ('(' (expr) ( ( ',' expr ) )* ')') ( ( ',' ('(' (expr) ( ( ',' expr ) )* ')') )* ) )
-    | query
-  )
-  ( 'RETURNING' ( '*' | output_expression ( AS? output_name )? ) ( ',' ( '*' | output_expression ( AS? output_name )? ) )* )?
-execute ::=
-  'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain_filter_pushdown ::=
   'EXPLAIN FILTER PUSHDOWN'
   'FOR'
@@ -138,9 +128,6 @@ explain_schema ::=
   'FOR'
   'CREATE SINK' (sink_name)?
   sink_definition
-fetch ::=
-  'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
-  ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
   'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name key_strat? val_strat? with_options? |
   'PROTOBUF' ('USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options | 'MESSAGE' message_name 'USING SCHEMA' encoded_schema) |
@@ -149,8 +136,6 @@ format_spec ::=
   'TEXT' |
   'BYTES' |
   'JSON'
-grant_role ::=
-  'GRANT' role_name ( ',' role_name )* 'TO' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 key_strat ::=
   'KEY STRATEGY' strat
 val_strat ::=

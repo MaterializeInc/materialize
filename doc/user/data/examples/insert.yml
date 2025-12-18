@@ -1,0 +1,28 @@
+- name: "syntax"
+  code: |
+    INSERT INTO <table_name> [[AS] <alias>] [ ( <col1> [, ...] ) ]
+    VALUES ( <expr1> [, ...] ) [, ...] | DEFAULT VALUES | <query>
+    [RETURNING <output_expr | *> [, ...] ]
+  syntax_elements:
+    - name: "`<table_name>`"
+      description: |
+        The table to write values to.
+    - name: "`<col1> [, ...]`"
+      description: |
+        Correlates the inserted rows' columns to `<table_name>`'s columns by ordinal position, i.e. the first column of the row to insert is correlated to the first named column.
+
+        If some but not all of `<table_name>`'s columns are provided, the unprovided columns receive their type's default value, or `NULL` if no default value was specified.
+    - name: "`VALUES ( <expr1> [, ...] ) [, ...]`"
+      description: |
+        A list of tuples `( <expr1> [, ...] ) [, ...]` to insert. Each tuple contains expressions or values to be inserted into the columns. If a given column is nullable, a `NULL` value may be provided.
+    - name: "`DEFAULT VALUES`"
+      description: |
+        Insert a single row using the default value for all columns.
+    - name: "`<query>`"
+      description: |
+        A [`SELECT`](/sql/select) statement whose returned rows you want to write to the table.
+    - name: "`RETURNING <output_expr | *> [, ...]`"
+      description: |
+        Causes `INSERT` to return values based on each inserted row:
+        - `*` to return all columns
+        - `<output_expr> [[AS] <alias>]`. [Aggregate functions](/sql/functions/#aggregate-functions) are not allowed in the `RETURNING` clause.
