@@ -176,6 +176,7 @@ class Action:
                     "was dropped while executing a statement",
                     "' was dropped",  # ConcurrentDependencyDrop (collection, schema, etc.)
                     "non-temporary items cannot depend on temporary item",  # TODO(def-): Fix?
+                    "is not readable at any timestamp",  # Expected, due to object drops
                 ]
             )
         if exe.db.scenario == Scenario.Cancel:
