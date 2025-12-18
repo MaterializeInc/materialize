@@ -1318,13 +1318,28 @@ impl PendingRead {
 /// the statement ending (with `Canceled` reason). This handles cases like
 /// connection drops where the context cannot be explicitly retired.
 /// See <https://github.com/MaterializeInc/database-issues/issues/7304>
-#[derive(Debug, Default)]
+#[derive(Debug)]
 #[must_use]
 pub struct ExecuteContextExtra {
     statement_uuid: Option<StatementLoggingId>,
     /// Channel for sending messages to the coordinator. Used for auto-retiring on drop.
-    /// If `None`, dropping will not send a retire message (this can happen for `Default` instances).
-    coordinator_tx: Option<mpsc::UnboundedSender<Message>>,
+    /// For `Default` instances, this is a dummy sender (receiver already dropped), so
+    /// sends will fail silently - which is the desired behavior since Default instances
+    /// should only be used for non-logged statements.
+    coordinator_tx: mpsc::UnboundedSender<Message>,
+}
+
+impl Default for ExecuteContextExtra {
+    fn default() -> Self {
+        // Create a dummy sender by immediately dropping the receiver.
+        // Any send on this channel will fail silently, which is the desired
+        // behavior for Default instances (non-logged statements).
+        let (tx, _rx) = mpsc::unbounded_channel();
+        Self {
+            statement_uuid: None,
+            coordinator_tx: tx,
+        }
+    }
 }
 
 impl ExecuteContextExtra {
@@ -1334,7 +1349,7 @@ impl ExecuteContextExtra {
     ) -> Self {
         Self {
             statement_uuid,
-            coordinator_tx: Some(coordinator_tx),
+            coordinator_tx,
         }
     }
     pub fn is_trivial(&self) -> bool {
@@ -1348,7 +1363,7 @@ impl ExecuteContextExtra {
     /// based on the inner value.
     #[must_use]
     pub(crate) fn retire(mut self) -> Option<StatementLoggingId> {
-        self.coordinator_tx = None;
+        // Taking statement_uuid prevents the Drop impl from sending a retire message
         self.statement_uuid.take()
     }
 }
@@ -1356,22 +1371,22 @@ impl ExecuteContextExtra {
 impl Drop for ExecuteContextExtra {
     fn drop(&mut self) {
         if let Some(statement_uuid) = self.statement_uuid.take() {
-            if let Some(tx) = &self.coordinator_tx {
-                // Auto-retire since the context was dropped without explicit retirement (likely due
-                // to connection drop).
-                let msg = Message::RetireExecute {
-                    data: ExecuteContextExtra {
-                        statement_uuid: Some(statement_uuid),
-                        coordinator_tx: None, // Prevent recursion
-                    },
-                    otel_ctx: OpenTelemetryContext::obtain(),
-                    reason: StatementEndedExecutionReason::Aborted,
-                };
-                let _ = tx.send(msg);
-            }
-            // If no channel is available (e.g., Default instance), we silently
-            // drop. This is acceptable because Default instances should only be
-            // used for non-logged statements.
+            // Auto-retire since the context was dropped without explicit retirement (likely due
+            // to connection drop).
+            // Create a dummy sender for the inner ExecuteContextExtra to prevent recursion.
+            // The dummy sender's receiver is immediately dropped, so any send will fail silently.
+            let (dummy_tx, _) = mpsc::unbounded_channel();
+            let msg = Message::RetireExecute {
+                data: ExecuteContextExtra {
+                    statement_uuid: Some(statement_uuid),
+                    coordinator_tx: dummy_tx,
+                },
+                otel_ctx: OpenTelemetryContext::obtain(),
+                reason: StatementEndedExecutionReason::Aborted,
+            };
+            // Send may fail for Default instances (dummy sender), which is fine since
+            // Default instances should only be used for non-logged statements.
+            let _ = self.coordinator_tx.send(msg);
         }
     }
 }
