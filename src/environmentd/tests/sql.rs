@@ -2411,8 +2411,6 @@ fn test_emit_tracing_notice() {
         .with_system_parameter_default("log_filter".to_string(), "info".to_string())
         .start_blocking();
 
-    server.disable_feature_flags(&["enable_frontend_peek_sequencing"]);
-
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let mut client = server

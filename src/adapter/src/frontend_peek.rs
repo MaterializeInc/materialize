@@ -74,12 +74,6 @@ impl PeekClient {
         session: &mut Session,
         outer_ctx_extra: &mut Option<ExecuteContextExtra>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        if session.vars().emit_timestamp_notice() {
-            // TODO(peek-seq): implement this. See end of peek_finish
-            debug!("Bailing out from try_frontend_peek, because emit_timestamp_notice");
-            return Ok(None);
-        }
-
         // # From handle_execute
 
         if session.vars().emit_trace_id_notice() {
@@ -103,14 +97,12 @@ impl PeekClient {
         // back to the old sequencing.
         let catalog = self.catalog_snapshot("try_frontend_peek").await;
 
-        if let Err(_) = Coordinator::verify_portal(&*catalog, session, portal_name) {
-            // TODO(peek-seq): Don't fall back to the coordinator's peek sequencing here, but retire already.
-            debug!("Bailing out from try_frontend_peek, because verify_portal returned an error");
-            return Ok(None);
-        }
-
         // Extract things from the portal.
         let (stmt, params, logging, lifecycle_timestamps) = {
+            if let Err(err) = Coordinator::verify_portal(&*catalog, session, portal_name) {
+                outer_ctx_extra.take().and_then(|extra| extra.retire());
+                return Err(err);
+            }
             let portal = session
                 .get_portal_unverified(portal_name)
                 // The portal is a session-level thing, so it couldn't have concurrently disappeared
@@ -299,8 +291,13 @@ impl PeekClient {
             }
         };
 
-        let session_type = metrics::session_type_label_value(session.user());
-        let stmt_type = metrics::statement_type_label_value(&stmt);
+        session
+            .metrics()
+            .query_total(&[
+                metrics::session_type_label_value(session.user()),
+                metrics::statement_type_label_value(&stmt),
+            ])
+            .inc();
 
         // # From handle_execute_inner
 
@@ -1127,15 +1124,6 @@ impl PeekClient {
                     session.add_notice(AdapterNotice::PlanInsights(insights));
                 }
 
-                // TODO(peek-seq): move this up to the beginning of the function when we have eliminated all
-                // the fallbacks to the old peek sequencing. Currently, it has to be here to avoid
-                // double-counting a fallback situation, but this has the drawback that if we error out
-                // from this function then we don't count the peek at all.
-                session
-                    .metrics()
-                    .query_total(&[session_type, stmt_type])
-                    .inc();
-
                 // # Now back to peek_finish
 
                 let watch_set = statement_logging_id.map(|logging_id| {
@@ -1148,6 +1136,14 @@ impl PeekClient {
                 });
 
                 let max_result_size = catalog.system_config().max_result_size();
+
+                // Clone determination if we need it for emit_timestamp_notice, since it may be
+                // moved into Command::ExecuteSlowPathPeek.
+                let determination_for_notice = if session.vars().emit_timestamp_notice() {
+                    Some(determination.clone())
+                } else {
+                    None
+                };
 
                 let response = match peek_plan {
                     PeekPlan::FastPath(fast_path_plan) => {
@@ -1283,6 +1279,21 @@ impl PeekClient {
                         .await?
                     }
                 };
+
+                // Add timestamp notice if emit_timestamp_notice is enabled
+                if let Some(determination) = determination_for_notice {
+                    let explanation = self
+                        .call_coordinator(|tx| Command::ExplainTimestamp {
+                            conn_id: session.conn_id().clone(),
+                            session_wall_time: session.pcx().wall_time,
+                            cluster_id: target_cluster_id,
+                            id_bundle: input_id_bundle.clone(),
+                            determination,
+                            tx,
+                        })
+                        .await;
+                    session.add_notice(AdapterNotice::QueryTimestamp { explanation });
+                }
 
                 Ok(Some(match select_plan.copy_to {
                     None => response,

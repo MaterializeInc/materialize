@@ -871,8 +871,13 @@ impl Coordinator {
             .await?;
 
         if ctx.session().vars().emit_timestamp_notice() {
-            let explanation =
-                self.explain_timestamp(ctx.session(), cluster_id, &id_bundle, determination);
+            let explanation = self.explain_timestamp(
+                ctx.session().conn_id(),
+                ctx.session().pcx().wall_time,
+                cluster_id,
+                &id_bundle,
+                determination,
+            );
             ctx.session()
                 .add_notice(AdapterNotice::QueryTimestamp { explanation });
         }

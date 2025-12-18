@@ -380,6 +380,7 @@ impl Message {
                 Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
                 Command::RegisterFrontendPeek { .. } => "register-frontend-peek",
                 Command::UnregisterFrontendPeek { .. } => "unregister-frontend-peek",
+                Command::ExplainTimestamp { .. } => "explain-timestamp",
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
             },
             Message::ControllerReady {
