@@ -110,6 +110,9 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
                 unit_test::TestValidationError::ExpectedSchemaMismatch(inner) => {
                     eprintln!("{}", inner)
                 }
+                unit_test::TestValidationError::InvalidAtTime(inner) => {
+                    eprintln!("{}", inner)
+                }
                 unit_test::TestValidationError::TypesCacheUnavailable { reason } => {
                     eprintln!(
                         "{}: types cache unavailable: {}",
@@ -137,6 +140,27 @@ pub async fn run(directory: &Path) -> Result<(), CliError> {
                 )));
             }
         };
+
+        // Validate at_time if present by attempting to cast it to mz_timestamp
+        if let Some(at_time) = &test.at_time {
+            let validation_query = format!("SELECT {}::mz_timestamp", at_time);
+            if let Err(e) = client.query(&validation_query, &[]).await {
+                println!(
+                    "{} {} ... {}",
+                    "test".cyan(),
+                    test.name.cyan(),
+                    "VALIDATION FAILED".red().bold()
+                );
+                let error = unit_test::InvalidAtTimeError {
+                    test_name: test.name.clone(),
+                    at_time_value: at_time.clone(),
+                    db_error: e.to_string(),
+                };
+                eprintln!("{}", error);
+                validation_failed += 1;
+                continue;
+            }
+        }
 
         print!("{} {} ... ", "test".cyan(), test.name.cyan());
 

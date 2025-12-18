@@ -11,16 +11,21 @@
 //! ```sql
 //! EXECUTE UNIT TEST test_name
 //! FOR database.schema.view_name
-//! WITH database.schema.mock1(col1 TYPE1, col2 TYPE2) AS (
+//! [AT TIME 'timestamp']  -- optional, sets mz_now() during test
+//! MOCK database.schema.mock1(col1 TYPE1, col2 TYPE2) AS (
 //!   SELECT * FROM VALUES (...)
 //! ),
-//! database.schema.mock2(col TYPE) AS (
+//! MOCK database.schema.mock2(col TYPE) AS (
 //!   SELECT * FROM VALUES (...)
 //! ),
-//! expected(col1 TYPE1, col2 TYPE2) AS (
+//! EXPECTED(col1 TYPE1, col2 TYPE2) AS (
 //!   SELECT * FROM VALUES (...)
 //! );
 //! ```
+//!
+//! The `AT TIME` clause is optional. When provided, it specifies the timestamp value
+//! that `mz_now()` will return during test execution. This is useful for testing
+//! views that use temporal filters based on `mz_now()`.
 //!
 //! # Output
 //!
@@ -29,6 +34,7 @@
 //! 2. CREATE TEMPORARY VIEW for expected results
 //! 3. CREATE TEMPORARY VIEW for the target (using flattened naming)
 //! 4. Test query that returns rows with status column indicating failures
+//!    (includes AS OF clause when AT TIME is specified)
 
 use crate::project::ast::Statement;
 use crate::project::normalize::NormalizingVisitor;
@@ -48,6 +54,8 @@ pub struct UnitTest {
     pub name: String,
     /// Fully qualified name of the target view being tested
     pub target_view: String,
+    /// Optional timestamp for mz_now() during test execution
+    pub at_time: Option<String>,
     /// Mock views to create for dependencies
     pub mocks: Vec<MockView>,
     /// Expected results definition
@@ -63,6 +71,12 @@ impl UnitTest {
 
         let name = stmt.name.to_string();
         let target_view = stmt.target.to_ast_string(FormatMode::Simple);
+
+        // Convert at_time if present
+        let at_time = stmt
+            .at_time
+            .as_ref()
+            .map(|expr| expr.to_ast_string(FormatMode::Simple));
 
         // Convert mocks
         let mocks = stmt
@@ -108,6 +122,7 @@ impl UnitTest {
         UnitTest {
             name,
             target_view,
+            at_time,
             mocks,
             expected,
         }
@@ -152,6 +167,10 @@ pub enum TestValidationError {
     /// Expected output doesn't match target view schema
     #[error("expected output schema mismatch")]
     ExpectedSchemaMismatch(ExpectedSchemaMismatchError),
+
+    /// The AT TIME value is not a valid timestamp
+    #[error("invalid at_time timestamp")]
+    InvalidAtTime(InvalidAtTimeError),
 
     /// Types cache is missing or stale
     #[error("types cache unavailable: {reason}")]
@@ -402,6 +421,60 @@ impl fmt::Display for ExpectedSchemaMismatchError {
 }
 
 impl std::error::Error for ExpectedSchemaMismatchError {}
+
+/// Error: The AT TIME value is not a valid timestamp.
+#[derive(Debug)]
+pub struct InvalidAtTimeError {
+    /// Test name
+    pub test_name: String,
+    /// The invalid AT TIME value
+    pub at_time_value: String,
+    /// The database error message
+    pub db_error: String,
+}
+
+impl fmt::Display for InvalidAtTimeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(
+            f,
+            "{}: test '{}' has invalid AT TIME value",
+            "error".bright_red().bold(),
+            self.test_name.cyan()
+        )?;
+        writeln!(
+            f,
+            " {} value: {}",
+            "-->".bright_blue().bold(),
+            self.at_time_value.yellow()
+        )?;
+        writeln!(f)?;
+
+        // Extract the useful part of the error message
+        // DB errors like: "Error: invalid input syntax for type mz_timestamp: ..."
+        // We want to show from "invalid input syntax..." forward
+        let display_error = self
+            .db_error
+            .find("invalid input syntax")
+            .map(|idx| &self.db_error[idx..])
+            .unwrap_or(&self.db_error);
+
+        writeln!(f, "  {} {}", "|".bright_blue().bold(), display_error.red())?;
+        writeln!(f)?;
+        writeln!(
+            f,
+            "  {} The AT TIME value must be a valid timestamp that can be cast to mz_timestamp",
+            "=".bright_blue().bold()
+        )?;
+        writeln!(
+            f,
+            "  {} Example: AT TIME '2024-01-15 10:00:00'",
+            "=".bright_blue().bold()
+        )?;
+        Ok(())
+    }
+}
+
+impl std::error::Error for InvalidAtTimeError {}
 
 /// Validate a unit test against the known types.
 ///
@@ -664,7 +737,10 @@ pub fn desugar_unit_test(
         target_fqn.object()
     );
     let flattened_target_name = flatten_fqn(&target_fqn_str);
-    statements.push(create_test_query_sql(&flattened_target_name));
+    statements.push(create_test_query_sql(
+        &flattened_target_name,
+        test.at_time.as_deref(),
+    ));
 
     statements
 }
@@ -790,7 +866,13 @@ fn create_target_view_sql(stmt: &Statement, fqn: &FullyQualifiedName) -> String 
 /// - 'UNEXPECTED': Actual rows not found in expected results
 ///
 /// Empty result means the test passed.
-fn create_test_query_sql(flattened_target_name: &str) -> String {
+///
+/// If `at_time` is provided, the query includes an `AS OF` clause to set
+/// the value of `mz_now()` during test execution.
+fn create_test_query_sql(flattened_target_name: &str, at_time: Option<&str>) -> String {
+    let as_of_clause = at_time
+        .map(|t| format!(" AS OF {}::mz_timestamp", t))
+        .unwrap_or_default();
     format!(
         r#"SELECT 'MISSING' as status, * FROM expected
 EXCEPT
@@ -800,8 +882,8 @@ UNION ALL
 
 SELECT 'UNEXPECTED' as status, * FROM {}
 EXCEPT
-SELECT 'UNEXPECTED', * FROM expected;"#,
-        flattened_target_name, flattened_target_name
+SELECT 'UNEXPECTED', * FROM expected{}"#,
+        flattened_target_name, flattened_target_name, as_of_clause
     )
 }
 
@@ -860,7 +942,7 @@ mod tests {
 
     #[test]
     fn test_create_test_query_sql() {
-        let sql = create_test_query_sql("materialize_public_my_view");
+        let sql = create_test_query_sql("materialize_public_my_view", None);
 
         assert!(sql.contains("SELECT 'MISSING' as status, * FROM expected"));
         assert!(sql.contains("SELECT 'MISSING', * FROM materialize_public_my_view"));
@@ -868,6 +950,16 @@ mod tests {
         assert!(sql.contains("SELECT 'UNEXPECTED', * FROM expected"));
         assert!(sql.contains("UNION ALL"));
         assert!(sql.contains("EXCEPT"));
+        assert!(!sql.contains("AS OF")); // No AS OF when at_time is None
+    }
+
+    #[test]
+    fn test_create_test_query_sql_with_at_time() {
+        let sql =
+            create_test_query_sql("materialize_public_my_view", Some("'2024-01-15 10:00:00'"));
+
+        assert!(sql.contains("SELECT 'MISSING' as status, * FROM expected"));
+        assert!(sql.contains("AS OF '2024-01-15 10:00:00'::mz_timestamp"));
     }
 
     // =========================================================================
@@ -989,6 +1081,7 @@ mod tests {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 MockView {
                     fqn: "materialize.public.users".to_string(),
@@ -1032,6 +1125,7 @@ mod tests {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 // Only mocking users, not orders
                 MockView {
@@ -1078,6 +1172,7 @@ mod tests {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 MockView {
                     fqn: "materialize.public.users".to_string(),
@@ -1131,6 +1226,7 @@ mod tests {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 MockView {
                     fqn: "materialize.public.users".to_string(),
@@ -1184,6 +1280,7 @@ mod tests {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 MockView {
                     fqn: "materialize.public.users".to_string(),
@@ -1239,6 +1336,7 @@ mod tests {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 MockView {
                     fqn: "materialize.public.users".to_string(),
@@ -1295,6 +1393,7 @@ mod tests {
         let test = UnitTest {
             name: "test_user_summary".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 MockView {
                     fqn: "materialize.public.users".to_string(),
@@ -1710,6 +1809,7 @@ mod tests {
         let test = UnitTest {
             name: "test_partial_fqn".to_string(),
             target_view: "materialize.public.user_order_summary".to_string(),
+            at_time: None,
             mocks: vec![
                 MockView {
                     fqn: "users".to_string(), // Unqualified - should resolve to materialize.public.users
@@ -1753,6 +1853,7 @@ mod tests {
         let test = UnitTest {
             name: "test_no_deps".to_string(),
             target_view: "materialize.public.my_view".to_string(),
+            at_time: None,
             mocks: vec![],
             expected: ExpectedResult {
                 columns: vec![("result".to_string(), "integer".to_string())],
@@ -1778,6 +1879,7 @@ mod tests {
         let test = UnitTest {
             name: "test_unknown_mock".to_string(),
             target_view: "materialize.public.my_view".to_string(),
+            at_time: None,
             mocks: vec![MockView {
                 fqn: "materialize.public.unknown_table".to_string(),
                 columns: vec![("id".to_string(), "bigint".to_string())],
