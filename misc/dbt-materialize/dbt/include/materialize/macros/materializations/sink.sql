@@ -24,6 +24,11 @@
                                                 database=database,
                                                 type='sink') -%}
 
+  {{ validate_sink_schema_isolation(schema, database) }}
+
+  {%- set cluster = config.get('cluster', target.cluster) -%}
+  {{ validate_sink_cluster_isolation(cluster) }}
+
   {% if old_relation %}
     {{ adapter.drop_relation(old_relation) }}
   {% endif %}
