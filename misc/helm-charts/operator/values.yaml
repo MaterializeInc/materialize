@@ -26,7 +26,7 @@ operator:
     enableLicenseKeyChecks: false
 
   # -- Additional columns to display when printing the Materialize CRD in table format.
-  additionalMaterializeCRDColumns:
+  additionalMaterializeCRDColumns: {}
     ## Example:
     #- description: "Metadata from the context annotator"
     #  jsonPath: ".metadata.annotations['materialize\\.cloud/analytics-context']"
@@ -187,11 +187,11 @@ operator:
       analytics: 0
 
   # -- Node selector to use for the operator pod
-  nodeSelector:
+  nodeSelector: {}
   # -- Affinity to use for the operator pod
-  affinity:
+  affinity: {}
   # -- Tolerations to use for the operator pod
-  tolerations:
+  tolerations: {}
   resources:
     # -- Resources requested by the operator for CPU and memory
     requests:
@@ -211,13 +211,16 @@ environmentd:
   # -- Node selector to use for environmentd pods spawned by the operator
   nodeSelector: {}
   # -- Affinity to use for environmentd pods spawned by the operator
-  affinity:
+  affinity: {}
   # -- Tolerations to use for environmentd pods spawned by the operator
-  tolerations:
-  # -- Default resources if not set in the Materialize CR
+  tolerations: {}
   defaultResources:
+    # -- Default resource limits for environmentd's CPU and memory
+    # if not set in the Materialize CR
     limits:
       memory: "4Gi"
+    # -- Default resources requested for environmentd's CPU and memory
+    # if not set in the Materialize CR
     requests:
       cpu: "1"
       # Setting the memory request to slightly less than limit
@@ -236,23 +239,26 @@ clusterd:
   swapNodeSelector:
     materialize.cloud/swap: "true"
   # -- Affinity to use for clusterd pods spawned by the operator
-  affinity:
+  affinity: {}
   # -- Tolerations to use for clusterd pods spawned by the operator
-  tolerations:
+  tolerations: {}
 
 balancerd:
   # -- Flag to indicate whether to create balancerd pods for the environments
   enabled: true
   # -- Node selector to use for balancerd pods spawned by the operator
-  nodeSelector:
+  nodeSelector: {}
   # -- Affinity to use for balancerd pods spawned by the operator
-  affinity:
+  affinity: {}
   # -- Tolerations to use for balancerd pods spawned by the operator
-  tolerations:
-  # -- Default resources if not set in the Materialize CR
+  tolerations: {}
   defaultResources:
+    # -- Default resource limits for balancerd's CPU and memory
+    # if not set in the Materialize CR
     limits:
       memory: "256Mi"
+    # -- Default resources requested for balancerd's CPU and memory
+    # if not set in the Materialize CR
     requests:
       cpu: "500m"
       memory: "256Mi"
@@ -263,15 +269,18 @@ console:
   # -- Override the mapping of environmentd versions to console versions
   imageTagMapOverride: {}
   # -- Node selector to use for console pods spawned by the operator
-  nodeSelector:
+  nodeSelector: {}
   # -- Affinity to use for console pods spawned by the operator
-  affinity:
+  affinity: {}
   # -- Tolerations to use for console pods spawned by the operator
-  tolerations:
-  # -- Default resources if not set in the Materialize CR
+  tolerations: {}
   defaultResources:
+    # -- Default resource limits for the console's CPU and memory
+    # if not set in the Materialize CR
     limits:
       memory: "256Mi"
+    # -- Default resources requested for the console's CPU and memory
+    # if not set in the Materialize CR
     requests:
       cpu: "500m"
       memory: "256Mi"
@@ -314,18 +323,20 @@ telemetry:
 networkPolicies:
   # -- Whether to enable network policies for securing communication between pods
   enabled: false
-  # -- Whether to enable internal communication between Materialize pods
   internal:
+    # -- Whether to enable network policies for internal communication between Materialize pods
     enabled: false
-  # -- Whether to enable ingress to the SQL and HTTP interfaces
-  # on environmentd or balancerd
   ingress:
+    # -- Whether to enable ingress network policies to the SQL and HTTP interfaces
+    # on environmentd and balancerd
     enabled: false
+    # -- CIDR blocks to allow ingress from
     cidrs:
     - 0.0.0.0/0
-  # -- egress from Materialize pods to sources and sinks
   egress:
+    # -- Whether to enable egress network policies to sources and sinks
     enabled: false
+    # -- CIDR blocks to allow egress to
     cidrs:
     - 0.0.0.0/0
 

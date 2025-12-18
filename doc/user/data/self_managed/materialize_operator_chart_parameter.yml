@@ -1,25 +1,37 @@
 - key: balancerd.affinity
-  type: string
-  notationtype: ""
-  autodefault: ""
-  default: '`nil`'
-  autodescription: Affinity to use for balancerd pods spawned by the operator
-  description: Affinity to use for balancerd pods spawned by the operator
-  section: ""
-  column: 3
-  linenumber: 249
-  dependency: ""
-  isglobal: false
-- key: balancerd.defaultResources
   type: object
   notationtype: ""
   autodefault: ""
-  default: '`{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`'
-  autodescription: Default resources if not set in the Materialize CR
+  default: '`{}`'
+  autodescription: Affinity to use for balancerd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 253
+  linenumber: 252
+  dependency: ""
+  isglobal: false
+- key: balancerd.defaultResources.limits
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"memory":"256Mi"}`'
+  autodescription: Default resource limits for balancerd's CPU and memory if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 258
+  dependency: ""
+  isglobal: false
+- key: balancerd.defaultResources.requests
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"cpu":"500m","memory":"256Mi"}`'
+  autodescription: Default resources requested for balancerd's CPU and memory if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 262
   dependency: ""
   isglobal: false
 - key: balancerd.enabled
@@ -31,43 +43,43 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 245
+  linenumber: 248
   dependency: ""
   isglobal: false
 - key: balancerd.nodeSelector
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Node selector to use for balancerd pods spawned by the operator
-  description: Node selector to use for balancerd pods spawned by the operator
+  description: ""
   section: ""
   column: 3
-  linenumber: 247
+  linenumber: 250
   dependency: ""
   isglobal: false
 - key: balancerd.tolerations
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Tolerations to use for balancerd pods spawned by the operator
-  description: Tolerations to use for balancerd pods spawned by the operator
+  description: ""
   section: ""
   column: 3
-  linenumber: 251
+  linenumber: 254
   dependency: ""
   isglobal: false
 - key: clusterd.affinity
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Affinity to use for clusterd pods spawned by the operator
-  description: Affinity to use for clusterd pods spawned by the operator
+  description: ""
   section: ""
   column: 3
-  linenumber: 239
+  linenumber: 242
   dependency: ""
   isglobal: false
 - key: clusterd.nodeSelector
@@ -79,7 +91,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 229
+  linenumber: 232
   dependency: ""
   isglobal: false
 - key: clusterd.scratchfsNodeSelector
@@ -91,7 +103,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 232
+  linenumber: 235
   dependency: ""
   isglobal: false
 - key: clusterd.swapNodeSelector
@@ -103,43 +115,55 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 236
+  linenumber: 239
   dependency: ""
   isglobal: false
 - key: clusterd.tolerations
-  type: string
-  notationtype: ""
-  autodefault: ""
-  default: '`nil`'
-  autodescription: Tolerations to use for clusterd pods spawned by the operator
-  description: Tolerations to use for clusterd pods spawned by the operator
-  section: ""
-  column: 3
-  linenumber: 241
-  dependency: ""
-  isglobal: false
-- key: console.affinity
-  type: string
-  notationtype: ""
-  autodefault: ""
-  default: '`nil`'
-  autodescription: Affinity to use for console pods spawned by the operator
-  description: Affinity to use for console pods spawned by the operator
-  section: ""
-  column: 3
-  linenumber: 268
-  dependency: ""
-  isglobal: false
-- key: console.defaultResources
   type: object
   notationtype: ""
   autodefault: ""
-  default: '`{"limits":{"memory":"256Mi"},"requests":{"cpu":"500m","memory":"256Mi"}}`'
-  autodescription: Default resources if not set in the Materialize CR
+  default: '`{}`'
+  autodescription: Tolerations to use for clusterd pods spawned by the operator
   description: ""
   section: ""
   column: 3
-  linenumber: 272
+  linenumber: 244
+  dependency: ""
+  isglobal: false
+- key: console.affinity
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
+  autodescription: Affinity to use for console pods spawned by the operator
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 274
+  dependency: ""
+  isglobal: false
+- key: console.defaultResources.limits
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"memory":"256Mi"}`'
+  autodescription: Default resource limits for the console's CPU and memory if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 280
+  dependency: ""
+  isglobal: false
+- key: console.defaultResources.requests
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"cpu":"500m","memory":"256Mi"}`'
+  autodescription: Default resources requested for the console's CPU and memory if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 284
   dependency: ""
   isglobal: false
 - key: console.enabled
@@ -151,7 +175,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 262
+  linenumber: 268
   dependency: ""
   isglobal: false
 - key: console.imageTagMapOverride
@@ -163,55 +187,67 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 264
-  dependency: ""
-  isglobal: false
-- key: console.nodeSelector
-  type: string
-  notationtype: ""
-  autodefault: ""
-  default: '`nil`'
-  autodescription: Node selector to use for console pods spawned by the operator
-  description: Node selector to use for console pods spawned by the operator
-  section: ""
-  column: 3
-  linenumber: 266
-  dependency: ""
-  isglobal: false
-- key: console.tolerations
-  type: string
-  notationtype: ""
-  autodefault: ""
-  default: '`nil`'
-  autodescription: Tolerations to use for console pods spawned by the operator
-  description: Tolerations to use for console pods spawned by the operator
-  section: ""
-  column: 3
   linenumber: 270
   dependency: ""
   isglobal: false
-- key: environmentd.affinity
-  type: string
+- key: console.nodeSelector
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
+  autodescription: Node selector to use for console pods spawned by the operator
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 272
+  dependency: ""
+  isglobal: false
+- key: console.tolerations
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
+  autodescription: Tolerations to use for console pods spawned by the operator
+  description: ""
+  section: ""
+  column: 3
+  linenumber: 276
+  dependency: ""
+  isglobal: false
+- key: environmentd.affinity
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{}`'
   autodescription: Affinity to use for environmentd pods spawned by the operator
-  description: Affinity to use for environmentd pods spawned by the operator
+  description: ""
   section: ""
   column: 3
   linenumber: 214
   dependency: ""
   isglobal: false
-- key: environmentd.defaultResources
+- key: environmentd.defaultResources.limits
   type: object
   notationtype: ""
   autodefault: ""
-  default: '`{"limits":{"memory":"4Gi"},"requests":{"cpu":"1","memory":"4095Mi"}}`'
-  autodescription: Default resources if not set in the Materialize CR
+  default: '`{"memory":"4Gi"}`'
+  autodescription: Default resource limits for environmentd's CPU and memory if not set in the Materialize CR
   description: ""
   section: ""
-  column: 3
-  linenumber: 218
+  column: 5
+  linenumber: 220
+  dependency: ""
+  isglobal: false
+- key: environmentd.defaultResources.requests
+  type: object
+  notationtype: ""
+  autodefault: ""
+  default: '`{"cpu":"1","memory":"4095Mi"}`'
+  autodescription: Default resources requested for environmentd's CPU and memory if not set in the Materialize CR
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 224
   dependency: ""
   isglobal: false
 - key: environmentd.nodeSelector
@@ -227,27 +263,39 @@
   dependency: ""
   isglobal: false
 - key: environmentd.tolerations
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Tolerations to use for environmentd pods spawned by the operator
-  description: Tolerations to use for environmentd pods spawned by the operator
+  description: ""
   section: ""
   column: 3
   linenumber: 216
   dependency: ""
   isglobal: false
-- key: networkPolicies.egress
-  type: object
+- key: networkPolicies.egress.cidrs
+  type: list
   notationtype: ""
   autodefault: ""
-  default: '`{"cidrs":["0.0.0.0/0"],"enabled":false}`'
-  autodescription: egress from Materialize pods to sources and sinks
+  default: '`["0.0.0.0/0"]`'
+  autodescription: CIDR blocks to allow egress to
   description: ""
   section: ""
-  column: 3
-  linenumber: 327
+  column: 5
+  linenumber: 340
+  dependency: ""
+  isglobal: false
+- key: networkPolicies.egress.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: Whether to enable egress network policies to sources and sinks
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 338
   dependency: ""
   isglobal: false
 - key: networkPolicies.enabled
@@ -259,31 +307,43 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 316
+  linenumber: 325
   dependency: ""
   isglobal: false
-- key: networkPolicies.ingress
-  type: object
+- key: networkPolicies.ingress.cidrs
+  type: list
   notationtype: ""
   autodefault: ""
-  default: '`{"cidrs":["0.0.0.0/0"],"enabled":false}`'
-  autodescription: Whether to enable ingress to the SQL and HTTP interfaces on environmentd or balancerd
+  default: '`["0.0.0.0/0"]`'
+  autodescription: CIDR blocks to allow ingress from
   description: ""
   section: ""
-  column: 3
-  linenumber: 322
+  column: 5
+  linenumber: 334
   dependency: ""
   isglobal: false
-- key: networkPolicies.internal
-  type: object
+- key: networkPolicies.ingress.enabled
+  type: bool
   notationtype: ""
   autodefault: ""
-  default: '`{"enabled":false}`'
-  autodescription: Whether to enable internal communication between Materialize pods
+  default: '`false`'
+  autodescription: Whether to enable ingress network policies to the SQL and HTTP interfaces on environmentd and balancerd
   description: ""
   section: ""
-  column: 3
-  linenumber: 318
+  column: 5
+  linenumber: 332
+  dependency: ""
+  isglobal: false
+- key: networkPolicies.internal.enabled
+  type: bool
+  notationtype: ""
+  autodefault: ""
+  default: '`false`'
+  autodescription: Whether to enable network policies for internal communication between Materialize pods
+  description: ""
+  section: ""
+  column: 5
+  linenumber: 328
   dependency: ""
   isglobal: false
 - key: observability.enabled
@@ -295,7 +355,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 297
+  linenumber: 306
   dependency: ""
   isglobal: false
 - key: observability.podMetrics.enabled
@@ -307,7 +367,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 302
+  linenumber: 311
   dependency: ""
   isglobal: false
 - key: observability.prometheus.scrapeAnnotations.enabled
@@ -319,28 +379,28 @@
   description: ""
   section: ""
   column: 7
-  linenumber: 306
+  linenumber: 315
   dependency: ""
   isglobal: false
 - key: operator.additionalMaterializeCRDColumns
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Additional columns to display when printing the Materialize CRD in table format.
-  description: Additional columns to display when printing the Materialize CRD in table format.
+  description: ""
   section: ""
   column: 3
   linenumber: 29
   dependency: ""
   isglobal: false
 - key: operator.affinity
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Affinity to use for the operator pod
-  description: Affinity to use for the operator pod
+  description: ""
   section: ""
   column: 3
   linenumber: 192
@@ -635,12 +695,12 @@
   dependency: ""
   isglobal: false
 - key: operator.nodeSelector
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Node selector to use for the operator pod
-  description: Node selector to use for the operator pod
+  description: ""
   section: ""
   column: 3
   linenumber: 190
@@ -683,12 +743,12 @@
   dependency: ""
   isglobal: false
 - key: operator.tolerations
-  type: string
+  type: object
   notationtype: ""
   autodefault: ""
-  default: '`nil`'
+  default: '`{}`'
   autodescription: Tolerations to use for the operator pod
-  description: Tolerations to use for the operator pod
+  description: ""
   section: ""
   column: 3
   linenumber: 194
@@ -703,7 +763,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 282
+  linenumber: 291
   dependency: ""
   isglobal: false
 - key: schedulerName
@@ -715,7 +775,7 @@
   description: Optionally use a non-default kubernetes scheduler.
   section: ""
   column: 1
-  linenumber: 285
+  linenumber: 294
   dependency: ""
   isglobal: false
 - key: serviceAccount.create
@@ -727,7 +787,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 290
+  linenumber: 299
   dependency: ""
   isglobal: false
 - key: serviceAccount.name
@@ -739,7 +799,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 292
+  linenumber: 301
   dependency: ""
   isglobal: false
 - key: storage.storageClass.allowVolumeExpansion
@@ -751,7 +811,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 370
+  linenumber: 381
   dependency: ""
   isglobal: false
 - key: storage.storageClass.create
@@ -763,7 +823,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 356
+  linenumber: 367
   dependency: ""
   isglobal: false
 - key: storage.storageClass.name
@@ -775,7 +835,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 359
+  linenumber: 370
   dependency: ""
   isglobal: false
 - key: storage.storageClass.parameters
@@ -787,7 +847,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 365
+  linenumber: 376
   dependency: ""
   isglobal: false
 - key: storage.storageClass.provisioner
@@ -799,7 +859,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 362
+  linenumber: 373
   dependency: ""
   isglobal: false
 - key: storage.storageClass.reclaimPolicy
@@ -811,7 +871,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 371
+  linenumber: 382
   dependency: ""
   isglobal: false
 - key: storage.storageClass.volumeBindingMode
@@ -823,7 +883,7 @@
   description: ""
   section: ""
   column: 5
-  linenumber: 372
+  linenumber: 383
   dependency: ""
   isglobal: false
 - key: telemetry.enabled
@@ -835,7 +895,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 309
+  linenumber: 318
   dependency: ""
   isglobal: false
 - key: telemetry.segmentApiKey
@@ -847,7 +907,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 310
+  linenumber: 319
   dependency: ""
   isglobal: false
 - key: telemetry.segmentClientSide
@@ -859,7 +919,7 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 311
+  linenumber: 320
   dependency: ""
   isglobal: false
 - key: tls.defaultCertificateSpecs
@@ -871,6 +931,6 @@
   description: ""
   section: ""
   column: 3
-  linenumber: 333
+  linenumber: 344
   dependency: ""
   isglobal: false
