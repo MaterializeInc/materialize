@@ -11,12 +11,7 @@ other roles, as well as inherit all the privileges of those roles.
 
 ## Syntax
 
-{{< diagram "grant-role.svg" >}}
-
-Field         | Use
---------------|--------------------------------------------------
-_role_name_   | The role name to add _member_name_ as a member.
-_member_name_ | The role name to add to _role_name_ as a member.
+{{% include-syntax file="examples/grant_role" example="syntax" %}}
 
 ## Examples
 

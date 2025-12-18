@@ -1,16 +1,20 @@
 ---
 title: "COMMENT ON"
-description: "`COMMENT ON ...` adds or updates the comment of an object."
+description: "`COMMENT ON` adds or updates the comment of an object."
 menu:
   main:
     parent: 'commands'
 ---
 
-`COMMENT ON ...` adds or updates the comment of an object.
+Use `COMMENT ON` to:
+
+- Add a comment to an object.
+- Update the comment to an object.
+- Remove the comment from an object.
 
 ## Syntax
 
-{{< diagram "comment-on.svg" >}}
+{{% include-syntax file="examples/comment_on" example="syntax" %}}
 
 ## Details
 

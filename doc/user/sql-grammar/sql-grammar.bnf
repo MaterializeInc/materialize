@@ -1,9 +1,4 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
-alter_default_privileges ::=
-  'ALTER' 'DEFAULT' 'PRIVILEGES' 'FOR' (( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'ALL' 'ROLES' ) ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
-alter_network_policy::='ALTER' 'NETWORK POLICY' name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
-abbreviated_grant ::=
-  'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
 abbreviated_revoke ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'FROM' 'GROUP'? revokee (',' revokee)*
 array_agg ::=
@@ -28,74 +23,6 @@ copy_to_s3 ::=
 copy_from ::=
   'COPY' 'INTO'? table_name ('(' column ( ',' column )* ')')? 'FROM' 'STDIN'
   ( 'WITH'? '(' field val ( ',' field val )* ')' )?
-create_cluster ::=
-  'CREATE' 'CLUSTER' name (
-    'REPLICAS' '(' (replica_definition (',' replica_definition)*)? ')'
-  )?
-create_managed_cluster ::=
-  'CREATE' 'CLUSTER' name '(' cluster_option '=' value (',' cluster_option '=' value)* ')'
-cluster_replica_def ::=
-  replica_name '(' replica_option '=' value ( ',' replica_option '=' value )* ')'
-create_cluster_replica ::=
-  'CREATE' 'CLUSTER' 'REPLICA' cluster_name '.' replica_name '(' (option '=' value ( ',' option '=' value )*)? ')'
-create_connection_aws ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_kafka ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'KAFKA'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_csr ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'CONFLUENT' 'SCHEMA' 'REGISTRY'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_postgres ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'POSTGRES'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_mysql ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'MYSQL'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_sql-server ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'SQL SERVER'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_aws_privatelink ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'AWS' 'PRIVATELINK'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_ssh_tunnel ::=
-  'CREATE' 'CONNECTION' 'IF NOT EXISTS'? connection_name 'TO' 'SSH' 'TUNNEL'
-  '(' field '='? val ( ',' field '='? val )* ')'
-  ('WITH' with_options)?
-create_connection_kafka_brokers ::= 'BROKERS' '(' kafka_broker (',' kafka_broker)* ')'
-create_connection_kafka_broker_aws_privatelink ::=
-  "'host:port'" 'USING' 'AWS' 'PRIVATELINK' aws_connection ( '(' broker_option (',' broker_option)* ')' )?
-create_connection_kafka_default_aws_privatelink ::=
-  'AWS' 'PRIVATELINK' aws_connection ( '(' 'PORT' port ')' )?
-create_connection_kafka_broker_ssh_tunnel ::=
-  "'host:port'" 'USING' 'SSH' 'TUNNEL' ssh_connection
-broker_option ::= 'PORT' number | 'AVAILABILITY ZONE' az
-create_database ::=
-    'CREATE' 'DATABASE' ('IF NOT EXISTS')? database_name
-create_index ::=
-    'CREATE' (
-        'INDEX' index_name ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)? '(' ( ( col_expr ) ( ( ',' col_expr ) )* ) ')'
-        | 'DEFAULT INDEX' ('IN' 'CLUSTER' cluster_name)? 'ON' obj_name ('USING' method)?
-    )
-    with_options?
-create_materialized_view ::=
-  'CREATE' 'OR REPLACE'? 'MATERIALIZED VIEW' 'IF NOT EXISTS'?
-    view_name ( '(' col_ident ( ',' col_ident )* ')' )?
-    ('IN CLUSTER' cluster_name)?
-    ('WITH' with_options)?
-    'AS' select_stmt
-create_secret ::=
-    'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
-create_schema ::=
-    'CREATE' 'SCHEMA' ('IF NOT EXISTS')? schema_name
 create_sink_kafka ::=
     'CREATE SINK' 'IF NOT EXISTS'? sink_name sink_definition
 sink_definition ::=
@@ -146,7 +73,6 @@ load_generator_option ::=
     | 'SEED' seed
     | 'PARTITIONS' partitions
     | 'BATCH SIZE' batch_size
-create_network_policy::='CREATE' 'NETWORK POLICY' name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
 create_source_postgres ::=
   'CREATE SOURCE' ('IF NOT EXISTS')? src_name
   ('IN CLUSTER' cluster_name)?
@@ -184,23 +110,6 @@ create_source_sql-server ::=
   )
   ('EXPOSE' 'PROGRESS' 'AS' progress_subsource_name)?
   with_options?
-create_type ::=
-    'CREATE' 'TYPE' type_name 'AS' '(' ((field_name field_type) (',' field_name field_type)*) ')' |
-    'CREATE' 'TYPE' type_name 'AS' ( 'LIST' | 'MAP' ) '(' ( property '=' val ) ( ( ',' property '=' val ) )* ')'
-create_view ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
-  'CREATE' 'OR REPLACE' 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
-insert ::=
-  'INSERT' 'INTO' table_name ('AS'? alias)
-  ( '(' (col_name) ( ',' col_name )* ')' )?
-  (
-    'VALUES' ( ('(' (expr) ( ( ',' expr ) )* ')') ( ( ',' ('(' (expr) ( ( ',' expr ) )* ')') )* ) )
-    | query
-  )
-  ( 'RETURNING' ( '*' | output_expression ( AS? output_name )? ) ( ',' ( '*' | output_expression ( AS? output_name )? ) )* )?
-execute ::=
-  'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain_filter_pushdown ::=
   'EXPLAIN FILTER PUSHDOWN'
   'FOR'
@@ -219,9 +128,6 @@ explain_schema ::=
   'FOR'
   'CREATE SINK' (sink_name)?
   sink_definition
-fetch ::=
-  'FETCH' 'FORWARD'? ('ALL' | count)? 'FROM'? cursor_name
-  ( 'WITH'? '(' (option_name ('=' option_value)?) ( ',' (option_name ('=' option_value)?) )* ')' )?
 format_spec ::=
   'AVRO USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name key_strat? val_strat? with_options? |
   'PROTOBUF' ('USING' 'CONFLUENT SCHEMA REGISTRY' 'CONNECTION' connection_name with_options | 'MESSAGE' message_name 'USING SCHEMA' encoded_schema) |
@@ -230,8 +136,6 @@ format_spec ::=
   'TEXT' |
   'BYTES' |
   'JSON'
-grant_role ::=
-  'GRANT' role_name ( ',' role_name )* 'TO' 'GROUP'? member_name ( ',' 'GROUP'? member_name )*
 key_strat ::=
   'KEY STRATEGY' strat
 val_strat ::=

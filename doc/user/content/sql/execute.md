@@ -13,12 +13,7 @@ If the `PREPARE` statement specified some parameters, you must pass values compa
 
 ## Syntax
 
-{{< diagram "execute.svg" >}}
-
-Field | Use
-------|-----
-**name**  | The name of the prepared statement to execute.
-**parameter**  |  The actual value of a parameter to the prepared statement.
+{{% include-syntax file="examples/execute" example="syntax" %}}
 
 ## Example
 

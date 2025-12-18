@@ -80,18 +80,6 @@ To swap the name of this cluster with another cluster:
 {{< /tab >}}
 {{< /tabs >}}
 
-### Cluster configuration
-
-{{% yaml-table data="syntax_options/alter_cluster_options" %}}
-
-### `WITH` options
-
-
-| Command options (optional) | Value | Description |
-|----------------------------|-------|-----------------|
-| `WAIT UNTIL READY(...)`    |  | ***Private preview.** This option has known performance or stability issues and is under active development.* {{< alter-cluster/alter-clusters-cmd-options >}} |
-| `WAIT FOR` | [`interval`](/sql/types/interval/) | ***Private preview.** This option has known performance or stability issues and is under active development.* A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
-
 ## Considerations
 
 ### Resizing
@@ -284,7 +272,7 @@ tolerance](#replication-factor-and-fault-tolerance), not its work capacity.
 
 You can alter the cluster size with **no downtime** (i.e., [zero-downtime
 cluster resizing](#zero-downtime-cluster-resizing)) by running the `ALTER
-CLUSTER` command with the `WAIT UNTIL READY` [option](#with-options):
+CLUSTER` command with the `WAIT UNTIL READY` [option](#syntax):
 
 ```mzsql
 ALTER CLUSTER c1

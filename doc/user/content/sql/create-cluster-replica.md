@@ -16,29 +16,9 @@ When getting started with Materialize, we recommend starting with managed
 clusters.
 {{</ tip >}}
 
-## Conceptual framework
-
-A cluster consists of zero or more replicas. Each replica of a cluster is a pool
-of compute resources that performs exactly the same computations on exactly the
-same data.
-
-Using multiple replicas of a cluster facilitates **fault tolerance**. Clusters
-with multiple replicas can tolerate failures of the underlying hardware or
-network. As long as one replica remains reachable, the cluster as a whole
-remains available.
-
 ## Syntax
 
-{{< diagram "create-cluster-replica.svg" >}}
-
-Field | Use
-------|-----
-_cluster_name_ | The cluster you want to attach a replica to.
-_replica_name_ | A name for this replica.
-
-### Options
-
-{{% replica-options %}}
+{{% include-syntax file="examples/create_cluster_replica" example="syntax" %}}
 
 ## Details
 

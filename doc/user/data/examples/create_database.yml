@@ -1,0 +1,12 @@
+- name: "syntax"
+  code: |
+    CREATE DATABASE [IF NOT EXISTS] <database_name>;
+  syntax_elements:
+    - name: "`IF NOT EXISTS`"
+      description: |
+        If specified, do not generate an error if a database of the same name
+        already exists. If not specified, throw an error if a database of the
+        same name already exists.
+    - name: "`<database_name>`"
+      description: |
+        A name for the database.

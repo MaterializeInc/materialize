@@ -9,25 +9,9 @@ menu:
 
 `CREATE CLUSTER` creates a new [cluster](/concepts/clusters/).
 
-## Conceptual framework
-
-A cluster is a pool of compute resources (CPU, memory, and scratch disk space)
-for running your workloads.
-
-The following operations require compute resources in Materialize, and so need
-to be associated with a cluster:
-
-- Executing [`SELECT`] and [`SUBSCRIBE`] statements.
-- Maintaining [indexes](/concepts/indexes/) and [materialized views](/concepts/views/#materialized-views).
-- Maintaining [sources](/concepts/sources/) and [sinks](/concepts/sinks/).
-
 ## Syntax
 
-{{< diagram "create-managed-cluster.svg" >}}
-
-### Options
-
-{{< yaml-table data="syntax_options/create_cluster_options" >}}
+{{% include-syntax file="examples/create_cluster" example="syntax" %}}
 
 ## Details
 

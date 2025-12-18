@@ -19,10 +19,7 @@ menu:
 
 ### Cloud
 
-{{% include-example file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
-
-{{% include-example file="examples/rbac-cloud/alter_roles"
-example="alter-role-options" %}}
+{{% include-syntax file="examples/rbac-cloud/alter_roles" example="alter-role-syntax" %}}
 
 **Note:**
 {{% include-example file="examples/rbac-cloud/alter_roles"
@@ -31,10 +28,7 @@ example="alter-role-details" %}}
 {{< tab "Self-Managed" >}}
 ### Self-Managed
 
-{{% include-example file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
-
-{{% include-example file="examples/rbac-sm/alter_roles"
-example="alter-role-options" %}}
+{{% include-syntax file="examples/rbac-sm/alter_roles" example="alter-role-syntax" %}}
 
 **Note:**
 {{% include-example file="examples/rbac-sm/alter_roles"
