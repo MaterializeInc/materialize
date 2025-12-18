@@ -508,11 +508,13 @@ impl Coordinator {
         StatementLoggingId(id): StatementLoggingId,
         f: F,
     ) {
-        let record = self
-            .statement_logging
-            .executions_begun
-            .get_mut(&id)
-            .expect("mutate_record must not be called after execution ends");
+        let Some(record) = self.statement_logging.executions_begun.get_mut(&id) else {
+            tracing::debug!(
+                statement_logging_id = %id,
+                "dropping statement logging mutation for execution that already ended"
+            );
+            return;
+        };
         let retraction = pack_statement_began_execution_update(record);
         self.statement_logging
             .pending_statement_execution_events
