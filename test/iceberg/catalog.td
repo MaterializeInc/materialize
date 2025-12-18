@@ -23,3 +23,41 @@
     WAREHOUSE = 'default_catalog',
     SCOPE = 'PRINCIPAL_ROLE:ALL'
   );
+
+> create table foo(a int, b text);
+
+> insert into foo values (1, 'one'), (2, 'two'), (3, 'three');
+
+> CREATE SINK demo
+    FROM foo
+    INTO ICEBERG CATALOG CONNECTION polaris (
+        NAMESPACE 'default_namespace',
+        TABLE 'demo_table'
+    )
+    USING AWS CONNECTION aws_conn
+    KEY (a) NOT ENFORCED
+    ENVELOPE UPSERT
+    WITH (COMMIT INTERVAL '1s');
+
+# Iceberg sinks commit data asynchronously, need to wait for at least one commit interval
+$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
+
+$ duckdb-execute name=iceberg
+CREATE SECRET s3_secret (TYPE S3, KEY_ID 'tduser', SECRET '${arg.s3-access-key}', ENDPOINT '${arg.aws-endpoint}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+SET unsafe_enable_version_guessing = true;
+
+$ duckdb-query name=iceberg sort-rows=true
+SELECT a, b FROM iceberg_scan('s3://test-bucket/default_namespace/demo_table') ORDER BY a
+1 one
+2 two
+3 three
+
+$ duckdb-execute name=iceberg
+CREATE SECRET polaris_secret (TYPE iceberg, CLIENT_ID 'root', CLIENT_SECRET 'root', ENDPOINT 'http://polaris:8181/api/catalog');
+ATTACH 'default_catalog' AS polaris (TYPE iceberg, SECRET polaris_secret, ACCESS_DELEGATION_MODE 'none');
+
+$ duckdb-query name=iceberg sort-rows=true
+SELECT a, b FROM polaris.default_namespace.demo_table ORDER BY a
+1 one
+2 two
+3 three

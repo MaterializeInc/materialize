@@ -16,11 +16,12 @@ async-trait = "0.1.89"
 aws-credential-types = { version = "1.2.10", features = ["hardcoded-credentials"] }
 aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
 aws-types = "1.3.9"
-arrow = { version = "55.2.0", default-features = false }
+arrow = { version = "57.0", default-features = false }
 byteorder = "1.5"
 bytes = "1.10.1"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
+duckdb = { version = "1.4.3", default-features = false, features = ["bundled", "native-tls"] }
 flate2 = "1.1.5"
 futures = "0.3.31"
 globset = "0.4.18"
@@ -53,7 +54,7 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-sql-server-util = { path = "../sql-server-util" }
 mz-storage-types = { path = "../storage-types" }
 mz-tls-util = { path = "../tls-util" }
-parquet = { version = "55.2.0", default-features = false, features = ["arrow"] }
+parquet = { version = "57", default-features = false, features = ["arrow"] }
 postgres_array = { version = "0.11.0" }
 postgres-protocol = { version = "0.6.9" }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }

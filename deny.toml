@@ -96,7 +96,6 @@ skip = [
     # Used by reqwest
     { name = "thiserror", version = "1.0.61" },
     { name = "thiserror-impl", version = "1.0.61" },
-    { name = "twox-hash", version = "1.6.3" },
     { name = "unicode-width", version = "0.1.10" },
     # Used by rdkafka-sys
     { name = "num_enum", version = "0.5.11" },
@@ -110,7 +109,6 @@ skip = [
     # Used by tracing-capture
     { name = "predicates", version = "2.1.5" },
     # Used by aws-config
-    { name = "aws-smithy-http", version = "0.60.10" },
     # Used by aws-sdk-s3
     { name = "lru", version = "0.12.5" },
     # Used by tower-lsp
@@ -138,6 +136,10 @@ skip = [
     { name = "spin", version = "0.9.8" },
     # insta
     { name = "console", version = "0.15.11" },
+    # duckdb
+    { name = "fallible-iterator", version = "0.3.0" },
+    # arrow
+    { name = "hashbrown", version = "0.16.1" },
 ]
 
 [[bans.deny]]
@@ -167,7 +169,8 @@ name = "protobuf"
 name = "strum"
 wrappers = [
     "apache-avro",
-    "iceberg"
+    "iceberg",
+    "duckdb",
 ]
 [[bans.deny]]
 name = "strum-macros"
@@ -198,12 +201,12 @@ wrappers = [
     "reqwest",
     "tokio-postgres",
     "tokio-tungstenite",
-    "thrift",
     "tracing-log",
     "tracing",
     "tungstenite",
     "want",
     "workspace-hack",
+    "zopfli",
 ]
 
 # We prefer the system's native TLS or OpenSSL to Rustls, since they are more

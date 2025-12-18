@@ -56,6 +56,7 @@ use crate::util::postgres::postgres_client;
 
 pub mod consistency;
 
+mod duckdb;
 mod file;
 mod fivetran;
 mod http;
@@ -255,6 +256,7 @@ pub struct State {
     aws_config: SdkConfig,
 
     // === Database driver state. ===
+    pub duckdb_clients: BTreeMap<String, std::sync::Arc<std::sync::Mutex<::duckdb::Connection>>>,
     mysql_clients: BTreeMap<String, mysql_async::Conn>,
     postgres_clients: BTreeMap<String, tokio_postgres::Client>,
     sql_server_clients: BTreeMap<String, mz_sql_server_util::Client>,
@@ -802,6 +804,8 @@ impl Run for PosCommand {
                     "check-shard-tombstone" => {
                         consistency::run_check_shard_tombstone(builtin, state).await
                     }
+                    "duckdb-execute" => duckdb::run_execute(builtin, state).await,
+                    "duckdb-query" => duckdb::run_query(builtin, state).await,
                     "fivetran-destination" => {
                         fivetran::run_destination_command(builtin, state).await
                     }
@@ -1095,6 +1099,7 @@ pub async fn create_state(
         aws_config: config.aws_config.clone(),
 
         // === Database driver state. ===
+        duckdb_clients: BTreeMap::new(),
         mysql_clients: BTreeMap::new(),
         postgres_clients: BTreeMap::new(),
         sql_server_clients: BTreeMap::new(),

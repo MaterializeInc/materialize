@@ -643,6 +643,50 @@ BEGIN TRANSACTION INSERT INTO t1 VALUES (1); INSERT INTO t2 VALUES (2); COMMIT;
 
 The output of the queries is not validated in any way. An error during execution will cause the test to fail.
 
+## Connecting to DuckDB
+
+Testdrive supports connecting to an in-memory DuckDB instance with the Iceberg and HTTPFS extensions pre-loaded. This is useful for testing Iceberg table functionality by querying tables from DuckDB and comparing results with Materialize.
+
+Connections are created lazily on first use and cached by name for reuse across multiple commands.
+
+#### `$ duckdb-execute name=...`
+
+Executes SQL statements against a named DuckDB connection. Each line in the command body is executed as a separate statement. The output is not validated, but an error will cause the test to fail.
+
+```
+$ duckdb-execute name=duckdb
+CREATE TABLE test_table (id INTEGER, name VARCHAR);
+INSERT INTO test_table VALUES (1, 'Alice'), (2, 'Bob');
+```
+
+#### `$ duckdb-query name=... [sort-rows=true]`
+
+Executes a query against a named DuckDB connection and verifies the output. The first line of the command body is the SQL query. The remaining lines are the expected output, with columns separated by spaces.
+
+```
+$ duckdb-query name=duckdb
+SELECT * FROM test_table
+1 Alice
+2 Bob
+```
+
+If `sort-rows=true` is specified, both the expected and actual rows are sorted before comparison. This is useful for queries that may return rows in a non-deterministic order:
+
+```
+$ duckdb-query name=duckdb sort-rows=true
+SELECT * FROM test_table ORDER BY id
+1 Alice
+2 Bob
+```
+
+NULL values are displayed as `<null>`:
+
+```
+$ duckdb-query name=duckdb
+SELECT NULL
+<null>
+```
+
 ## Sleeping in the test
 
 #### `$ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration="Ns"`

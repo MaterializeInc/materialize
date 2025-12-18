@@ -349,9 +349,15 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 
 # Custom iceberg features for mz
 # All changes should go to the `mz_changes` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cf1e6e0c9de3" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cf1e6e0c9de3" }
-iceberg-catalog-s3tables = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "cf1e6e0c9de3" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ae5804ab41d5" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "ae5804ab41d5" }
+
+# Custom duckdb crate to support mz needs
+# All changes should go to the `mz_changes` branch.
+# The main change is allowing the TLS implementation to be selected via features.
+# Hopefully we can upstream these changes eventually.
+# Additionally we keep the apache crates updated to latest versions.
+duckdb = { git = "https://github.com/MaterializeInc/duckdb-rs.git", rev = "752c7efe2582" }
 
 
 # BEGIN LINT CONFIG
