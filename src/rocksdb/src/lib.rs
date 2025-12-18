@@ -329,6 +329,9 @@ pub struct RocksDBInstance<K, V> {
     /// Whether this instance supports merge operations (whether a
     /// merge operator was set at creation time)
     pub supports_merges: bool,
+
+    /// JoinHandle for the rocksdb core loop that processes requests.
+    handle: Option<std::thread::JoinHandle<()>>,
 }
 
 impl<K, V> RocksDBInstance<K, V>
@@ -368,7 +371,7 @@ where
         // If initialization fails, the thread exits.  The channel rx handle will be dropped,
         // and any command to RocksDBInstance will fail with Error::RocksDBThreadGoneAway,
         // resulting in suspend-and-restart.
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             rocksdb_core_loop(
                 options,
                 tuning_config,
@@ -386,7 +389,14 @@ where
             multi_update_scratch: Vec::new(),
             dynamic_config,
             supports_merges,
+            handle: Some(handle),
         })
+    }
+
+    /// Take ownership of the join handle for the core thread. Once taken, this will just return
+    /// [`None`].
+    pub fn take_core_loop_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
+        self.handle.take()
     }
 
     /// For each _unique_ key in `gets`, place the stored value (if any) in `results_out`.
