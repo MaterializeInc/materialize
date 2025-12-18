@@ -19,4 +19,4 @@ rows:
       - **Database access**: Inherits role-level privileges defined by
         the `PUBLIC` role; may also have additional privileges via grants or
         default privileges. See [Access control
-        control](/security/access-control/#roles-and-privileges).
+        control](/security/cloud/access-control/#roles-and-privileges).

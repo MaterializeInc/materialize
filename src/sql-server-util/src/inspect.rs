@@ -24,7 +24,8 @@ use tiberius::numeric::Numeric;
 
 use crate::cdc::{Lsn, RowFilterOption};
 use crate::desc::{
-    SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerQualifiedTableName, SqlServerTableRaw,
+    SqlServerCaptureInstanceRaw, SqlServerColumnRaw, SqlServerQualifiedTableName,
+    SqlServerTableConstraintRaw, SqlServerTableRaw,
 };
 use crate::{Client, SqlServerError, quote_identifier};
 
@@ -364,12 +365,10 @@ SELECT @mz_cleanup_status_bit;
 // - sys.columns: Column definitions including nullability
 // - sys.types: Data type information for each column
 // - cdc.change_tables: CDC configuration linking capture instances to source tables
-// - information_schema views: To identify primary key constraints
 //
 // For each column, it returns:
 // - Table identification (schema_name, table_name, capture_instance)
 // - Column metadata (name, type, nullable, max_length, precision, scale)
-// - Primary key information (constraint name if the column is part of a PK)
 static GET_COLUMNS_FOR_TABLES_WITH_CDC_QUERY: &str = "
 SELECT
     s.name as schema_name,
@@ -382,24 +381,12 @@ SELECT
     c.max_length as col_max_length,
     c.precision as col_precision,
     c.scale as col_scale,
-    c.is_computed as col_is_computed,
-    tc.constraint_name AS col_primary_key_constraint
+    c.is_computed as col_is_computed
 FROM sys.tables t
 JOIN sys.schemas s ON t.schema_id = s.schema_id
 JOIN sys.columns c ON t.object_id = c.object_id
 JOIN sys.types ty ON c.user_type_id = ty.user_type_id
 JOIN cdc.change_tables ch ON t.object_id = ch.source_object_id
-LEFT JOIN information_schema.key_column_usage kc
-    ON kc.table_schema = s.name
-    AND kc.table_name = t.name
-    AND kc.column_name = c.name
-LEFT JOIN information_schema.table_constraints tc
-    ON tc.constraint_catalog = kc.constraint_catalog
-    AND tc.constraint_schema = kc.constraint_schema
-    AND tc.constraint_name = kc.constraint_name
-    AND tc.table_schema = kc.table_schema
-    AND tc.table_name = kc.table_name
-    AND tc.constraint_type = 'PRIMARY KEY'
 ";
 
 /// Returns the table metadata for the tables that are tracked by the specified `capture_instance`s.
@@ -478,7 +465,6 @@ pub async fn get_cdc_table_columns(
             name: Arc::clone(&column_name),
             data_type: get_value::<&str>(row, "col_type")?.into(),
             is_nullable: true,
-            primary_key_constraint: None,
             max_length: get_value(row, "col_max_length")?,
             precision: get_value(row, "col_precision")?,
             scale: get_value(row, "col_scale")?,
@@ -487,6 +473,102 @@ pub async fn get_cdc_table_columns(
         columns.insert(column_name, column);
     }
     Ok(columns)
+}
+
+/// Retrieve primary key and unique constraints for the given tables.  Tables should be provided as
+/// an interator of tuples, where each tuple contains is `(schema_name, table_name)`.
+pub async fn get_constraints_for_tables(
+    client: &mut Client,
+    schema_table_list: impl Iterator<Item = &(Arc<str>, Arc<str>)>,
+) -> Result<BTreeMap<(Arc<str>, Arc<str>), Vec<SqlServerTableConstraintRaw>>, SqlServerError> {
+    let qualified_table_names: Vec<_> = schema_table_list
+        .map(|(schema, table)| {
+            format!(
+                "{quoted_schema}.{quoted_table}",
+                quoted_schema = quote_identifier(schema),
+                quoted_table = quote_identifier(table)
+            )
+        })
+        .collect();
+
+    if qualified_table_names.is_empty() {
+        return Ok(Default::default());
+    }
+
+    let params = (1..qualified_table_names.len() + 1)
+        .map(|idx| format!("@P{}", idx))
+        .join(", ");
+
+    // Because we don't have an object idenfifier for the table(s), this query concatenates the
+    // schema and table name to create a single identifier for the query rather than compose a
+    // complex set of OR conditions for each schema + set of tables in the schema.
+    //
+    // This query may perform poorly due to the condition relying on a concatenated value. We may get
+    // better performance by adding a query constraint on the table names, but it isn't clear at
+    // this time if that is needed.
+    let query = format!(
+        "SELECT \
+        tc.table_schema, \
+        tc.table_name, \
+        ccu.column_name,  \
+        tc.constraint_name, \
+        tc.constraint_type \
+    FROM information_schema.table_constraints tc \
+    JOIN information_schema.constraint_column_usage ccu \
+        ON ccu.constraint_schema = tc.constraint_schema \
+        AND ccu.constraint_name = tc.constraint_name \
+    WHERE
+        QUOTENAME(tc.table_schema) + '.' + QUOTENAME(tc.table_name) IN ({params})
+        AND tc.constraint_type in ('PRIMARY KEY', 'UNIQUE')"
+    );
+
+    let query_params: Vec<_> = qualified_table_names
+        .iter()
+        .map(|qualified_name| {
+            let name: &dyn tiberius::ToSql = qualified_name;
+            name
+        })
+        .collect();
+
+    tracing::debug!("query = {query} params = {qualified_table_names:?}");
+    let result = client.query(query, &query_params).await?;
+
+    let mut contraints_by_table: BTreeMap<_, BTreeMap<_, Vec<_>>> = BTreeMap::new();
+    for row in result {
+        let schema_name: Arc<str> = get_value::<&str>(&row, "table_schema")?.into();
+        let table_name: Arc<str> = get_value::<&str>(&row, "table_name")?.into();
+        let column_name = get_value::<&str>(&row, "column_name")?.into();
+        let constraint_name = get_value::<&str>(&row, "constraint_name")?.into();
+        let constraint_type = get_value::<&str>(&row, "constraint_type")?.into();
+
+        contraints_by_table
+            .entry((Arc::clone(&schema_name), Arc::clone(&table_name)))
+            .or_default()
+            .entry((constraint_name, constraint_type))
+            .or_default()
+            .push(column_name);
+    }
+    Ok(contraints_by_table
+        .into_iter()
+        .inspect(|((schema_name, table_name), constraints)| {
+            tracing::debug!("table {schema_name}.{table_name} constraints: {constraints:?}")
+        })
+        .map(|(qualified_name, constraints)| {
+            (
+                qualified_name,
+                constraints
+                    .into_iter()
+                    .map(|((constraint_name, constraint_type), columns)| {
+                        SqlServerTableConstraintRaw {
+                            constraint_name,
+                            constraint_type,
+                            columns,
+                        }
+                    })
+                    .collect(),
+            )
+        })
+        .collect())
 }
 
 /// Ensure change data capture (CDC) is enabled for the database the provided
@@ -675,7 +757,6 @@ fn get_value<'a, T: tiberius::FromSql<'a>>(
     row.try_get(name)?
         .ok_or(SqlServerError::MissingColumn(name))
 }
-
 fn deserialize_table_columns_to_raw_tables(
     rows: &[tiberius::Row],
 ) -> Result<Vec<SqlServerTableRaw>, SqlServerError> {
@@ -687,16 +768,12 @@ fn deserialize_table_columns_to_raw_tables(
         let capture_instance: Arc<str> = get_value::<&str>(row, "capture_instance")?.into();
         let capture_instance_create_date: NaiveDateTime =
             get_value::<NaiveDateTime>(row, "capture_instance_create_date")?;
-        let primary_key_constraint: Option<Arc<str>> = row
-            .try_get::<&str, _>("col_primary_key_constraint")?
-            .map(|v| v.into());
 
         let column_name = get_value::<&str>(row, "col_name")?.into();
         let column = SqlServerColumnRaw {
             name: Arc::clone(&column_name),
             data_type: get_value::<&str>(row, "col_type")?.into(),
             is_nullable: get_value(row, "col_nullable")?,
-            primary_key_constraint,
             max_length: get_value(row, "col_max_length")?,
             precision: get_value(row, "col_precision")?,
             scale: get_value(row, "col_scale")?,
@@ -714,7 +791,6 @@ fn deserialize_table_columns_to_raw_tables(
         columns.push(column);
     }
 
-    // Flatten into our raw Table description.
     let raw_tables = tables
         .into_iter()
         .map(
@@ -730,8 +806,7 @@ fn deserialize_table_columns_to_raw_tables(
                 }
             },
         )
-        .collect::<Vec<SqlServerTableRaw>>();
-
+        .collect();
     Ok(raw_tables)
 }
 

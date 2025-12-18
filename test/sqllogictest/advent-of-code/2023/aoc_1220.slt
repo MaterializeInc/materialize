@@ -146,7 +146,7 @@ Explained Query:
     cte l1 =
       Project (#3, #4) // { arity: 2 }
         Map (regexp_split_to_array[" ", case_insensitive=false](#0{line}), substr(array_index(#2, 1), 2), btrim(array_index(#2, integer_to_bigint(#1{x})), ",")) // { arity: 5 }
-          FlatMap generate_series(3, (regexp_split_to_array[" ", case_insensitive=false](#0{line}) array_length 1), 1) // { arity: 2 }
+          FlatMap generate_series(3, array_length(regexp_split_to_array[" ", case_insensitive=false](#0{line}), 1), 1) // { arity: 2 }
             Get l0 // { arity: 1 }
     cte l2 =
       Project (#1, #2) // { arity: 2 }

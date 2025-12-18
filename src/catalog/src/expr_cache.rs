@@ -252,6 +252,11 @@ impl ExpressionCache {
             .collect();
         self.durable_cache.try_set_many(&keys_to_remove).await?;
 
+        if remove_prior_versions {
+            // We've purged old versions from the cache; upgrade the backing Persist version as well.
+            self.durable_cache.upgrade_version().await;
+        }
+
         if compact_shard {
             let fuel = EXPRESSION_CACHE_FORCE_COMPACTION_FUEL.handle(dyncfgs);
             let wait = EXPRESSION_CACHE_FORCE_COMPACTION_WAIT.handle(dyncfgs);

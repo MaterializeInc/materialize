@@ -82,6 +82,7 @@ pub enum Statement<T: AstInfo> {
     AlterNetworkPolicy(AlterNetworkPolicyStatement<T>),
     AlterRole(AlterRoleStatement<T>),
     AlterTableAddColumn(AlterTableAddColumnStatement<T>),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementStatement),
     Discard(DiscardStatement),
     DropObjects(DropObjectsStatement),
     DropOwned(DropOwnedStatement<T>),
@@ -97,7 +98,8 @@ pub enum Statement<T: AstInfo> {
     ExplainPushdown(ExplainPushdownStatement<T>),
     ExplainTimestamp(ExplainTimestampStatement<T>),
     ExplainSinkSchema(ExplainSinkSchemaStatement<T>),
-    ExplainAnalyze(ExplainAnalyzeStatement<T>),
+    ExplainAnalyzeObject(ExplainAnalyzeObjectStatement<T>),
+    ExplainAnalyzeCluster(ExplainAnalyzeClusterStatement),
     Declare(DeclareStatement<T>),
     Fetch(FetchStatement<T>),
     Close(CloseStatement),
@@ -159,6 +161,7 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::AlterConnection(stmt) => f.write_node(stmt),
             Statement::AlterRole(stmt) => f.write_node(stmt),
             Statement::AlterTableAddColumn(stmt) => f.write_node(stmt),
+            Statement::AlterMaterializedViewApplyReplacement(stmt) => f.write_node(stmt),
             Statement::Discard(stmt) => f.write_node(stmt),
             Statement::DropObjects(stmt) => f.write_node(stmt),
             Statement::DropOwned(stmt) => f.write_node(stmt),
@@ -172,7 +175,8 @@ impl<T: AstInfo> AstDisplay for Statement<T> {
             Statement::Subscribe(stmt) => f.write_node(stmt),
             Statement::ExplainPlan(stmt) => f.write_node(stmt),
             Statement::ExplainPushdown(stmt) => f.write_node(stmt),
-            Statement::ExplainAnalyze(stmt) => f.write_node(stmt),
+            Statement::ExplainAnalyzeObject(stmt) => f.write_node(stmt),
+            Statement::ExplainAnalyzeCluster(stmt) => f.write_node(stmt),
             Statement::ExplainTimestamp(stmt) => f.write_node(stmt),
             Statement::ExplainSinkSchema(stmt) => f.write_node(stmt),
             Statement::Declare(stmt) => f.write_node(stmt),
@@ -239,6 +243,9 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::AlterOwner => "alter_owner",
         StatementKind::AlterConnection => "alter_connection",
         StatementKind::AlterTableAddColumn => "alter_table",
+        StatementKind::AlterMaterializedViewApplyReplacement => {
+            "alter_materialized_view_apply_replacement"
+        }
         StatementKind::Discard => "discard",
         StatementKind::DropObjects => "drop_objects",
         StatementKind::DropOwned => "drop_owned",
@@ -252,7 +259,8 @@ pub fn statement_kind_label_value(kind: StatementKind) -> &'static str {
         StatementKind::Subscribe => "subscribe",
         StatementKind::ExplainPlan => "explain_plan",
         StatementKind::ExplainPushdown => "explain_pushdown",
-        StatementKind::ExplainAnalyze => "explain_analyze",
+        StatementKind::ExplainAnalyzeObject => "explain_analyze_object",
+        StatementKind::ExplainAnalyzeCluster => "explain_analyze_cluster",
         StatementKind::ExplainTimestamp => "explain_timestamp",
         StatementKind::ExplainSinkSchema => "explain_sink_schema",
         StatementKind::Declare => "declare",
@@ -1379,6 +1387,7 @@ pub struct CreateMaterializedViewStatement<T: AstInfo> {
     pub if_exists: IfExistsBehavior,
     pub name: UnresolvedItemName,
     pub columns: Vec<Ident>,
+    pub replacing: Option<T::ItemName>,
     pub in_cluster: Option<T::ClusterName>,
     pub query: Query<T>,
     pub as_of: Option<u64>,
@@ -1405,6 +1414,11 @@ impl<T: AstInfo> AstDisplay for CreateMaterializedViewStatement<T> {
             f.write_str(" (");
             f.write_node(&display::comma_separated(&self.columns));
             f.write_str(")");
+        }
+
+        if let Some(target) = &self.replacing {
+            f.write_str(" REPLACING ");
+            f.write_node(target);
         }
 
         if let Some(cluster) = &self.in_cluster {
@@ -3196,6 +3210,32 @@ impl<T: AstInfo> AstDisplay for AlterTableAddColumnStatement<T> {
 
 impl_display_t!(AlterTableAddColumnStatement);
 
+/// `ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT ...`
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct AlterMaterializedViewApplyReplacementStatement {
+    pub if_exists: bool,
+    pub name: UnresolvedItemName,
+    pub replacement_name: UnresolvedItemName,
+}
+
+impl AstDisplay for AlterMaterializedViewApplyReplacementStatement {
+    fn fmt<W>(&self, f: &mut AstFormatter<W>)
+    where
+        W: fmt::Write,
+    {
+        f.write_str("ALTER MATERIALIZED VIEW ");
+        if self.if_exists {
+            f.write_str("IF EXISTS ");
+        }
+        f.write_node(&self.name);
+
+        f.write_str(" APPLY REPLACEMENT ");
+        f.write_node(&self.replacement_name);
+    }
+}
+
+impl_display!(AlterMaterializedViewApplyReplacementStatement);
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DiscardStatement {
     pub target: DiscardTarget,
@@ -4075,27 +4115,32 @@ pub enum ExplainAnalyzeComputationProperty {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExplainAnalyzeProperty {
-    Computation {
-        /// Must be non-empty.
-        properties: Vec<ExplainAnalyzeComputationProperty>,
-        skew: bool,
-    },
+    Computation(ExplainAnalyzeComputationProperties),
     Hints,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct ExplainAnalyzeStatement<T: AstInfo> {
+pub struct ExplainAnalyzeComputationProperties {
+    /// Must be non-empty.
+    pub properties: Vec<ExplainAnalyzeComputationProperty>,
+    pub skew: bool,
+}
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainAnalyzeObjectStatement<T: AstInfo> {
     pub properties: ExplainAnalyzeProperty,
     /// Should only be `Explainee::Index` or `Explainee::MaterializedView`
     pub explainee: Explainee<T>,
     pub as_sql: bool,
 }
 
-impl<T: AstInfo> AstDisplay for ExplainAnalyzeStatement<T> {
+impl<T: AstInfo> AstDisplay for ExplainAnalyzeObjectStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("EXPLAIN ANALYZE");
         match &self.properties {
-            ExplainAnalyzeProperty::Computation { properties, skew } => {
+            ExplainAnalyzeProperty::Computation(ExplainAnalyzeComputationProperties {
+                properties,
+                skew,
+            }) => {
                 let mut first = true;
                 for property in properties {
                     if first {
@@ -4121,7 +4166,40 @@ impl<T: AstInfo> AstDisplay for ExplainAnalyzeStatement<T> {
         }
     }
 }
-impl_display_t!(ExplainAnalyzeStatement);
+impl_display_t!(ExplainAnalyzeObjectStatement);
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ExplainAnalyzeClusterStatement {
+    pub properties: ExplainAnalyzeComputationProperties,
+    pub as_sql: bool,
+}
+
+impl AstDisplay for ExplainAnalyzeClusterStatement {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("EXPLAIN ANALYZE CLUSTER");
+
+        let mut first = true;
+        for property in &self.properties.properties {
+            if first {
+                first = false;
+            } else {
+                f.write_str(",");
+            }
+            match property {
+                ExplainAnalyzeComputationProperty::Cpu => f.write_str(" CPU"),
+                ExplainAnalyzeComputationProperty::Memory => f.write_str(" MEMORY"),
+            }
+        }
+
+        if self.properties.skew {
+            f.write_str(" WITH SKEW");
+        }
+        if self.as_sql {
+            f.write_str(" AS SQL");
+        }
+    }
+}
+impl_display!(ExplainAnalyzeClusterStatement);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ExplainTimestampStatement<T: AstInfo> {

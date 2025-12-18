@@ -9,15 +9,15 @@ menu:
 
 `SHOW ROLE MEMBERSHIP` lists the members of each role granted (directly or
 indirectly) via [role-based access
-control](/security/access-control/#role-based-access-control-rbac) (RBAC).
+control](/security/) (RBAC).
 
 ## Syntax
 
 ```mzsql
-SHOW ROLE MEMBERSHIP [ FOR <role_name> ]
+SHOW ROLE MEMBERSHIP [ FOR <role_name> ];
 ```
 
-Option                     | Description
+Syntax element             | Description
 ---------------------------|------------
 **FOR** <role_name>        | If specified, only show membership for the specified role.
 
@@ -53,4 +53,3 @@ SHOW ROLE MEMBERSHIP FOR r2;
 
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [Access control](/security/access-control/#role-based-access-control-rbac)

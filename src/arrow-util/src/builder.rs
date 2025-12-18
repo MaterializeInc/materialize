@@ -27,11 +27,52 @@ use mz_ore::cast::CastFrom;
 use mz_repr::adt::jsonb::JsonbRef;
 use mz_repr::{Datum, RelationDesc, Row, SqlScalarType};
 
+const EXTENSION_PREFIX: &str = "materialize.v1.";
+
 pub struct ArrowBuilder {
     columns: Vec<ArrowColumn>,
     /// A crude estimate of the size of the data in the builder
     /// based on the size of the rows added to it.
     row_size_bytes: usize,
+    /// The original schema, if provided. Used to preserve metadata in to_record_batch().
+    original_schema: Option<Arc<Schema>>,
+}
+
+/// Converts a RelationDesc to an Arrow Schema.
+pub fn desc_to_schema(desc: &RelationDesc) -> Result<Schema, anyhow::Error> {
+    let mut fields = vec![];
+    let mut errs = vec![];
+    let mut seen_names = BTreeMap::new();
+    for (col_name, col_type) in desc.iter() {
+        let mut col_name = col_name.to_string();
+        // If we allow columns with the same name we encounter two issues:
+        // 1. The arrow crate will accidentally reuse the same buffers for the columns
+        // 2. Many parquet readers will error when trying to read the file metadata
+        // Instead we append a number to the end of the column name for any duplicates.
+        // TODO(roshan): We should document this when writing the copy-to-s3 MZ docs.
+        seen_names
+            .entry(col_name.clone())
+            .and_modify(|e: &mut u32| {
+                *e += 1;
+                col_name += &e.to_string();
+            })
+            .or_insert(1);
+        match scalar_to_arrow_datatype(&col_type.scalar_type) {
+            Ok((data_type, extension_type_name)) => {
+                fields.push(field_with_typename(
+                    &col_name,
+                    data_type,
+                    col_type.nullable,
+                    &extension_type_name,
+                ));
+            }
+            Err(err) => errs.push(err.to_string()),
+        }
+    }
+    if !errs.is_empty() {
+        anyhow::bail!("Relation contains unimplemented arrow types: {:?}", errs);
+    }
+    Ok(Schema::new(fields))
 }
 
 impl ArrowBuilder {
@@ -60,43 +101,51 @@ impl ArrowBuilder {
         item_capacity: usize,
         data_capacity: usize,
     ) -> Result<Self, anyhow::Error> {
+        let schema = desc_to_schema(desc)?;
         let mut columns = vec![];
-        let mut errs = vec![];
-        let mut seen_names = BTreeMap::new();
-        for (col_name, col_type) in desc.iter() {
-            let mut col_name = col_name.to_string();
-            // If we allow columns with the same name we encounter two issues:
-            // 1. The arrow crate will accidentally reuse the same buffers for the columns
-            // 2. Many parquet readers will error when trying to read the file metadata
-            // Instead we append a number to the end of the column name for any duplicates.
-            // TODO(roshan): We should document this when writing the copy-to-s3 MZ docs.
-            seen_names
-                .entry(col_name.clone())
-                .and_modify(|e: &mut u32| {
-                    *e += 1;
-                    col_name += &e.to_string();
-                })
-                .or_insert(1);
-            match scalar_to_arrow_datatype(&col_type.scalar_type) {
-                Ok((data_type, extension_type_name)) => {
-                    columns.push(ArrowColumn::new(
-                        col_name,
-                        col_type.nullable,
-                        data_type,
-                        extension_type_name,
-                        item_capacity,
-                        data_capacity,
-                    )?);
-                }
-                Err(err) => errs.push(err.to_string()),
-            }
-        }
-        if !errs.is_empty() {
-            anyhow::bail!("Relation contains unimplemented arrow types: {:?}", errs);
+        for field in schema.fields() {
+            columns.push(ArrowColumn::new(
+                field.name().clone(),
+                field.is_nullable(),
+                field.data_type().clone(),
+                typename_from_field(field)?,
+                item_capacity,
+                data_capacity,
+            )?);
         }
         Ok(Self {
             columns,
             row_size_bytes: 0,
+            original_schema: None,
+        })
+    }
+
+    /// Initializes a new ArrowBuilder with a pre-built Arrow Schema.
+    /// This is useful when you need to preserve schema metadata (e.g., field IDs for Iceberg).
+    /// `item_capacity` is used to initialize the capacity of each column's builder which defines
+    /// the number of values that can be appended to each column before reallocating.
+    /// `data_capacity` is used to initialize the buffer size of the string and binary builders.
+    /// Errors if the schema contains an unimplemented type.
+    pub fn new_with_schema(
+        schema: Arc<Schema>,
+        item_capacity: usize,
+        data_capacity: usize,
+    ) -> Result<Self, anyhow::Error> {
+        let mut columns = vec![];
+        for field in schema.fields() {
+            columns.push(ArrowColumn::new(
+                field.name().clone(),
+                field.is_nullable(),
+                field.data_type().clone(),
+                typename_from_field(field)?,
+                item_capacity,
+                data_capacity,
+            )?);
+        }
+        Ok(Self {
+            columns,
+            row_size_bytes: 0,
+            original_schema: Some(schema),
         })
     }
 
@@ -118,7 +167,15 @@ impl ArrowBuilder {
             arrays.push(col.finish());
             fields.push((&col).into());
         }
-        RecordBatch::try_new(Schema::new(fields).into(), arrays)
+
+        // If we have an original schema, use it to preserve metadata (e.g., field IDs)
+        let schema = if let Some(original_schema) = self.original_schema {
+            original_schema
+        } else {
+            Arc::new(Schema::new(fields))
+        };
+
+        RecordBatch::try_new(schema, arrays)
     }
 
     /// Appends a row to the builder.
@@ -437,7 +494,7 @@ fn field_with_typename(
 ) -> Field {
     Field::new(name, data_type, nullable).with_metadata(HashMap::from([(
         "ARROW:extension:name".to_string(),
-        format!("materialize.v1.{}", extension_type_name),
+        format!("{}{}", EXTENSION_PREFIX, extension_type_name),
     )]))
 }
 
@@ -447,7 +504,7 @@ fn typename_from_field(field: &Field) -> Result<String, anyhow::Error> {
     let extension_name = metadata
         .get("ARROW:extension:name")
         .ok_or_else(|| anyhow::anyhow!("Missing extension name in metadata"))?;
-    if let Some(name) = extension_name.strip_prefix("materialize.v1") {
+    if let Some(name) = extension_name.strip_prefix(EXTENSION_PREFIX) {
         Ok(name.to_string())
     } else {
         anyhow::bail!("Extension name {} does not match expected", extension_name,)
@@ -709,8 +766,8 @@ impl ArrowColumn {
                 }
                 builder.append(true).unwrap()
             }
-            (_builder, datum) => {
-                anyhow::bail!("Datum {:?} does not match builder", datum)
+            (builder, datum) => {
+                anyhow::bail!("Datum {:?} does not match builder {:?}", datum, builder)
             }
         }
         Ok(())

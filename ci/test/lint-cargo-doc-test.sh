@@ -13,6 +13,9 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
-try bin/xcompile cargo test --locked --profile=ci --doc
+RESULT=0
+{ stdbuf --output=L --error=L bin/xcompile cargo test --locked --profile=ci --doc |& tee run.log; } || RESULT=$?
 
-try_status_report
+if [[ $RESULT -ne 0 ]]; then
+  bin/clear-corrupted-cargo-target-dir run.log
+fi

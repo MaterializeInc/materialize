@@ -113,10 +113,20 @@ class Scenario:
     def requires_external_idempotence(self) -> bool:
         return False
 
+    def does_forced_migrations(self) -> bool:
+        return False
+
     def _include_check_class(self, check_class: type[Check]) -> bool:
-        return not check_class.__name__.endswith("Base") and (
-            not self.requires_external_idempotence()
-            or check_class.externally_idempotent
+        return (
+            not check_class.__name__.endswith("Base")
+            and (
+                not self.requires_external_idempotence()
+                or check_class.externally_idempotent
+            )
+            and (
+                not self.does_forced_migrations()
+                or check_class.supports_forced_migrations
+            )
         )
 
 

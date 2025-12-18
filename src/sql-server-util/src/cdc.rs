@@ -75,7 +75,7 @@ use tiberius::numeric::Numeric;
 
 use crate::desc::{SqlServerQualifiedTableName, SqlServerTableRaw};
 use crate::inspect::DDLEvent;
-use crate::{Client, SqlServerError, TransactionIsolationLevel};
+use crate::{Client, SqlServerCdcMetrics, SqlServerError, TransactionIsolationLevel};
 
 /// A stream of changes from a table in SQL Server that has CDC enabled.
 ///
@@ -83,7 +83,7 @@ use crate::{Client, SqlServerError, TransactionIsolationLevel};
 /// poll the upstream source.
 ///
 /// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-tables/change-data-capture-tables-transact-sql?view=sql-server-ver16>
-pub struct CdcStream<'a> {
+pub struct CdcStream<'a, M: SqlServerCdcMetrics> {
     /// Client we use for querying SQL Server.
     client: &'a mut Client,
     /// Upstream capture instances we'll list changes from.
@@ -97,18 +97,22 @@ pub struct CdcStream<'a> {
     /// we'll wait this duration for SQL Server to report an [`Lsn`] and thus indicate CDC is
     /// ready to go.
     max_lsn_wait: Duration,
+    /// Metrics.
+    metrics: M,
 }
 
-impl<'a> CdcStream<'a> {
+impl<'a, M: SqlServerCdcMetrics> CdcStream<'a, M> {
     pub(crate) fn new(
         client: &'a mut Client,
         capture_instances: BTreeMap<Arc<str>, Option<Lsn>>,
+        metrics: M,
     ) -> Self {
         CdcStream {
             client,
             capture_instances,
             poll_interval: Duration::from_secs(1),
             max_lsn_wait: Duration::from_secs(10),
+            metrics,
         }
     }
 
@@ -164,6 +168,13 @@ impl<'a> CdcStream<'a> {
         // as it will be just be locking the table(s).
         let mut fencing_client = self.client.new_connection().await?;
         let mut fence_txn = fencing_client.transaction().await?;
+        let qualified_table_name = format!(
+            "{schema_name}.{table_name}",
+            schema_name = &table.schema_name,
+            table_name = &table.name
+        );
+        self.metrics
+            .snapshot_table_lock_start(&qualified_table_name);
         fence_txn
             .lock_table_shared(&table.schema_name, &table.name)
             .await?;
@@ -204,7 +215,7 @@ impl<'a> CdcStream<'a> {
         // the table no longer needs to be locked. Any writes that happen to the upstream table
         // will have an LSN higher than our captured LSN, and will be read from CDC.
         fence_txn.rollback().await?;
-
+        self.metrics.snapshot_table_lock_end(&qualified_table_name);
         let lsn = txn.get_lsn().await?;
 
         tracing::info!(%source_id, ?lsn, "timely-{worker_id} starting snapshot");
@@ -225,7 +236,9 @@ impl<'a> CdcStream<'a> {
     }
 
     /// Consume `self` returning a [`Stream`] of [`CdcEvent`]s.
-    pub fn into_stream(mut self) -> impl Stream<Item = Result<CdcEvent, SqlServerError>> + use<'a> {
+    pub fn into_stream(
+        mut self,
+    ) -> impl Stream<Item = Result<CdcEvent, SqlServerError>> + use<'a, M> {
         async_stream::try_stream! {
             // Initialize all of our start LSNs.
             self.initialize_start_lsns().await?;

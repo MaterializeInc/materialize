@@ -41,6 +41,30 @@ use uuid::Uuid;
 use crate::catalog::open::into_consolidatable_updates_startup;
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{BuiltinTableUpdate, CatalogState, ConnCatalog};
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
+
+/// Catalog key of the `migration_version` setting.
+///
+/// The `migration_version` tracks the version of the binary that last successfully performed and
+/// committed all the catalog migrations (including builtin schema migrations). It can be used by
+/// migration logic to identify the source version from which to migrate.
+///
+/// Note that the durable catalog also knows a `catalog_content_version`. That doesn't work for
+/// this purpose as it is already bumped to the current binary version when the catalog is opened
+/// in writable mode, before any migrations have run.
+const MIGRATION_VERSION_KEY: &str = "migration_version";
+
+pub(crate) fn get_migration_version(txn: &Transaction<'_>) -> Option<Version> {
+    txn.get_setting(MIGRATION_VERSION_KEY.into())
+        .map(|s| s.parse().expect("valid migration version"))
+}
+
+pub(crate) fn set_migration_version(
+    txn: &mut Transaction<'_>,
+    version: Version,
+) -> Result<(), mz_catalog::durable::CatalogError> {
+    txn.set_setting(MIGRATION_VERSION_KEY.into(), Some(version.to_string()))
+}
 
 fn rewrite_ast_items<F>(tx: &mut Transaction<'_>, mut f: F) -> Result<(), anyhow::Error>
 where
@@ -94,6 +118,7 @@ where
 
 pub(crate) struct MigrateResult {
     pub(crate) builtin_table_updates: Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+    pub(crate) catalog_updates: Vec<ParsedStateUpdate>,
     pub(crate) post_item_updates: Vec<(BootstrapStateUpdateKind, Timestamp, Diff)>,
 }
 
@@ -108,11 +133,7 @@ pub(crate) async fn migrate(
     _now: NowFn,
     _boot_ts: Timestamp,
 ) -> Result<MigrateResult, anyhow::Error> {
-    let catalog_version = tx.get_catalog_content_version();
-    let catalog_version = match catalog_version {
-        Some(v) => Version::parse(v)?,
-        None => Version::new(0, 0, 0),
-    };
+    let catalog_version = get_migration_version(tx).unwrap_or(Version::new(0, 0, 0));
 
     info!(
         "migrating statements from catalog version {:?}",
@@ -129,6 +150,7 @@ pub(crate) async fn migrate(
         // Migration functions may also take `tx` as input to stage
         // arbitrary changes to the catalog.
         ast_rewrite_create_sink_partition_strategy(stmt)?;
+        ast_rewrite_sql_server_constraints(stmt)?;
         Ok(())
     })?;
 
@@ -172,9 +194,8 @@ pub(crate) async fn migrate(
             .expect("known parameter");
     }
 
-    let mut ast_builtin_table_updates = state
-        .apply_updates_for_bootstrap(item_updates, local_expr_cache)
-        .await;
+    let (mut ast_builtin_table_updates, mut ast_catalog_updates) =
+        state.apply_updates(item_updates, local_expr_cache).await;
 
     info!("migrating from catalog version {:?}", catalog_version);
 
@@ -218,18 +239,20 @@ pub(crate) async fn migrate(
     // input and stages arbitrary transformations to the catalog on `tx`.
 
     let op_item_updates = tx.get_and_commit_op_updates();
-    let item_builtin_table_updates = state
-        .apply_updates_for_bootstrap(op_item_updates, local_expr_cache)
-        .await;
+    let (item_builtin_table_updates, item_catalog_updates) =
+        state.apply_updates(op_item_updates, local_expr_cache).await;
 
     ast_builtin_table_updates.extend(item_builtin_table_updates);
+    ast_catalog_updates.extend(item_catalog_updates);
 
     info!(
         "migration from catalog version {:?} complete",
         catalog_version
     );
+
     Ok(MigrateResult {
         builtin_table_updates: ast_builtin_table_updates,
+        catalog_updates: ast_catalog_updates,
         post_item_updates,
     })
 }
@@ -832,5 +855,92 @@ fn ast_rewrite_create_sink_partition_strategy(
     };
     stmt.with_options
         .retain(|op| op.name != CreateSinkOptionName::PartitionStrategy);
+    Ok(())
+}
+
+// Migrate SQL Server constraint information from the columns to dedicated constraints field.
+fn ast_rewrite_sql_server_constraints(stmt: &mut Statement<Raw>) -> Result<(), anyhow::Error> {
+    use mz_sql::ast::{
+        CreateSubsourceOptionName, TableFromSourceOptionName, Value, WithOptionValue,
+    };
+    use mz_sql_server_util::desc::{SqlServerTableConstraint, SqlServerTableConstraintType};
+    use mz_storage_types::sources::ProtoSourceExportStatementDetails;
+    use mz_storage_types::sources::proto_source_export_statement_details::Kind;
+
+    let deets: Option<&mut String> = match stmt {
+        Statement::CreateSubsource(stmt) => stmt.with_options.iter_mut().find_map(|option| {
+            if matches!(option.name, CreateSubsourceOptionName::Details)
+                && let Some(WithOptionValue::Value(Value::String(ref mut details))) = option.value
+            {
+                Some(details)
+            } else {
+                None
+            }
+        }),
+        Statement::CreateTableFromSource(stmt) => stmt.with_options.iter_mut().find_map(|option| {
+            if matches!(option.name, TableFromSourceOptionName::Details)
+                && let Some(WithOptionValue::Value(Value::String(ref mut details))) = option.value
+            {
+                Some(details)
+            } else {
+                None
+            }
+        }),
+        _ => None,
+    };
+    let Some(deets) = deets else {
+        return Ok(());
+    };
+
+    let current_value = hex::decode(&mut *deets)?;
+    let current_value = ProtoSourceExportStatementDetails::decode(&*current_value)?;
+
+    // avoid further work if this isn't SQL Server
+    if !matches!(current_value.kind, Some(Kind::SqlServer(_))) {
+        return Ok(());
+    };
+
+    let SourceExportStatementDetails::SqlServer {
+        mut table,
+        capture_instance,
+        initial_lsn,
+    } = SourceExportStatementDetails::from_proto(current_value)?
+    else {
+        unreachable!("statement details must exist for SQL Server");
+    };
+
+    // Migration has already occured or did not need to happen.
+    if !table.constraints.is_empty() {
+        return Ok(());
+    }
+
+    // Relocates the primary key constraint information from the individual columns to the
+    // constraints field. This ensures that the columns no longer hold constraint information.
+    let mut migrated_constraints: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for col in table.columns.iter_mut() {
+        if let Some(constraint_name) = col.primary_key_constraint.take() {
+            migrated_constraints
+                .entry(constraint_name)
+                .or_default()
+                .push(col.name.to_string());
+        }
+    }
+
+    table.constraints = migrated_constraints
+        .into_iter()
+        .map(|(constraint_name, column_names)| SqlServerTableConstraint {
+            constraint_name: constraint_name.to_string(),
+            constraint_type: SqlServerTableConstraintType::PrimaryKey,
+            column_names,
+        })
+        .collect();
+
+    let new_value = SourceExportStatementDetails::SqlServer {
+        table,
+        capture_instance,
+        initial_lsn,
+    };
+    *deets = hex::encode(new_value.into_proto().encode_to_vec());
+
     Ok(())
 }

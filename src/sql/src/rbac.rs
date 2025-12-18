@@ -27,7 +27,7 @@ use crate::catalog::{
 };
 use crate::names::{
     CommentObjectId, ObjectId, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
-    SystemObjectId,
+    SchemaSpecifier, SystemObjectId,
 };
 use crate::plan::{self, PlanKind};
 use crate::plan::{
@@ -337,7 +337,11 @@ pub fn check_usage(
 pub fn check_plan(
     catalog: &impl SessionCatalog,
     // Function mapping a connection ID to an authenticated role. The roles may have been dropped concurrently.
-    active_conns: impl FnOnce(u32) -> Option<RoleId>,
+    // Only required for Plan::SideEffectingFunc; can be None for other plan types.
+    // TODO(peek-seq): Remove this when deleting the old peek sequencing. The logic here that uses
+    // `active_conns` is mirrored in `execute_side_effecting_func`, which is what the frontend peek
+    // sequencing uses.
+    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
     session: &dyn SessionMetadata,
     plan: &Plan,
     target_cluster_id: Option<ClusterId>,
@@ -377,7 +381,7 @@ pub fn is_rbac_enabled_for_session(
 fn generate_rbac_requirements(
     catalog: &impl SessionCatalog,
     plan: &Plan,
-    active_conns: impl FnOnce(u32) -> Option<RoleId>,
+    active_conns: Option<impl FnOnce(u32) -> Option<RoleId>>,
     target_cluster_id: Option<ClusterId>,
     role_id: RoleId,
 ) -> RbacRequirements {
@@ -1264,6 +1268,13 @@ fn generate_rbac_requirements(
             item_usage: &CREATE_ITEM_USAGE,
             ..Default::default()
         },
+        Plan::AlterMaterializedViewApplyReplacement(
+            plan::AlterMaterializedViewApplyReplacementPlan { id, replacement_id },
+        ) => RbacRequirements {
+            ownership: vec![ObjectId::Item(*id), ObjectId::Item(*replacement_id)],
+            item_usage: &CREATE_ITEM_USAGE,
+            ..Default::default()
+        },
         Plan::AlterNetworkPolicy(plan::AlterNetworkPolicyPlan { id, .. }) => RbacRequirements {
             ownership: vec![ObjectId::NetworkPolicy(*id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -1464,11 +1475,12 @@ fn generate_rbac_requirements(
         },
         Plan::SideEffectingFunc(func) => {
             let role_membership = match func {
-                SideEffectingFunc::PgCancelBackend { connection_id } => {
-                    active_conns(*connection_id)
-                        .map(|x| [x].into())
-                        .unwrap_or_default()
-                }
+                SideEffectingFunc::PgCancelBackend { connection_id } => active_conns
+                    .expect("active_conns is required for Plan::SideEffectingFunc")(
+                    *connection_id
+                )
+                .map(|x| [x].into())
+                .unwrap_or_default(),
             };
             RbacRequirements {
                 role_membership,
@@ -1737,6 +1749,16 @@ fn check_object_privileges(
     let mut role_memberships: BTreeMap<RoleId, BTreeSet<RoleId>> = BTreeMap::new();
     role_memberships.insert(current_role_id, role_membership);
     for (object_id, acl_mode, role_id) in privileges {
+        // Temporary schemas are owned by the connection that created them,
+        // so users implicitly have all privileges on their own temp schema.
+        // The schema may not exist yet (lazy creation), so we skip the check.
+        if matches!(
+            &object_id,
+            SystemObjectId::Object(ObjectId::Schema((_, SchemaSpecifier::Temporary)))
+        ) {
+            continue;
+        }
+
         let role_membership = role_memberships
             .entry(role_id)
             .or_insert_with_key(|role_id| catalog.collect_role_membership(role_id));

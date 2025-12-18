@@ -365,11 +365,10 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
             let item = catalog
                 .get_item(object_id)
                 .at_version(RelationVersionSelector::Latest);
-            let full_name = catalog.resolve_full_name(item.name());
             let full_resolved_name = ResolvedItemName::Item {
                 id: *object_id,
                 qualifiers: item.name().qualifiers.clone(),
-                full_name: full_name.clone(),
+                full_name: catalog.resolve_full_name(item.name()),
                 print_id: !matches!(
                     item.item_type(),
                     CatalogItemType::Func | CatalogItemType::Type
@@ -398,10 +397,14 @@ pub(crate) fn purify_create_sink_avro_doc_on_options(
                 // Attach comment for each column in the item, if the user has
                 // not already provided an overriding `DOC ON` option for the
                 // column.
-                if let Ok(desc) = item.desc(&full_name) {
+                let column_descs = match item.type_details() {
+                    Some(details) => details.typ.desc(catalog).unwrap_or_default(),
+                    None => item.relation_desc().map(|d| d.into_owned()),
+                };
+
+                if let Some(desc) = column_descs {
                     for (pos, column_name) in desc.iter_names().enumerate() {
-                        let comment = comments_map.get(&Some(pos + 1));
-                        if let Some(comment_str) = comment {
+                        if let Some(comment_str) = comments_map.get(&Some(pos + 1)) {
                             let doc_on_column_key = AvroDocOn {
                                 identifier: DocOnIdentifier::Column(ColumnName {
                                     relation: full_resolved_name.clone(),
@@ -450,7 +453,10 @@ async fn purify_create_sink(
     } = &mut create_sink_stmt;
 
     // The list of options that the user is allowed to specify.
-    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[CreateSinkOptionName::Snapshot];
+    const USER_ALLOWED_WITH_OPTIONS: &[CreateSinkOptionName] = &[
+        CreateSinkOptionName::Snapshot,
+        CreateSinkOptionName::CommitInterval,
+    ];
 
     if let Some(op) = with_options
         .iter()

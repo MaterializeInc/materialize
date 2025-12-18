@@ -188,7 +188,7 @@ impl Coordinator {
 
     #[instrument]
     pub(crate) fn explain_view(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -242,7 +242,7 @@ impl Coordinator {
 
     #[instrument]
     fn create_view_validate(
-        &mut self,
+        &self,
         plan: plan::CreateViewPlan,
         resolved_ids: ResolvedIds,
         // An optional context set iff the state machine is initiated from
@@ -437,7 +437,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_view_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateViewExplain {
             id,

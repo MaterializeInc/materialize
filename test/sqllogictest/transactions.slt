@@ -689,6 +689,10 @@ ALTER SYSTEM SET allow_real_time_recency = true
 ----
 COMPLETE 0
 
+# TODO(ggevay): I think this is not actually testing real-time recency, because tables don't participate in the
+# RTR machinery at all. (We do get the latest contents of a table in STRICT SERIALIZABLE mode even without RTR
+# being turned on.) We do have other tests in Testdrive, though.
+
 statement ok
 SET REAL_TIME_RECENCY TO TRUE
 
@@ -1469,6 +1473,30 @@ COMPLETE 0
 2
 COMPLETE 1
 COMPLETE 0
+
+# AS OF query outside the timedomain of a transaction.
+
+statement ok
+CREATE SCHEMA s1;
+
+statement ok
+CREATE TABLE s1.t (a int);
+
+statement ok
+CREATE SCHEMA s2;
+
+statement ok
+CREATE MATERIALIZED VIEW s2.const_mv AS (SELECT 1);
+
+# TODO(peek-seq): Uncomment this when the new peek sequencing is turned on in CI. See the comment on
+# `in_immediate_multi_stmt_txn`.
+#simple
+#SELECT * FROM s1.t;
+#SELECT * FROM s2.const_mv AS OF 7;
+#----
+#COMPLETE 0
+#1
+#COMPLETE 1
 
 # Cleanup.
 

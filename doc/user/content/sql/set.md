@@ -14,15 +14,17 @@ To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
-{{< diagram "set-stmt.svg" >}}
+```mzsql
+SET [SESSION|LOCAL] <config> TO|= <value|DEFAULT>;
+```
 
-Field                   | Use
-------------------------|-----
-_name_                  | The name of the configuration parameter to modify.
-_value_                 | The value to assign to the parameter.
-**SESSION**             | **_(Default)_** Set the value for the duration of the current session.
-**LOCAL**               | Set the value for the duration of a single transaction.
-**DEFAULT**             | Use the parameter's default value. Equivalent to [`RESET`](../reset).
+Syntax element                | Description
+------------------------------|------------
+**SESSION**               | Optional. Set the value for the duration of the current session. **_(Default)_**
+**LOCAL**                 | Optional. If specified, set the value for the duration of a single transaction.
+`<config>`                | The name of the configuration parameter to modify.
+`<value>`                 | The value to assign to the parameter.
+**DEFAULT**               | Use the parameter's default value. Equivalent to [`RESET`](../reset).
 
 {{% configuration-parameters %}}
 

@@ -10,7 +10,6 @@
 //! Management of dataflow-local state, like arrangements, while building a
 //! dataflow.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -18,7 +17,7 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION;
 use mz_compute_types::plan::AvailableCollections;
@@ -29,14 +28,13 @@ use mz_repr::fixed_length::ToDatumIter;
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
-use mz_timely_util::builder_async::{ButtonHandle, PressOnDropButton};
 use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::Capability;
-use timely::dataflow::operators::generic::OutputHandleCore;
+use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::scopes::Child;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::timestamp::Refines;
@@ -87,8 +85,6 @@ where
     pub until: Antichain<T>,
     /// Bindings of identifiers to collections.
     pub bindings: BTreeMap<Id, CollectionBundle<S, T>>,
-    /// A handle that operators can probe to know whether the dataflow is shutting down.
-    pub(super) shutdown_probe: ShutdownProbe,
     /// The logger, from Timely's logging framework, if logs are enabled.
     pub(super) compute_logger: Option<crate::logging::compute::Logger>,
     /// Specification for rendering linear joins.
@@ -138,7 +134,6 @@ where
             as_of_frontier,
             until,
             bindings: BTreeMap::new(),
-            shutdown_probe: Default::default(),
             compute_logger,
             linear_join_spec: compute_state.linear_join_spec,
             dataflow_expiration,
@@ -192,7 +187,7 @@ where
     }
 
     pub(super) fn error_logger(&self) -> ErrorLogger {
-        ErrorLogger::new(self.shutdown_probe.clone(), self.debug_name.clone())
+        ErrorLogger::new(self.debug_name.clone())
     }
 }
 
@@ -221,56 +216,11 @@ where
             export_ids: self.export_ids.clone(),
             as_of_frontier: self.as_of_frontier.clone(),
             until: self.until.clone(),
-            shutdown_probe: self.shutdown_probe.clone(),
             compute_logger: self.compute_logger.clone(),
             linear_join_spec: self.linear_join_spec.clone(),
             bindings,
             dataflow_expiration: self.dataflow_expiration.clone(),
             config_set: Rc::clone(&self.config_set),
-        }
-    }
-}
-
-pub(super) fn shutdown_token<G: Scope>(scope: &mut G) -> (ShutdownProbe, PressOnDropButton) {
-    let (button_handle, button) = mz_timely_util::builder_async::button(scope, scope.addr());
-    let probe = ShutdownProbe::new(button_handle);
-    let token = button.press_on_drop();
-    (probe, token)
-}
-
-/// Convenient wrapper around an optional `ButtonHandle` that can be used to check whether a
-/// dataflow is shutting down.
-///
-/// Instances created through the `Default` impl act as if the dataflow never shuts down.
-/// Instances created through [`ShutdownProbe::new`] defer to the wrapped button.
-#[derive(Clone, Default)]
-pub(super) struct ShutdownProbe(Option<Rc<RefCell<ButtonHandle>>>);
-
-impl ShutdownProbe {
-    /// Construct a `ShutdownProbe` instance that defers to `button`.
-    fn new(button: ButtonHandle) -> Self {
-        Self(Some(Rc::new(RefCell::new(button))))
-    }
-
-    /// Returns whether the dataflow is in the process of shutting down.
-    ///
-    /// The result of this method is synchronized among workers: It only returns `true` once all
-    /// workers have dropped their shutdown token.
-    pub(super) fn in_shutdown(&self) -> bool {
-        match &self.0 {
-            Some(t) => t.borrow_mut().all_pressed(),
-            None => false,
-        }
-    }
-
-    /// Returns whether the dataflow is in the process of shutting down on the current worker.
-    ///
-    /// In contrast to [`ShutdownProbe::in_shutdown`], this method returns `true` as soon as the
-    /// current worker has dropped its shutdown token, without waiting for other workers.
-    pub(super) fn in_local_shutdown(&self) -> bool {
-        match &self.0 {
-            Some(t) => t.borrow_mut().local_pressed(),
-            None => false,
         }
     }
 }
@@ -311,7 +261,12 @@ where
     /// If you have logic that could be applied to each record, consider using the
     /// `flat_map` methods which allows this and can reduce the work done.
     #[deprecated(note = "Use `flat_map` instead.")]
-    pub fn as_collection(&self) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+    pub fn as_collection(
+        &self,
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
         let mut datums = DatumVec::new();
         let logic = move |k: DatumSeq, v: DatumSeq| {
             let mut datums_borrow = datums.borrow();
@@ -348,7 +303,7 @@ where
         key: Option<&Row>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
+    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -438,7 +393,10 @@ where
     T: MzTimestamp,
     S::Timestamp: MzTimestamp + Refines<T>,
 {
-    pub collection: Option<(Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)>,
+    pub collection: Option<(
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    )>,
     pub arranged: BTreeMap<Vec<MirScalarExpr>, ArrangementFlavor<S, T>>,
 }
 
@@ -449,8 +407,8 @@ where
 {
     /// Construct a new collection bundle from update streams.
     pub fn from_collections(
-        oks: Collection<S, Row, Diff>,
-        errs: Collection<S, DataflowError, Diff>,
+        oks: VecCollection<S, Row, Diff>,
+        errs: VecCollection<S, DataflowError, Diff>,
     ) -> Self {
         Self {
             collection: Some((oks, errs)),
@@ -557,7 +515,10 @@ where
         &self,
         key: Option<&[MirScalarExpr]>,
         config_set: &ConfigSet,
-    ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>) {
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    ) {
         // Any operator that uses this method was told to use a particular
         // collection during LIR planning, where we should have made
         // sure that that collection exists.
@@ -606,7 +567,7 @@ where
         key_val: Option<(Vec<MirScalarExpr>, Option<Row>)>,
         max_demand: usize,
         mut logic: L,
-    ) -> (Stream<S, I::Item>, Collection<S, DataflowError, Diff>)
+    ) -> (Stream<S, I::Item>, VecCollection<S, DataflowError, Diff>)
     where
         I: IntoIterator<Item = (D, S::Timestamp, Diff)>,
         D: Data,
@@ -741,8 +702,8 @@ where
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
-        Collection<S, mz_repr::Row, Diff>,
-        Collection<S, DataflowError, Diff>,
+        VecCollection<S, mz_repr::Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
     ) {
         mfp.optimize();
         let mfp_plan = mfp.clone().into_plan().unwrap();
@@ -886,12 +847,12 @@ where
     /// columns in the key are not included in the value.
     fn arrange_collection(
         name: &String,
-        oks: Collection<S, Row, Diff>,
+        oks: VecCollection<S, Row, Diff>,
         key: Vec<MirScalarExpr>,
         thinning: Vec<usize>,
     ) -> (
         Arranged<S, RowRowAgent<S::Timestamp, Diff>>,
-        Collection<S, DataflowError, Diff>,
+        VecCollection<S, DataflowError, Diff>,
     ) {
         // The following `unary_fallible` implements a `map_fallible`, but produces columnar updates
         // for the ok stream. The `map_fallible` cannot be used here because the closure cannot
@@ -965,12 +926,7 @@ where
         key: Option<&C::Key<'_>>,
         logic: &mut L,
         fuel: &mut usize,
-        output: &mut OutputHandleCore<
-            '_,
-            C::Time,
-            ConsolidatingContainerBuilder<Vec<I::Item>>,
-            timely::dataflow::channels::pushers::Tee<C::Time, Vec<I::Item>>,
-        >,
+        output: &mut OutputBuilderSession<'_, C::Time, ConsolidatingContainerBuilder<Vec<I::Item>>>,
     ) where
         I: IntoIterator<Item = (D, C::Time, C::Diff)>,
         D: Data,

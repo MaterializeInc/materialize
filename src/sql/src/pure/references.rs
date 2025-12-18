@@ -14,6 +14,7 @@ use std::sync::Arc;
 use mz_ore::now::SYSTEM_TIME;
 use mz_repr::RelationDesc;
 use mz_sql_parser::ast::{ExternalReferences, Ident, IdentError, UnresolvedItemName};
+use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::desc::SqlServerTableRaw;
 use mz_storage_types::sources::load_generator::{LoadGenerator, LoadGeneratorOutput};
 use mz_storage_types::sources::{ExternalReferenceResolutionError, SourceReferenceResolver};
@@ -272,19 +273,31 @@ impl<'a> SourceReferenceClient<'a> {
                         .or_insert(table);
                 }
 
+                let mut constraints_by_table =
+                    mz_sql_server_util::inspect::get_constraints_for_tables(
+                        client,
+                        unique_tables.keys(),
+                    )
+                    .await?;
                 unique_tables
-                    .into_values()
-                    .map(|raw| {
-                        let capture_instance = Arc::clone(&raw.capture_instance.name);
+                    .into_iter()
+                    .map(|(qualified_table_name, raw_table)| {
+                        let constraints = constraints_by_table
+                            .remove(&qualified_table_name)
+                            .unwrap_or_default();
+                        let capture_instance = Arc::clone(&raw_table.capture_instance.name);
                         let database = Arc::clone(database);
-                        let table = mz_sql_server_util::desc::SqlServerTableDesc::new(raw);
-                        ReferenceMetadata::SqlServer {
+                        let table = mz_sql_server_util::desc::SqlServerTableDesc::new(
+                            raw_table,
+                            constraints,
+                        )?;
+                        Ok(ReferenceMetadata::SqlServer {
                             table,
                             database,
                             capture_instance,
-                        }
+                        })
                     })
-                    .collect()
+                    .collect::<Result<_, SqlServerError>>()?
             }
             SourceReferenceClient::Kafka { topic } => {
                 vec![ReferenceMetadata::Kafka(topic.to_string())]

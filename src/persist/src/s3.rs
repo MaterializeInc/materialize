@@ -864,14 +864,13 @@ impl S3Blob {
         let mut parts = Vec::with_capacity(parts_len);
         for (part_num, part_fut) in part_futs.into_iter() {
             let (this_part_elapsed, part_res) = part_fut
-                .await
                 .inspect(|_| {
                     self.metrics
                         .error_counts
                         .with_label_values(&["UploadPart", "AsyncSpawnError"])
                         .inc()
                 })
-                .map_err(|err| anyhow!(err).context("s3 spawn err"))?;
+                .await;
             let part_res = part_res
                 .inspect_err(|err| self.update_error_metrics("UploadPart", err))
                 .context("s3 upload_part err")?;

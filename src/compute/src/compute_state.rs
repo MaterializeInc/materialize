@@ -10,7 +10,6 @@ use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
-
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,9 +28,8 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_ACTIVE_DATAFLOW_CANCELATION, ENABLE_PEEK_RESPONSE_STASH,
-    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE,
-    PEEK_STASH_NUM_BATCHES,
+    ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
+    PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -41,6 +39,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::EpochMillis;
+use mz_ore::soft_panic_or_log;
 use mz_ore::task::AbortOnDropHandle;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_persist_client::Diagnostics;
@@ -94,8 +93,6 @@ pub struct ComputeState {
     ///  * Persist sinks store their current frontier in `CollectionState::sink_write_frontier`.
     ///  * Subscribes report their frontiers through the `subscribe_response_buffer`.
     pub collections: BTreeMap<GlobalId, CollectionState>,
-    /// Collections that were recently dropped and whose removal needs to be reported.
-    pub dropped_collections: Vec<(GlobalId, DroppedCollection)>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
@@ -153,21 +150,6 @@ pub struct ComputeState {
     /// same dataflow.
     suspended_collections: BTreeMap<GlobalId, Rc<dyn Any>>,
 
-    /// When this replica/cluster is in read-only mode it must not affect any
-    /// changes to external state. This flag can only be changed by a
-    /// [ComputeCommand::AllowWrites].
-    ///
-    /// Everything running on this replica/cluster must obey this flag. At the
-    /// time of writing the only part that is doing this is `persist_sink`.
-    ///
-    /// NOTE: In the future, we might want a more complicated flag, for example
-    /// something that tells us after which timestamp we are allowed to write.
-    /// In this first version we are keeping things as simple as possible!
-    pub read_only_rx: watch::Receiver<bool>,
-
-    /// Send-side for read-only state.
-    pub read_only_tx: watch::Sender<bool>,
-
     /// Interval at which to perform server maintenance tasks. Set to a zero interval to
     /// perform maintenance with every `step_or_park` invocation.
     pub server_maintenance_interval: Duration,
@@ -195,13 +177,8 @@ impl ComputeState {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
 
-        // We always initialize as read_only=true. Only when we're explicitly
-        // allowed do we switch to doing writes.
-        let (read_only_tx, read_only_rx) = watch::channel(true);
-
         Self {
             collections: Default::default(),
-            dropped_collections: Default::default(),
             traces,
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
@@ -218,8 +195,6 @@ impl ComputeState {
             context,
             worker_config: mz_dyncfgs::all_dyncfgs().into(),
             suspended_collections: Default::default(),
-            read_only_tx,
-            read_only_rx,
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
@@ -418,12 +393,8 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
                 self.handle_peek(*peek)
             }
             CancelPeek { uuid } => self.handle_cancel_peek(uuid),
-            AllowWrites => {
-                self.compute_state
-                    .read_only_tx
-                    .send(false)
-                    .expect("we're holding one other end");
-                self.compute_state.persist_clients.cfg().enable_compaction();
+            AllowWrites(id) => {
+                self.handle_allow_writes(id);
             }
         }
 
@@ -633,22 +604,20 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         }
     }
 
-    /// Arrange for the given collection to be dropped.
-    ///
-    /// Collection dropping occurs in three phases:
-    ///
-    ///  1. This method removes the collection from the [`ComputeState`] and drops its
-    ///     [`CollectionState`], including its held dataflow tokens. It then adds the dropped
-    ///     collection to `dropped_collections`.
-    ///  2. The next step of the Timely worker lets the source operators observe the token drops
-    ///     and shut themselves down.
-    ///  3. `report_dropped_collections` removes the entry from `dropped_collections` and emits any
-    ///     outstanding final responses required by the compute protocol.
-    ///
-    /// These steps ensure that we don't report a collection as dropped to the controller before it
-    /// has stopped reading from its inputs. Doing so would allow the controller to release its
-    /// read holds on the inputs, which could lead to panics from the replica trying to read
-    /// already compacted times.
+    fn handle_allow_writes(&mut self, id: GlobalId) {
+        // Enable persist compaction on any allow-writes command. We
+        // assume persist only compacts after making durable changes,
+        // such as appending a batch or advancing the upper.
+        self.compute_state.persist_clients.cfg().enable_compaction();
+
+        if let Some(collection) = self.compute_state.collections.get_mut(&id) {
+            collection.allow_writes();
+        } else {
+            soft_panic_or_log!("allow writes for unknown collection {id}");
+        }
+    }
+
+    /// Drop the given collection.
     fn drop_collection(&mut self, id: GlobalId) {
         let collection = self
             .compute_state
@@ -661,19 +630,30 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
-        if ENABLE_ACTIVE_DATAFLOW_CANCELATION.get(&self.compute_state.worker_config) {
-            // Drop the dataflow, if all its exports have been dropped.
-            if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
-                self.timely_worker.drop_dataflow(index);
-            }
+        // Drop the dataflow, if all its exports have been dropped.
+        if let Ok(index) = Rc::try_unwrap(collection.dataflow_index) {
+            self.timely_worker.drop_dataflow(index);
         }
 
-        // Remember the collection as dropped, for emission of outstanding final compute responses.
-        let dropped = DroppedCollection {
-            reported_frontiers: collection.reported_frontiers,
-            is_subscribe_or_copy: collection.is_subscribe_or_copy,
-        };
-        self.compute_state.dropped_collections.push((id, dropped));
+        // The compute protocol requires us to send a `Frontiers` response with empty frontiers
+        // when a collection was dropped, unless:
+        //  * The frontier was already reported as empty previously, or
+        //  * The collection is a subscribe or copy-to.
+        if !collection.is_subscribe_or_copy {
+            let reported = collection.reported_frontiers;
+            let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
+            let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
+            let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
+
+            let frontiers = FrontiersResponse {
+                write_frontier,
+                input_frontier,
+                output_frontier,
+            };
+            if frontiers.has_updates() {
+                self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
+            }
+        }
     }
 
     /// Initializes timely dataflow logging and publishes as a view.
@@ -816,36 +796,6 @@ impl<'a, A: Allocate + 'static> ActiveComputeState<'a, A> {
 
         for (id, frontiers) in responses {
             self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
-        }
-    }
-
-    /// Report dropped collections to the controller.
-    pub fn report_dropped_collections(&mut self) {
-        let dropped_collections = std::mem::take(&mut self.compute_state.dropped_collections);
-
-        for (id, collection) in dropped_collections {
-            // The compute protocol requires us to send a `Frontiers` response with empty frontiers
-            // when a collection was dropped, unless:
-            //  * The frontier was already reported as empty previously, or
-            //  * The collection is a subscribe or copy-to.
-
-            if collection.is_subscribe_or_copy {
-                continue;
-            }
-
-            let reported = collection.reported_frontiers;
-            let write_frontier = (!reported.write_frontier.is_empty()).then(Antichain::new);
-            let input_frontier = (!reported.input_frontier.is_empty()).then(Antichain::new);
-            let output_frontier = (!reported.output_frontier.is_empty()).then(Antichain::new);
-
-            let frontiers = FrontiersResponse {
-                write_frontier,
-                input_frontier,
-                output_frontier,
-            };
-            if frontiers.has_updates() {
-                self.send_compute_response(ComputeResponse::Frontiers(id, frontiers));
-            }
         }
     }
 
@@ -1709,6 +1659,20 @@ pub struct CollectionState {
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
     metrics: CollectionMetrics,
+    /// Send-side to transition a dataflow from read-only mode to read-write mode.
+    ///
+    /// All dataflows start in read-only mode. Only after receiving a
+    /// `AllowWrites` command from the controller will they transition to
+    /// read-write mode.
+    ///
+    /// A dataflow in read-only mode must not affect any external state.
+    ///
+    /// NOTE: In the future, we might want a more complicated flag, for example
+    /// something that tells us after which timestamp we are allowed to write.
+    /// In this first version we are keeping things as simple as possible!
+    read_only_tx: watch::Sender<bool>,
+    /// Receive-side to observe whether a dataflow is in read-only mode.
+    pub read_only_rx: watch::Receiver<bool>,
 }
 
 impl CollectionState {
@@ -1718,6 +1682,10 @@ impl CollectionState {
         as_of: Antichain<Timestamp>,
         metrics: CollectionMetrics,
     ) -> Self {
+        // We always initialize as read_only=true. Only when we're explicitly
+        // allowed to we switch to read-write.
+        let (read_only_tx, read_only_rx) = watch::channel(true);
+
         Self {
             reported_frontiers: ReportedFrontiers::new(),
             dataflow_index,
@@ -1729,6 +1697,8 @@ impl CollectionState {
             compute_probe: None,
             logging: None,
             metrics,
+            read_only_tx,
+            read_only_rx,
         }
     }
 
@@ -1791,20 +1761,14 @@ impl CollectionState {
             ReportedFrontier::NotReported { .. } => false,
         }
     }
-}
 
-/// State remembered about a dropped compute collection.
-///
-/// This is the subset of the full [`CollectionState`] that survives the invocation of
-/// `drop_collection`, until it is finally dropped in `report_dropped_collections`. It includes any
-/// information required to report the dropping of a collection to the controller.
-///
-/// Note that this state must _not_ store any state (such as tokens) whose dropping releases
-/// resources elsewhere in the system. A `DroppedCollection` for a collection dropped during
-/// reconciliation might be alive at the same time as the [`CollectionState`] for the re-created
-/// collection, and if the dropped collection hasn't released all its held resources by the time
-/// the new one is created, conflicts can ensue.
-pub struct DroppedCollection {
-    reported_frontiers: ReportedFrontiers,
-    is_subscribe_or_copy: bool,
+    /// Allow writes for this collection.
+    fn allow_writes(&self) {
+        info!(
+            dataflow_index = *self.dataflow_index,
+            export = ?self.logging.as_ref().map(|l| l.export_id()),
+            "allowing writes for dataflow",
+        );
+        let _ = self.read_only_tx.send(false);
+    }
 }

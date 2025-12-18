@@ -6,18 +6,47 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER SECRET` changes the contents of a secret. To rename a secret, see [`ALTER...RENAME`](/sql/alter-rename/).
+Use `ALTER SECRET` to:
+
+- Change the value of the secret.
+- Rename a secret.
+- Change owner of a secret.
 
 ## Syntax
 
-{{< diagram "alter-secret.svg" >}}
+{{< tabs >}}
+{{< tab "Change value" >}}
 
-Field | Use
-------|-----
-_name_ | The identifier of the secret you want to alter.
-_value_ | The new value for the secret. The _value_ expression may not reference any relations, and must be implicitly castable to `bytea`.
+### Change value
+
+To change the value of a secret:
+
+{{% include-syntax file="examples/alter_secret" example="syntax-change-value" %}}
+
+{{< /tab >}}
+{{< tab "Rename" >}}
+
+### Rename
+
+To rename a secret:
+
+{{% include-syntax file="examples/alter_secret" example="syntax-rename" %}}
+
+{{< /tab >}}
+{{< tab "Change owner" >}}
+
+### Change owner
+
+To change the owner of a secret:
+
+{{% include-syntax file="examples/alter_secret" example="syntax-change-owner" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
+
+### Changing the secret value
 
 After an `ALTER SECRET` command is executed:
 
@@ -59,7 +88,6 @@ The privileges required to execute this statement are:
 
 ## Related pages
 
-- [`ALTER...RENAME`](/sql/alter-rename/)
 - [`SHOW SECRETS`](/sql/show-secrets)
 - [`DROP SECRET`](/sql/drop-secret)
 

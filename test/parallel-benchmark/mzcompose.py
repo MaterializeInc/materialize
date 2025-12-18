@@ -22,6 +22,7 @@ import numpy
 from matplotlib.markers import MarkerStyle
 
 from materialize import MZ_ROOT, buildkite
+from materialize.docker import image_registry
 from materialize.mz_env_util import get_cloud_hostname
 from materialize.mzcompose import ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS
 from materialize.mzcompose.composition import (
@@ -70,7 +71,7 @@ from materialize.version_list import resolve_ancestor_image_tag
 PARALLEL_BENCHMARK_FRAMEWORK_VERSION = "1.2.0"
 
 
-def known_regression(scenario: str, other_tag: str) -> bool:
+def known_regression(scenario: str, other_tag: str | None) -> bool:
     return False
 
 
@@ -440,7 +441,7 @@ def run_once(
     else:
         overrides = [
             Materialized(
-                image=f"materialize/materialized:{tag}" if tag else None,
+                image=f"{image_registry()}/materialized:{tag}" if tag else None,
                 default_size=args.size,
                 soft_assertions=False,
                 external_metadata_store=True,
@@ -567,7 +568,7 @@ def less_than_is_regression(stat: str) -> bool:
 def check_regressions(
     this_stats: dict[Scenario, dict[str, Statistics]],
     other_stats: dict[Scenario, dict[str, Statistics]],
-    other_tag: str,
+    other_tag: str | None,
 ) -> list[TestFailureDetails]:
     failures: list[TestFailureDetails] = []
 
@@ -641,7 +642,7 @@ def check_regressions(
     return failures
 
 
-def resolve_tag(tag: str) -> str:
+def resolve_tag(tag: str) -> str | None:
     if tag == "common-ancestor":
         # TODO: We probably will need overrides too
         return resolve_ancestor_image_tag({})

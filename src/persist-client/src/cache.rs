@@ -17,7 +17,7 @@ use std::future::Future;
 use std::sync::{Arc, RwLock, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::instrument;
 use mz_ore::metrics::MetricsRegistry;
@@ -109,6 +109,39 @@ impl PersistClientCache {
             &MetricsRegistry::new(),
             |_, _| PubSubClientConnection::noop(),
         )
+    }
+
+    #[cfg(feature = "turmoil")]
+    /// Create a [PersistClientCache] for use in turmoil tests.
+    ///
+    /// Turmoil wants to run all software under test in a single thread, so we disable the
+    /// (multi-threaded) isolated runtime.
+    pub fn new_for_turmoil() -> Self {
+        use crate::rpc::NoopPubSubSender;
+
+        let cfg = PersistConfig::new_for_tests();
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+
+        let pubsub_sender: Arc<dyn PubSubSender> = Arc::new(NoopPubSubSender);
+        let _pubsub_receiver_task = mz_ore::task::spawn(|| "noop", async {});
+
+        let state_cache = Arc::new(StateCache::new(
+            &cfg,
+            Arc::clone(&metrics),
+            Arc::clone(&pubsub_sender),
+        ));
+        let isolated_runtime = IsolatedRuntime::new_disabled();
+
+        PersistClientCache {
+            cfg,
+            metrics,
+            blob_by_uri: Mutex::new(BTreeMap::new()),
+            consensus_by_uri: Mutex::new(BTreeMap::new()),
+            isolated_runtime: Arc::new(isolated_runtime),
+            state_cache,
+            pubsub_sender,
+            _pubsub_receiver_task,
+        }
     }
 
     /// Returns the [PersistConfig] being used by this cache.
@@ -437,7 +470,7 @@ impl StateCache {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
         F: Future<Output = Result<TypedState<K, V, T, D>, Box<CodecMismatch>>>,
         InitFn: FnMut() -> F,
     {
@@ -815,6 +848,7 @@ mod tests {
             )
             .await
         })
+        .into_tokio_handle()
         .await;
         assert_err!(res);
         assert_eq!(states.initialized_count(), 0);

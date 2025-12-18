@@ -188,7 +188,7 @@ impl Coordinator {
 
     #[instrument]
     pub(crate) fn explain_index(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -277,7 +277,7 @@ impl Coordinator {
     // sequencing an EXPLAIN for this statement.
     #[instrument]
     fn create_index_validate(
-        &mut self,
+        &self,
         plan: plan::CreateIndexPlan,
         resolved_ids: ResolvedIds,
         explain_ctx: ExplainContext,
@@ -494,6 +494,7 @@ impl Coordinator {
                             notice_builtin_updates_fut,
                         )
                         .await;
+                    // No `allow_writes` here because indexes do not modify external state.
 
                     // Drop read holds after the dataflow has been shipped, at which
                     // point compute will have put in its own read holds.
@@ -527,7 +528,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_index_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateIndexExplain {
             exported_index_id,
@@ -549,7 +550,7 @@ impl Coordinator {
             let on_entry = self.catalog.get_entry_by_global_id(&index.on);
             let full_name = self.catalog.resolve_full_name(&name, on_entry.conn_id());
             let on_desc = on_entry
-                .desc(&full_name)
+                .relation_desc()
                 .expect("can only create indexes on items with a valid description");
 
             let transient_items = btreemap! {

@@ -18,10 +18,11 @@ cd "$(dirname "$0")/.."
 . misc/shlib/shlib.bash
 
 if [[ $# -lt 1 ]]; then
-    die "usage: $0 VERSION [--no-commit] [--sbom]"
+    die "usage: $0 VERSION [--no-commit] [--no-console-bump] [--sbom]"
 fi
 
 commit=true
+console_bump=true
 sbom=false
 
 version=${1#v}
@@ -31,16 +32,52 @@ while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--no-commit" ]]; then
         commit=false
         shift
+    elif [[ "$1" == "--no-console-bump" ]]; then
+        console_bump=false
+        shift
     elif [[ "$1" == "--sbom" ]]; then
         sbom=true
         shift
     else
-        die "invalid flag: $2, only --no-commit and --sbom are supported"
+        die "invalid flag: $2, only --no-commit, --no-console-bump and --sbom are supported"
     fi
 done
 
 if ! run git diff HEAD --compact-summary --exit-code; then
     die "cannot begin bump with uncommitted content"
+fi
+
+if $console_bump; then
+    console_dir=console
+    rm -rf $console_dir
+    if is_truthy "${CI:-0}"; then
+        GIT_TERMINAL_PROMPT=0 git clone "https://materializebot:$GITHUB_TOKEN@github.com/MaterializeInc/console" $console_dir
+    else
+        GIT_TERMINAL_PROMPT=0 git clone git@github.com:MaterializeInc/console $console_dir
+    fi
+    echo "Bumping console version to v$version"
+    (
+        cd "$console_dir"
+        git tag -a "v$version" -m "v$version"
+        git push origin "v$version"
+    )
+
+    echo "Waiting for console version to be released on DockerHub (~15 min)"
+    console_image="materialize/console:$version"
+    while true; do
+        if docker manifest inspect "$console_image" >/dev/null 2>&1; then
+            break
+        fi
+        echo "$console_image not yet on DockerHub, sleeping 5 min"
+        sleep 300
+    done
+    echo "$console_image found on DockerHub"
+    sed -i.bak \
+        "s#FROM materialize/console:.* AS console#FROM $console_image AS console#" \
+        misc/images/materialized-base/Dockerfile
+    sed -i.bak \
+        "s/\"--console-image-tag-default=[^\"]*\"/\"--console-image-tag-default=$version\"/" \
+        misc/helm-charts/operator/templates/deployment.yaml
 fi
 
 sed -i.bak \
@@ -69,7 +106,11 @@ rm -f src/{clusterd,environmentd,materialized,persist-client,testdrive,catalog-d
 
 cargo update --workspace
 
-bin/helm-chart-version-bump --bump-weekly-version --bump-orchestratord-version "v$version"
+crd_descriptions_json=doc/user/data/self_managed/materialize_crd_descriptions.json
+cargo run -p mz-cloud-resources --bin crd-writer > "${crd_descriptions_json}"
+git add "${crd_descriptions_json}"
+
+bin/helm-chart-version-bump --bump-orchestratord-version "v$version"
 
 helm_docs_version=1.14.2
 if ! helm-docs --help > /dev/null; then
@@ -83,7 +124,11 @@ if [ "$(helm-docs --version)" != "helm-docs version $helm_docs_version" ]; then
     echo "Install helm-docs $helm_docs_version from https://github.com/norwoodj/helm-docs/releases/tag/v$helm_docs_version"
     exit 1
 fi
+# update README.md
 helm-docs misc/helm-charts
+# update values yaml descriptions
+helm-docs misc/helm-charts -t misc/helm-charts/operator/value_descriptions.yml.gotmpl -o value_descriptions.yml
+mv misc/helm-charts/operator/value_descriptions.yml doc/user/data/self_managed/materialize_operator_chart_parameter.yml
 
 if $sbom; then
     if ! inspector-sbomgen --version > /dev/null; then
@@ -91,7 +136,7 @@ if $sbom; then
         echo "Or use bin/ci-builder run stable ..."
         exit 1
     fi
-    inspector_sbomgen_version=1.8.1
+    inspector_sbomgen_version=1.8.2
     if [ "$(inspector-sbomgen --version)" != "$inspector_sbomgen_version" ]; then
         echo "inspector-sbomgen is installed, but has wrong version: $(inspector-sbomgen --version)"
         echo "Install inspector-sbomgen $inspector_sbomgen_version from from https://docs.aws.amazon.com/inspector/latest/user/sbom-generator.html"

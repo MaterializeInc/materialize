@@ -354,7 +354,7 @@ static VALID_LOGICAL_TYPES: LazyLock<Vec<(&'static str, Value)>> = LazyLock::new
     ]
 });
 
-// From https://avro.apache.org/docs/current/spec.html#Logical+Types
+// From https://avro.apache.org/docs/++version++/specification/#logical-types
 // "Language implementations must ignore unknown logical types when reading, and should use the
 //  underlying Avro type. If a logical type is invalid, for example a decimal with scale greater
 //  than its precision, then implementations should ignore the logical type and use the underlying

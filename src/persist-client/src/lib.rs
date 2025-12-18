@@ -19,7 +19,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use itertools::Itertools;
 use mz_build_info::{BuildInfo, build_info};
@@ -240,7 +240,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let state_versions = StateVersions::new(
             self.cfg.clone(),
@@ -292,7 +292,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         Ok((
             self.open_writer(
@@ -334,7 +334,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -386,7 +386,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let read_schemas = Schemas {
@@ -465,7 +465,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
@@ -502,7 +502,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let machine = self.make_machine(shard_id, diagnostics.clone()).await?;
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
@@ -553,7 +553,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let mut compact_cfg = CompactConfig::new(&self.cfg, shard_id);
         compact_cfg.batch.max_runs = max_runs;
@@ -588,7 +588,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let batch_shard_id: ShardId = batch
             .shard_id
@@ -603,6 +603,7 @@ impl PersistClient {
             metrics: Arc::clone(&self.metrics),
             shard_metrics,
             version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            schemas: (batch.key_schema, batch.val_schema),
             batch: batch
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")
@@ -643,7 +644,7 @@ impl PersistClient {
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
         T: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let shard_metrics = self.metrics.shards.shard(&shard_id, "peek_stash");
 
@@ -676,7 +677,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -694,12 +695,47 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
             .await?;
         Ok(machine.latest_schema())
+    }
+
+    /// Registers a schema for the given shard.
+    ///
+    /// Returns the new schema ID if the registration succeeds, and `None`
+    /// otherwise. Schema registration succeeds in two cases:
+    ///  a) No schema was currently registered for the shard.
+    ///  b) The given schema is already registered for the shard.
+    ///
+    /// To evolve an existing schema instead, use
+    /// [PersistClient::compare_and_evolve_schema].
+    //
+    // TODO: unify with `compare_and_evolve_schema`
+    pub async fn register_schema<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        key_schema: &K::Schema,
+        val_schema: &V::Schema,
+        diagnostics: Diagnostics,
+    ) -> Result<Option<SchemaId>, InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+        let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+
+        let (schema_id, maintenance) = machine.register_schema(key_schema, val_schema).await;
+        maintenance.start_performing(&machine, &gc);
+
+        Ok(schema_id)
     }
 
     /// Registers a new latest schema for the given shard.
@@ -724,7 +760,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -749,7 +785,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -777,7 +813,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
     {
         let machine = self
             .make_machine::<K, V, T, D>(shard_id, diagnostics)
@@ -789,6 +825,33 @@ impl PersistClient {
         let () = maintenance.perform(&machine, &gc).await;
 
         Ok(())
+    }
+
+    /// Upgrade the state to the latest version. This should only be called once we will no longer
+    /// need to interoperate with older versions, like after a successful upgrade.
+    pub async fn upgrade_version<K, V, T, D>(
+        &self,
+        shard_id: ShardId,
+        diagnostics: Diagnostics,
+    ) -> Result<(), InvalidUsage<T>>
+    where
+        K: Debug + Codec,
+        V: Debug + Codec,
+        T: Timestamp + Lattice + Codec64 + Sync,
+        D: Monoid + Codec64 + Send + Sync,
+    {
+        let machine = self
+            .make_machine::<K, V, T, D>(shard_id, diagnostics)
+            .await?;
+
+        match machine.upgrade_version().await {
+            Ok(maintenance) => {
+                let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
+                let () = maintenance.perform(&machine, &gc).await;
+                Ok(())
+            }
+            Err(version) => Err(InvalidUsage::IncompatibleVersion { version }),
+        }
     }
 
     /// Returns the internal state of the shard for debugging and QA.
@@ -831,7 +894,7 @@ impl PersistClient {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
         K::Schema: Default,
         V::Schema: Default,
     {
@@ -907,15 +970,12 @@ mod tests {
             .expect("client construction failed")
     }
 
-    pub fn all_ok<'a, K, V, T, D, I>(
-        iter: I,
-        as_of: T,
-    ) -> Vec<((Result<K, String>, Result<V, String>), T, D)>
+    pub fn all_ok<'a, K, V, T, D, I>(iter: I, as_of: T) -> Vec<((K, V), T, D)>
     where
         K: Ord + Clone + 'a,
         V: Ord + Clone + 'a,
         T: Timestamp + Lattice + Clone + 'a,
-        D: Semigroup + Clone + 'a,
+        D: Monoid + Clone + 'a,
         I: IntoIterator<Item = &'a ((K, V), T, D)>,
     {
         let as_of = Antichain::from_elem(as_of);
@@ -924,7 +984,7 @@ mod tests {
             .map(|((k, v), t, d)| {
                 let mut t = t.clone();
                 t.advance_by(as_of.borrow());
-                ((Ok(k.clone()), Ok(v.clone())), t, d.clone())
+                ((k.clone(), v.clone()), t, d.clone())
             })
             .collect();
         consolidate_updates(&mut ret);
@@ -936,13 +996,10 @@ mod tests {
         key: &BlobKey,
         metrics: &Metrics,
         read_schemas: &Schemas<K, V>,
-    ) -> (
-        BlobTraceBatchPart<T>,
-        Vec<((Result<K, String>, Result<V, String>), T, D)>,
-    )
+    ) -> (BlobTraceBatchPart<T>, Vec<((K, V), T, D)>)
     where
-        K: Codec,
-        V: Codec,
+        K: Codec + Clone,
+        V: Codec + Clone,
         T: Timestamp + Codec64,
         D: Codec64,
     {
@@ -953,22 +1010,13 @@ mod tests {
             .expect("missing part");
         let mut part =
             BlobTraceBatchPart::decode(&value, &metrics.columnar).expect("failed to decode part");
-        // Ensure codec data is present even if it was not generated at write time.
-        let _ = part
+        let structured = part
             .updates
-            .get_or_make_codec::<K, V>(&read_schemas.key, &read_schemas.val);
-        let mut updates = Vec::new();
-        // TODO(bkirwi): switch to structured data in tests
-        for ((k, v), t, d) in part.updates.records().expect("codec data").iter() {
-            updates.push((
-                (
-                    K::decode(k, &read_schemas.key),
-                    V::decode(v, &read_schemas.val),
-                ),
-                T::decode(t),
-                D::decode(d),
-            ));
-        }
+            .into_part::<K, V>(&*read_schemas.key, &*read_schemas.val);
+        let updates = structured
+            .decode_iter::<K, V, T, D>(&*read_schemas.key, &*read_schemas.val)
+            .expect("structured data")
+            .collect();
         (part, updates)
     }
 
@@ -1856,7 +1904,7 @@ mod tests {
         }
 
         for handle in handles {
-            let () = handle.await.expect("task failed");
+            let () = handle.await;
         }
 
         let expected = data.records().collect::<Vec<_>>();
@@ -1910,7 +1958,7 @@ mod tests {
         assert_eq!(
             listen_next.await,
             vec![
-                ListenEvent::Updates(vec![((Ok("2".to_owned()), Ok("two".to_owned())), 2, 1)]),
+                ListenEvent::Updates(vec![(("2".to_owned(), "two".to_owned()), 2, 1)]),
                 ListenEvent::Progress(Antichain::from_elem(3)),
             ]
         );
@@ -1965,9 +2013,7 @@ mod tests {
             .expect("handle should have unexpired state");
         read.expire().await;
         for read_heartbeat_task in mem::take(&mut read_unexpired_state._heartbeat_tasks) {
-            let () = read_heartbeat_task
-                .await
-                .expect("task should shutdown cleanly");
+            let () = read_heartbeat_task.await;
         }
     }
 

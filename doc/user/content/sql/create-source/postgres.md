@@ -1,16 +1,20 @@
 ---
-title: "CREATE SOURCE: PostgreSQL"
+title: "CREATE SOURCE: PostgreSQL (Legacy Syntax)"
 description: "Connecting Materialize to a PostgreSQL database for Change Data Capture (CDC)."
 pagerank: 40
 menu:
   main:
     parent: 'create-source'
     identifier: cs_postgres
-    name: PostgreSQL
-    weight: 20
+    name: PostgreSQL (Legacy Syntax)
+    weight: 21
 aliases:
   - /sql/create-source/postgresql
 ---
+
+{{< source-versioning-disambiguation is_new=false
+other_ref="[new reference page](/sql/create-source/postgres-v2)"
+include_blurb=true >}}
 
 {{% create-source/intro %}}
 Materialize supports PostgreSQL (11+) as a data source. To connect to a
@@ -30,6 +34,8 @@ your PostgreSQL service: [AlloyDB](/ingest-data/postgres-alloydb/),
 [Google Cloud SQL](/ingest-data/postgres-google-cloud-sql/),
 [Self-hosted](/ingest-data/postgres-self-hosted/).
 {{< /warning >}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ## Syntax
 
@@ -129,11 +135,6 @@ When you define a source, Materialize will automatically:
 source as change events stream in, as a result of `INSERT`, `UPDATE` and
 `DELETE` operations in the upstream PostgreSQL database.
 
-It's important to note that the schema metadata is captured when the source is
-initially created, and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a PostgreSQL source and want to
-replicate them to Materialize, the source must be dropped and recreated.
-
 ##### PostgreSQL replication slots
 
 Each source ingests the raw replication stream data for all tables in the
@@ -143,9 +144,8 @@ same source across multiple materializations.
 
 {{< tip >}}
 
-- {{< include-md file="shared-content/postgres-wal.md" >}}
-
-{{< include-md file="shared-content/postgres-remove-unused-replication-slots.md" >}}
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-replication-slots-tip-list" %}}
 
 {{</ tip >}}
 
@@ -189,7 +189,48 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-{{% include-md file="shared-content/postgres-known-limitations.md" %}}
+### Schema changes
+
+Materialize supports schema changes in the upstream database as follows:
+
+#### Compatible schema changes (Legacy syntax)
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-compatible-schema-changes-legacy" %}}
+
+#### Incompatible schema changes
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-incompatible-schema-changes-legacy" %}}
+
+### Publication membership
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-publication-membership-mitigation-legacy" %}}
+
+### Supported types
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-supported-types" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-unsupported-types" %}}
+
+### Truncation
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-truncation-restriction" %}}
+
+### Inherited tables
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables" %}}
+
+{{% include-from-yaml data="postgres_source_details"
+name="postgres-inherited-tables-action-legacy" %}}
 
 ## Examples
 
@@ -228,10 +269,12 @@ CREATE CONNECTION pg_connection TO POSTGRES (
 
 If your PostgreSQL server is not exposed to the public internet, you can
 [tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host.
+through an AWS PrivateLink service (Materialize Cloud) or an SSH bastion host.
 
 {{< tabs tabID="1" >}}
 {{< tab "AWS PrivateLink">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (

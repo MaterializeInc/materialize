@@ -69,6 +69,7 @@ use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{AlterError, CollectionMetadata, StorageError, TxnsCodecRow};
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -324,10 +325,7 @@ where
         &self.config
     }
 
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing> {
         self.storage_collections.collection_metadata(id)
     }
 
@@ -450,10 +448,7 @@ where
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<
-        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        StorageError<Self::Timestamp>,
-    > {
+    ) -> Result<(Antichain<Self::Timestamp>, Antichain<Self::Timestamp>), CollectionMissing> {
         let frontiers = self.storage_collections.collection_frontiers(id)?;
         Ok((frontiers.implied_capability, frontiers.write_frontier))
     }
@@ -461,7 +456,7 @@ where
     fn collections_frontiers(
         &self,
         mut ids: Vec<GlobalId>,
-    ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<(GlobalId, Antichain<T>, Antichain<T>)>, CollectionMissing> {
         let mut result = vec![];
         // In theory, we could pull all our frontiers from storage collections...
         // but in practice those frontiers may not be identical. For historical reasons, we use the
@@ -890,7 +885,7 @@ where
         // easier to reason about it this way.
         let (tables_to_register, collections_to_register): (Vec<_>, Vec<_>) = to_register
             .into_iter()
-            .partition(|(_id, desc, ..)| matches!(desc.data_source, DataSource::Table { .. }));
+            .partition(|(_id, desc, ..)| desc.data_source == DataSource::Table);
         let to_register = tables_to_register
             .into_iter()
             .rev()
@@ -909,15 +904,13 @@ where
                     && !(self.read_only && migrated_storage_collections.contains(&id))
             };
 
-            let data_source = description.data_source;
-
             to_execute.insert(id);
             new_collections.insert(id);
 
             let write_frontier = write.upper();
 
             // Determine if this collection has another dependency.
-            let storage_dependencies = self.determine_collection_dependencies(id, &data_source)?;
+            let storage_dependencies = self.determine_collection_dependencies(id, &description)?;
 
             let dependency_read_holds = self
                 .storage_collections
@@ -928,6 +921,8 @@ where
             for read_hold in dependency_read_holds.iter() {
                 dependency_since.join_assign(read_hold.since());
             }
+
+            let data_source = description.data_source;
 
             // Assert some invariants.
             //
@@ -956,14 +951,14 @@ where
                     );
                 }
 
-                // The dependency since cannot be beyond the dependent (our)
-                // upper unless the collection is new. In practice, the
-                // depdenency is the remap shard of a source (export), and if
-                // the since is allowed to "catch up" to the upper, that is
-                // `upper <= since`, a restarting ingestion cannot differentiate
-                // between updates that have already been written out to the
-                // backing persist shard and updates that have yet to be
-                // written. We would write duplicate updates.
+                // If the dependency is between a remap shard and a source (and
+                // not a "primary" dependency), the dependency since cannot be
+                // beyond the dependent (our) upper unless the collection is
+                // new. If the since is allowed to "catch up" to the upper, that
+                // is `upper <= since`, a restarting ingestion cannot
+                // differentiate between updates that have already been written
+                // out to the backing persist shard and updates that have yet to
+                // be written. We would write duplicate updates.
                 //
                 // If this check fails, it means that the read hold installed on
                 // the dependency was probably not upheld –– if it were, the
@@ -973,18 +968,20 @@ where
                 // We don't care about the dependency since when the write
                 // frontier is empty. In that case, no-one can write down any
                 // more updates.
-                mz_ore::soft_assert_or_log!(
-                    write_frontier.elements() == &[T::minimum()]
-                        || write_frontier.is_empty()
-                        || PartialOrder::less_than(&dependency_since, write_frontier),
-                    "dependency since has advanced past dependent ({id}) upper \n
+                if description.primary.is_none() {
+                    mz_ore::soft_assert_or_log!(
+                        write_frontier.elements() == &[T::minimum()]
+                            || write_frontier.is_empty()
+                            || PartialOrder::less_than(&dependency_since, write_frontier),
+                        "dependency since has advanced past dependent ({id}) upper \n
                             dependent ({id}): upper {:?} \n
                             dependency since {:?} \n
                             dependency read holds: {:?}",
-                    write_frontier,
-                    dependency_since,
-                    dependency_read_holds,
-                );
+                        write_frontier,
+                        dependency_since,
+                        dependency_read_holds,
+                    );
+                }
             }
 
             // Perform data source-specific setup.
@@ -1081,7 +1078,7 @@ where
 
                     new_source_statistic_entries.insert(id);
                 }
-                DataSource::Table { .. } => {
+                DataSource::Table => {
                     debug!(
                         ?data_source, meta = ?metadata,
                         "registering {id} with persist table worker",
@@ -1212,7 +1209,7 @@ where
                 ),
                 DataSource::Introspection(_)
                 | DataSource::Webhook
-                | DataSource::Table { .. }
+                | DataSource::Table
                 | DataSource::Progress
                 | DataSource::Other => {}
                 DataSource::Sink { .. } => {
@@ -1388,7 +1385,7 @@ where
             let existing = collections
                 .get(&existing_collection)
                 .ok_or(StorageError::IdentifierMissing(existing_collection))?;
-            if !matches!(existing.data_source, DataSource::Table { .. }) {
+            if existing.data_source != DataSource::Table {
                 return Err(StorageError::IdentifierInvalid(existing_collection));
             }
 
@@ -1419,8 +1416,6 @@ where
             )
             .await;
 
-        // Note: The new collection is now the "primary collection" so we specify `None` here.
-        let collection_desc = CollectionDescription::<T>::for_table(new_desc.clone(), None);
         let collection_meta = CollectionMetadata {
             persist_location: self.persist_location.clone(),
             data_shard,
@@ -1431,7 +1426,7 @@ where
         // TODO(alter_table): Support schema evolution on sources.
         let wallclock_lag_metrics = self.metrics.wallclock_lag_metrics(new_collection, None);
         let collection_state = CollectionState::new(
-            collection_desc.data_source.clone(),
+            DataSource::Table,
             collection_meta,
             CollectionStateExtra::None,
             wallclock_lag_metrics,
@@ -1440,17 +1435,6 @@ where
         // Great! We have successfully evolved the schema of our Table, now we need to update our
         // in-memory data structures.
         self.collections.insert(new_collection, collection_state);
-        let existing = self
-            .collections
-            .get_mut(&existing_collection)
-            .expect("missing existing collection");
-        assert!(matches!(
-            existing.data_source,
-            DataSource::Table { primary: None }
-        ));
-        existing.data_source = DataSource::Table {
-            primary: Some(new_collection),
-        };
 
         self.persist_table_worker
             .register(register_ts, vec![(new_collection, write_handle)])
@@ -1615,6 +1599,7 @@ where
                 from_storage_metadata,
                 with_snapshot: new_description.sink.with_snapshot,
                 to_storage_metadata,
+                commit_interval: new_description.sink.commit_interval,
             },
         };
 
@@ -1694,6 +1679,7 @@ where
                     as_of: as_of.to_owned(),
                     from_storage_metadata,
                     to_storage_metadata,
+                    commit_interval: new_export_description.sink.commit_interval,
                 },
             };
 
@@ -1766,7 +1752,7 @@ where
         let (table_write_ids, data_source_ids): (Vec<_>, Vec<_>) = identifiers
             .into_iter()
             .partition(|id| match self.collections[id].data_source {
-                DataSource::Table { .. } => true,
+                DataSource::Table => true,
                 DataSource::IngestionExport { .. } | DataSource::Webhook => false,
                 _ => panic!("identifier is not a table: {}", id),
             });
@@ -1884,7 +1870,7 @@ where
                         ingestions_to_drop.insert(*id);
                         source_statistics_to_drop.push(*id);
                     }
-                    DataSource::Progress | DataSource::Table { .. } | DataSource::Other => {
+                    DataSource::Progress | DataSource::Table | DataSource::Other => {
                         collections_to_drop.push(*id);
                     }
                     DataSource::Introspection(_) | DataSource::Sink { .. } => {
@@ -2612,6 +2598,100 @@ where
                 })
         }))
     }
+
+    fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            build_info: _,
+            now: _,
+            read_only,
+            collections,
+            dropped_objects,
+            persist_table_worker: _,
+            txns_read: _,
+            txns_metrics: _,
+            stashed_responses,
+            pending_table_handle_drops_tx: _,
+            pending_table_handle_drops_rx: _,
+            pending_oneshot_ingestions,
+            collection_manager: _,
+            introspection_ids,
+            introspection_tokens: _,
+            source_statistics: _,
+            sink_statistics: _,
+            statistics_interval_sender: _,
+            instances,
+            initialized,
+            config,
+            persist_location,
+            persist: _,
+            metrics: _,
+            recorded_frontiers,
+            recorded_replica_frontiers,
+            wallclock_lag: _,
+            wallclock_lag_last_recorded,
+            storage_collections: _,
+            migrated_storage_collections,
+            maintenance_ticker: _,
+            maintenance_scheduled,
+            instance_response_tx: _,
+            instance_response_rx: _,
+            persist_warm_task: _,
+        } = self;
+
+        let collections: BTreeMap<_, _> = collections
+            .iter()
+            .map(|(id, c)| (id.to_string(), format!("{c:?}")))
+            .collect();
+        let dropped_objects: BTreeMap<_, _> = dropped_objects
+            .iter()
+            .map(|(id, rs)| (id.to_string(), format!("{rs:?}")))
+            .collect();
+        let stashed_responses: Vec<_> =
+            stashed_responses.iter().map(|r| format!("{r:?}")).collect();
+        let pending_oneshot_ingestions: BTreeMap<_, _> = pending_oneshot_ingestions
+            .iter()
+            .map(|(uuid, i)| (uuid.to_string(), format!("{i:?}")))
+            .collect();
+        let introspection_ids: BTreeMap<_, _> = introspection_ids
+            .iter()
+            .map(|(typ, id)| (format!("{typ:?}"), id.to_string()))
+            .collect();
+        let instances: BTreeMap<_, _> = instances
+            .iter()
+            .map(|(id, i)| (id.to_string(), format!("{i:?}")))
+            .collect();
+        let recorded_frontiers: BTreeMap<_, _> = recorded_frontiers
+            .iter()
+            .map(|(id, fs)| (id.to_string(), format!("{fs:?}")))
+            .collect();
+        let recorded_replica_frontiers: Vec<_> = recorded_replica_frontiers
+            .iter()
+            .map(|((gid, rid), f)| (gid.to_string(), rid.to_string(), format!("{f:?}")))
+            .collect();
+        let migrated_storage_collections: Vec<_> = migrated_storage_collections
+            .iter()
+            .map(|id| id.to_string())
+            .collect();
+
+        Ok(serde_json::json!({
+            "read_only": read_only,
+            "collections": collections,
+            "dropped_objects": dropped_objects,
+            "stashed_responses": stashed_responses,
+            "pending_oneshot_ingestions": pending_oneshot_ingestions,
+            "introspection_ids": introspection_ids,
+            "instances": instances,
+            "initialized": initialized,
+            "config": format!("{config:?}"),
+            "persist_location": format!("{persist_location:?}"),
+            "recorded_frontiers": recorded_frontiers,
+            "recorded_replica_frontiers": recorded_replica_frontiers,
+            "wallclock_lag_last_recorded": format!("{wallclock_lag_last_recorded:?}"),
+            "migrated_storage_collections": migrated_storage_collections,
+            "maintenance_scheduled": maintenance_scheduled,
+        }))
+    }
 }
 
 /// Seed [`StorageTxn`] with any state required to instantiate a
@@ -2694,7 +2774,7 @@ where
                 .expect("txns schema shouldn't change");
             persist_handles::PersistTableWriteWorker::new_read_only_mode(txns_write)
         } else {
-            let txns = TxnsHandle::open(
+            let mut txns = TxnsHandle::open(
                 T::minimum(),
                 txns_client.clone(),
                 txns_client.dyncfgs().clone(),
@@ -2702,6 +2782,7 @@ where
                 txns_id,
             )
             .await;
+            txns.upgrade_version().await;
             persist_handles::PersistTableWriteWorker::new_txns(txns)
         };
         let txns_read = TxnsRead::start::<TxnsCodecRow>(txns_client.clone(), txns_id).await;
@@ -3213,17 +3294,20 @@ where
     fn determine_collection_dependencies(
         &self,
         self_id: GlobalId,
-        data_source: &DataSource<T>,
+        collection_desc: &CollectionDescription<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
-        let dependency = match &data_source {
+        let mut dependencies = Vec::new();
+
+        if let Some(id) = collection_desc.primary {
+            dependencies.push(id);
+        }
+
+        match &collection_desc.data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table { primary: None }
+            | DataSource::Table
             | DataSource::Progress
-            | DataSource::Other => vec![],
-            DataSource::Table {
-                primary: Some(primary),
-            } => vec![*primary],
+            | DataSource::Other => (),
             DataSource::IngestionExport { ingestion_id, .. } => {
                 // Ingestion exports depend on their primary source's remap
                 // collection.
@@ -3240,7 +3324,7 @@ where
                 // and, 2) that the remap shard's since stays one step behind
                 // their upper. Hence they track themselves and the remap shard
                 // as dependencies.
-                vec![self_id, ingestion_remap_collection_id]
+                dependencies.extend([self_id, ingestion_remap_collection_id]);
             }
             // Ingestions depend on their remap collection.
             DataSource::Ingestion(ingestion) => {
@@ -3248,19 +3332,18 @@ where
                 // since stays one step behind the upper, and, 2) that the remap
                 // shard's since stays one step behind their upper. Hence they
                 // track themselves and the remap shard as dependencies.
-                let mut dependencies = vec![self_id];
+                dependencies.push(self_id);
                 if self_id != ingestion.remap_collection_id {
                     dependencies.push(ingestion.remap_collection_id);
                 }
-                dependencies
             }
             DataSource::Sink { desc } => {
                 // Sinks hold back their own frontier and the frontier of their input.
-                vec![self_id, desc.sink.from]
+                dependencies.extend([self_id, desc.sink.from]);
             }
         };
 
-        Ok(dependency)
+        Ok(dependencies)
     }
 
     async fn read_handle_for_snapshot(
@@ -3403,6 +3486,7 @@ where
                 from_storage_metadata,
                 with_snapshot,
                 to_storage_metadata,
+                commit_interval: description.sink.commit_interval,
             },
         };
 

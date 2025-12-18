@@ -193,7 +193,6 @@ impl FoldConstants {
                     let new_rows = match rows {
                         Ok(rows) => rows
                             .iter()
-                            .cloned()
                             .map(|(input_row, diff)| {
                                 // TODO: reduce allocations to zero.
                                 let mut unpacked = input_row.unpack();
@@ -201,7 +200,7 @@ impl FoldConstants {
                                 for scalar in scalars.iter() {
                                     unpacked.push(scalar.eval(&unpacked, &temp_storage)?)
                                 }
-                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), diff))
+                                Ok::<_, EvalError>((Row::pack_slice(&unpacked), *diff))
                             })
                             .collect::<Result<_, _>>(),
                         Err(e) => Err(e.clone()),

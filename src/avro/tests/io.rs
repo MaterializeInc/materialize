@@ -223,7 +223,7 @@ fn test_schema_promotion() {
     // Each schema is present in order of promotion (int -> long, long -> float, float -> double)
     // Each value represents the expected decoded value when promoting a value previously encoded with a promotable schema
     let promotable_schemas = [r#""int""#, r#""long""#, r#""float""#, r#""double""#];
-    let promotable_values = vec![
+    let promotable_values = [
         Value::Int(219),
         Value::Long(219),
         Value::Float(219.0),

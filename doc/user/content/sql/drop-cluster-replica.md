@@ -18,13 +18,15 @@ clusters.
 
 ## Syntax
 
-{{< diagram "drop-cluster-replica.svg" >}}
+```mzsql
+DROP CLUSTER REPLICA [IF EXISTS] <cluster_name>.<replica_name>;
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the specified cluster replica does not exist.
-_cluster_name_ | The cluster you want to remove a replica from. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
-_replica&lowbar;name_ | The cluster replica you want to drop. For available cluster replicas, see [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas).
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified cluster replica does not exist.
+`<cluster_name>` | The cluster you want to remove a replica from. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+`<replica_name>` | The cluster replica you want to drop. For available cluster replicas, see [`SHOW CLUSTER REPLICAS`](../show-cluster-replicas).
 
 ## Examples
 

@@ -11,14 +11,15 @@ menu:
 ## Syntax
 
 ```mzsql
-DROP INDEX [IF EXISTS] <index_name> [ 'CASCADE' | 'RESTRICT' ];
+DROP INDEX [IF EXISTS] <index_name> [CASCADE|RESTRICT];
 ```
 
-Option | Description
-------|-----
-**IF EXISTS** | Do not return an error if the specified index does not exist.
-**CASCADE** | Remove the index and its dependent objects.
-**RESTRICT** |  Remove the index. _(Default.)_
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified index does not exist.
+`<index_name>` | Index to drop.
+**CASCADE** | Optional. If specified, remove the index and its dependent objects.
+**RESTRICT** | Optional. Remove the index. _(Default.)_
 
 {{< note >}}
 

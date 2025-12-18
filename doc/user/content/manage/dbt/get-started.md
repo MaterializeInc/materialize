@@ -71,8 +71,11 @@ create a `profiles.yml` file, if it doesn't exist. To help you get started, the
 ### Connect to Materialize
 
 {{< note >}}
-As a best practice, we strongly recommend using [service accounts](/security/users-service-accounts/create-service-accounts)
-to connect external applications, like dbt, to Materialize.
+
+As a best practice, we strongly recommend using [service
+accounts](/security/cloud/users-service-accounts/create-service-accounts) to
+connect external applications, like dbt, to Materialize.
+
 {{</ note >}}
 
 dbt manages all your connection configurations (or, profiles) in a file called

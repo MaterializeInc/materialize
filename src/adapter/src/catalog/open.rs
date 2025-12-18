@@ -9,9 +9,10 @@
 
 //! Logic related to opening a [`Catalog`].
 
-mod builtin_item_migration;
+mod builtin_schema_migration;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -23,7 +24,7 @@ use mz_auth::hash::scram256_hash;
 use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BUILTIN_CLUSTER_REPLICAS, BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin,
-    Fingerprint, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    Fingerprint, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::StateConfig;
 use mz_catalog::durable::objects::{
@@ -60,12 +61,10 @@ use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::AdapterError;
-use crate::catalog::open::builtin_item_migration::{
-    BuiltinItemMigrationResult, migrate_builtin_items,
-};
+use crate::catalog::migrate::{self, get_migration_version, set_migration_version};
 use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
-    BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name, migrate,
+    BuiltinTableUpdate, Catalog, CatalogPlans, CatalogState, Config, is_reserved_name,
 };
 
 pub struct InitializeStateResult {
@@ -183,12 +182,14 @@ impl Catalog {
             license_key: config.license_key,
         };
 
+        let deploy_generation = storage.get_deployment_generation().await?;
+
         let mut updates: Vec<_> = storage.sync_to_current_updates().await?;
         assert!(!updates.is_empty(), "initial catalog snapshot is missing");
         let mut txn = storage.transaction().await?;
 
         // Migrate/update durable data before we start loading the in-memory catalog.
-        let (migrated_builtins, new_builtin_collections) = {
+        let new_builtin_collections = {
             migrate::durable_migrate(
                 &mut txn,
                 state.config.environment_id.organization_id(),
@@ -203,7 +204,7 @@ impl Catalog {
                 txn.set_system_config_synced_once()?;
             }
             // Add any new builtin objects and remove old ones.
-            let (migrated_builtins, new_builtin_collections) =
+            let new_builtin_collections =
                 add_new_remove_old_builtin_items_migration(&state.config().builtins_cfg, &mut txn)?;
             let builtin_bootstrap_cluster_config_map = BuiltinBootstrapClusterConfigMap {
                 system_cluster: config.builtin_system_cluster_config,
@@ -223,9 +224,10 @@ impl Catalog {
             )?;
             add_new_remove_old_builtin_roles_migration(&mut txn)?;
             remove_invalid_config_param_role_defaults_migration(&mut txn)?;
-            (migrated_builtins, new_builtin_collections)
+            remove_pending_cluster_replicas_migration(&mut txn)?;
+
+            new_builtin_collections
         };
-        remove_pending_cluster_replicas_migration(&mut txn)?;
 
         let op_updates = txn.get_and_commit_op_updates();
         updates.extend(op_updates);
@@ -311,8 +313,8 @@ impl Catalog {
             }
         }
 
-        let builtin_table_update = state
-            .apply_updates_for_bootstrap(pre_item_updates, &mut LocalExpressionCache::Closed)
+        let (builtin_table_update, _catalog_updates) = state
+            .apply_updates(pre_item_updates, &mut LocalExpressionCache::Closed)
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
@@ -323,9 +325,14 @@ impl Catalog {
             if let Some(password) = config.external_login_password_mz_system {
                 let role_auth = RoleAuth {
                     role_id: MZ_SYSTEM_ROLE_ID,
-                    password_hash: Some(scram256_hash(&password).map_err(|_| {
-                        AdapterError::Internal("Failed to hash mz_system password.".to_owned())
-                    })?),
+                    // builtin roles should always use a secure scram iteration
+                    // <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
+                    password_hash: Some(
+                        scram256_hash(&password, &NonZeroU32::new(600_000).expect("known valid"))
+                            .map_err(|_| {
+                            AdapterError::Internal("Failed to hash mz_system password.".to_owned())
+                        })?,
+                    ),
                     updated_at: SYSTEM_TIME(),
                 };
                 state
@@ -403,15 +410,18 @@ impl Catalog {
             expr_cache_start.elapsed()
         );
 
-        let builtin_table_update = state
-            .apply_updates_for_bootstrap(system_item_updates, &mut local_expr_cache)
+        // When initializing/bootstrapping, we don't use the catalog updates but
+        // instead load the catalog fully and then go ahead and apply commands
+        // to the controller(s). Maybe we _should_ instead use the same logic
+        // and return and use the updates from here. But that's at the very
+        // least future work.
+        let (builtin_table_update, _catalog_updates) = state
+            .apply_updates(system_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
-        let last_seen_version = txn
-            .get_catalog_content_version()
-            .unwrap_or("new")
-            .to_string();
+        let last_seen_version =
+            get_migration_version(&txn).map_or_else(|| "new".into(), |v| v.to_string());
 
         let mz_authentication_mock_nonce =
             txn.get_authentication_mock_nonce().ok_or_else(|| {
@@ -421,7 +431,7 @@ impl Catalog {
         state.mock_authentication_nonce = Some(mz_authentication_mock_nonce);
 
         // Migrate item ASTs.
-        let builtin_table_update = if !config.skip_migrations {
+        let (builtin_table_update, _catalog_updates) = if !config.skip_migrations {
             let migrate_result = migrate::migrate(
                 &mut state,
                 &mut txn,
@@ -432,7 +442,7 @@ impl Catalog {
             )
             .await
             .map_err(|e| {
-                Error::new(ErrorKind::FailedMigration {
+                Error::new(ErrorKind::FailedCatalogMigration {
                     last_seen_version: last_seen_version.clone(),
                     this_version: config.build_info.version,
                     cause: e.to_string(),
@@ -451,10 +461,13 @@ impl Catalog {
                 differential_dataflow::consolidation::consolidate_updates(&mut post_item_updates);
             }
 
-            migrate_result.builtin_table_updates
+            (
+                migrate_result.builtin_table_updates,
+                migrate_result.catalog_updates,
+            )
         } else {
             state
-                .apply_updates_for_bootstrap(item_updates, &mut local_expr_cache)
+                .apply_updates(item_updates, &mut local_expr_cache)
                 .await
         };
         builtin_table_updates.extend(builtin_table_update);
@@ -467,8 +480,8 @@ impl Catalog {
                 diff: diff.try_into().expect("valid diff"),
             })
             .collect();
-        let builtin_table_update = state
-            .apply_updates_for_bootstrap(post_item_updates, &mut local_expr_cache)
+        let (builtin_table_update, _catalog_updates) = state
+            .apply_updates(post_item_updates, &mut local_expr_cache)
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
@@ -482,28 +495,38 @@ impl Catalog {
         }
 
         // Migrate builtin items.
-        let BuiltinItemMigrationResult {
-            builtin_table_updates: builtin_table_update,
-            migrated_storage_collections_0dt,
-            cleanup_action,
-        } = migrate_builtin_items(
-            &mut state,
+        let schema_migration_result = builtin_schema_migration::run(
+            config.build_info,
+            deploy_generation,
             &mut txn,
-            &mut local_expr_cache,
-            migrated_builtins,
             config.builtin_item_migration_config,
         )
         .await?;
-        builtin_table_updates.extend(builtin_table_update);
+
+        let state_updates = txn.get_and_commit_op_updates();
+
+        // When initializing/bootstrapping, we don't use the catalog updates but
+        // instead load the catalog fully and then go ahead and apply commands
+        // to the controller(s). Maybe we _should_ instead use the same logic
+        // and return and use the updates from here. But that's at the very
+        // least future work.
+        let (table_updates, _catalog_updates) = state
+            .apply_updates(state_updates, &mut local_expr_cache)
+            .await;
+        builtin_table_updates.extend(table_updates);
         let builtin_table_updates = state.resolve_builtin_table_updates(builtin_table_updates);
+
+        // Bump the migration version immediately before committing.
+        set_migration_version(&mut txn, config.build_info.semver_version())?;
 
         txn.commit(config.boot_ts).await?;
 
-        cleanup_action.await;
+        // Now that the migration is durable, run any requested deferred cleanup.
+        schema_migration_result.cleanup_action.await;
 
         Ok(InitializeStateResult {
             state,
-            migrated_storage_collections_0dt,
+            migrated_storage_collections_0dt: schema_migration_result.replaced_items,
             new_builtin_collections: new_builtin_collections.into_iter().collect(),
             builtin_table_updates,
             last_seen_version,
@@ -587,7 +610,7 @@ impl Catalog {
                 );
             }
 
-            catalog.storage().await.mark_bootstrap_complete();
+            catalog.storage().await.mark_bootstrap_complete().await;
 
             Ok(OpenCatalogResult {
                 catalog,
@@ -633,8 +656,17 @@ impl Catalog {
             .map_err(mz_catalog::durable::DurableCatalogError::from)?;
 
         let updates = txn.get_and_commit_op_updates();
-        let builtin_updates = state.apply_updates(updates)?;
-        assert!(builtin_updates.is_empty());
+        let (builtin_updates, catalog_updates) = state
+            .apply_updates(updates, &mut LocalExpressionCache::Closed)
+            .await;
+        assert!(
+            builtin_updates.is_empty(),
+            "storage is not allowed to generate catalog changes that would cause changes to builtin tables"
+        );
+        assert!(
+            catalog_updates.is_empty(),
+            "storage is not allowed to generate catalog changes that would change the catalog or controller state"
+        );
         let commit_ts = txn.upper();
         txn.commit(commit_ts).await?;
         drop(storage);
@@ -709,19 +741,17 @@ impl CatalogState {
 
 /// Updates the catalog with new and removed builtin items.
 ///
-/// Returns the list of builtin [`GlobalId`]s that need to be migrated, and the list of new builtin
-/// [`GlobalId`]s.
+/// Returns the list of new builtin [`GlobalId`]s.
 fn add_new_remove_old_builtin_items_migration(
     builtins_cfg: &BuiltinsConfig,
     txn: &mut mz_catalog::durable::Transaction<'_>,
-) -> Result<(Vec<CatalogItemId>, Vec<GlobalId>), mz_catalog::durable::CatalogError> {
+) -> Result<Vec<GlobalId>, mz_catalog::durable::CatalogError> {
     let mut new_builtin_mappings = Vec::new();
-    let mut migrated_builtin_ids = Vec::new();
     // Used to validate unique descriptions.
     let mut builtin_descs = HashSet::new();
 
     // We compare the builtin items that are compiled into the binary with the builtin items that
-    // are persisted in the catalog to discover new, deleted, and migrated builtin items.
+    // are persisted in the catalog to discover new and deleted builtin items.
     let mut builtins = Vec::new();
     for builtin in BUILTINS::iter(builtins_cfg) {
         let desc = SystemObjectDescription {
@@ -772,36 +802,6 @@ fn add_new_remove_old_builtin_items_migration(
         .into_iter()
         .zip_eq(new_builtin_ids.clone())
         .collect();
-
-    // Look for migrated builtins.
-    for (builtin, system_object_mapping, fingerprint) in existing_builtins.iter().cloned() {
-        if system_object_mapping.unique_identifier.fingerprint != fingerprint {
-            // `mz_storage_usage_by_shard` cannot be migrated for multiple reasons. Firstly,
-            // it was cause the table to be truncated because the contents are not also
-            // stored in the durable catalog. Secondly, we prune `mz_storage_usage_by_shard`
-            // of old events in the background on startup. The correctness of that pruning
-            // relies on there being no other retractions to `mz_storage_usage_by_shard`.
-            assert_ne!(
-                *MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, system_object_mapping.description,
-                "mz_storage_usage_by_shard cannot be migrated or else the table will be truncated"
-            );
-            assert_ne!(
-                builtin.catalog_item_type(),
-                CatalogItemType::Type,
-                "types cannot be migrated"
-            );
-            assert_ne!(
-                system_object_mapping.unique_identifier.fingerprint,
-                RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
-                "clearing the runtime alterable flag on an existing object is not permitted",
-            );
-            assert!(
-                !builtin.runtime_alterable(),
-                "setting the runtime alterable flag on an existing object is not permitted"
-            );
-            migrated_builtin_ids.push(system_object_mapping.unique_identifier.catalog_id);
-        }
-    }
 
     // Add new builtin items to catalog.
     for ((builtin, fingerprint), (catalog_id, global_id)) in new_builtins.iter().cloned() {
@@ -951,7 +951,7 @@ fn add_new_remove_old_builtin_items_migration(
         .map(|(_catalog_id, global_id)| global_id)
         .collect();
 
-    Ok((migrated_builtin_ids, new_builtin_collections))
+    Ok(new_builtin_collections)
 }
 
 fn add_new_remove_old_builtin_clusters_migration(
@@ -1095,17 +1095,17 @@ fn add_new_remove_old_builtin_cluster_replicas_migration(
             .get_mut(&cluster.id)
             .unwrap_or(&mut empty_map);
 
-        let builtin_cluster_boostrap_config =
+        let builtin_cluster_bootstrap_config =
             builtin_cluster_config_map.get_config(builtin_replica.cluster_name)?;
         if replica_names.remove(builtin_replica.name).is_none()
             // NOTE(SangJunBak): We need to explicitly check the replication factor because
             // BUILT_IN_CLUSTER_REPLICAS is constant throughout all deployments but the replication
             // factor is configurable on bootstrap.
-            && builtin_cluster_boostrap_config.replication_factor > 0
+            && builtin_cluster_bootstrap_config.replication_factor > 0
         {
             let replica_size = match cluster.config.variant {
                 ClusterVariant::Managed(ClusterVariantManaged { ref size, .. }) => size.clone(),
-                ClusterVariant::Unmanaged => builtin_cluster_boostrap_config.size,
+                ClusterVariant::Unmanaged => builtin_cluster_bootstrap_config.size,
             };
 
             let config = builtin_cluster_replica_config(replica_size);

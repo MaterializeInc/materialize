@@ -15,17 +15,17 @@ anyhow = "1.0.100"
 chrono = { version = "0.4.39", default-features = false, features = ["serde", "std"], optional = true }
 chrono-tz = { version = "0.8.1", features = ["serde", "case-insensitive"], optional = true }
 globset = "0.4.18"
-http = "1.2.0"
+http = "1.4.0"
 mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test", "overflowing"] }
 num = "0.4.3"
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-regex = "1.11.3"
+regex = "1.12.2"
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.145", features = ["arbitrary_precision"] }
-url = { version = "2.3.1", features = ["serde"] }
-uuid = "1.18.1"
+url = { version = "2.5.7", features = ["serde"] }
+uuid = "1.19.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [features]

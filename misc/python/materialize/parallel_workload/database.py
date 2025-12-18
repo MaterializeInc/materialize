@@ -49,6 +49,7 @@ from materialize.parallel_workload.column import (
     SqlServerColumn,
     WebhookColumn,
     naughtify,
+    set_naughty_identifiers,
 )
 from materialize.parallel_workload.executor import Executor
 from materialize.parallel_workload.expression import ExprKind, expression
@@ -149,6 +150,15 @@ class Schema:
         exe.execute(query)
 
 
+class MzTempSchema(Schema):
+    def __init__(self, db: DB):
+        self.db = db
+        self.lock = threading.Lock()
+
+    def name(self) -> str:
+        return "mz_temp"
+
+
 class DBObject:
     columns: list[Column]
     lock: threading.Lock
@@ -168,8 +178,11 @@ class Table(DBObject):
     rename: int
     num_rows: int
     schema: Schema
+    temp: bool
 
-    def __init__(self, rng: random.Random, table_id: int, schema: Schema):
+    def __init__(
+        self, rng: random.Random, table_id: int, schema: Schema, temp: bool = False
+    ):
         super().__init__()
         self.table_id = table_id
         self.schema = schema
@@ -179,6 +192,7 @@ class Table(DBObject):
         ]
         self.num_rows = 0
         self.rename = 0
+        self.temp = temp
 
     def name(self) -> str:
         if self.rename:
@@ -189,7 +203,10 @@ class Table(DBObject):
         return f"{self.schema}.{identifier(self.name())}"
 
     def create(self, exe: Executor) -> None:
-        query = f"CREATE TABLE {self}("
+        query = "CREATE "
+        if self.temp:
+            query += "TEMP "
+        query += f"TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
         exe.execute(query)
@@ -206,6 +223,7 @@ class View(DBObject):
     rename: int
     schema: Schema
     refresh: str | None
+    temp: bool
 
     def __init__(
         self,
@@ -214,6 +232,7 @@ class View(DBObject):
         base_object: DBObject,
         base_object2: DBObject | None,
         schema: Schema,
+        temp: bool = False,
     ):
         super().__init__()
         self.rename = 0
@@ -221,6 +240,7 @@ class View(DBObject):
         self.base_object = base_object
         self.base_object2 = base_object2
         self.schema = schema
+        self.temp = temp
         all_columns = list(base_object.columns) + (
             list(base_object2.columns) if base_object2 else []
         )
@@ -236,7 +256,7 @@ class View(DBObject):
             for i, data_type in enumerate(self.data_types)
         ]
 
-        self.materialized = rng.choice([True, False])
+        self.materialized = not self.temp and rng.choice([True, False])
 
         self.refresh = (
             rng.choice(
@@ -272,11 +292,12 @@ class View(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: Executor) -> None:
-        if self.materialized:
-            query = "CREATE MATERIALIZED VIEW"
-        else:
-            query = "CREATE VIEW"
+    def get_select(self) -> str:
+        def select_str(exprs: str) -> str:
+            select = f"SELECT {exprs} FROM {self.base_object}"
+            if self.base_object2:
+                select += f" JOIN {self.base_object2} ON {self.on_expr}"
+            return select
 
         expressions_str = ", ".join(
             [
@@ -287,23 +308,7 @@ class View(DBObject):
             ]
         )
 
-        query += f" {self}"
-
-        options = []
-
-        if self.refresh:
-            options.append(f"REFRESH {self.refresh}")
-
-        if options:
-            query += f" WITH ({', '.join(options)})"
-
-        def select_str(exprs: str) -> str:
-            select = f"SELECT {exprs} FROM {self.base_object}"
-            if self.base_object2:
-                select += f" JOIN {self.base_object2} ON {self.on_expr}"
-            return select
-
-        query += f" AS {select_str(expressions_str)}"
+        query = select_str(expressions_str)
 
         if self.union:
             expressions_str2 = ", ".join(
@@ -316,6 +321,26 @@ class View(DBObject):
             )
 
             query += f" UNION ALL {select_str(expressions_str2)}"
+
+        return query
+
+    def create(self, exe: Executor) -> None:
+        query = "CREATE "
+        if self.temp:
+            query += "TEMP "
+        if self.materialized:
+            query += "MATERIALIZED "
+        query += f"VIEW {self}"
+
+        options = []
+
+        if self.refresh:
+            options.append(f"REFRESH {self.refresh}")
+
+        if options:
+            query += f" WITH ({', '.join(options)})"
+
+        query += f" AS {self.get_select()}"
 
         exe.execute(query)
 
@@ -872,13 +897,12 @@ class Database:
         scenario: Scenario,
         naughty_identifiers: bool,
     ):
-        global NAUGHTY_IDENTIFIERS
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
         self.seed = seed
-        NAUGHTY_IDENTIFIERS = naughty_identifiers
+        set_naughty_identifiers(naughty_identifiers)
 
         self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
@@ -993,7 +1017,7 @@ class Database:
 
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
-            exe.execute(f"DROP ROLE {identifier(row[0])}")
+            exe.execute(f"DROP ROLE {identifier(row[0])} CASCADE")
 
         exe.execute("DROP SECRET IF EXISTS pgpass CASCADE")
         exe.execute("DROP SECRET IF EXISTS mypass CASCADE")

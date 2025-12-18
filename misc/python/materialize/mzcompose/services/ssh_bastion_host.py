@@ -25,6 +25,7 @@ class SshBastionHost(Service):
         name: str = "ssh-bastion-host",
         max_startups: str | None = None,
         aliases: list[str] | None = None,
+        allow_any_key: bool = False,
     ) -> None:
         setup_path = os.path.relpath(
             MZ_ROOT / "misc" / "images" / "sshd" / "setup.sh",
@@ -44,6 +45,7 @@ class SshBastionHost(Service):
                     "SSH_USERS=mz:1000:1000",
                     "TCP_FORWARDING=true",
                     *([f"MAX_STARTUPS={max_startups}"] if max_startups else []),
+                    f"ALLOW_ANY_KEY={'true' if allow_any_key else 'false'}",
                 ],
                 "volumes": [f"{setup_path}:/etc/entrypoint.d/setup.sh"],
                 "networks": {"default": {"aliases": aliases}},

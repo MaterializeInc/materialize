@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::cast::CastFrom;
 use mz_persist_types::columnar::data_type;
@@ -94,7 +94,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub fn new(maps: Arc<SchemaCacheMaps<K, V>>, applier: Applier<K, V, T, D>) -> Self {
         let key_migration_by_ids = MigrationCacheMap {
@@ -342,7 +342,7 @@ where
     ) -> Result<Self, Schemas<K, V>>
     where
         T: Timestamp + Lattice + Codec64 + Sync,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         // At one point in time during our structured data migration, we deprecated the
         // already written schema IDs because we made all columns at the Arrow/Parquet
@@ -615,7 +615,7 @@ mod tests {
             .await
             .unwrap();
 
-        write0.ensure_schema_registered().await;
+        write0.try_register_schema().await;
         assert_eq!(write0.write_schemas.id.unwrap(), SchemaId(0));
 
         // Not backward compatible (yet... we don't support dropping a column at
@@ -679,9 +679,9 @@ mod tests {
         assert_eq!(write1.write_schemas.id.unwrap(), SchemaId(1));
     }
 
-    fn strings(xs: &[((Result<Strings, String>, Result<(), String>), u64, i64)]) -> Vec<Vec<&str>> {
+    fn strings(xs: &[((Strings, ()), u64, i64)]) -> Vec<Vec<&str>> {
         xs.iter()
-            .map(|((k, _), _, _)| k.as_ref().unwrap().0.iter().map(|x| x.as_str()).collect())
+            .map(|((k, _), _, _)| k.0.iter().map(|x| x.as_str()).collect())
             .collect()
     }
 
@@ -691,7 +691,7 @@ mod tests {
         async fn snap_streaming(
             as_of: u64,
             read: &mut ReadHandle<Strings, (), u64, i64>,
-        ) -> Vec<((Result<Strings, String>, Result<(), String>), u64, i64)> {
+        ) -> Vec<((Strings, ()), u64, i64)> {
             // NB: We test with both snapshot_and_fetch and snapshot_and_stream
             // because one uses the consolidating iter and one doesn't.
             let mut ret = read

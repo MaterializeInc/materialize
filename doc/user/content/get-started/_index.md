@@ -11,26 +11,7 @@ menu:
     weight: 5
 ---
 
-Materialize is the live data layer for apps and AI agents.
-
-To keep results up-to-date as new data arrives, Materialize incrementally
-updates results as it ingests data rather than recalculating results from
-scratch.
-
-{{< callout primary_url="https://materialize.com/register/?utm_campaign=General&utm_source=documentation" primary_text="Get Started">}}
-
-## Try it out! 🚀
-
-1. Sign up for a [free trial
-   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation)
-   on Materialize Cloud. Alternatively, both the [Self-managed Materialize] and the
-   [Materialize Emulator Docker image](/get-started/install-materialize-emulator/)
-   are also available.
-2. Follow the quickstart guide to learn the basics.
-3. Connect your own data sources and start building.
-
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
-{{</ callout >}}
+{{< include-md file="shared-content/materialize-intro.md" >}}
 
 ## Key features
 

@@ -16,7 +16,7 @@ FROM confluentinc/cp-kafka-connect-base:8.0.0
 # Be sure to use a `X.Y.Z.Final` tag here; `X.Y` tags refer to the latest minor
 # version in the release series, and minor versions have been known to introduce
 # breakage.
-ARG DEBEZIUM_VERSION="3.2.0.Final"
+ARG DEBEZIUM_VERSION="3.3.1.Final"
 
 RUN : \
     && curl -fsSL https://repo1.maven.org/maven2/io/debezium/debezium-connector-mysql/${DEBEZIUM_VERSION}/debezium-connector-mysql-${DEBEZIUM_VERSION}-plugin.tar.gz | tar -zxC /usr/share/java \

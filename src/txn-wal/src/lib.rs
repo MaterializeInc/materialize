@@ -206,7 +206,7 @@ use std::fmt::Debug;
 use std::fmt::Write;
 
 use differential_dataflow::Hashable;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_dyncfg::ConfigSet;
 use mz_ore::instrument;
@@ -333,7 +333,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
 {
     fn debug_sep<'a, T: Debug + 'a>(sep: &str, xs: impl IntoIterator<Item = &'a T>) -> String {
         xs.into_iter().fold(String::new(), |mut output, x| {
@@ -397,7 +397,7 @@ pub(crate) async fn empty_caa<S, F, K, V, T, D>(
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
 {
     let name = name();
     let empty: &[((&K, &V), &T, D)] = &[];
@@ -443,7 +443,7 @@ async fn apply_caa<K, V, T, D>(
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     let mut batches = batch_raws
         .into_iter()
@@ -576,7 +576,7 @@ mod tests {
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync + Clone,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
@@ -600,7 +600,7 @@ mod tests {
         K: Debug + Codec + Clone,
         V: Debug + Codec + Clone,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync + Clone,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync + Clone,
     {
         pub(crate) fn new() -> Self {
             Self {
@@ -744,7 +744,7 @@ mod tests {
                 TxnsCache::open(&self.client, self.txns_id, Some(data_id)).await;
             let _ = cache.update_gt(&as_of).await;
             let snapshot = cache.data_snapshot(data_id, as_of);
-            let mut data_read = self
+            let mut data_read: ReadHandle<String, (), _, _> = self
                 .client
                 .open_leased_reader(
                     data_id,
@@ -762,10 +762,7 @@ mod tests {
             data_read.expire().await;
             let snapshot: Vec<_> = snapshot
                 .into_iter()
-                .map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                .map(|((k, ()), t, d)| (k, t, d))
                 .collect();
 
             // Check that a subscribe would produce the same result.

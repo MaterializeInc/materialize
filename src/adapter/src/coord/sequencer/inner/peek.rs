@@ -8,12 +8,9 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::str::FromStr;
 use std::sync::Arc;
 
-use http::Uri;
 use itertools::Either;
-use maplit::btreemap;
 use mz_adapter_types::dyncfgs::PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION;
 use mz_catalog::memory::objects::CatalogItem;
 use mz_compute_types::sinks::ComputeSinkConnection;
@@ -21,14 +18,13 @@ use mz_controller_types::ClusterId;
 use mz_expr::{CollectionPlan, ResultSpec};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
-use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::{OptimizerFeatures, OverrideFrom};
-use mz_repr::{Datum, GlobalId, RowArena, Timestamp};
+use mz_repr::{Datum, GlobalId, Timestamp};
 use mz_sql::ast::{ExplainStage, Statement};
 use mz_sql::catalog::CatalogCluster;
 // Import `plan` module, but only import select elements to avoid merge conflicts on use statements.
 use mz_sql::plan::QueryWhen;
-use mz_sql::plan::{self, HirScalarExpr};
+use mz_sql::plan::{self};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_transform::EmptyStatisticsOracle;
 use tokio::sync::oneshot;
@@ -39,8 +35,9 @@ use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::command::ExecuteResponse;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::peek::{self, PeekDataflowPlan, PeekPlan, PlannedPeek};
-use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
-use crate::coord::timeline::TimelineContext;
+use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices, eval_copy_to_uri};
+use crate::coord::timeline::{TimelineContext, timedomain_for};
 use crate::coord::timestamp_selection::{
     TimestampContext, TimestampDetermination, TimestampProvider,
 };
@@ -54,7 +51,6 @@ use crate::error::AdapterError;
 use crate::explain::insights::PlanInsightsContext;
 use crate::explain::optimizer_trace::OptimizerTrace;
 use crate::notice::AdapterNotice;
-use crate::optimize::dataflows::{EvalTime, ExprPrepStyle, prep_scalar_expr};
 use crate::optimize::{self, Optimize};
 use crate::session::{RequireLinearization, Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::StatementLifecycleEvent;
@@ -166,32 +162,10 @@ impl Coordinator {
         }: plan::CopyToPlan,
         target_cluster: TargetCluster,
     ) {
-        let eval_uri = |to: HirScalarExpr| -> Result<Uri, AdapterError> {
-            let style = ExprPrepStyle::OneShot {
-                logical_time: EvalTime::NotAvailable,
-                session: ctx.session(),
-                catalog_state: self.catalog().state(),
-            };
-            let mut to = to.lower_uncorrelated()?;
-            prep_scalar_expr(&mut to, style)?;
-            let temp_storage = RowArena::new();
-            let evaled = to.eval(&[], &temp_storage)?;
-            if evaled == Datum::Null {
-                coord_bail!("COPY TO target value can not be null");
-            }
-            let to_url = match Uri::from_str(evaled.unwrap_str()) {
-                Ok(url) => {
-                    if url.scheme_str() != Some("s3") {
-                        coord_bail!("only 's3://...' urls are supported as COPY TO target");
-                    }
-                    url
-                }
-                Err(e) => coord_bail!("could not parse COPY TO target url: {}", e),
-            };
-            Ok(to_url)
-        };
-
-        let uri = return_if_err!(eval_uri(to), ctx);
+        let uri = return_if_err!(
+            eval_copy_to_uri(to, ctx.session(), self.catalog().state()),
+            ctx
+        );
 
         let stage = return_if_err!(
             self.peek_validate(
@@ -282,7 +256,6 @@ impl Coordinator {
         let compute_instance = self
             .instance_snapshot(cluster.id())
             .expect("compute instance does not exist");
-        let (_, view_id) = self.allocate_transient_id();
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster.id()).config.features())
             .override_from(&explain_ctx);
@@ -329,6 +302,7 @@ impl Coordinator {
                     }
                 };
                 copy_to_ctx.output_batch_count = Some(max_worker_count);
+                let (_, view_id) = self.allocate_transient_id();
                 // Build an optimizer for this COPY TO.
                 Either::Right(optimize::copy_to::Optimizer::new(
                     Arc::clone(&catalog),
@@ -755,12 +729,8 @@ impl Coordinator {
             explain_ctx,
         }: PeekStageRealTimeRecency,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
-        let item_ids: Vec<_> = source_ids
-            .iter()
-            .map(|gid| self.catalog.resolve_item_id(gid))
-            .collect();
         let fut = self
-            .determine_real_time_recent_timestamp(session, item_ids.into_iter())
+            .determine_real_time_recent_timestamp_if_needed(session, source_ids.iter().copied())
             .await?;
 
         match fut {
@@ -838,14 +808,12 @@ impl Coordinator {
         let (peek_plan, df_meta, typ) = global_lir_plan.unapply();
         let source_arity = typ.arity();
 
-        self.emit_optimizer_notices(&*session, &df_meta.optimizer_notices);
-
-        let target_cluster = self.catalog().get_cluster(cluster_id);
-
-        let features = OptimizerFeatures::from(self.catalog().system_config())
-            .override_from(&target_cluster.config.features());
+        emit_optimizer_notices(&*self.catalog, &*session, &df_meta.optimizer_notices);
 
         if let Some(trace) = plan_insights_optimizer_trace {
+            let target_cluster = self.catalog().get_cluster(cluster_id);
+            let features = OptimizerFeatures::from(self.catalog().system_config())
+                .override_from(&target_cluster.config.features());
             let insights = trace
                 .into_plan_insights(
                     &features,
@@ -895,8 +863,10 @@ impl Coordinator {
                     CatalogItem::Table(_) | CatalogItem::Source(_) => {
                         transitive_storage_deps.extend(entry.global_ids());
                     }
+                    // Each catalog item is computed by at most one compute collection at a time,
+                    // which is also the most recent one.
                     CatalogItem::MaterializedView(_) | CatalogItem::Index(_) => {
-                        transitive_compute_deps.extend(entry.global_ids());
+                        transitive_compute_deps.insert(entry.latest_global_id());
                     }
                     _ => {}
                 }
@@ -955,7 +925,7 @@ impl Coordinator {
 
     #[instrument]
     async fn peek_copy_to_preflight(
-        &mut self,
+        &self,
         copy_to: PeekStageCopyTo,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
         let connection_context = self.connection_context().clone();
@@ -1016,7 +986,7 @@ impl Coordinator {
 
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
-        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
 
         // Callback for the active copy to.
         let (tx, rx) = oneshot::channel();
@@ -1057,54 +1027,19 @@ impl Coordinator {
             optimizer,
             insights_ctx,
             df_meta,
-            explain_ctx:
-                ExplainPlanContext {
-                    config,
-                    format,
-                    stage,
-                    desc,
-                    optimizer_trace,
-                    ..
-                },
+            explain_ctx,
             ..
         }: PeekStageExplainPlan,
     ) -> Result<StageResult<Box<PeekStage>>, AdapterError> {
-        let desc = desc.expect("RelationDesc for SelectPlan in EXPLAIN mode");
-
-        let session_catalog = self.catalog().for_session(session);
-        let expr_humanizer = {
-            let transient_items = btreemap! {
-                optimizer.select_id() => TransientItem::new(
-                    Some(vec![GlobalId::Explain.to_string()]),
-                    Some(desc.iter_names().map(|c| c.to_string()).collect()),
-                )
-            };
-            ExprHumanizerExt::new(transient_items, &session_catalog)
-        };
-
-        let finishing = if optimizer.finishing().is_trivial(desc.arity()) {
-            None
-        } else {
-            Some(optimizer.finishing().clone())
-        };
-
-        let target_cluster = self.catalog().get_cluster(optimizer.cluster_id());
-        let features = optimizer.config().features.clone();
-
-        let rows = optimizer_trace
-            .into_rows(
-                format,
-                &config,
-                &features,
-                &expr_humanizer,
-                finishing,
-                Some(target_cluster),
-                df_meta,
-                stage,
-                plan::ExplaineeStatementKind::Select,
-                insights_ctx,
-            )
-            .await?;
+        let rows = super::super::explain_plan_inner(
+            session,
+            self.catalog(),
+            df_meta,
+            explain_ctx,
+            optimizer,
+            insights_ctx,
+        )
+        .await?;
 
         Ok(StageResult::Response(Self::send_immediate_rows(rows)))
     }
@@ -1123,7 +1058,7 @@ impl Coordinator {
             .map(|t| ResultSpec::value(Datum::MzTimestamp(*t)))
             .unwrap_or_else(ResultSpec::value_all);
         let fut = self
-            .render_explain_pushdown_prepare(session, as_of, mz_now, stage.imports)
+            .explain_pushdown_future(session, as_of, mz_now, stage.imports)
             .await;
         let span = Span::current();
         Ok(StageResult::HandleRetire(mz_ore::task::spawn(
@@ -1164,7 +1099,9 @@ impl Coordinator {
                 let determine_bundle = if in_immediate_multi_stmt_txn {
                     // In a transaction, determine a timestamp that will be valid for anything in
                     // any schema referenced by the first query.
-                    timedomain_bundle = self.timedomain_for(
+                    timedomain_bundle = timedomain_for(
+                        self.catalog(),
+                        &self.index_oracle(cluster_id),
                         source_ids,
                         &timeline_context,
                         session.conn_id(),
@@ -1223,15 +1160,15 @@ impl Coordinator {
             // Queries without a timestamp and timeline can belong to any existing timedomain.
             if determination.timestamp_context.contains_timestamp() && !outside.is_empty() {
                 let valid_names =
-                    self.resolve_collection_id_bundle_names(session, &allowed_id_bundle);
-                let invalid_names = self.resolve_collection_id_bundle_names(session, &outside);
+                    allowed_id_bundle.resolve_names(self.catalog(), session.conn_id());
+                let invalid_names = outside.resolve_names(self.catalog(), session.conn_id());
                 return Err(AdapterError::RelationOutsideTimeDomain {
                     relations: invalid_names,
                     names: valid_names,
                 });
             }
         } else if let Some(read_holds) = read_holds {
-            self.store_transaction_read_holds(session, read_holds);
+            self.store_transaction_read_holds(session.conn_id().clone(), read_holds);
         }
 
         // TODO: Checking for only `InTransaction` and not `Implied` (also `Started`?) seems

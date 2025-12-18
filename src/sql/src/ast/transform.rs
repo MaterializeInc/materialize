@@ -202,8 +202,17 @@ pub fn create_stmt_rename_refs(
         Statement::CreateView(CreateViewStatement {
             definition: ViewDefinition { query, .. },
             ..
-        })
-        | Statement::CreateMaterializedView(CreateMaterializedViewStatement { query, .. }) => {
+        }) => {
+            rewrite_query(from_name, to_item_name, query)?;
+        }
+        Statement::CreateMaterializedView(CreateMaterializedViewStatement {
+            replacing,
+            query,
+            ..
+        }) => {
+            if let Some(target) = replacing {
+                maybe_update_item_name(target.name_mut());
+            }
             rewrite_query(from_name, to_item_name, query)?;
         }
         Statement::CreateSource(_)

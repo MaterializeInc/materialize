@@ -101,7 +101,7 @@ where
         let mut final_configuration = ComputeParameters::default();
 
         let mut initialization_complete = false;
-        let mut allow_writes = false;
+        let mut allow_writes = BTreeSet::new();
 
         for command in self.commands.drain(..) {
             match command {
@@ -135,8 +135,8 @@ where
                 ComputeCommand::CancelPeek { uuid } => {
                     live_peeks.remove(&uuid);
                 }
-                ComputeCommand::AllowWrites => {
-                    allow_writes = true;
+                ComputeCommand::AllowWrites(id) => {
+                    allow_writes.insert(id);
                 }
             }
         }
@@ -182,6 +182,8 @@ where
             .flat_map(|d| d.export_ids())
             .collect();
         scheduled_collections.retain(|id| retained_collections.contains(id));
+        // Retain any `AllowWrites` command for dataflows that still exist.
+        allow_writes.retain(|id| retained_collections.contains(id));
 
         // Reconstitute the commands as a compact history.
 
@@ -239,14 +241,16 @@ where
                 .push(ComputeCommand::AllowCompaction { id, frontier });
         }
 
+        let count = u64::cast_from(allow_writes.len());
+        command_counts.allow_writes.borrow().set(count);
+        for id in allow_writes {
+            self.commands.push(ComputeCommand::AllowWrites(id));
+        }
+
         let count = u64::from(initialization_complete);
         command_counts.initialization_complete.borrow().set(count);
         if initialization_complete {
             self.commands.push(ComputeCommand::InitializationComplete);
-        }
-
-        if allow_writes {
-            self.commands.push(ComputeCommand::AllowWrites);
         }
 
         self.reduced_count = self.commands.len();

@@ -2,6 +2,37 @@
   description: |
     Use the [`CREATE SOURCE`](/sql/create-source/) command to connect
     Materialize to your SQL Server instance and start ingesting data:
+  test_setup: |
+    $ sql-server-connect name=sql-server
+    server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=SA;Password=RPSsql12345
+
+    $ sql-server-execute name=sql-server split-lines=false
+    IF EXISTS (SELECT name FROM sys.databases WHERE name = N'test')
+    BEGIN
+        ALTER DATABASE test SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+        DROP DATABASE test;
+    END;
+
+    $ sql-server-execute name=sql-server
+    CREATE DATABASE test COLLATE Latin1_General_100_CI_AI_SC_UTF8;
+    USE test;
+
+    EXEC sys.sp_cdc_enable_db;
+    ALTER DATABASE test SET ALLOW_SNAPSHOT_ISOLATION ON;
+
+    CREATE TABLE dummy (t datetime);
+    INSERT INTO dummy VALUES (CURRENT_TIMESTAMP);
+    EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
+    > CREATE SECRET IF NOT EXISTS sqlserver_pass AS 'RPSsql12345'
+
+    > CREATE CONNECTION sqlserver_connection TO SQL SERVER (
+        HOST 'sql-server',
+        PORT 1433,
+        DATABASE test,
+        USER 'SA',
+        PASSWORD = SECRET sqlserver_pass
+      );
   code: |
     CREATE SOURCE mz_source
       FROM SQL SERVER CONNECTION sqlserver_connection

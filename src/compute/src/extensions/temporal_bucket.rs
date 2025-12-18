@@ -19,13 +19,13 @@ use differential_dataflow::trace::implementations::chunker::ColumnationChunker;
 use differential_dataflow::trace::implementations::merge_batcher::{ColMerger, MergeBatcher};
 use differential_dataflow::trace::{Batcher, Builder, Description};
 use mz_timely_util::temporal::{Bucket, BucketChain, BucketTimestamp};
-use timely::container::{ContainerBuilder, PushInto};
+use timely::container::PushInto;
 use timely::dataflow::channels::pact::Exchange;
 use timely::dataflow::operators::Operator;
 use timely::dataflow::{Scope, StreamCore};
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, PathSummary, Timestamp};
-use timely::{Data, ExchangeData, PartialOrder};
+use timely::{ContainerBuilder, Data, ExchangeData, PartialOrder};
 
 use crate::typedefs::MzData;
 
@@ -74,11 +74,11 @@ where
             // Buffer for data to be inserted into the chain.
             let mut buffer = Vec::new();
 
-            move |input, output| {
+            move |(input, frontier), output| {
                 // The upper frontier is the join of the input frontier and the `as_of` frontier,
                 // with the `threshold` summary applied to it.
                 let mut upper = Antichain::new();
-                for time1 in &input.frontier().frontier() {
+                for time1 in &frontier.frontier() {
                     for time2 in as_of.elements() {
                         // TODO: Use `join_assign` if we ever use a timestamp with allocations.
                         if let Some(time) = threshold.results_in(&time1.join(time2)) {
@@ -87,45 +87,47 @@ where
                     }
                 }
 
-                while let Some((time, data)) = input.next() {
-                    // Skip data that is about to be revealed.
-                    let pass_through = data.extract_if(.., |(_, t, _)| !upper.less_equal(t));
-                    output
-                        .session_with_builder(&time)
-                        .give_iterator(pass_through);
+                input.for_each_time(|time, data| {
+                    let mut session = output.session_with_builder(&time);
+                    for data in data {
+                        // Skip data that is about to be revealed.
+                        let pass_through = data.extract_if(.., |(_, t, _)| !upper.less_equal(t));
+                        session.give_iterator(pass_through);
 
-                    // Sort data by time, then drain it into a buffer that contains data for a
-                    // single bucket. We scan the data for ranges of time that fall into the same
-                    // bucket so we can push batches of data at once.
-                    data.sort_unstable_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
+                        // Sort data by time, then drain it into a buffer that contains data for a
+                        // single bucket. We scan the data for ranges of time that fall into the same
+                        // bucket so we can push batches of data at once.
+                        data.sort_unstable_by(|(_, t, _), (_, t2, _)| t.cmp(t2));
 
-                    let mut drain = data.drain(..);
-                    if let Some((datum, time, diff)) = drain.next() {
-                        let mut range = chain.range_of(&time).expect("Must exist");
-                        buffer.push((datum, time, diff));
-                        for (datum, time, diff) in drain {
-                            // If we have a range, check if the time is not within it.
-                            if !range.contains(&time) {
-                                // If the time is outside the range, push the current buffer
-                                // to the chain and reset the range.
-                                if !buffer.is_empty() {
-                                    let bucket = chain.find_mut(&range.start).expect("Must exist");
-                                    bucket.inner.push_container(&mut buffer);
-                                    buffer.clear();
-                                }
-                                range = chain.range_of(&time).expect("Must exist");
-                            }
+                        let mut drain = data.drain(..);
+                        if let Some((datum, time, diff)) = drain.next() {
+                            let mut range = chain.range_of(&time).expect("Must exist");
                             buffer.push((datum, time, diff));
-                        }
+                            for (datum, time, diff) in drain {
+                                // If we have a range, check if the time is not within it.
+                                if !range.contains(&time) {
+                                    // If the time is outside the range, push the current buffer
+                                    // to the chain and reset the range.
+                                    if !buffer.is_empty() {
+                                        let bucket =
+                                            chain.find_mut(&range.start).expect("Must exist");
+                                        bucket.inner.push_container(&mut buffer);
+                                        buffer.clear();
+                                    }
+                                    range = chain.range_of(&time).expect("Must exist");
+                                }
+                                buffer.push((datum, time, diff));
+                            }
 
-                        // Handle leftover data in the buffer.
-                        if !buffer.is_empty() {
-                            let bucket = chain.find_mut(&range.start).expect("Must exist");
-                            bucket.inner.push_container(&mut buffer);
-                            buffer.clear();
+                            // Handle leftover data in the buffer.
+                            if !buffer.is_empty() {
+                                let bucket = chain.find_mut(&range.start).expect("Must exist");
+                                bucket.inner.push_container(&mut buffer);
+                                buffer.clear();
+                            }
                         }
                     }
-                }
+                });
 
                 // Check for data that is ready to be revealed.
                 let peeled = chain.peel(upper.borrow());
@@ -145,7 +147,7 @@ where
                 }
 
                 // Downgrade the cap to the current input frontier.
-                if input.frontier().is_empty() || upper.is_empty() {
+                if frontier.is_empty() || upper.is_empty() {
                     cap = None;
                 } else if let Some(cap) = cap.as_mut() {
                     // TODO: This assumes that the time is total ordered.

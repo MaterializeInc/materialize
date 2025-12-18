@@ -93,7 +93,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_secret_validate(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::CreateSecretPlan,
     ) -> Result<SecretStage, AdapterError> {
@@ -265,7 +265,7 @@ impl Coordinator {
 
     #[instrument]
     fn alter_secret(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::AlterSecretPlan,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
@@ -304,7 +304,7 @@ impl Coordinator {
 
     #[instrument]
     fn rotate_keys_ensure(
-        &mut self,
+        &self,
         RotateKeysSecretEnsure { validity, id }: RotateKeysSecretEnsure,
     ) -> Result<StageResult<Box<SecretStage>>, AdapterError> {
         let secrets_controller = Arc::clone(&self.secrets_controller);

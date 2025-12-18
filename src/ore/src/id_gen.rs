@@ -146,7 +146,7 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
         let total = usize::cast_from(max - min);
         assert!(total < BitSet::BITS_PER_USIZE.pow(4));
         IdAllocatorInnerBitSet {
-            next: StdRng::from_entropy(),
+            next: StdRng::from_os_rng(),
             min,
             max,
             mask,
@@ -156,7 +156,7 @@ impl IdAllocatorInner for IdAllocatorInnerBitSet {
 
     fn alloc(&mut self) -> Option<u32> {
         let range = self.min..=self.max;
-        let init = self.next.gen_range(range);
+        let init = self.next.random_range(range);
         let mut next = init;
         loop {
             // Because hibitset has a hard maximum of 64**4 (~16 million), subtract the min in case

@@ -13,11 +13,14 @@ To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
-{{< diagram "reset-stmt.svg" >}}
+```mzsql
+RESET <parameter_name>;
+```
 
-Field  | Use
--------|-----
-_name_ | The configuration parameter's name.
+
+Syntax element | Description
+---------------|------------
+`<parameter_name>` | The configuration parameter's name.
 
 {{% configuration-parameters %}}
 

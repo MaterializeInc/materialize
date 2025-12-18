@@ -18,9 +18,11 @@
 //! of each method and make it easy for callers to ensure that all possible errors are handled.
 
 use mz_repr::GlobalId;
-use mz_storage_types::read_holds::ReadHoldError;
 use thiserror::Error;
 
+pub use mz_storage_types::errors::CollectionMissing;
+
+use crate::controller::instance::InstanceShutDown;
 use crate::controller::{ComputeInstanceId, ReplicaId};
 
 /// The error returned by replica-targeted peeks and subscribes when the target replica
@@ -40,21 +42,19 @@ pub struct InstanceExists(pub ComputeInstanceId);
 
 /// Error returned in response to a reference to an unknown compute collection.
 #[derive(Error, Debug)]
-#[error("collection does not exist: {0}")]
-pub struct CollectionMissing(pub GlobalId);
-
-/// Error returned in response to a reference to an unknown compute collection.
-#[derive(Error, Debug)]
 #[error("No replicas found in cluster for target list.")]
 pub struct HydrationCheckBadTarget(pub Vec<ReplicaId>);
 
 /// Errors arising during compute collection lookup.
 #[derive(Error, Debug)]
 pub enum CollectionLookupError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The specified compute instance does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The specified compute instance has shut down.
+    #[error("the instance has shut down")]
+    InstanceShutDown,
+    /// The compute collection does not exist.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
 }
@@ -62,6 +62,12 @@ pub enum CollectionLookupError {
 impl From<InstanceMissing> for CollectionLookupError {
     fn from(error: InstanceMissing) -> Self {
         Self::InstanceMissing(error.0)
+    }
+}
+
+impl From<InstanceShutDown> for CollectionLookupError {
+    fn from(_error: InstanceShutDown) -> Self {
+        Self::InstanceShutDown
     }
 }
 
@@ -145,28 +151,19 @@ impl From<CollectionMissing> for DataflowCreationError {
     }
 }
 
-impl From<ReadHoldError> for DataflowCreationError {
-    fn from(error: ReadHoldError) -> Self {
-        match error {
-            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
-        }
-    }
-}
-
 /// Errors arising during peek processing.
 #[derive(Error, Debug)]
 pub enum PeekError {
-    /// TODO(database-issues#7533): Add documentation.
+    /// The instance that the peek was issued against does not exist.
     #[error("instance does not exist: {0}")]
     InstanceMissing(ComputeInstanceId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The peek's target collection was not found.
     #[error("collection does not exist: {0}")]
     CollectionMissing(GlobalId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The replica that the peek was issued against does not exist.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
-    /// TODO(database-issues#7533): Add documentation.
+    /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("peek timestamp is not beyond the since of collection: {0}")]
     SinceViolation(GlobalId),
 }
@@ -180,15 +177,6 @@ impl From<InstanceMissing> for PeekError {
 impl From<CollectionMissing> for PeekError {
     fn from(error: CollectionMissing) -> Self {
         Self::CollectionMissing(error.0)
-    }
-}
-
-impl From<ReadHoldError> for PeekError {
-    fn from(error: ReadHoldError) -> Self {
-        match error {
-            ReadHoldError::CollectionMissing(id) => Self::CollectionMissing(id),
-            ReadHoldError::SinceViolation(id) => Self::SinceViolation(id),
-        }
     }
 }
 

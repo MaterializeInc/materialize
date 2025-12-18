@@ -26,6 +26,9 @@ on:
     types:
       - labeled
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     runs-on: ubuntu-latest

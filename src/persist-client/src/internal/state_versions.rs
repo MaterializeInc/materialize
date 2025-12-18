@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use bytes::Bytes;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastFrom;
@@ -152,7 +152,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let shard_id = shard_metrics.shard_id;
 
@@ -232,7 +232,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         assert_eq!(shard_metrics.shard_id, new_state.shard_id);
         let path = new_state.shard_id.to_string();
@@ -335,6 +335,19 @@ impl StateVersions {
                 shard_metrics
                     .inline_part_bytes
                     .set(u64::cast_from(size_metrics.inline_part_bytes));
+                shard_metrics.stale_version.set(
+                    if new_state
+                        .state
+                        .collections
+                        .version
+                        .cmp_precedence(&self.cfg.build_version)
+                        .is_lt()
+                    {
+                        1
+                    } else {
+                        0
+                    },
+                );
 
                 let spine_metrics = new_state.collections.trace.spine_metrics();
                 shard_metrics
@@ -662,7 +675,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let empty_state = TypedState::new(
             self.cfg.build_version.clone(),
@@ -715,7 +728,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let (latest_rollup_seqno, _rollup) = state.latest_rollup();
         let seqno = state.seqno();
@@ -793,7 +806,7 @@ impl StateVersions {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + Codec64,
-        D: Semigroup + Codec64,
+        D: Monoid + Codec64,
     {
         let shard_id = state.shard_id;
         let rollup_seqno = state.seqno;
@@ -1074,7 +1087,6 @@ impl<T: Timestamp + Lattice + Codec64> StateVersionsIter<T> {
     pub fn into_rollup_proto_without_diffs(&self) -> impl serde::Serialize + use<T> {
         Rollup::from_state_without_diffs(
             State {
-                applier_version: self.state.applier_version.clone(),
                 shard_id: self.state.shard_id.clone(),
                 seqno: self.state.seqno.clone(),
                 walltime_ms: self.state.walltime_ms.clone(),
@@ -1186,7 +1198,7 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
         assert_eq!(inc_lower, full_lower);
         assert_eq!(inc_upper, full_upper);
 
-        fn part_unique<T: Hash>(x: &RunPart<T>) -> String {
+        fn part_unique<T: Codec64>(x: &RunPart<T>) -> String {
             match x {
                 RunPart::Single(BatchPart::Inline {
                     updates,
@@ -1195,7 +1207,10 @@ impl<T: Timestamp + Lattice + Codec64> ReferencedBlobValidator<T> {
                 }) => {
                     let mut h = DefaultHasher::new();
                     updates.hash(&mut h);
-                    ts_rewrite.as_ref().map(|x| x.elements()).hash(&mut h);
+                    if let Some(frontier) = &ts_rewrite {
+                        h.write_usize(frontier.len());
+                        frontier.iter().for_each(|t| t.encode().hash(&mut h));
+                    }
                     h.finish().to_string()
                 }
                 other => other.printable_name().to_string(),

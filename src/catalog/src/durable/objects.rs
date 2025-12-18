@@ -1326,13 +1326,20 @@ impl ItemValue {
     }
 }
 
-fn item_type(create_sql: &str) -> CatalogItemType {
+pub fn item_type(create_sql: &str) -> CatalogItemType {
     // NOTE(benesch): the implementation of this method is hideous, but is
     // there a better alternative? Storing the object type alongside the
     // `create_sql` would introduce the possibility of skew.
     let mut tokens = create_sql.split_whitespace();
     assert_eq!(tokens.next(), Some("CREATE"));
-    match tokens.next() {
+
+    // Read away TEMPORARY, if any.
+    let next_token = match tokens.next() {
+        Some("TEMPORARY") => tokens.next(),
+        token => token,
+    };
+
+    match next_token {
         Some("TABLE") => CatalogItemType::Table,
         Some("SOURCE") | Some("SUBSOURCE") => CatalogItemType::Source,
         Some("SINK") => CatalogItemType::Sink,

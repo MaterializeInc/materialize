@@ -39,6 +39,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::cast::CastLossy;
 use mz_ore::cast::TryCastFrom;
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME, to_datetime};
 use mz_ore::retry::Retry;
@@ -65,7 +66,7 @@ use tokio::sync::oneshot;
 use tokio_postgres::error::SqlState;
 use tracing::info;
 use tungstenite::error::ProtocolError;
-use tungstenite::{Error, Message};
+use tungstenite::{Error, Message, Utf8Bytes};
 use uuid::Uuid;
 
 // Allow the use of banned rdkafka methods, because we are just in tests.
@@ -165,11 +166,79 @@ fn test_persistence() {
     );
 }
 
+/// A wrapper around `TestServerWithRuntime` that runs statement logging checks when dropped.
+///
+/// This guard ensures that all statements have finished executing (have non-NULL `finished_at`
+/// and `finished_status` in `mz_internal.mz_recent_activity_log`) before the test completes.
+struct TestServerWithStatementLoggingChecks {
+    server: test_util::TestServerWithRuntime,
+}
+
+impl TestServerWithStatementLoggingChecks {
+    /// Connect to the __internal__ SQL port of the running `environmentd` server.
+    pub fn connect_internal<T>(&self, tls: T) -> Result<postgres::Client, anyhow::Error>
+    where
+        T: postgres::tls::MakeTlsConnect<postgres::Socket> + Send + 'static,
+        T::TlsConnect: Send,
+        T::Stream: Send,
+        <T::TlsConnect as postgres::tls::TlsConnect<postgres::Socket>>::Future: Send,
+    {
+        self.server.connect_internal(tls)
+    }
+}
+
+impl Drop for TestServerWithStatementLoggingChecks {
+    fn drop(&mut self) {
+        // Don't run checks if we're already panicking, as this could mask the original error.
+        if std::thread::panicking() {
+            return;
+        }
+
+        let mut mz_client = self
+            .server
+            .connect_internal(postgres::NoTls)
+            .expect("Failed to connect to internal SQL port for statement logging check");
+
+        // Disable RBAC checks so we can query mz_internal tables.
+        // (We don't need to restore this afterwards, since no more tests run in the same system.)
+        mz_client
+            .batch_execute("ALTER SYSTEM SET enable_rbac_checks = false")
+            .expect("Failed to disable RBAC checks");
+
+        // The statement log has a 5-second buffer flush interval, so allow sufficient time.
+        Retry::default()
+            .max_duration(Duration::from_secs(30))
+            .retry(|_| {
+                let result = mz_client.query_one(
+                    "SELECT count(*)
+                     FROM mz_internal.mz_recent_activity_log
+                     WHERE (finished_at IS NULL OR finished_status IS NULL)
+                       AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'",
+                    &[],
+                );
+
+                match result {
+                    Ok(row) => {
+                        let count: i64 = row.get(0);
+                        if count == 0 {
+                            Ok(())
+                        } else {
+                            Err(format!("{} statements have not finished", count))
+                        }
+                    }
+                    Err(e) => Err(format!("Query failed: {}", e)),
+                }
+            })
+            .expect("All statements should have finished executing");
+    }
+}
+
 fn setup_statement_logging_core(
     max_sample_rate: f64,
     sample_rate: f64,
+    target_data_rate: &str,
     test_harness: test_util::TestHarness,
-) -> (test_util::TestServerWithRuntime, postgres::Client) {
+) -> (TestServerWithStatementLoggingChecks, postgres::Client) {
     let server = test_harness
         .with_system_parameter_default(
             "statement_logging_max_sample_rate".to_string(),
@@ -180,21 +249,36 @@ fn setup_statement_logging_core(
             sample_rate.to_string(),
         )
         .with_system_parameter_default(
+            "statement_logging_max_data_credit".to_string(),
+            "".to_string(),
+        )
+        .with_system_parameter_default(
+            "statement_logging_target_data_rate".to_string(),
+            target_data_rate.to_string(),
+        )
+        .with_system_parameter_default(
             "statement_logging_use_reproducible_rng".to_string(),
             "true".to_string(),
         )
+        .with_system_parameter_default(
+            "enable_frontend_peek_sequencing".to_string(),
+            "false".to_string(),
+        )
         .start_blocking();
     let client = server.connect(postgres::NoTls).unwrap();
+    let server = TestServerWithStatementLoggingChecks { server };
     (server, client)
 }
 
 fn setup_statement_logging(
     max_sample_rate: f64,
     sample_rate: f64,
-) -> (test_util::TestServerWithRuntime, postgres::Client) {
+    target_data_rate: &str,
+) -> (TestServerWithStatementLoggingChecks, postgres::Client) {
     setup_statement_logging_core(
         max_sample_rate,
         sample_rate,
+        target_data_rate,
         test_util::TestHarness::default(),
     )
 }
@@ -202,13 +286,9 @@ fn setup_statement_logging(
 // Test that we log various kinds of statement whose execution terminates in the coordinator.
 #[mz_ore::test]
 fn test_statement_logging_immediate() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
 
-    let mut mz_client = server
-        .pg_config_internal()
-        .user(&SYSTEM_USER.name)
-        .connect(postgres::NoTls)
-        .unwrap();
+    let mut mz_client = server.connect_internal(postgres::NoTls).unwrap();
     mz_client
         .batch_execute("ALTER SYSTEM SET enable_statement_lifecycle_logging = false")
         .unwrap();
@@ -348,7 +428,7 @@ fn test_statement_logging_immediate() {
 
 #[mz_ore::test]
 fn test_statement_logging_basic() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     client.execute("SELECT 1", &[]).unwrap();
     // We test that queries of this view execute on a cluster.
     // If we ever change the threshold for constant folding such that
@@ -507,20 +587,21 @@ ORDER BY mseh.began_at",
     assert_none!(sl_results[3].rows_returned);
 }
 
-#[mz_ore::test]
-fn test_statement_logging_throttling() {
-    let (server, mut client) = setup_statement_logging_core(
-        1.0,
-        1.0,
-        test_util::TestHarness::default().with_system_parameter_default(
-            "statement_logging_target_data_rate".to_string(),
-            "100".to_string(),
-        ),
-    );
+fn run_throttling_test(use_prepared_statement: bool) {
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "1000");
     thread::sleep(Duration::from_secs(2));
-    for _ in 0..100 {
-        client.execute("SELECT 1", &[]).unwrap();
+
+    if use_prepared_statement {
+        let statement = client.prepare("SELECT 1").unwrap();
+        for _ in 0..100 {
+            client.execute(&statement, &[]).unwrap();
+        }
+    } else {
+        for _ in 0..100 {
+            client.execute("SELECT 1", &[]).unwrap();
+        }
     }
+
     thread::sleep(Duration::from_secs(4));
     client.execute("SELECT 2", &[]).unwrap();
     let mut client = server.connect_internal(postgres::NoTls).unwrap();
@@ -532,7 +613,9 @@ fn test_statement_logging_throttling() {
                     "SELECT
     sql,
     throttled_count
-FROM mz_internal.mz_prepared_statement_history mpsh
+FROM mz_internal.mz_statement_execution_history mseh
+JOIN mz_internal.mz_prepared_statement_history mpsh
+ON mseh.prepared_statement_id = mpsh.id
 JOIN (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
 ON mpsh.sql_hash = mst.sql_hash
 WHERE sql IN ('SELECT 1', 'SELECT 2')",
@@ -566,8 +649,18 @@ WHERE sql IN ('SELECT 1', 'SELECT 2')",
 }
 
 #[mz_ore::test]
+fn test_statement_logging_throttling() {
+    run_throttling_test(false);
+}
+
+#[mz_ore::test]
+fn test_statement_logging_prepared_statement_throttling() {
+    run_throttling_test(true);
+}
+
+#[mz_ore::test]
 fn test_statement_logging_subscribes() {
-    let (server, mut client) = setup_statement_logging(1.0, 1.0);
+    let (server, mut client) = setup_statement_logging(1.0, 1.0, "");
     let cancel_token = client.cancel_token();
 
     // This should finish
@@ -657,7 +750,7 @@ fn test_statement_logging_subscribes() {
 /// (1) that the effective sampling rate for the session is 50%,
 /// (2) that we are using the deterministic testing RNG.
 fn test_statement_logging_sampling_inner(
-    server: test_util::TestServerWithRuntime,
+    server: TestServerWithStatementLoggingChecks,
     mut client: postgres::Client,
 ) {
     for i in 0..50 {
@@ -706,7 +799,7 @@ fn test_statement_logging_sampling_inner(
 
 #[mz_ore::test]
 fn test_statement_logging_sampling() {
-    let (server, client) = setup_statement_logging(1.0, 0.5);
+    let (server, client) = setup_statement_logging(1.0, 0.5, "");
     test_statement_logging_sampling_inner(server, client);
 }
 
@@ -714,13 +807,16 @@ fn test_statement_logging_sampling() {
 /// arbitrarily high, but that it is constrained by `statement_logging_max_sample_rate`.
 #[mz_ore::test]
 fn test_statement_logging_sampling_constrained() {
-    let (server, client) = setup_statement_logging(0.5, 1.0);
+    let (server, client) = setup_statement_logging(0.5, 1.0, "");
     test_statement_logging_sampling_inner(server, client);
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 async fn test_statement_logging_unsampled_metrics() {
     let server = test_util::TestHarness::default().start().await;
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
+        .await;
     let client = server.connect().await.unwrap();
 
     // TODO[btv]
@@ -797,6 +893,7 @@ fn test_enable_internal_statement_logging() {
     let (server, mut client) = setup_statement_logging_core(
         1.0,
         1.0,
+        "",
         test_util::TestHarness::default().with_system_parameter_default(
             "enable_internal_statement_logging".to_string(),
             "true".to_string(),
@@ -914,8 +1011,8 @@ fn test_http_sql() {
 
         f.run(|tc| {
             let msg = match tc.directive.as_str() {
-                "ws-text" => Message::Text(tc.input.clone()),
-                "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec()),
+                "ws-text" => Message::Text(tc.input.clone().into()),
+                "ws-binary" => Message::Binary(tc.input.as_bytes().to_vec().into()),
                 "http" => {
                     let json: serde_json::Value = serde_json::from_str(&tc.input).unwrap();
                     let res = Client::new()
@@ -940,9 +1037,11 @@ fn test_http_sql() {
                 match resp {
                     Message::Text(mut msg) => {
                         if fixtimestamp {
-                            msg = fixtimestamp_re
-                                .replace_all(&msg, fixtimestamp_replace)
-                                .into();
+                            msg = Utf8Bytes::from(
+                                fixtimestamp_re
+                                    .replace_all(&msg, fixtimestamp_replace)
+                                    .into_owned(),
+                            );
                         }
                         let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                         write!(&mut responses, "{}\n", serde_json::to_string(&msg).unwrap())
@@ -1742,7 +1841,7 @@ fn test_max_request_size() {
         let json =
             format!("{{\"queries\":[{{\"query\":\"{statement}\",\"params\":[\"{param}\"]}}]}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.send(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string().into())).unwrap();
 
         // The specific error isn't forwarded to the client, the connection is just closed.
         let err = ws.read().unwrap_err();
@@ -1819,7 +1918,7 @@ fn test_max_statement_batch_size() {
         test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
         let json = format!("{{\"query\":\"{statements}\"}}");
         let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-        ws.send(Message::Text(json.to_string())).unwrap();
+        ws.send(Message::Text(json.to_string().into())).unwrap();
 
         // Discard the CommandStarting message
         let _ = ws.read().unwrap();
@@ -1875,7 +1974,7 @@ fn test_ws_passes_options() {
     // set from the options map we passed with the auth.
     let json = "{\"query\":\"SHOW application_name;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();
@@ -1930,7 +2029,7 @@ fn test_ws_subscribe_no_crash() {
     let query = "SUBSCRIBE (SELECT 1)";
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     // Give the server time to crash, if it's going to.
     std::thread::sleep(Duration::from_secs(1))
@@ -2114,7 +2213,7 @@ fn test_max_connections_on_all_interfaces() {
         let (mut ws, _resp) = tungstenite::connect(ws_url.clone()).unwrap();
         let err = test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap_err();
         assert_contains!(
-            err.to_string(),
+            err.to_string_with_causes(),
             "creating connection would violate max_connections limit (desired: 2, limit: 2, current: 1)"
         );
     }
@@ -2143,7 +2242,7 @@ fn test_max_connections_on_all_interfaces() {
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = format!("{{\"query\":\"{query}\"}}");
     let json: serde_json::Value = serde_json::from_str(&json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     // The specific error isn't forwarded to the client, the connection is just closed.
     match ws.read() {
@@ -2156,11 +2255,11 @@ fn test_max_connections_on_all_interfaces() {
                 ws.read().unwrap(),
                 Message::Text(format!(
                     r#"{{"type":"Rows","payload":{{"columns":[{{"name":"{UNKNOWN_COLUMN_NAME}","type_oid":23,"type_len":4,"type_mod":-1}}]}}}}"#
-                ))
+                ).into())
             );
             assert_eq!(
                 ws.read().unwrap(),
-                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string())
+                Message::Text("{\"type\":\"Row\",\"payload\":[\"1\"]}".to_string().into())
             );
             tracing::info!("data: {:?}", ws.read().unwrap());
         }
@@ -2206,7 +2305,7 @@ fn test_max_connections_on_all_interfaces() {
         panic!("unexpected success connecting to server");
     };
     assert_contains!(
-        failure.to_string(),
+        failure.to_string_with_causes(),
         "creating connection would violate max_connections limit (desired: 7, limit: 2, current: 6)"
     );
 }
@@ -2307,7 +2406,7 @@ async fn test_max_connections_limits() {
         connect_regular_user()
             .await
             .expect_err("connect should fail")
-            .to_string(),
+            .to_string_with_causes(),
         "creating connection would violate max_connections limit"
     );
 
@@ -2320,7 +2419,7 @@ async fn test_max_connections_limits() {
         connect_regular_user()
             .await
             .expect_err("connect should fail")
-            .to_string(),
+            .to_string_with_causes(),
         "creating connection would violate max_connections limit"
     );
 
@@ -2337,7 +2436,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2345,7 +2444,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2360,7 +2459,7 @@ async fn test_max_connections_limits() {
             connect_external_admin()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2379,7 +2478,7 @@ async fn test_max_connections_limits() {
             connect_regular_user()
                 .await
                 .expect_err("connect should fail")
-                .to_string(),
+                .to_string_with_causes(),
             "creating connection would violate max_connections limit"
         );
 
@@ -2393,7 +2492,7 @@ async fn test_max_connections_limits() {
             let client = match connect_regular_user().await {
                 Err(e) => {
                     assert_contains!(
-                        e.to_string(),
+                        e.to_string_with_causes(),
                         "creating connection would violate max_connections limit"
                     );
                     return Err(());
@@ -2593,7 +2692,11 @@ fn test_internal_ws_auth() {
     // Auth with OptionsOnly
     test_util::auth_with_ws_impl(
         &mut ws,
-        Message::Text(serde_json::to_string(&WebSocketAuth::OptionsOnly { options }).unwrap()),
+        Message::Text(
+            serde_json::to_string(&WebSocketAuth::OptionsOnly { options })
+                .unwrap()
+                .into(),
+        ),
     )
     .unwrap();
 
@@ -2601,7 +2704,7 @@ fn test_internal_ws_auth() {
     // set from the headers passed with the websocket request.
     let json = "{\"query\":\"SELECT current_user;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();
@@ -2768,7 +2871,7 @@ fn test_cancel_ws() {
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
     let json = r#"{"queries":[{"query":"SUBSCRIBE t"}]}"#;
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     loop {
         let msg = ws.read().unwrap();
@@ -2970,7 +3073,7 @@ fn test_invalid_webhook_body() {
 
     // No matter what is in the body, we should always succeed.
     let mut data = [0u8; 128];
-    rand::thread_rng().fill_bytes(&mut data);
+    rand::rng().fill_bytes(&mut data);
     println!("Random bytes: {data:?}");
     let resp = http_client
         .post(webhook_url)
@@ -3057,10 +3160,10 @@ fn test_github_20262() {
 
     let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
     test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
-    ws.send(Message::Text(subscribe)).unwrap();
+    ws.send(Message::Text(subscribe.into())).unwrap();
     cancel();
-    ws.send(Message::Text(commit)).unwrap();
-    ws.send(Message::Text(select)).unwrap();
+    ws.send(Message::Text(commit.into())).unwrap();
+    ws.send(Message::Text(select.into())).unwrap();
 
     let mut expect = VecDeque::from([
         r#"{"type":"CommandStarting","payload":{"has_rows":true,"is_streaming":true}}"#.to_string(),
@@ -3119,7 +3222,7 @@ fn test_cancel_read_then_write() {
                     .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
                     .unwrap_err();
                 assert_contains!(
-                    err.to_string(),
+                    err.to_string_with_causes(),
                     "statement timeout"
                 );
                 client1
@@ -3130,7 +3233,7 @@ fn test_cancel_read_then_write() {
                 .batch_execute("insert into foo values ('blah', 1);")
                 .unwrap_err();
                 assert_contains!(
-                    err.to_string(),
+                    err.to_string_with_causes(),
                     "canceling statement"
                 );
             });
@@ -3343,14 +3446,10 @@ async fn webhook_concurrent_actions() {
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     // Stop the threads.
     keep_sending.store(false, std::sync::atomic::Ordering::Relaxed);
-    let results = poster.await.expect("thread panicked!");
+    let results = poster.await;
 
     // Inspect the results.
-    let mut results = results
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("no join failures")
-        .into_iter();
+    let mut results = results.into_iter().collect::<Vec<_>>().into_iter();
 
     for _ in 0..num_requests_before_drop {
         let response = results.next().expect("element");
@@ -3463,8 +3562,7 @@ fn webhook_concurrency_limit() {
     }
     let results = server
         .runtime()
-        .block_on(futures::future::try_join_all(handles))
-        .expect("failed to wait for requests");
+        .block_on(futures::future::join_all(handles));
 
     let successes = results
         .iter()
@@ -3903,6 +4001,18 @@ async fn test_github_25388() {
     server
         .enable_feature_flags(&["unsafe_enable_unsafe_functions"])
         .await;
+
+    // TODO(peek-seq) The second part of this test no longer works with the new peek sequencing,
+    // because we no longer check the catalog after optimization whether the original dependencies
+    // still exist. This might be fine, because nothing bad happens: timestamp determination already
+    // puts a a read hold on the index, so the index doesn't actually gets dropped in the
+    // Controller, and therefore the peek actually succeeds. In other words, the old peek
+    // sequencing's dependency check was overly cautious. I'm planning to revisit this later, and
+    // probably delete the second part of the test.
+    server
+        .disable_feature_flags(&["enable_frontend_peek_sequencing"])
+        .await;
+
     let client1 = server.connect().await.unwrap();
 
     client1
@@ -3933,8 +4043,14 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
-                Err(err) => Err(err.to_string()),
+                Err(err)
+                    if err
+                        .to_string_with_causes()
+                        .contains("dependency was removed") =>
+                {
+                    Ok(())
+                }
+                Err(err) => Err(err.to_string_with_causes()),
             }
         })
         .await
@@ -3962,8 +4078,14 @@ async fn test_github_25388() {
                 .await
             {
                 Ok(_) => Err("unexpected query success".to_string()),
-                Err(err) if err.to_string().contains("dependency was removed") => Ok(()),
-                Err(err) => Err(err.to_string()),
+                Err(err)
+                    if err
+                        .to_string_with_causes()
+                        .contains("dependency was removed") =>
+                {
+                    Ok(())
+                }
+                Err(err) => Err(err.to_string_with_causes()),
             }
         })
         .await
@@ -4353,7 +4475,7 @@ async fn test_double_encoded_json() {
 
     let json = "{\"query\":\"SELECT a FROM t1 ORDER BY a;\"}";
     let json: serde_json::Value = serde_json::from_str(json).unwrap();
-    ws.send(Message::Text(json.to_string())).unwrap();
+    ws.send(Message::Text(json.to_string().into())).unwrap();
 
     let mut read_msg = || -> WebSocketResponse {
         let msg = ws.read().unwrap();

@@ -42,6 +42,7 @@ where
     /// Consumes the collection and returns its only element.
     ///
     /// This method panics if the collection does not have exactly one element.
+    #[track_caller]
     fn into_element(self) -> T::Item {
         self.expect_element(|| "into_element called on collection without exactly one element")
     }
@@ -57,14 +58,17 @@ impl<T> CollectionExt<T> for T
 where
     T: IntoIterator,
 {
+    #[track_caller]
     fn into_first(self) -> T::Item {
         self.into_iter().next().unwrap()
     }
 
+    #[track_caller]
     fn into_last(self) -> T::Item {
         self.into_iter().last().unwrap()
     }
 
+    #[track_caller]
     fn expect_element<Err: Display>(self, msg_fn: impl FnOnce() -> Err) -> T::Item {
         let mut iter = self.into_iter();
         match (iter.next(), iter.next()) {

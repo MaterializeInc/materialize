@@ -11,7 +11,7 @@ rows:
     "RTO (RF2 - multiple AZs)": |
       N/A
 
-    Notes: |
+    Notes: ""
 
   - "Failure Type": "**Single AZ failure**"
     "RPO": N/A

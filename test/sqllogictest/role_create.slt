@@ -128,6 +128,13 @@ GRANT CREATECLUSTER ON SYSTEM TO regress_createcluster;
 ----
 COMPLETE 0
 
+# We disable password auth to make sure we error in cloud like
+# we expect.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_password_auth = false
+----
+COMPLETE 0
+
 simple conn=regress_role_admin,user=regress_role_admin
 ALTER ROLE regress_createcluster NOCREATECLUSTER;
 ----

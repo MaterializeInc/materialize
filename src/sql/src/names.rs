@@ -9,6 +9,7 @@
 
 //! Structured name types for SQL objects.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::str::FromStr;
@@ -1761,20 +1762,36 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 print_id: _,
             } => {
                 let item = self.catalog.get_item(id).at_version(*version);
-                let desc = match item.desc(full_name) {
-                    Ok(desc) => desc,
-                    Err(e) => {
-                        if self.status.is_ok() {
-                            self.status = Err(e.into());
+                let name = normalize::column_name(column_name.column.clone());
+
+                let maybe_desc = match item.type_details() {
+                    Some(details) => match details.typ.desc(self.catalog) {
+                        Ok(desc) => desc.map(Cow::Owned),
+                        Err(e) => {
+                            if self.status.is_ok() {
+                                self.status = Err(e);
+                            }
+                            return ast::ColumnName {
+                                relation: ResolvedItemName::Error,
+                                column: ResolvedColumnReference::Error,
+                            };
                         }
-                        return ast::ColumnName {
-                            relation: ResolvedItemName::Error,
-                            column: ResolvedColumnReference::Error,
-                        };
+                    },
+                    None => item.relation_desc(),
+                };
+                let Some(desc) = maybe_desc else {
+                    if self.status.is_ok() {
+                        self.status = Err(PlanError::ItemWithoutColumns {
+                            name: full_name.to_string(),
+                            item_type: item.item_type(),
+                        });
                     }
+                    return ast::ColumnName {
+                        relation: ResolvedItemName::Error,
+                        column: ResolvedColumnReference::Error,
+                    };
                 };
 
-                let name = normalize::column_name(column_name.column.clone());
                 let Some((index, _typ)) = desc.get_by_name(&name) else {
                     if self.status.is_ok() {
                         let similar = desc.iter_similar_names(&name).cloned().collect();
@@ -1840,6 +1857,21 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
                 return ResolvedSchemaName::Error;
             }
         };
+
+        // Special case for mz_temp: with lazy temporary schema creation, the temp
+        // schema may not exist yet. Return a resolved name with SchemaSpecifier::Temporary
+        // so that downstream code can handle it appropriately (e.g., return a proper error).
+        if norm_name.database.is_none() && norm_name.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+            return ResolvedSchemaName::Schema {
+                database_spec: ResolvedDatabaseSpecifier::Ambient,
+                schema_spec: SchemaSpecifier::Temporary,
+                full_name: FullSchemaName {
+                    database: RawDatabaseSpecifier::Ambient,
+                    schema: mz_repr::namespaces::MZ_TEMP_SCHEMA.to_string(),
+                },
+            };
+        }
+
         match self
             .catalog
             .resolve_schema(norm_name.database.as_deref(), norm_name.schema.as_str())

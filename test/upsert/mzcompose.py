@@ -17,7 +17,7 @@ Test Kafka Upsert sources using Testdrive.
 import os
 from textwrap import dedent
 
-from materialize import ci_util
+from materialize import MZ_ROOT, ci_util
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -151,7 +151,7 @@ def workflow_testdrive(c: Composition, parser: WorkflowArgumentParser) -> None:
                 file,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(f"test/upsert/{junit_report}")
+            os.remove(MZ_ROOT / "test" / "upsert" / junit_report)
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()

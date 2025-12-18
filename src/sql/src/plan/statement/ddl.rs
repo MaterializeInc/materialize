@@ -15,6 +15,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::iter;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use itertools::{Either, Itertools};
@@ -44,42 +45,42 @@ use mz_repr::{
 use mz_sql_parser::ast::{
     self, AlterClusterAction, AlterClusterStatement, AlterConnectionAction, AlterConnectionOption,
     AlterConnectionOptionName, AlterConnectionStatement, AlterIndexAction, AlterIndexStatement,
-    AlterNetworkPolicyStatement, AlterObjectRenameStatement, AlterObjectSwapStatement,
-    AlterRetainHistoryStatement, AlterRoleOption, AlterRoleStatement, AlterSecretStatement,
-    AlterSetClusterStatement, AlterSinkAction, AlterSinkStatement, AlterSourceAction,
-    AlterSourceAddSubsourceOption, AlterSourceAddSubsourceOptionName, AlterSourceStatement,
-    AlterSystemResetAllStatement, AlterSystemResetStatement, AlterSystemSetStatement,
-    AlterTableAddColumnStatement, AvroSchema, AvroSchemaOption, AvroSchemaOptionName,
-    ClusterAlterOption, ClusterAlterOptionName, ClusterAlterOptionValue,
-    ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName, ClusterFeature,
-    ClusterFeatureName, ClusterOption, ClusterOptionName, ClusterScheduleOptionValue, ColumnDef,
-    ColumnOption, CommentObjectType, CommentStatement, ConnectionOption, ConnectionOptionName,
-    ContinualTaskOption, ContinualTaskOptionName, CreateClusterReplicaStatement,
-    CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
-    CreateConnectionStatement, CreateConnectionType, CreateContinualTaskStatement,
-    CreateDatabaseStatement, CreateIndexStatement, CreateMaterializedViewStatement,
-    CreateNetworkPolicyStatement, CreateRoleStatement, CreateSchemaStatement,
-    CreateSecretStatement, CreateSinkConnection, CreateSinkOption, CreateSinkOptionName,
-    CreateSinkStatement, CreateSourceConnection, CreateSourceOption, CreateSourceOptionName,
-    CreateSourceStatement, CreateSubsourceOption, CreateSubsourceOptionName,
-    CreateSubsourceStatement, CreateTableFromSourceStatement, CreateTableStatement, CreateTypeAs,
-    CreateTypeListOption, CreateTypeListOptionName, CreateTypeMapOption, CreateTypeMapOptionName,
-    CreateTypeStatement, CreateViewStatement, CreateWebhookSourceStatement, CsrConfigOption,
-    CsrConfigOptionName, CsrConnection, CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf,
-    CsvColumns, DeferredItemName, DocOnIdentifier, DocOnSchema, DropObjectsStatement,
-    DropOwnedStatement, Expr, Format, FormatSpecifier, IcebergSinkConfigOption, Ident,
-    IfExistsBehavior, IndexOption, IndexOptionName, KafkaSinkConfigOption, KeyConstraint,
-    LoadGeneratorOption, LoadGeneratorOptionName, MaterializedViewOption,
-    MaterializedViewOptionName, MySqlConfigOption, MySqlConfigOptionName, NetworkPolicyOption,
-    NetworkPolicyOptionName, NetworkPolicyRuleDefinition, NetworkPolicyRuleOption,
-    NetworkPolicyRuleOptionName, PgConfigOption, PgConfigOptionName, ProtobufSchema,
-    QualifiedReplica, RefreshAtOptionValue, RefreshEveryOptionValue, RefreshOptionValue,
-    ReplicaDefinition, ReplicaOption, ReplicaOptionName, RoleAttribute, SetRoleVar,
-    SourceErrorPolicy, SourceIncludeMetadata, SqlServerConfigOption, SqlServerConfigOptionName,
-    Statement, TableConstraint, TableFromSourceColumns, TableFromSourceOption,
-    TableFromSourceOptionName, TableOption, TableOptionName, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName, Value, ViewDefinition,
-    WithOptionValue,
+    AlterMaterializedViewApplyReplacementStatement, AlterNetworkPolicyStatement,
+    AlterObjectRenameStatement, AlterObjectSwapStatement, AlterRetainHistoryStatement,
+    AlterRoleOption, AlterRoleStatement, AlterSecretStatement, AlterSetClusterStatement,
+    AlterSinkAction, AlterSinkStatement, AlterSourceAction, AlterSourceAddSubsourceOption,
+    AlterSourceAddSubsourceOptionName, AlterSourceStatement, AlterSystemResetAllStatement,
+    AlterSystemResetStatement, AlterSystemSetStatement, AlterTableAddColumnStatement, AvroSchema,
+    AvroSchemaOption, AvroSchemaOptionName, ClusterAlterOption, ClusterAlterOptionName,
+    ClusterAlterOptionValue, ClusterAlterUntilReadyOption, ClusterAlterUntilReadyOptionName,
+    ClusterFeature, ClusterFeatureName, ClusterOption, ClusterOptionName,
+    ClusterScheduleOptionValue, ColumnDef, ColumnOption, CommentObjectType, CommentStatement,
+    ConnectionOption, ConnectionOptionName, ContinualTaskOption, ContinualTaskOptionName,
+    CreateClusterReplicaStatement, CreateClusterStatement, CreateConnectionOption,
+    CreateConnectionOptionName, CreateConnectionStatement, CreateConnectionType,
+    CreateContinualTaskStatement, CreateDatabaseStatement, CreateIndexStatement,
+    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
+    CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
+    CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
+    CreateWebhookSourceStatement, CsrConfigOption, CsrConfigOptionName, CsrConnection,
+    CsrConnectionAvro, CsrConnectionProtobuf, CsrSeedProtobuf, CsvColumns, DeferredItemName,
+    DocOnIdentifier, DocOnSchema, DropObjectsStatement, DropOwnedStatement, Expr, Format,
+    FormatSpecifier, IcebergSinkConfigOption, Ident, IfExistsBehavior, IndexOption,
+    IndexOptionName, KafkaSinkConfigOption, KeyConstraint, LoadGeneratorOption,
+    LoadGeneratorOptionName, MaterializedViewOption, MaterializedViewOptionName, MySqlConfigOption,
+    MySqlConfigOptionName, NetworkPolicyOption, NetworkPolicyOptionName,
+    NetworkPolicyRuleDefinition, NetworkPolicyRuleOption, NetworkPolicyRuleOptionName,
+    PgConfigOption, PgConfigOptionName, ProtobufSchema, QualifiedReplica, RefreshAtOptionValue,
+    RefreshEveryOptionValue, RefreshOptionValue, ReplicaDefinition, ReplicaOption,
+    ReplicaOptionName, RoleAttribute, SetRoleVar, SourceErrorPolicy, SourceIncludeMetadata,
+    SqlServerConfigOption, SqlServerConfigOptionName, Statement, TableConstraint,
+    TableFromSourceColumns, TableFromSourceOption, TableFromSourceOptionName, TableOption,
+    TableOptionName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName, Value, ViewDefinition, WithOptionValue,
 };
 use mz_sql_parser::ident;
 use mz_sql_parser::parser::StatementParseResult;
@@ -129,7 +130,7 @@ use crate::catalog::{
 use crate::iceberg::IcebergSinkConfigOptionExtracted;
 use crate::kafka_util::{KafkaSinkConfigOptionExtracted, KafkaSourceConfigOptionExtracted};
 use crate::names::{
-    Aug, CommentObjectId, DatabaseId, ObjectId, PartialItemName, QualifiedItemName,
+    Aug, CommentObjectId, DatabaseId, DependencyIds, ObjectId, PartialItemName, QualifiedItemName,
     ResolvedClusterName, ResolvedColumnReference, ResolvedDataType, ResolvedDatabaseSpecifier,
     ResolvedItemName, ResolvedNetworkPolicyName, SchemaSpecifier, SystemObjectId,
 };
@@ -147,21 +148,21 @@ use crate::plan::with_options::{OptionalDuration, OptionalString, TryFromValue};
 use crate::plan::{
     AlterClusterPlan, AlterClusterPlanStrategy, AlterClusterRenamePlan,
     AlterClusterReplicaRenamePlan, AlterClusterSwapPlan, AlterConnectionPlan, AlterItemRenamePlan,
-    AlterNetworkPolicyPlan, AlterNoopPlan, AlterOptionParameter, AlterRetainHistoryPlan,
-    AlterRolePlan, AlterSchemaRenamePlan, AlterSchemaSwapPlan, AlterSecretPlan,
-    AlterSetClusterPlan, AlterSinkPlan, AlterSystemResetAllPlan, AlterSystemResetPlan,
-    AlterSystemSetPlan, AlterTablePlan, ClusterSchedule, CommentPlan, ComputeReplicaConfig,
-    ComputeReplicaIntrospectionConfig, ConnectionDetails, CreateClusterManagedPlan,
-    CreateClusterPlan, CreateClusterReplicaPlan, CreateClusterUnmanagedPlan, CreateClusterVariant,
-    CreateConnectionPlan, CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan,
-    CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan,
-    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
-    CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index,
-    MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan,
-    PlanClusterOption, PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink,
-    Source, Table, TableDataSource, Type, VariableValue, View, WebhookBodyFormat,
-    WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal, plan_utils, query,
-    transform_ast,
+    AlterMaterializedViewApplyReplacementPlan, AlterNetworkPolicyPlan, AlterNoopPlan,
+    AlterOptionParameter, AlterRetainHistoryPlan, AlterRolePlan, AlterSchemaRenamePlan,
+    AlterSchemaSwapPlan, AlterSecretPlan, AlterSetClusterPlan, AlterSinkPlan,
+    AlterSystemResetAllPlan, AlterSystemResetPlan, AlterSystemSetPlan, AlterTablePlan,
+    ClusterSchedule, CommentPlan, ComputeReplicaConfig, ComputeReplicaIntrospectionConfig,
+    ConnectionDetails, CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
+    CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan,
+    CreateContinualTaskPlan, CreateDatabasePlan, CreateIndexPlan, CreateMaterializedViewPlan,
+    CreateNetworkPolicyPlan, CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan,
+    CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc,
+    DropObjectsPlan, DropOwnedPlan, HirRelationExpr, Index, MaterializedView, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, Plan, PlanClusterOption, PlanNotice,
+    PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type,
+    VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders,
+    WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_CLUSTER_SCHEDULE_REFRESH, ENABLE_COLLECTION_PARTITION_BY,
@@ -2928,7 +2929,7 @@ pub fn plan_create_materialized_view(
                 scx,
                 ObjectType::MaterializedView,
                 if_exists,
-                partial_name.into(),
+                partial_name.clone().into(),
                 cascade,
             )?;
 
@@ -2961,11 +2962,42 @@ pub fn plan_create_materialized_view(
                 .collect()
         })
         .unwrap_or_default();
-    let dependencies = expr
+    let mut dependencies: BTreeSet<_> = expr
         .depends_on()
         .into_iter()
         .map(|gid| scx.catalog.resolve_item_id(&gid))
         .collect();
+
+    // Validate the replacement target, if one is given.
+    let mut replacement_target = None;
+    if let Some(target_name) = &stmt.replacing {
+        scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
+
+        let target = scx.get_item_by_resolved_name(target_name)?;
+        if target.item_type() != CatalogItemType::MaterializedView {
+            return Err(PlanError::InvalidReplacement {
+                item_type: target.item_type(),
+                item_name: scx.catalog.minimal_qualification(target.name()),
+                replacement_type: CatalogItemType::MaterializedView,
+                replacement_name: partial_name,
+            });
+        }
+        if target.id().is_system() {
+            sql_bail!(
+                "cannot replace {} because it is required by the database system",
+                scx.catalog.minimal_qualification(target.name()),
+            );
+        }
+
+        if !dependencies.insert(target.id()) {
+            sql_bail!(
+                "cannot replace {} because it is also a dependency",
+                scx.catalog.minimal_qualification(target.name()),
+            );
+        }
+
+        replacement_target = Some(target.id());
+    }
 
     // Check for an object in the catalog with this same name
     let full_name = scx.catalog.resolve_full_name(&name);
@@ -2986,8 +3018,9 @@ pub fn plan_create_materialized_view(
         materialized_view: MaterializedView {
             create_sql,
             expr,
-            dependencies,
+            dependencies: DependencyIds(dependencies),
             column_names,
+            replacement_target,
             cluster_id,
             non_null_assertions,
             compaction_window,
@@ -3089,8 +3122,8 @@ pub fn plan_create_continual_task(
                     // guess that the CT has the same shape as the input. It's
                     // fine if this is wrong, we'll get an error below after
                     // planning the query.
-                    let input_name = scx.catalog.resolve_full_name(input.name());
-                    input.desc(&input_name)?.into_owned()
+                    let desc = input.relation_desc().expect("item type checked above");
+                    desc.into_owned()
                 }
             };
             qcx.ctes.insert(
@@ -3237,6 +3270,7 @@ pub fn plan_create_continual_task(
             expr,
             dependencies,
             column_names,
+            replacement_target: None,
             cluster_id,
             non_null_assertions: Vec::new(),
             compaction_window: None,
@@ -3375,10 +3409,26 @@ fn plan_sink(
 
     let from_name = &from;
     let from = scx.get_item_by_resolved_name(&from)?;
+
+    {
+        use CatalogItemType::*;
+        match from.item_type() {
+            Table | Source | MaterializedView | ContinualTask => {}
+            Sink | View | Index | Type | Func | Secret | Connection => {
+                let name = scx.catalog.minimal_qualification(from.name());
+                return Err(PlanError::InvalidSinkFrom {
+                    name: name.to_string(),
+                    item_type: from.item_type(),
+                });
+            }
+        }
+    }
+
     if from.id().is_system() {
         bail_unsupported!("creating a sink directly on a catalog object");
     }
-    let desc = from.desc(&scx.catalog.resolve_full_name(from.name()))?;
+
+    let desc = from.relation_desc().expect("item type checked above");
     let key_indices = match &connection {
         CreateSinkConnection::Kafka { key: Some(key), .. }
         | CreateSinkConnection::Iceberg { key: Some(key), .. } => {
@@ -3499,6 +3549,14 @@ fn plan_sink(
         return Err(PlanError::UpsertSinkWithoutKey);
     }
 
+    let CreateSinkOptionExtracted {
+        snapshot,
+        version,
+        partition_strategy: _,
+        seen: _,
+        commit_interval,
+    } = with_options.try_into()?;
+
     let connection_builder = match connection {
         CreateSinkConnection::Kafka {
             connection,
@@ -3515,6 +3573,7 @@ fn plan_sink(
             desc.into_owned(),
             envelope,
             from.id(),
+            commit_interval,
         )?,
         CreateSinkConnection::Iceberg {
             connection,
@@ -3528,16 +3587,9 @@ fn plan_sink(
             options,
             relation_key_indices,
             key_desc_and_indices,
+            commit_interval,
         )?,
     };
-
-    let CreateSinkOptionExtracted {
-        snapshot,
-        version,
-        partition_strategy: _,
-        seen: _,
-        commit_interval: _,
-    } = with_options.try_into()?;
 
     // WITH SNAPSHOT defaults to true
     let with_snapshot = snapshot.unwrap_or(true);
@@ -3558,6 +3610,7 @@ fn plan_sink(
             connection: connection_builder,
             envelope,
             version,
+            commit_interval,
         },
         with_snapshot,
         if_not_exists,
@@ -3704,6 +3757,7 @@ fn iceberg_sink_builder(
     options: Vec<IcebergSinkConfigOption<Aug>>,
     relation_key_indices: Option<Vec<usize>>,
     key_desc_and_indices: Option<(RelationDesc, Vec<usize>)>,
+    commit_interval: Option<Duration>,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     scx.require_feature_flag(&vars::ENABLE_ICEBERG_SINK)?;
     let catalog_connection_item = scx.get_item_by_resolved_name(&catalog_connection)?;
@@ -3745,6 +3799,9 @@ fn iceberg_sink_builder(
     let Some(namespace) = namespace else {
         sql_bail!("Iceberg sink must specify NAMESPACE");
     };
+    if commit_interval.is_none() {
+        sql_bail!("Iceberg sink must specify COMMIT INTERVAL");
+    }
 
     Ok(StorageSinkConnection::Iceberg(IcebergSinkConnection {
         catalog_connection_id,
@@ -3769,6 +3826,7 @@ fn kafka_sink_builder(
     value_desc: RelationDesc,
     envelope: SinkEnvelope,
     sink_from: CatalogItemId,
+    commit_interval: Option<Duration>,
 ) -> Result<StorageSinkConnection<ReferencedConnection>, PlanError> {
     // Get Kafka connection.
     let connection_item = scx.get_item_by_resolved_name(&connection)?;
@@ -3780,6 +3838,10 @@ fn kafka_sink_builder(
             scx.catalog.resolve_full_name(connection_item.name())
         ),
     };
+
+    if commit_interval.is_some() {
+        sql_bail!("COMMIT INTERVAL option is not supported with KAFKA sinks");
+    }
 
     let KafkaSinkConfigOptionExtracted {
         topic,
@@ -4075,16 +4137,14 @@ pub fn plan_create_index(
         )
     }
 
-    let on_desc = on.desc(&scx.catalog.resolve_full_name(on.name()))?;
+    let on_desc = on.relation_desc().expect("item type checked above");
 
     let filled_key_parts = match key_parts {
         Some(kp) => kp.to_vec(),
         None => {
             // `key_parts` is None if we're creating a "default" index.
-            on.desc(&scx.catalog.resolve_full_name(on.name()))?
-                .typ()
-                .default_key()
-                .iter()
+            let key = on_desc.typ().default_key();
+            key.iter()
                 .map(|i| match on_desc.get_unambiguous_name(*i) {
                     Some(n) => Expr::Identifier(vec![n.clone().into()]),
                     _ => Expr::Value(Value::Number((i + 1).to_string())),
@@ -4337,6 +4397,7 @@ pub enum PlannedAlterRoleOption {
 pub struct PlannedRoleAttributes {
     pub inherit: Option<bool>,
     pub password: Option<Password>,
+    pub scram_iterations: Option<NonZeroU32>,
     /// `nopassword` is set to true if the password is from the parser is None.
     /// This is semantically different than not supplying a password at all,
     /// to allow for unsetting a password.
@@ -4345,10 +4406,14 @@ pub struct PlannedRoleAttributes {
     pub login: Option<bool>,
 }
 
-fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttributes, PlanError> {
+fn plan_role_attributes(
+    options: Vec<RoleAttribute>,
+    scx: &StatementContext,
+) -> Result<PlannedRoleAttributes, PlanError> {
     let mut planned_attributes = PlannedRoleAttributes {
         inherit: None,
         password: None,
+        scram_iterations: None,
         superuser: None,
         login: None,
         nopassword: None,
@@ -4391,6 +4456,8 @@ fn plan_role_attributes(options: Vec<RoleAttribute>) -> Result<PlannedRoleAttrib
             RoleAttribute::Password(password) => {
                 if let Some(password) = password {
                     planned_attributes.password = Some(password.into());
+                    planned_attributes.scram_iterations =
+                        Some(scx.catalog.system_vars().scram_iterations())
                 } else {
                     planned_attributes.nopassword = Some(true);
                 }
@@ -4464,10 +4531,10 @@ pub fn describe_create_role(
 }
 
 pub fn plan_create_role(
-    _: &StatementContext,
+    scx: &StatementContext,
     CreateRoleStatement { name, options }: CreateRoleStatement,
 ) -> Result<Plan, PlanError> {
-    let attributes = plan_role_attributes(options)?;
+    let attributes = plan_role_attributes(options, scx)?;
     Ok(Plan::CreateRole(CreateRolePlan {
         name: normalize::ident(name),
         attributes: attributes.into(),
@@ -5412,6 +5479,14 @@ fn plan_drop_schema(
     name: &UnresolvedSchemaName,
     cascade: bool,
 ) -> Result<Option<(ResolvedDatabaseSpecifier, SchemaSpecifier)>, PlanError> {
+    // Special case for mz_temp: with lazy temporary schema creation, the temp
+    // schema may not exist yet, but we still need to return the correct error.
+    // Check the schema name directly against MZ_TEMP_SCHEMA.
+    let normalized = normalize::unresolved_schema_name(name.clone())?;
+    if normalized.database.is_none() && normalized.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+        sql_bail!("cannot drop schema {name} because it is a temporary schema",)
+    }
+
     Ok(match resolve_schema(scx, name.clone(), if_exists)? {
         Some((database_spec, schema_spec)) => {
             if let ResolvedDatabaseSpecifier::Ambient = database_spec {
@@ -6396,6 +6471,17 @@ pub fn plan_alter_schema_rename(
     to_schema_name: Ident,
     if_exists: bool,
 ) -> Result<Plan, PlanError> {
+    // Special case for mz_temp: with lazy temporary schema creation, the temp
+    // schema may not exist yet, but we still need to return the correct error.
+    // Check the schema name directly against MZ_TEMP_SCHEMA.
+    let normalized = normalize::unresolved_schema_name(name.clone())?;
+    if normalized.database.is_none() && normalized.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+        sql_bail!(
+            "cannot rename schemas in the ambient database: {:?}",
+            mz_repr::namespaces::MZ_TEMP_SCHEMA
+        );
+    }
+
     let Some((db_spec, schema_spec)) = resolve_schema(scx, name.clone(), if_exists)? else {
         let object_type = ObjectType::Schema;
         scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
@@ -6436,6 +6522,20 @@ pub fn plan_alter_schema_swap<F>(
 where
     F: Fn(&dyn Fn(&str) -> bool) -> Result<String, PlanError>,
 {
+    // Special case for mz_temp: with lazy temporary schema creation, the temp
+    // schema may not exist yet, but we still need to return the correct error.
+    // Check the schema name directly against MZ_TEMP_SCHEMA.
+    let normalized_a = normalize::unresolved_schema_name(name_a.clone())?;
+    if normalized_a.database.is_none() && normalized_a.schema == mz_repr::namespaces::MZ_TEMP_SCHEMA
+    {
+        sql_bail!("cannot swap schemas that are in the ambient database");
+    }
+    // Also check name_b (the target schema name)
+    let name_b_str = normalize::ident_ref(&name_b);
+    if name_b_str == mz_repr::namespaces::MZ_TEMP_SCHEMA {
+        sql_bail!("cannot swap schemas that are in the ambient database");
+    }
+
     let schema_a = scx.resolve_schema(name_a.clone())?;
 
     let db_spec = schema_a.database().clone();
@@ -7213,12 +7313,12 @@ pub fn describe_alter_role(
 }
 
 pub fn plan_alter_role(
-    _scx: &StatementContext,
+    scx: &StatementContext,
     AlterRoleStatement { name, option }: AlterRoleStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let option = match option {
         AlterRoleOption::Attributes(attrs) => {
-            let attrs = plan_role_attributes(attrs)?;
+            let attrs = plan_role_attributes(attrs, scx)?;
             PlannedAlterRoleOption::Attributes(attrs)
         }
         AlterRoleOption::Variable(variable) => {
@@ -7262,7 +7362,7 @@ pub fn plan_alter_table_add_column(
                 // Always add columns to the latest version of the item.
                 let item_name = scx.catalog.resolve_full_name(item.name());
                 let item = item.at_version(RelationVersionSelector::Latest);
-                let desc = item.desc(&item_name)?.into_owned();
+                let desc = item.relation_desc().expect("table has desc").into_owned();
                 (item.id(), item_name, desc)
             }
             None => {
@@ -7302,6 +7402,54 @@ pub fn plan_alter_table_add_column(
         column_type,
         raw_sql_type,
     }))
+}
+
+pub fn describe_alter_materialized_view_apply_replacement(
+    _: &StatementContext,
+    _: AlterMaterializedViewApplyReplacementStatement,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+pub fn plan_alter_materialized_view_apply_replacement(
+    scx: &StatementContext,
+    stmt: AlterMaterializedViewApplyReplacementStatement,
+) -> Result<Plan, PlanError> {
+    let AlterMaterializedViewApplyReplacementStatement {
+        if_exists,
+        name,
+        replacement_name,
+    } = stmt;
+
+    scx.require_feature_flag(&vars::ENABLE_REPLACEMENT_MATERIALIZED_VIEWS)?;
+
+    let object_type = ObjectType::MaterializedView;
+    let Some(mv) = resolve_item_or_type(scx, object_type, name.clone(), if_exists)? else {
+        scx.catalog.add_notice(PlanNotice::ObjectDoesNotExist {
+            name: name.to_ast_string_simple(),
+            object_type,
+        });
+        return Ok(Plan::AlterNoop(AlterNoopPlan { object_type }));
+    };
+
+    let replacement = resolve_item_or_type(scx, object_type, replacement_name, false)?
+        .expect("if_exists not set");
+
+    if replacement.replacement_target() != Some(mv.id()) {
+        return Err(PlanError::InvalidReplacement {
+            item_type: mv.item_type(),
+            item_name: scx.catalog.minimal_qualification(mv.name()),
+            replacement_type: replacement.item_type(),
+            replacement_name: scx.catalog.minimal_qualification(replacement.name()),
+        });
+    }
+
+    Ok(Plan::AlterMaterializedViewApplyReplacement(
+        AlterMaterializedViewApplyReplacementPlan {
+            id: mv.id(),
+            replacement_id: replacement.id(),
+        },
+    ))
 }
 
 pub fn describe_comment(
@@ -7428,10 +7576,21 @@ pub fn plan_comment(
         CommentObjectType::Database { name } => {
             (CommentObjectId::Database(*name.database_id()), None)
         }
-        CommentObjectType::Schema { name } => (
-            CommentObjectId::Schema((*name.database_spec(), *name.schema_spec())),
-            None,
-        ),
+        CommentObjectType::Schema { name } => {
+            // Temporary schemas cannot have comments - they are connection-specific
+            // and transient. With lazy temporary schema creation, the temp schema
+            // may not exist yet, but we still need to return the correct error.
+            if matches!(name.schema_spec(), SchemaSpecifier::Temporary) {
+                sql_bail!(
+                    "cannot comment on schema {} because it is a temporary schema",
+                    mz_repr::namespaces::MZ_TEMP_SCHEMA
+                );
+            }
+            (
+                CommentObjectId::Schema((*name.database_spec(), *name.schema_spec())),
+                None,
+            )
+        }
         CommentObjectType::Cluster { name } => (CommentObjectId::Cluster(name.id), None),
         CommentObjectType::ClusterReplica { name } => {
             let replica = scx.catalog.resolve_cluster_replica(name)?;

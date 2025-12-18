@@ -17,6 +17,9 @@ bench = false
 anyhow = "1.0.100"
 async-stream = "0.3.6"
 async-trait = "0.1.89"
+aws-credential-types = { version = "1.2.7", features = ["hardcoded-credentials"] }
+aws-sdk-sts = { version = "1.41.0", default-features = false, features = ["rt-tokio"] }
+arrow = { version = "55.2.0", default-features = false }
 bytes = { version = "1.10.1", features = ["serde"] }
 bytesize = "2.1.0"
 bincode = "1"
@@ -26,14 +29,16 @@ columnation = "0.1.0"
 crossbeam-channel = "0.5.15"
 csv-core = { version = "0.1.13" }
 dec = "0.4.8"
-differential-dataflow = "0.17.0"
+differential-dataflow = "0.18.0"
 fail = { version = "0.5.1", features = ["failpoints"] }
 futures = "0.3.31"
+iceberg = "0.7.0"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
 itertools = { version = "0.14.0" }
 maplit = "1.0.2"
 mysql_async = { version = "0.36.1", default-features = false, features = ["minimal", "binlog"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["chrono"] }
+mz-arrow-util = { path = "../arrow-util" }
 mz-build-info = { path = "../build-info" }
 mz-ccsr = { path = "../ccsr" }
 mz-cluster-client = { path = "../cluster-client" }
@@ -60,44 +65,48 @@ mz-storage-operators = { path = "../storage-operators" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
+parquet = { version = "55.2.0", default-features = false, features = ["arrow", "brotli", "flate2", "snap", "lz4", "zstd"] }
 pin-project = "1.1.10"
 postgres-replication = { version = "0.6.7" }
 prometheus = { version = "0.14.0", default-features = false }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
-rand = "0.8.5"
+# Loadgen sources need reproducible randomness, so we need to continue using
+# the old version of `rand`.
+rand-8 = { package = "rand", version = "0.8.5" }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
     "ssl-vendored",
     "libz-static",
     "zstd",
 ] }
-regex = { version = "1.11.3" }
+regex = { version = "1.12.2" }
 rocksdb = { version = "0.24.0", default-features = false, features = ["snappy", "zstd", "lz4"] }
 seahash = "4"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.145" }
 serde_bytes = { version = "0.11.19" }
 sha2 = "0.10.9"
-timely = "0.24.0"
-tokio = { version = "1.44.1", features = ["fs", "rt", "sync", "test-util"] }
-tokio-postgres = { version = "0.7.8", features = ["serde"] }
+timely = "0.25.1"
+tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util"] }
+tokio-postgres = { version = "0.7.15", features = ["serde"] }
 tokio-stream = "0.1.17"
-tokio-util = { version = "0.7.16", features = ["io"] }
-tracing = "0.1.37"
+tokio-util = { version = "0.7.17", features = ["io"] }
+tracing = "0.1.43"
 thiserror = { version = "2.0.17" }
-uuid = { version = "1.18.1", features = ["serde", "v4"] }
+uuid = { version = "1.19.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
+arrow-ipc = "55.2.0"
 
 [dev-dependencies]
 async-trait = "0.1.89"
 axum = "0.7.5"
 clap = { version = "4.5.23", features = ["derive", "env"] }
-humantime = "2.2.0"
+humantime = "2.3.0"
 mz-http-util = { path = "../http-util" }
 mz-orchestrator-tracing = { path = "../orchestrator-tracing" }
 itertools = "0.14.0"
-tempfile = "3.20.0"
-tokio = { version = "1.44.1", features = ["test-util"] }
+tempfile = "3.23.0"
+tokio = { version = "1.48.0", features = ["test-util"] }
 
 [features]
 default = ["workspace-hack"]

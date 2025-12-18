@@ -207,13 +207,17 @@ def workflow_secrets_manager(c: Composition) -> None:
     for tag in expected_tags:
         assert tag in secret_u3["Tags"]
 
+    # Skip until https://github.com/localstack/localstack/issues/13518
+    # is resolved.
     # Check that alter secret gets reflected in Secrets Manager
-    c.sql("ALTER SECRET secret AS 'tops3cret'")
-    assert b"tops3cret" == get_secret_value("u3")
+    # c.sql("ALTER SECRET secret AS 'tops3cret'")
+    # assert b"tops3cret" == get_secret_value("u3")
 
+    # Skip until https://github.com/localstack/localstack/issues/13518
+    # is resolved.
     # Rename should not change the contents in Secrets Manager
-    c.sql("ALTER SECRET secret RENAME TO renamed_secret")
-    assert b"tops3cret" == get_secret_value("u3")
+    # c.sql("ALTER SECRET secret RENAME TO renamed_secret")
+    # assert b"tops3cret" == get_secret_value("u3")
 
     # Ensure secret still exists after a restart (i.e., test that orphaned
     # cleanup doesn't fire incorrectly).
@@ -222,10 +226,12 @@ def workflow_secrets_manager(c: Composition) -> None:
     secrets = list_secrets()
     assert secret_name("u3") in secrets
 
-    c.sql("DROP SECRET renamed_secret")
-    # Check that the file has been deleted from Secrets Manager
-    secrets = list_secrets()
-    assert secret_name("u3") not in secrets
+    # Skip until https://github.com/localstack/localstack/issues/13518
+    # is resolved.
+    # c.sql("DROP SECRET renamed_secret")
+    # # Check that the file has been deleted from Secrets Manager
+    # secrets = list_secrets()
+    # assert secret_name("u3") not in secrets
 
 
 def workflow_aws_connection(c: Composition) -> None:

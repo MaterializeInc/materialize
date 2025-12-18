@@ -119,6 +119,8 @@ impl Client {
         &self,
         version: Option<String>,
         environmentd_extra_args: Vec<String>,
+        environmentd_cpu_allocation: Option<String>,
+        environmentd_memory_allocation: Option<String>,
         cloud_provider: CloudProvider,
     ) -> Result<Region, Error> {
         #[derive(Serialize)]
@@ -128,6 +130,10 @@ impl Client {
             environmentd_image_ref: Option<String>,
             #[serde(skip_serializing_if = "Vec::is_empty")]
             environmentd_extra_args: Vec<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            environmentd_cpu_allocation: Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            environmentd_memory_allocation: Option<String>,
         }
 
         let body = Body {
@@ -136,6 +142,8 @@ impl Client {
                 Some((user, v)) => format!("{user}/environmentd:{v}"),
             }),
             environmentd_extra_args,
+            environmentd_cpu_allocation,
+            environmentd_memory_allocation,
         };
 
         let req = self

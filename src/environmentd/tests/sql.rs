@@ -31,10 +31,11 @@ use mz_environmentd::test_util::{
     get_explain_timestamp_determination, try_get_explain_timestamp,
 };
 use mz_ore::collections::CollectionExt;
+use mz_ore::error::ErrorExt;
 use mz_ore::now::{EpochMillis, NOW_ZERO, NowFn};
 use mz_ore::result::ResultExt;
 use mz_ore::retry::Retry;
-use mz_ore::task::{self, AbortOnDropHandle, JoinHandleExt};
+use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{assert_contains, assert_err, assert_ok};
 use mz_pgrepr::UInt4;
 use mz_repr::Timestamp;
@@ -170,7 +171,10 @@ async fn test_no_block() {
             println!("test_no_block: in thread; create source done");
             // Verify that the schema registry error was returned to the client, for
             // good measure.
-            assert_contains!(result.unwrap_err().to_string(), "server error 503");
+            assert_contains!(
+                result.unwrap_err().to_string_with_causes(),
+                "server error 503"
+            );
         });
 
         // Wait for Materialize to contact the schema registry, which
@@ -194,7 +198,7 @@ async fn test_no_block() {
             .expect("server unexpectedly closed channel");
 
         println!("test_no_block: joining task");
-        slow_task.await.unwrap();
+        slow_task.await;
     };
 
     tokio::time::timeout(Duration::from_secs(120), test_case)
@@ -297,9 +301,9 @@ async fn test_drop_connection_race() {
         .expect("server unexpectedly closed channel");
 
     info!("test_drop_connection_race: asserting response");
-    let source_res = source_task.await.unwrap();
+    let source_res = source_task.into_tokio_handle().await.unwrap();
     assert_contains!(
-        source_res.unwrap_err().to_string(),
+        source_res.unwrap_err().to_string_with_causes(),
         "unknown catalog item 'conn'"
     );
 }
@@ -1311,7 +1315,11 @@ fn test_transactional_explain_timestamps() {
         .query_one("EXPLAIN TIMESTAMP FOR SELECT * FROM t1;", &[])
         .unwrap_err();
 
-    assert!(format!("{}", error).contains("transaction in write-only mode"));
+    assert!(
+        error
+            .to_string_with_causes()
+            .contains("transaction in write-only mode")
+    );
 
     client_writes.batch_execute("ROLLBACK").unwrap();
 
@@ -1360,7 +1368,8 @@ fn test_transactional_explain_timestamps() {
         .unwrap_err();
 
     assert!(
-        format!("{}", error)
+        error
+            .to_string_with_causes()
             .contains("Transactions can only reference objects in the same timedomain")
     );
 
@@ -1589,15 +1598,15 @@ async fn test_github_12546() {
     );
 }
 
+/// Regression test for database-issues#3721.
 #[mz_ore::test]
-fn test_github_12951() {
+fn test_github_3721() {
     let server = test_util::TestHarness::default().start_blocking();
 
     // Verify sinks (SUBSCRIBE) are correctly handled for a dropped cluster.
     {
         let mut client1 = server.connect(postgres::NoTls).unwrap();
         let mut client2 = server.connect(postgres::NoTls).unwrap();
-        let client2_cancel = client2.cancel_token();
 
         client1
             .batch_execute("CREATE CLUSTER foo REPLICAS (r1 (size 'scale=1,workers=1'))")
@@ -1610,7 +1619,6 @@ fn test_github_12951() {
             )
             .unwrap();
         client1.batch_execute("DROP CLUSTER foo CASCADE").unwrap();
-        client2_cancel.cancel_query(postgres::NoTls).unwrap();
         client2
             .batch_execute("ROLLBACK; SET CLUSTER = default")
             .unwrap();
@@ -2014,14 +2022,14 @@ fn test_alter_system_invalid_param() {
         .batch_execute("ALTER SYSTEM SET invalid_param TO 42")
         .unwrap_err();
     assert!(
-        res.to_string()
+        res.to_string_with_causes()
             .contains("unrecognized configuration parameter \"invalid_param\"")
     );
     let res = mz_client
         .batch_execute("ALTER SYSTEM RESET invalid_param")
         .unwrap_err();
     assert!(
-        res.to_string()
+        res.to_string_with_causes()
             .contains("unrecognized configuration parameter \"invalid_param\"")
     );
 }
@@ -2424,6 +2432,8 @@ fn test_emit_tracing_notice() {
         .with_system_parameter_default("log_filter".to_string(), "info".to_string())
         .start_blocking();
 
+    server.disable_feature_flags(&["enable_frontend_peek_sequencing"]);
+
     let (tx, mut rx) = futures::channel::mpsc::unbounded();
 
     let mut client = server
@@ -2580,7 +2590,10 @@ fn test_dont_drop_sinks_twice() {
         .cancel_query(postgres::NoTls)
         .expect("failed to cancel subscribe");
     let err = out.read_to_end(&mut vec![]).unwrap_err();
-    assert!(err.to_string().contains("subscribe has been terminated"));
+    assert!(
+        err.to_string_with_causes()
+            .contains("subscribe has been terminated")
+    );
 
     drop(out);
     client_a.close().expect("failed to drop client");
@@ -3017,7 +3030,7 @@ fn test_pg_cancel_backend() {
             client_user
                 .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
                 .unwrap_err()
-                .to_string(),
+                .to_string_with_causes(),
             r#"must be a member of "materialize""#
         );
 
@@ -3029,7 +3042,10 @@ fn test_pg_cancel_backend() {
     });
 
     let err = client1.query("SUBSCRIBE t", &[]).unwrap_err();
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
 
     handle.join().unwrap();
 
@@ -3037,7 +3053,7 @@ fn test_pg_cancel_backend() {
         client1
             .query_one("SELECT * FROM (SELECT pg_cancel_backend(1))", &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "pg_cancel_backend in this position",
     );
 
@@ -3050,7 +3066,7 @@ fn test_pg_cancel_backend() {
         client1
             .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "canceling statement due to user request",
     );
 
@@ -3078,11 +3094,14 @@ fn test_pg_cancel_backend() {
         client1
             .query_one(&format!("SELECT pg_cancel_backend({conn_id})"), &[])
             .unwrap_err()
-            .to_string(),
+            .to_string_with_causes(),
         "canceling statement due to user request",
     );
     assert_contains!(
-        client1.batch_execute("SELECT 1").unwrap_err().to_string(),
+        client1
+            .batch_execute("SELECT 1")
+            .unwrap_err()
+            .to_string_with_causes(),
         "current transaction is aborted"
     );
 }
@@ -3196,6 +3215,10 @@ fn test_pg_cancel_dropped_role() {
 fn test_peek_on_dropped_indexed_view() {
     let server = test_util::TestHarness::default().start_blocking();
 
+    // TODO(peek-seq): This needs peek cancellation to work, which is not yet implemented in the
+    // new peek sequencing.
+    server.disable_feature_flags(&["enable_frontend_peek_sequencing"]);
+
     let mut ddl_client = server.connect(postgres::NoTls).unwrap();
     let mut peek_client = server.connect(postgres::NoTls).unwrap();
 
@@ -3244,7 +3267,7 @@ fn test_peek_on_dropped_indexed_view() {
 
     // Check that the peek is cancelled an all resources are cleaned up.
     let select_res = handle.join().unwrap();
-    let select_err = select_res.unwrap_err().to_string();
+    let select_err = select_res.unwrap_err().to_string_with_causes();
     assert!(
         select_err.contains(
             "query could not complete because relation \"materialize.public.v\" was dropped"
@@ -3586,7 +3609,10 @@ async fn test_constant_materialized_view() {
 async fn test_explain_timestamp_blocking() {
     let server = test_util::TestHarness::default().start().await;
     server
-        .enable_feature_flags(&["enable_refresh_every_mvs"])
+        .enable_feature_flags(&[
+            "enable_refresh_every_mvs",
+            "enable_frontend_peek_sequencing",
+        ])
         .await;
     let client = server.connect().await.unwrap();
     // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
@@ -3746,7 +3772,7 @@ async fn test_cancel_linearize_read_then_writes() {
         )
         .await;
     res.unwrap();
-    handle.await.unwrap();
+    handle.await;
 }
 
 // Test that builtin objects are created in the schemas they advertise in builtin.rs.
@@ -3817,7 +3843,7 @@ async fn test_serialized_ddl_serial() {
     let mut successes = 0;
     let mut errors = 0;
     for handle in handles {
-        let result = handle.await.unwrap();
+        let result = handle.await;
         match result {
             Ok(_) => {
                 successes += 1;
@@ -3869,12 +3895,18 @@ async fn test_serialized_ddl_cancel() {
     // Cancel the pending statement (this uses different cancellation logic and is the actual thing
     // we are trying to test here).
     cancel2.cancel_query(tokio_postgres::NoTls).await.unwrap();
-    let err = handle2.await.unwrap();
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    let err = handle2.await;
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
     // Cancel the in-progress statement.
     cancel1.cancel_query(tokio_postgres::NoTls).await.unwrap();
-    let err = handle1.await.unwrap();
-    assert_contains!(err.to_string(), "canceling statement due to user request");
+    let err = handle1.await;
+    assert_contains!(
+        err.to_string_with_causes(),
+        "canceling statement due to user request"
+    );
 
     // The mz_sleep calls above cause this test to not exit until the optimization tasks have fully
     // run, because spawn_blocking (used by optimization) are waited upon during Drop. Thus, don't

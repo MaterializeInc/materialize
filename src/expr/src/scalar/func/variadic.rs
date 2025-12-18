@@ -29,13 +29,15 @@ use mz_repr::adt::range::{InvalidRangeError, Range, RangeBound, parse_range_boun
 use mz_repr::adt::system::Oid;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, Row, RowArena, SqlColumnType, SqlScalarType};
+use mz_repr::{
+    ColumnName, Datum, DatumType, ReprScalarType, Row, RowArena, SqlColumnType, SqlScalarType,
+};
 use serde::{Deserialize, Serialize};
 use sha1::Sha1;
 use sha2::{Sha224, Sha256, Sha384, Sha512};
 
 use crate::func::{
-    MAX_STRING_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
+    MAX_STRING_FUNC_RESULT_BYTES, array_create_scalar, build_regex, date_bin, parse_timezone,
     regexp_match_static, regexp_replace_parse_flags, regexp_replace_static,
     regexp_split_to_array_re, stringify_datum, timezone_time,
 };
@@ -272,6 +274,9 @@ fn array_position<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     })))
 }
 
+// WARNING: This function has potential OOM risk!
+// It is very difficult to calculate the output size ahead of time without knowing how to
+// calculate the stringified size of each element for all possible datatypes.
 fn array_to_string<'a>(
     datums: &[Datum<'a>],
     elem_type: &SqlScalarType,
@@ -719,7 +724,7 @@ fn pad_leading<'a>(
             ));
         }
     };
-    if len > MAX_STRING_BYTES {
+    if len > MAX_STRING_FUNC_RESULT_BYTES {
         return Err(EvalError::LengthTooLarge);
     }
 
@@ -788,14 +793,28 @@ fn regexp_replace_dynamic<'a>(
     regexp_replace_static(source, replacement, &regexp, limit, temp_storage)
 }
 
-fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
-    Datum::String(
-        temp_storage.push_string(
-            datums[0]
-                .unwrap_str()
-                .replace(datums[1].unwrap_str(), datums[2].unwrap_str()),
-        ),
-    )
+fn replace<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Result<Datum<'a>, EvalError> {
+    // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
+    // we first check if its possible for the fully replaced string to exceed the limit by assuming that
+    // every possible substring is replaced.
+    //
+    // If that estimate exceeds the limit, we then do a more precise (and expensive) estimate by counting
+    // the actual number of replacements that would occur, and using that to calculate the final size.
+    let text = datums[0].unwrap_str();
+    let from = datums[1].unwrap_str();
+    let to = datums[2].unwrap_str();
+    let possible_size = text.len() * to.len();
+    if possible_size > MAX_STRING_FUNC_RESULT_BYTES {
+        let replacement_count = text.matches(from).count();
+        let estimated_size = text.len() + replacement_count * (to.len().saturating_sub(from.len()));
+        if estimated_size > MAX_STRING_FUNC_RESULT_BYTES {
+            return Err(EvalError::LengthTooLarge);
+        }
+    }
+
+    Ok(Datum::String(
+        temp_storage.push_string(text.replace(from, to)),
+    ))
 }
 
 fn string_to_array<'a>(
@@ -964,21 +983,47 @@ fn split_part<'a>(datums: &[Datum<'a>]) -> Result<Datum<'a>, EvalError> {
     ))
 }
 
-fn text_concat_variadic<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+fn text_concat_variadic<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    let mut total_size = 0;
+    for d in datums {
+        if !d.is_null() {
+            total_size += d.unwrap_str().len();
+            if total_size > MAX_STRING_FUNC_RESULT_BYTES {
+                return Err(EvalError::LengthTooLarge);
+            }
+        }
+    }
     let mut buf = String::new();
     for d in datums {
         if !d.is_null() {
             buf.push_str(d.unwrap_str());
         }
     }
-    Datum::String(temp_storage.push_string(buf))
+    Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
-fn text_concat_ws<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
+fn text_concat_ws<'a>(
+    datums: &[Datum<'a>],
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
     let ws = match datums[0] {
-        Datum::Null => return Datum::Null,
+        Datum::Null => return Ok(Datum::Null),
         d => d.unwrap_str(),
     };
+
+    let mut total_size = 0;
+    for d in &datums[1..] {
+        if !d.is_null() {
+            total_size += d.unwrap_str().len();
+            total_size += ws.len();
+            if total_size > MAX_STRING_FUNC_RESULT_BYTES {
+                return Err(EvalError::LengthTooLarge);
+            }
+        }
+    }
 
     let buf = Itertools::join(
         &mut datums[1..].iter().filter_map(|d| match d {
@@ -988,7 +1033,7 @@ fn text_concat_ws<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum
         ws,
     );
 
-    Datum::String(temp_storage.push_string(buf))
+    Ok(Datum::String(temp_storage.push_string(buf)))
 }
 
 fn translate<'a>(datums: &[Datum<'a>], temp_storage: &'a RowArena) -> Datum<'a> {
@@ -1167,12 +1212,12 @@ impl VariadicFunc {
             | VariadicFunc::Or
             | VariadicFunc::ErrorIfNull
             | VariadicFunc::Least => unreachable!(),
-            VariadicFunc::Concat => Ok(text_concat_variadic(&ds, temp_storage)),
-            VariadicFunc::ConcatWs => Ok(text_concat_ws(&ds, temp_storage)),
+            VariadicFunc::Concat => text_concat_variadic(&ds, temp_storage),
+            VariadicFunc::ConcatWs => text_concat_ws(&ds, temp_storage),
             VariadicFunc::MakeTimestamp => make_timestamp(&ds),
             VariadicFunc::PadLeading => pad_leading(&ds, temp_storage),
             VariadicFunc::Substr => substr(&ds),
-            VariadicFunc::Replace => Ok(replace(&ds, temp_storage)),
+            VariadicFunc::Replace => replace(&ds, temp_storage),
             VariadicFunc::Translate => Ok(translate(&ds, temp_storage)),
             VariadicFunc::JsonbBuildArray => Ok(jsonb_build_array(&ds, temp_storage)),
             VariadicFunc::JsonbBuildObject => jsonb_build_object(&ds, temp_storage),
@@ -1199,12 +1244,14 @@ impl VariadicFunc {
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamp(),
                 ds[2].unwrap_timestamp(),
-            ),
+            )
+            .into_result(temp_storage),
             VariadicFunc::DateBinTimestampTz => date_bin(
                 ds[0].unwrap_interval(),
                 ds[1].unwrap_timestamptz(),
                 ds[2].unwrap_timestamptz(),
-            ),
+            )
+            .into_result(temp_storage),
             VariadicFunc::DateDiffTimestamp => date_diff_timestamp(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffTimestampTz => date_diff_timestamptz(ds[0], ds[1], ds[2]),
             VariadicFunc::DateDiffDate => date_diff_date(ds[0], ds[1], ds[2]),
@@ -1321,8 +1368,11 @@ impl VariadicFunc {
             .nullable(true),
             ArrayCreate { elem_type } => {
                 debug_assert!(
-                    input_types.iter().all(|t| t.scalar_type.base_eq(elem_type)),
-                    "Args to ArrayCreate should have types that are compatible with the elem_type"
+                    input_types
+                        .iter()
+                        .all(|t| ReprScalarType::from(&t.scalar_type)
+                            == ReprScalarType::from(elem_type)),
+                    "Args to ArrayCreate should have types that are repr-compatible with the elem_type"
                 );
                 match elem_type {
                     SqlScalarType::Array(_) => elem_type.clone().nullable(false),

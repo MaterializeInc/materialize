@@ -341,16 +341,17 @@ impl Client {
     /// `capture_instances`.
     ///
     /// [`CdcStream`]: crate::cdc::CdcStream
-    pub fn cdc<I>(&mut self, capture_instances: I) -> crate::cdc::CdcStream<'_>
+    pub fn cdc<I, M>(&mut self, capture_instances: I, metrics: M) -> crate::cdc::CdcStream<'_, M>
     where
         I: IntoIterator,
         I::Item: Into<Arc<str>>,
+        M: SqlServerCdcMetrics,
     {
         let instances = capture_instances
             .into_iter()
             .map(|i| (i.into(), None))
             .collect();
-        crate::cdc::CdcStream::new(self, instances)
+        crate::cdc::CdcStream::new(self, instances, metrics)
     }
 }
 
@@ -943,6 +944,27 @@ pub fn quote_identifier(ident: &str) -> String {
     quoted.insert(0, '[');
     quoted.push(']');
     quoted
+}
+
+pub trait SqlServerCdcMetrics {
+    /// Called before the table lock is aquired
+    fn snapshot_table_lock_start(&self, table_name: &str);
+    /// Called after the table lock is released
+    fn snapshot_table_lock_end(&self, table_name: &str);
+}
+
+/// A simple implementation of [`SqlServerCdcMetrics`] that uses the tracing framework to log
+/// the start and end conditions.
+pub struct LoggingSqlServerCdcMetrics;
+
+impl SqlServerCdcMetrics for LoggingSqlServerCdcMetrics {
+    fn snapshot_table_lock_start(&self, table_name: &str) {
+        tracing::info!("snapshot_table_lock_start: {table_name}");
+    }
+
+    fn snapshot_table_lock_end(&self, table_name: &str) {
+        tracing::info!("snapshot_table_lock_end: {table_name}");
+    }
 }
 
 #[cfg(test)]

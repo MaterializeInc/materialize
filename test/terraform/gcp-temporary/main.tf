@@ -29,7 +29,7 @@ provider "helm" {
 }
 
 module "materialize" {
-  source = "github.com/MaterializeInc/terraform-google-materialize?ref=v0.5.3"
+  source = "git::https://github.com/MaterializeInc/terraform-google-materialize?ref=v0.8.3"
 
   project_id = var.project_id
   region     = var.region
@@ -52,9 +52,23 @@ module "materialize" {
     example     = "true"
   }
 
+  # System node group configuration
+  system_node_group_node_count   = 2
+  system_node_group_machine_type = "n2-standard-4"
+  system_node_group_disk_size_gb = 100
+  system_node_group_min_nodes    = 2
+  system_node_group_max_nodes    = 2
+
+  # Materialize node group configuration
+  materialize_node_group_machine_type    = "n2-highmem-8"
+  materialize_node_group_disk_size_gb    = 100
+  materialize_node_group_min_nodes       = 1
+  materialize_node_group_max_nodes       = 2
+  materialize_node_group_local_ssd_count = 1
+
   install_materialize_operator = true
   use_local_chart              = true
-  helm_chart                   = "materialize-operator-v25.3.0-beta.1.tgz"
+  helm_chart                   = "materialize-operator-${var.operator_version}.tgz"
   operator_version             = var.operator_version
   orchestratord_version        = var.orchestratord_version
 
@@ -97,7 +111,7 @@ variable "database_password" {
 
 variable "operator_version" {
   type    = string
-  default = "v25.3.0-beta.1.tgz"
+  default = "v26.0.0-beta.1"
 }
 
 variable "orchestratord_version" {

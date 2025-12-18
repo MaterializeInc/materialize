@@ -18,7 +18,7 @@ resource "random_password" "db_password" {
 
 variable "operator_version" {
   type    = string
-  default = "v25.3.0-beta.1.tgz"
+  default = "v26.0.0-beta.1"
 }
 
 variable "orchestratord_version" {
@@ -27,14 +27,14 @@ variable "orchestratord_version" {
 }
 
 module "materialize_infrastructure" {
-  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.5.7"
+  source = "git::https://github.com/MaterializeInc/terraform-aws-materialize.git?ref=v0.8.5"
 
   # Basic settings
   namespace                    = "aws-persistent"
   environment                  = "dev"
   install_materialize_operator = true
   use_local_chart              = true
-  helm_chart                   = "materialize-operator-v25.3.0-beta.1.tgz"
+  helm_chart                   = "materialize-operator-${var.operator_version}.tgz"
   operator_version             = var.operator_version
   orchestratord_version        = var.orchestratord_version
 
@@ -63,11 +63,14 @@ module "materialize_infrastructure" {
 
   # EKS Configuration
   cluster_version           = "1.31"
-  node_group_instance_types = ["r8g.2xlarge"]
-  node_group_desired_size   = 2
-  node_group_min_size       = 1
-  node_group_max_size       = 3
-  node_group_capacity_type  = "ON_DEMAND"
+  system_node_group_instance_types = ["r8g.xlarge"]
+  system_node_group_desired_size   = 2
+  system_node_group_min_size       = 1
+  system_node_group_max_size       = 3
+  materialize_node_group_instance_types = ["r8gd.xlarge"]
+  materialize_node_group_desired_size   = 2
+  materialize_node_group_min_size       = 1
+  materialize_node_group_max_size       = 3
 
   # Storage Configuration
   bucket_force_destroy = true

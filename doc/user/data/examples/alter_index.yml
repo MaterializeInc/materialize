@@ -1,0 +1,12 @@
+- name: "syntax-rename"
+  code: |
+    ALTER INDEX <name> RENAME TO <new_name>;
+  syntax_elements:
+    - name: "`<name>`"
+      description: |
+        The current name of the index you want to alter.
+    - name: "`<new_name>`"
+      description: |
+        The new name of the index.
+  addenda: |
+    See also [Renaming restrictions](/sql/identifiers/#renaming-restrictions).

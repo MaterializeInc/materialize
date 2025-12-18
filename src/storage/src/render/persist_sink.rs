@@ -95,9 +95,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::{StreamExt, future};
 use itertools::Itertools;
 use mz_ore::cast::CastFrom;
@@ -176,7 +176,7 @@ where
     K: Codec + Debug,
     V: Codec + Debug,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     /// Creates a new batch.
     ///
@@ -277,7 +277,7 @@ pub(crate) fn render<G>(
     scope: &G,
     collection_id: GlobalId,
     target: CollectionMetadata,
-    desired_collection: Collection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: VecCollection<G, Result<Row, DataflowError>, Diff>,
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
@@ -347,7 +347,7 @@ fn mint_batch_descriptions<G>(
     collection_id: GlobalId,
     operator_name: &str,
     target: &CollectionMetadata,
-    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
 ) -> (
     Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
@@ -377,7 +377,7 @@ where
         scope.clone(),
     );
 
-    let (output, output_stream) = mint_op.new_output();
+    let (output, output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
     let (data_output, data_output_stream) = mint_op.new_output::<CapacityContainerBuilder<_>>();
 
     // The description and the data-passthrough outputs are both driven by this input, so
@@ -530,7 +530,7 @@ fn write_batches<G>(
     operator_name: &str,
     target: &CollectionMetadata,
     batch_descriptions: &Stream<G, (Antichain<mz_repr::Timestamp>, Antichain<mz_repr::Timestamp>)>,
-    desired_collection: &Collection<G, Result<Row, DataflowError>, Diff>,
+    desired_collection: &VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
     storage_state: &StorageState,
     busy_signal: Arc<Semaphore>,
@@ -1112,7 +1112,18 @@ where
             let validate_part_bounds_on_write = write.validate_part_bounds_on_write();
             let mut todo = VecDeque::new();
 
-            if !validate_part_bounds_on_write {
+            if validate_part_bounds_on_write {
+                // Persist will expect each batch's bounds to match the append-time bounds; write them separately.
+                for done_batch_metadata in done_batches.drain(..) {
+                    in_flight_descriptions.remove(&done_batch_metadata);
+                    let batch_set = in_flight_batches
+                        .remove(&done_batch_metadata)
+                        .unwrap_or_default();
+                    todo.push_back((done_batch_metadata, batch_set));
+                }
+            } else {
+                // Persist should allow batches to be written as part of a single append even when the bounds don't
+                // match exactly; group all eligible batches together.
                 let mut combined_batch_metadata = None;
                 let mut combined_batch_set = BatchSet::default();
                 for done_batch_metadata in done_batches.drain(..) {
@@ -1129,14 +1140,6 @@ where
                 }
                 if let Some(done_batch_metadata) = combined_batch_metadata {
                     todo.push_back((done_batch_metadata, combined_batch_set))
-                }
-            } else {
-                for done_batch_metadata in done_batches.drain(..) {
-                    in_flight_descriptions.remove(&done_batch_metadata);
-                    let batch_set = in_flight_batches
-                        .remove(&done_batch_metadata)
-                        .unwrap_or_default();
-                    todo.push_back((done_batch_metadata, batch_set));
                 }
             };
 

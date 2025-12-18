@@ -589,7 +589,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap();
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     let mut state = state_builder
         .clone()
@@ -625,7 +625,7 @@ async fn test_concurrent_debugs(state_builder: TestCatalogStateBuilder) {
         .await
         .unwrap();
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     let configs = state_builder
         .clone()

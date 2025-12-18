@@ -21,7 +21,7 @@ import uuid
 from textwrap import dedent
 
 from materialize import buildkite
-from materialize.docker import is_image_tag_of_release_version
+from materialize.docker import image_registry, is_image_tag_of_release_version
 from materialize.feature_benchmark.benchmark_result_evaluator import (
     BenchmarkResultEvaluator,
 )
@@ -211,7 +211,7 @@ def run_one_scenario(
                 param_name, param_value = param.split("=")
                 additional_system_parameter_defaults[param_name] = param_value
 
-        mz_image = f"materialize/materialized:{tag}" if tag else None
+        mz_image = f"{image_registry()}/materialized:{tag}" if tag else None
         # TODO: Better azurite support detection
         mz = create_mz_service(
             mz_image,
@@ -228,7 +228,7 @@ def run_one_scenario(
             print(
                 f"Unable to find materialize image with tag {tag}, proceeding with latest instead!"
             )
-            mz_image = "materialize/materialized:latest"
+            mz_image = f"{image_registry()}/materialized:latest"
             # TODO: Better azurite support detection
             mz = create_mz_service(
                 mz_image,
@@ -319,10 +319,12 @@ def run_one_scenario(
     return result
 
 
-resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str] = {}
+resolved_tags: dict[tuple[str, frozenset[tuple[str, MzVersion]]], str | None] = {}
 
 
-def resolve_tag(tag: str, scenario_class: type[Scenario], scale: str | None) -> str:
+def resolve_tag(
+    tag: str, scenario_class: type[Scenario], scale: str | None
+) -> str | None:
     if tag == "common-ancestor":
         overrides = get_ancestor_overrides_for_performance_regressions(
             scenario_class, scale

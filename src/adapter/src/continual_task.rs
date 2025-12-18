@@ -39,6 +39,7 @@ pub fn ct_item_from_plan(
                 expr: mut raw_expr,
                 dependencies,
                 column_names: _,
+                replacement_target: _,
                 non_null_assertions: _,
                 compaction_window: _,
                 refresh_schedule: _,

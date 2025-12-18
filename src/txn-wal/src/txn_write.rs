@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use differential_dataflow::Hashable;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -71,7 +71,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new() -> Self {
         Txn {
@@ -378,7 +378,7 @@ impl<T> TxnApply<T> {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {
@@ -666,7 +666,8 @@ mod tests {
                 txn.write(&ShardId::new(), "foo".into(), (), 1).await;
                 txn.commit_at(&mut txns, 1).await
             }
-        });
+        })
+        .into_tokio_handle();
         assert_err!(commit.await);
 
         let d0 = txns.expect_register(2).await;
@@ -681,7 +682,8 @@ mod tests {
                 txn.write(&d0, "foo".into(), (), 1).await;
                 txn.commit_at(&mut txns, 4).await
             }
-        });
+        })
+        .into_tokio_handle();
         assert_err!(commit.await);
     }
 

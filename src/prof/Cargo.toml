@@ -15,14 +15,14 @@ anyhow = "1.0.100"
 backtrace = "0.3.76"
 flate2 = "1.1.5"
 itertools = "0.14.0"
-jemalloc_pprof = { version = "0.8", optional = true }
+jemalloc_pprof = { version = "0.8.1", optional = true }
 pprof_util = "0.8"
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 pprof = "0.15.0"
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 tikv-jemalloc-ctl = { version = "0.6", features = ["use_std", "stats"], optional = true }
-tracing = "0.1.37"
-tokio = { version = "1.44.1", features = ["time"] }
+tracing = "0.1.43"
+tokio = { version = "1.48.0", features = ["time"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [build-dependencies]

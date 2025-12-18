@@ -1,0 +1,33 @@
+{{- $pathArray := split (lower (.Get "file")) "/" -}}
+{{- $data := .Site.Data -}}
+{{- range $pathArray }}
+  {{- $data = index $data . -}}
+{{- end }}
+{{- $example := .Get "example" -}}
+{{- $indent := .Get "indent" -}}
+{{- range $data }}
+{{- if eq .name $example -}}
+{{- if .code -}}
+{{- $code := .code -}}
+{{- if $indent }}
+{{- $code = replaceRE "(?m)^" "   " $code -}}
+{{- end }}
+
+{{ if $indent }}   {{ end -}}```mzsql
+{{ $code | safeHTML }}
+{{ if $indent }}   {{ end -}}```
+{{- end -}}
+{{- if .syntax_elements }}
+
+Syntax element | Description
+---------------|------------
+{{- range .syntax_elements }}
+{{ .name | markdownify }} | {{ .description | markdownify }}
+{{- end }}
+{{- end -}}
+{{- if .addenda }}
+
+{{ .addenda | markdownify }}
+{{- end -}}
+{{- end -}}
+{{- end -}}

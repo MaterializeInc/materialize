@@ -22,15 +22,15 @@ mz-frontegg-auth = { path = "../frontegg-auth" }
 mz-ore = { path = "../ore", default-features = false, features = ["cli"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
-tokio = { version = "1.44.1", default-features = false }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.19"
-uuid = "1.18.1"
+tokio = { version = "1.48.0", default-features = false }
+tracing = "0.1.43"
+tracing-subscriber = "0.3.22"
+uuid = "1.19.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 reqwest = { version = "0.11.13", features = ["json"] }
-openssl = { version = "0.10.74", features = ["vendored"] }
+openssl = { version = "0.10.75", features = ["vendored"] }
 
 [package.metadata.cargo-udeps.ignore]
 normal = ["workspace-hack"]

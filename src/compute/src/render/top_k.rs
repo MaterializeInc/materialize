@@ -15,14 +15,14 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use differential_dataflow::Data;
+use differential_dataflow::AsCollection;
 use differential_dataflow::hashable::Hashable;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::operators::iterate::SemigroupVariable;
 use differential_dataflow::trace::implementations::merge_batcher::container::MergerChunk;
 use differential_dataflow::trace::{Builder, Trace};
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{Data, VecCollection};
 use mz_compute_types::plan::top_k::{
     BasicTopKPlan, MonotonicTop1Plan, MonotonicTopKPlan, TopKPlan,
 };
@@ -248,14 +248,17 @@ where
     /// Constructs a TopK dataflow subgraph.
     fn build_topk<S>(
         &self,
-        collection: Collection<S, Row, Diff>,
+        collection: VecCollection<S, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         offset: usize,
         limit: Option<mz_expr::MirScalarExpr>,
         arity: usize,
         buckets: Vec<u64>,
-    ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -274,7 +277,7 @@ where
         });
 
         let mut validating = true;
-        let mut err_collection: Option<Collection<S, _, _>> = None;
+        let mut err_collection: Option<VecCollection<S, _, _>> = None;
 
         if let Some(mut limit) = limit.clone() {
             // We may need a new `limit` that reflects the addition of `offset`.
@@ -377,7 +380,7 @@ where
     /// omitting them here for the sake of simplicity.
     fn build_topk_stage<S>(
         &self,
-        collection: Collection<S, (Row, Row), Diff>,
+        collection: VecCollection<S, (Row, Row), Diff>,
         order_key: Vec<mz_expr::ColumnOrder>,
         modulus: u64,
         offset: usize,
@@ -385,8 +388,8 @@ where
         arity: usize,
         validating: bool,
     ) -> (
-        Collection<S, (Row, Row), Diff>,
-        Option<Collection<S, DataflowError, Diff>>,
+        VecCollection<S, (Row, Row), Diff>,
+        Option<VecCollection<S, DataflowError, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -445,11 +448,14 @@ where
 
     fn render_top1_monotonic<S>(
         &self,
-        collection: Collection<S, Row, Diff>,
+        collection: VecCollection<S, Row, Diff>,
         group_key: Vec<usize>,
         order_key: Vec<mz_expr::ColumnOrder>,
         must_consolidate: bool,
-    ) -> (Collection<S, Row, Diff>, Collection<S, DataflowError, Diff>)
+    ) -> (
+        VecCollection<S, Row, Diff>,
+        VecCollection<S, DataflowError, Diff>,
+    )
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -519,7 +525,7 @@ where
 /// * The arranged input data without modifications, and
 /// * the maintained negated output data.
 fn build_topk_negated_stage<G, Bu, Tr>(
-    input: &Collection<G, (Row, Row), Diff>,
+    input: &VecCollection<G, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     offset: usize,
     limit: Option<mz_expr::MirScalarExpr>,
@@ -667,10 +673,10 @@ where
 }
 
 fn render_intra_ts_thinning<S>(
-    collection: Collection<S, (Row, Row), Diff>,
+    collection: VecCollection<S, (Row, Row), Diff>,
     order_key: Vec<mz_expr::ColumnOrder>,
     limit: mz_expr::MirScalarExpr,
-) -> Collection<S, (Row, Row), Diff>
+) -> VecCollection<S, (Row, Row), Diff>
 where
     S: Scope,
     S::Timestamp: Lattice,
@@ -690,11 +696,12 @@ where
             "TopKIntraTimeThinning",
             [],
             move |input, output, notificator| {
-                while let Some((time, data)) = input.next() {
+                input.for_each_time(|time, data| {
                     let agg_time = aggregates
                         .entry(time.time().clone())
                         .or_insert_with(BTreeMap::new);
-                    for ((grp_row, row), record_time, diff) in data.drain(..) {
+                    for ((grp_row, row), record_time, diff) in data.flat_map(|data| data.drain(..))
+                    {
                         let monoid = monoids::Top1MonoidLocal {
                             row,
                             shared: Rc::clone(&shared),
@@ -724,7 +731,7 @@ where
                         topk.update(monoid, diff.into_inner());
                     }
                     notificator.notify_at(time.retain());
-                }
+                });
 
                 notificator.for_each(|time, _, _| {
                     if let Some(aggs) = aggregates.remove(time.time()) {

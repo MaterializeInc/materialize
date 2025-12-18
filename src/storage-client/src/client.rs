@@ -16,7 +16,7 @@ use std::fmt::Debug;
 use std::iter;
 
 use async_trait::async_trait;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::TryIntoProtocolNonce;
@@ -577,7 +577,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: TimestampManipulation + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     /// Create a new [`TimestamplessUpdateBuilder`] for the shard associated
     /// with the provided [`WriteHandle`].

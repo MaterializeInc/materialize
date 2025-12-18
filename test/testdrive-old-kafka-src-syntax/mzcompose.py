@@ -232,7 +232,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                 persistent=False,
             )
             # Uploading successful junit files wastes time and contains no useful information
-            os.remove(f"test/testdrive-old-kafka-src-syntax/{junit_report}")
+            os.remove(
+                MZ_ROOT / "test" / "testdrive-old-kafka-src-syntax" / junit_report
+            )
 
         c.test_parts(args.files, process)
         c.sanity_restart_mz()

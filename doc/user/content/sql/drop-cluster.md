@@ -11,14 +11,16 @@ menu:
 
 ## Syntax
 
-{{< diagram "drop-cluster.svg" >}}
+```mzsql
+DROP CLUSTER [IF EXISTS] <cluster_name> [CASCADE|RESTRICT];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the specified cluster does not exist.
-_cluster&lowbar;name_ | The cluster you want to drop. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
-**CASCADE** | Remove the cluster and its dependent objects.
-**RESTRICT** | Do not drop the cluster if it has dependencies. _(Default)_
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional.  If specified, do not return an error if the specified cluster does not exist.
+`<cluster_name>` | The cluster you want to drop. For available clusters, see [`SHOW CLUSTERS`](../show-clusters).
+**CASCADE** | Optional. If specified, remove the cluster and its dependent objects.
+**RESTRICT** | Optional. Do not drop the cluster if it has dependencies. _(Default)_
 
 ## Examples
 

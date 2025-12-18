@@ -42,6 +42,7 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row};
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::instances::StorageInstanceId;
 use mz_storage_types::oneshot_sources::{OneshotIngestionRequest, OneshotResultCallback};
 use mz_storage_types::parameters::StorageParameters;
@@ -124,12 +125,7 @@ pub enum DataSource<T> {
     /// Data comes from external HTTP requests pushed to Materialize.
     Webhook,
     /// The adapter layer appends timestamped data, i.e. it is a `TABLE`.
-    Table {
-        /// This table has had columns added or dropped to it, so we're now a
-        /// "view" over the "primary" Table/collection. Within the
-        /// `storage-controller` we the primary as a dependency.
-        primary: Option<GlobalId>,
-    },
+    Table,
     /// This source's data does not need to be managed by the storage
     /// controller, e.g. it's a materialized view or the catalog collection.
     Other,
@@ -151,16 +147,37 @@ pub struct CollectionDescription<T> {
     pub status_collection_id: Option<GlobalId>,
     /// The timeline of the source. Absent for materialized views, continual tasks, etc.
     pub timeline: Option<Timeline>,
+    /// The primary of this collections.
+    ///
+    /// Multiple storage collections can point to the same persist shard,
+    /// possibly with different schemas. In such a configuration, we select one
+    /// of the involved collections as the primary, who "owns" the persist
+    /// shard. All other involved collections have a dependency on the primary.
+    pub primary: Option<GlobalId>,
 }
 
 impl<T> CollectionDescription<T> {
-    pub fn for_table(desc: RelationDesc, primary: Option<GlobalId>) -> Self {
+    /// Create a CollectionDescription for [`DataSource::Other`].
+    pub fn for_other(desc: RelationDesc, since: Option<Antichain<T>>) -> Self {
         Self {
             desc,
-            data_source: DataSource::Table { primary },
+            data_source: DataSource::Other,
+            since,
+            status_collection_id: None,
+            timeline: None,
+            primary: None,
+        }
+    }
+
+    /// Create a CollectionDescription for a table.
+    pub fn for_table(desc: RelationDesc) -> Self {
+        Self {
+            desc,
+            data_source: DataSource::Table,
             since: None,
             status_collection_id: None,
             timeline: Some(Timeline::EpochMilliseconds),
+            primary: None,
         }
     }
 }
@@ -294,10 +311,7 @@ pub trait StorageController: Debug {
     fn config(&self) -> &StorageConfiguration;
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing>;
 
     /// Returns `true` iff the given collection/ingestion has been hydrated.
     ///
@@ -327,10 +341,7 @@ pub trait StorageController: Debug {
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<
-        (Antichain<Self::Timestamp>, Antichain<Self::Timestamp>),
-        StorageError<Self::Timestamp>,
-    >;
+    ) -> Result<(Antichain<Self::Timestamp>, Antichain<Self::Timestamp>), CollectionMissing>;
 
     /// Returns the since/upper frontiers of the identified collections.
     ///
@@ -349,14 +360,14 @@ pub trait StorageController: Debug {
             Antichain<Self::Timestamp>,
             Antichain<Self::Timestamp>,
         )>,
-        StorageError<Self::Timestamp>,
+        CollectionMissing,
     >;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
     ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
+    /// A collection is "active" when it has a non-empty frontier of read
+    /// capabilities.
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)>;
 
     /// Returns the IDs of ingestion exports running on the given instance. This
@@ -717,6 +728,9 @@ pub trait StorageController: Debug {
         BoxFuture<Result<Self::Timestamp, StorageError<Self::Timestamp>>>,
         StorageError<Self::Timestamp>,
     >;
+
+    /// Returns the state of the [`StorageController`] formatted as JSON.
+    fn dump(&self) -> Result<serde_json::Value, anyhow::Error>;
 }
 
 impl<T> DataSource<T> {
@@ -724,7 +738,7 @@ impl<T> DataSource<T> {
     /// source using txn-wal.
     pub fn in_txns(&self) -> bool {
         match self {
-            DataSource::Table { .. } => true,
+            DataSource::Table => true,
             DataSource::Other
             | DataSource::Ingestion(_)
             | DataSource::IngestionExport { .. }

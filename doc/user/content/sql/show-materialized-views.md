@@ -12,11 +12,11 @@ in Materialize.
 ## Syntax
 
 ```mzsql
-SHOW MATERIALIZED VIEWS [ FROM <schema_name> ] [ IN <cluster_name> ]
+SHOW MATERIALIZED VIEWS [ FROM <schema_name> ] [ IN <cluster_name> ];
 ```
 
-Option                      | Description
-----------------------------|------------
+Syntax element                | Description
+------------------------------|------------
 **FROM** <schema_name>      | If specified, only show materialized views from the specified schema. Defaults to first resolvable schema in the search path. For available schemas, see [`SHOW SCHEMAS`](../show-schemas).
 **IN** <cluster_name>       | If specified, only show materialized views from the specified cluster.
 

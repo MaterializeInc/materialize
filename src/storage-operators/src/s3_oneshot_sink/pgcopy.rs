@@ -14,7 +14,6 @@ use mz_aws_util::s3_uploader::{
 };
 use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
-use mz_ore::task::JoinHandleExt;
 use mz_pgcopy::{CopyFormatParams, encode_copy_format, encode_copy_format_header};
 use mz_repr::{GlobalId, RelationDesc, Row};
 use mz_storage_types::sinks::s3_oneshot_sink::S3KeyManager;
@@ -84,7 +83,7 @@ impl CopyToS3Uploader for PgCopyUploader {
                 total_bytes_uploaded,
                 bucket,
                 key,
-            } = handle.wait_and_assert_finished().await?;
+            } = handle.await?;
             info!(
                 "finished upload: bucket {}, key {}, bytes_uploaded {}, parts_uploaded {}",
                 bucket, key, total_bytes_uploaded, part_count
@@ -158,7 +157,7 @@ impl PgCopyUploader {
             .await;
             (uploader, sdk_config)
         });
-        let (uploader, sdk_config) = handle.wait_and_assert_finished().await;
+        let (uploader, sdk_config) = handle.await;
         self.sdk_config = Some(sdk_config);
         let mut uploader = uploader?;
         if self.format.requires_header() {

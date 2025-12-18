@@ -13,14 +13,16 @@ database without confirmation. Use with care! {{< /warning >}}
 
 ## Syntax
 
-{{< diagram "drop-database.svg" >}}
+```mzsql
+DROP DATABASE [IF EXISTS] <database_name> [CASCADE|RESTRICT];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the specified database does not exist.
-_database&lowbar;name_ | The database you want to drop. For available databases, see [`SHOW DATABASES`](../show-databases).
-**CASCADE** | Remove the database and its dependent objects. _(Default)_
-**RESTRICT** | Do not remove this database if it contains any schemas.
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional.  If specified, do not return an error if the specified database does not exist.
+`<database_name>` | The database you want to drop. For available databases, see [`SHOW DATABASES`](../show-databases).
+**CASCADE** | Optional. Remove the database and its dependent objects. _(Default)_
+**RESTRICT** | Optional. If specified, do not remove this database if it contains any schemas.
 
 ## Example
 

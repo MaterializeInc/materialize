@@ -1,0 +1,12 @@
+When operating in AWS, we recommend the following instances:
+
+| EC2 Instances  |
+| ---------------|
+| `r8g`, `r7g`, and `r6g` families when running without local disk. |
+| `r7gd` and `r6gd` families (and `r8gd` once available) when running with local disk.  *Recommended for production.* |
+
+Starting in v0.3.1, the Materialize on AWS Terraform uses `["r7gd.2xlarge"]` as
+the default [`node_group_instance_types`].
+
+[`node_group_instance_types`]:
+    https://github.com/MaterializeInc/terraform-aws-materialize?tab=readme-ov-file#input_node_group_instance_types

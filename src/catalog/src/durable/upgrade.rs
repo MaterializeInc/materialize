@@ -60,9 +60,9 @@
 //!
 //! When in doubt, reach out to the Surfaces team, and we'll be more than happy to help :)
 
+pub mod json_compatible;
 #[cfg(test)]
 mod tests;
-pub mod wire_compatible;
 
 use mz_ore::{soft_assert_eq_or_log, soft_assert_ne_or_log};
 use mz_repr::Diff;
@@ -188,7 +188,7 @@ macro_rules! objects {
     }
 }
 
-objects!(v67, v68, v69, v70, v71, v72, v73, v74, v75, v76, v77);
+objects!(v74, v75, v76, v77, v78);
 
 /// The current version of the `Catalog`.
 pub use mz_catalog_protos::CATALOG_VERSION;
@@ -200,16 +200,10 @@ pub use mz_catalog_protos::MIN_CATALOG_VERSION;
 const TOO_OLD_VERSION: u64 = MIN_CATALOG_VERSION - 1;
 const FUTURE_VERSION: u64 = CATALOG_VERSION + 1;
 
-mod v67_to_v68;
-mod v68_to_v69;
-mod v69_to_v70;
-mod v70_to_v71;
-mod v71_to_v72;
-mod v72_to_v73;
-mod v73_to_v74;
 mod v74_to_v75;
 mod v75_to_v76;
 mod v76_to_v77;
+mod v77_to_v78;
 
 /// Describes a single action to take during a migration from `V1` to `V2`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -292,69 +286,6 @@ async fn run_upgrade(
     match version {
         ..=TOO_OLD_VERSION => Err(incompatible),
 
-        67 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v67_to_v68::upgrade,
-            )
-            .await
-        }
-        68 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v68_to_v69::upgrade,
-            )
-            .await
-        }
-        69 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v69_to_v70::upgrade,
-            )
-            .await
-        }
-        70 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v70_to_v71::upgrade,
-            )
-            .await
-        }
-        71 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v71_to_v72::upgrade,
-            )
-            .await
-        }
-        72 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v72_to_v73::upgrade,
-            )
-            .await
-        }
-        73 => {
-            run_versioned_upgrade(
-                unopened_catalog_state,
-                version,
-                commit_ts,
-                v73_to_v74::upgrade,
-            )
-            .await
-        }
         74 => {
             run_versioned_upgrade(
                 unopened_catalog_state,
@@ -379,6 +310,15 @@ async fn run_upgrade(
                 version,
                 commit_ts,
                 v76_to_v77::upgrade,
+            )
+            .await
+        }
+        77 => {
+            run_versioned_upgrade(
+                unopened_catalog_state,
+                version,
+                commit_ts,
+                v77_to_v78::upgrade,
             )
             .await
         }

@@ -1,0 +1,3 @@
+- Ownership of the database.
+- In addition, to change owners:
+  - Role membership in `new_owner`.

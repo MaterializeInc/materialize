@@ -16,9 +16,9 @@ use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{
     AuctionView, Event, Generator, LoadGeneratorOutput,
 };
-use rand::SeedableRng;
-use rand::prelude::{Rng, SmallRng};
-use rand::seq::SliceRandom;
+use rand_8::SeedableRng;
+use rand_8::prelude::{Rng, SmallRng};
+use rand_8::seq::SliceRandom;
 
 /// CREATE TABLE organizations
 ///   (

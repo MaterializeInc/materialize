@@ -170,8 +170,7 @@ async fn main() {
         enable_version_flag: true,
     });
 
-    let (_, _tracing_guard) = args
-        .tracing
+    args.tracing
         .configure_tracing(
             StaticTracingConfig {
                 service_name: "catalog-debug",
@@ -605,6 +604,7 @@ async fn upgrade_check(
             unsafe_mode: true,
             all_features: false,
             build_info: &BUILD_INFO,
+            deploy_generation: args.deploy_generation.unwrap_or(0),
             environment_id: args.environment_id.clone(),
             read_only,
             now,
@@ -651,6 +651,7 @@ async fn upgrade_check(
                 // client.
                 persist_client: PersistClient::new_for_tests().await,
                 read_only,
+                force_migration: None,
             },
             persist_client: persist_client.clone(),
             enable_expression_cache_override: None,
@@ -681,7 +682,7 @@ async fn upgrade_check(
             CatalogItem::Table(table) => Some((table.global_id_writes(), table.desc.latest())),
             CatalogItem::Source(source) => Some((source.global_id(), source.desc.clone())),
             CatalogItem::ContinualTask(ct) => Some((ct.global_id(), ct.desc.clone())),
-            CatalogItem::MaterializedView(mv) => Some((mv.global_id(), mv.desc.clone())),
+            CatalogItem::MaterializedView(mv) => Some((mv.global_id_writes(), mv.desc.latest())),
             CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Sink(_)

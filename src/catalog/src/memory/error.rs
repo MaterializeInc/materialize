@@ -78,9 +78,17 @@ pub enum ErrorKind {
     #[error(
         "cannot migrate from catalog version {last_seen_version} to version {this_version} (earlier versions might still work): {cause}"
     )]
-    FailedMigration {
+    FailedCatalogMigration {
         last_seen_version: String,
         this_version: &'static str,
+        cause: String,
+    },
+    #[error(
+        "cannot migrate builtin schemas from version {last_seen_version} to version {this_version}: {cause}"
+    )]
+    FailedBuiltinSchemaMigration {
+        last_seen_version: String,
+        this_version: String,
         cause: String,
     },
     #[error("failpoint {0} reached)")]

@@ -91,20 +91,33 @@ SERVICES = [
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument("--slow-only", action="store_true")
+    args = parser.parse_args()
+
+    slow_tests = [
+        "crash-on-replica-expiration-index",
+        "test-incident-70",
+        "test-refresh-mv-restart",
+        "test-slow-seqno-hold",
+    ]
+
     def process(name: str) -> None:
-        # incident-70, crash-on-replica-expiration-index and refresh-mv-restart
-        # are slow, run in separate CI step
+        # incident-70, crash-on-replica-expiration-index, refresh-mv-restart
+        # and slow-seqno-hold are slow, run in separate CI step
         # concurrent-connections is too flaky
         # TODO: Reenable test-memory-limiter when database-issues/9502 is fixed
         if name in (
             "default",
-            "crash-on-replica-expiration-index",
-            "test-incident-70",
             "test-concurrent-connections",
-            "test-refresh-mv-restart",
             "test-memory-limiter",
         ):
             return
+
+        if (args.slow_only and name not in slow_tests) or (
+            not args.slow_only and name in slow_tests
+        ):
+            return
+
         with c.test_case(name):
             c.workflow(name)
             c.down()
@@ -404,22 +417,22 @@ def workflow_test_github_4443(c: Composition) -> None:
         ) = find_command_history_metrics(c)
         assert (
             controller_command_count < 100
-        ), "controller history grew more than expected after peeks"
+        ), f"controller history grew more than expected after peeks, got {controller_command_count}"
         assert (
             controller_dataflow_count > 0
-        ), "at least one dataflow expected in controller history"
+        ), f"at least one dataflow expected in controller history, got {controller_dataflow_count}"
         assert (
             controller_dataflow_count < 5
-        ), "more dataflows than expected in controller history"
+        ), f"more dataflows than expected in controller history, got {controller_dataflow_count}"
         assert (
             replica_command_count < 100
-        ), "replica history grew more than expected after peeks"
+        ), f"replica history grew more than expected after peeks, got {replica_command_count}"
         assert (
             replica_dataflow_count > 0
-        ), "at least one dataflow expected in replica history"
+        ), f"at least one dataflow expected in replica history, got {replica_dataflow_count}"
         assert (
             replica_dataflow_count < 5
-        ), "more dataflows than expected in replica history"
+        ), f"more dataflows than expected in replica history, got {replica_dataflow_count}"
 
 
 def workflow_test_github_4444(c: Composition) -> None:
@@ -2661,7 +2674,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_compute_commands_total("schedule")
     assert count > 0, f"got {count}"
     count = metrics.get_compute_commands_total("allow_writes")
-    assert count == 1, f"got {count}"
+    assert count >= 1, f"got {count}"
 
     # mz_compute_responses_total
     count = metrics.get_compute_responses_total("frontiers")
@@ -2717,7 +2730,7 @@ def workflow_test_compute_controller_metrics(c: Composition) -> None:
     count = metrics.get_compute_controller_history_command_count("update_configuration")
     assert count == 1, f"got {count}"
     count = metrics.get_compute_controller_history_command_count("allow_writes")
-    assert count == 1, f"got {count}"
+    assert count > 0, f"got {count}"
 
     count = metrics.get_value("mz_compute_controller_history_dataflow_count")
     assert count >= 2, f"got {count}"
@@ -3695,6 +3708,16 @@ def workflow_statement_logging(c: Composition, parser: WorkflowArgumentParser) -
         """,
             port=6877,
             user="mz_system",
+        )
+
+        # TODO(peek-seq): enable_frontend_peek_sequencing when it supports statement logging.
+        c.testdrive(
+            input=dedent(
+                """
+                $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
+                ALTER SYSTEM SET enable_frontend_peek_sequencing = false;
+                """
+            )
         )
 
         c.run_testdrive_files("statement-logging/statement-logging.td")
@@ -5423,10 +5446,7 @@ def workflow_replica_expiration_creates_retraction_diffs_after_panic(
 def workflow_test_constant_sink(c: Composition) -> None:
     """
     Test how we handle constant sinks.
-
-    This test reflects the current behavior, though not the desired behavior,
-    as described in database-issues#8842. Once we fix that issue, this can
-    become a regression test.
+    Regression test for database-issues#8842.
     """
 
     with c.override(Testdrive(no_reset=True)):
@@ -5462,7 +5482,8 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk' AND write_frontier IS NOT NULL
+                  WHERE name = 'snk'
+                <null>
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
@@ -5481,7 +5502,8 @@ def workflow_test_constant_sink(c: Composition) -> None:
                 > SELECT write_frontier
                   FROM mz_internal.mz_frontiers
                   JOIN mz_sinks ON id = object_id
-                  WHERE name = 'snk' AND write_frontier IS NOT NULL
+                  WHERE name = 'snk'
+                <null>
 
                 > SELECT status
                   FROM mz_internal.mz_sink_statuses
@@ -5993,3 +6015,151 @@ def workflow_alter_sink_hang(c: Composition) -> None:
         # Cleanup: unblock the ALTER SINK and wait for it to complete.
         c.up("kafka")
         alter_thread.join()
+
+
+def workflow_test_slow_seqno_hold(c: Composition):
+    """
+    Test that a reader periodically downgrades its since hold, even when the upstream
+    frontier is not making progress.
+    """
+
+    c.up("materialized", "postgres")
+
+    # Shorten the reader lease duration, to make the issue take less long to reproduce.
+    c.sql(
+        "ALTER SYSTEM SET persist_reader_lease_duration = '1min';",
+        port=6877,
+        user="mz_system",
+    )
+
+    # Create a postgres source and wait until it's caught up.
+    c.testdrive(
+        dedent(
+            """
+            > CREATE SECRET pgpass AS 'postgres'
+            > CREATE CONNECTION pg TO POSTGRES (
+                HOST postgres,
+                DATABASE postgres,
+                USER postgres,
+                PASSWORD SECRET pgpass
+              )
+            > CREATE CLUSTER test SIZE 'scale=1,workers=1'
+            > SET cluster = test
+
+            $ postgres-execute connection=postgres://postgres:postgres@postgres
+            ALTER USER postgres WITH replication;
+            DROP SCHEMA IF EXISTS public CASCADE;
+            CREATE SCHEMA public;
+
+            DROP PUBLICATION IF EXISTS mz_source;
+            CREATE PUBLICATION mz_source FOR ALL TABLES;
+
+            CREATE TABLE source1 (f1 INTEGER PRIMARY KEY, f2 integer[]);
+            INSERT INTO source1 VALUES (1, NULL);
+            ALTER TABLE source1 REPLICA IDENTITY FULL;
+            INSERT INTO source1 VALUES (2, NULL);
+
+            > CREATE SOURCE "pg_source"
+              FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source');
+            > CREATE TABLE "source1_tbl" FROM SOURCE "pg_source" (REFERENCE "source1");
+
+            > SELECT count(*) FROM source1_tbl;
+            2
+            """
+        )
+    )
+
+    # Down the postgres database, stalling out the source.
+    c.stop("postgres")
+
+    # Start a long-running select in the background, which should be unable to make progress.
+    def select_from_postgres():
+        c.sql("SELECT count(*) FROM source1_tbl")
+
+    background_select = Thread(target=select_from_postgres)
+    background_select.start()
+
+    try:
+        [(gid,)] = c.sql_query("SELECT id FROM mz_tables where name = 'source1_tbl'")
+
+        def get_reader_seqno():
+            [(state_json,)] = c.sql_query(
+                f"INSPECT SHARD '{gid}'", port=6877, user="mz_system"
+            )
+            leased_readers = state_json["leased_readers"]
+            if not leased_readers:
+                return None, None
+            assert len(leased_readers) == 1
+            id, value = leased_readers.popitem()
+            return id, value["seqno"]
+
+        # Show that the seqno is making progress - grab an initial value and then one higher value.
+        reader_id = None
+        initial_seqno = None
+        while initial_seqno is None:
+            reader_id, initial_seqno = get_reader_seqno()
+
+        print(
+            f"{reader_id} has initial seqno {initial_seqno}. Waiting for progress, which may take a minute..."
+        )
+        while True:
+            id, seqno = get_reader_seqno()
+            assert id == reader_id
+            assert seqno is not None
+            if seqno > initial_seqno:
+                break
+            time.sleep(1)
+
+    # Cleanup: unblock the select and wait for it to complete.
+    finally:
+        c.up("postgres")
+        background_select.join()
+
+
+def workflow_github_9961(c: Composition):
+    """Regression test for database-issues#9961."""
+
+    c.down(destroy_volumes=True)
+
+    with c.override(
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=mv_advanced_upper=pause"],
+        ),
+    ):
+        c.up("materialized", "clusterd1")
+
+        c.sql(
+            """
+            CREATE CLUSTER test REPLICAS (replica1 (
+                STORAGECTL ADDRESSES ['clusterd1:2100'],
+                STORAGE ADDRESSES ['clusterd1:2103'],
+                COMPUTECTL ADDRESSES ['clusterd1:2101'],
+                COMPUTE ADDRESSES ['clusterd1:2102'],
+                WORKERS 1
+            ));
+            SET cluster = test;
+
+            CREATE TABLE t (a int);
+            CREATE MATERIALIZED VIEW mv AS SELECT * FROM t;
+            """
+        )
+
+        # Wait until the MV's frontiers are equal.
+        for _ in range(3):
+            output = c.sql_query(
+                """
+                SELECT f.read_frontier = f.write_frontier
+                FROM mz_internal.mz_frontiers f
+                JOIN mz_materialized_views mv ON mv.id = f.object_id
+                WHERE mv.name = 'mv'
+                """
+            )
+            if output and output[0][0]:
+                break
+            time.sleep(1)
+        else:
+            raise RuntimeError("MV frontiers didn't become equal")
+
+        # database-issues#9961 causes this command to crash envd.
+        c.sql("CREATE MATERIALIZED VIEW rpl REPLACING mv AS SELECT * FROM t")

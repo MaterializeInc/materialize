@@ -26,7 +26,9 @@ use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::HirRelationExpr;
 use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
-use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
+use mz_transform::reprtypecheck::{
+    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
+};
 
 use crate::optimize::dataflows::{ExprPrepStyle, prep_relation_expr};
 use crate::optimize::{
@@ -35,8 +37,8 @@ use crate::optimize::{
 };
 
 pub struct Optimizer<'a> {
-    /// A typechecking context to use throughout the optimizer pipeline.
-    typecheck_ctx: TypecheckContext,
+    /// A representation typechecking context to use throughout the optimizer pipeline.
+    repr_typecheck_ctx: ReprTypecheckContext,
     /// Optimizer config.
     config: OptimizerConfig,
     /// Optimizer metrics.
@@ -53,7 +55,7 @@ pub struct Optimizer<'a> {
 impl<'a> Optimizer<'a> {
     pub fn new(config: OptimizerConfig, metrics: Option<OptimizerMetrics>) -> Self {
         Self {
-            typecheck_ctx: empty_context(),
+            repr_typecheck_ctx: empty_repr_context(),
             config,
             metrics,
             expr_prep_style: None,
@@ -70,7 +72,7 @@ impl<'a> Optimizer<'a> {
         expr_prep_style: ExprPrepStyle<'a>,
     ) -> Optimizer<'a> {
         Self {
-            typecheck_ctx: empty_context(),
+            repr_typecheck_ctx: empty_repr_context(),
             config,
             metrics,
             expr_prep_style: Some(expr_prep_style),
@@ -94,9 +96,9 @@ impl Optimize<HirRelationExpr> for Optimizer<'_> {
         let mut df_meta = DataflowMetainfo::default();
         let mut transform_ctx = TransformCtx::local(
             &self.config.features,
-            &self.typecheck_ctx,
+            &self.repr_typecheck_ctx,
             &mut df_meta,
-            self.metrics.as_ref(),
+            self.metrics.as_mut(),
             None,
         );
 

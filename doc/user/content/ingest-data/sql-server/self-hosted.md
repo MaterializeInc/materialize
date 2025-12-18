@@ -8,6 +8,7 @@ menu:
     identifier: "sql-server-self-hosted"
 aliases:
   - /ingest-data/cdc-sql-server/
+  - /self-managed/v25.1/ingest-data/cdc-sql-server/
 ---
 
 This page shows you how to stream data from a self-hosted SQL Server database
@@ -231,7 +232,6 @@ scenarios, we recommend separating your workloads into multiple clusters for
 {{% sql-server-direct/create-a-cluster %}}
 
 
-
 ### 2. Create a connection
 
 Once you have configured your network, create a connection in Materialize per
@@ -243,7 +243,7 @@ your networking configuration.
 {{% sql-server-direct/ingesting-data/allow-materialize-ips %}}
 {{< /tab >}}
 
-{{< tab "Use an AWS Privatelink">}}
+{{< tab "Use an AWS Privatelink (Cloud-only)">}}
 {{% sql-server-direct/ingesting-data/use-aws-privatelink %}}
 {{< /tab >}}
 

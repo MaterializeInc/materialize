@@ -74,19 +74,16 @@ impl<T, E> ResultExt<T, E> for Result<T, E> {
     where
         E: Into<Infallible>,
     {
-        match self {
-            Ok(t) => t,
-            Err(e) => {
-                let _infallible = e.into();
+        #[allow(unreachable_code)]
+        self.unwrap_or_else(|e| {
+            let _infallible = e.into();
 
-                // This code will forever be unreachable because Infallible is an enum
-                // with no variants, so it's impossible to construct. If it ever does
-                // become possible to construct this will become a compile time error
-                // since there will be a variant we're not matching on.
-                #[allow(unreachable_code)]
-                match _infallible {}
-            }
-        }
+            // This code will forever be unreachable because Infallible is an enum
+            // with no variants, so it's impossible to construct. If it ever does
+            // become possible to construct this will become a compile time error
+            // since there will be a variant we're not matching on.
+            match _infallible {}
+        })
     }
 }
 

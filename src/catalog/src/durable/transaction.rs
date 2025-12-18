@@ -9,6 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use anyhow::anyhow;
@@ -21,7 +22,7 @@ use mz_ore::cast::{u64_to_usize, usize_to_u64};
 use mz_ore::collections::{CollectionExt, HashSet};
 use mz_ore::now::SYSTEM_TIME;
 use mz_ore::vec::VecExt;
-use mz_ore::{soft_assert_no_log, soft_assert_or_log};
+use mz_ore::{soft_assert_no_log, soft_assert_or_log, soft_panic_or_log};
 use mz_persist_types::ShardId;
 use mz_pgrepr::oid::FIRST_USER_OID;
 use mz_proto::{RustType, TryFromProtoError};
@@ -357,8 +358,21 @@ impl<'a> Transaction<'a> {
         oid: u32,
     ) -> Result<(), CatalogError> {
         if let Some(ref password) = attributes.password {
-            let hash =
-                mz_auth::hash::scram256_hash(password).expect("password hash should be valid");
+            let hash = mz_auth::hash::scram256_hash(
+                password,
+                &attributes
+                    .scram_iterations
+                    .or_else(|| {
+                        soft_panic_or_log!(
+                            "Hash iterations must be set if a password is provided."
+                        );
+                        None
+                    })
+                    // This should never happen, but rather than panicking we'll
+                    // set a known secure value as a fallback.
+                    .unwrap_or_else(|| NonZeroU32::new(600_000).expect("known valid")),
+            )
+            .expect("password hash should be valid");
             match self.role_auth.insert(
                 RoleAuthKey { role_id: id },
                 RoleAuthValue {
@@ -1489,8 +1503,11 @@ impl<'a> Transaction<'a> {
 
             match password {
                 PasswordAction::Set(new_password) => {
-                    let hash = mz_auth::hash::scram256_hash(&new_password)
-                        .expect("password hash should be valid");
+                    let hash = mz_auth::hash::scram256_hash(
+                        &new_password.password,
+                        &new_password.scram_iterations,
+                    )
+                    .expect("password hash should be valid");
                     let value = RoleAuthValue {
                         password_hash: Some(hash),
                         updated_at: SYSTEM_TIME(),
@@ -3406,10 +3423,12 @@ where
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use mz_ore::{assert_none, assert_ok};
 
     use mz_ore::now::SYSTEM_TIME;
-    use mz_persist_client::PersistClient;
+    use mz_ore::{assert_none, assert_ok};
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_persist_types::PersistLocation;
+    use semver::Version;
 
     use crate::durable::{TestCatalogStateBuilder, test_bootstrap_args};
     use crate::memory;
@@ -3942,9 +3961,16 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_savepoint() {
-        let persist_client = PersistClient::new_for_tests().await;
-        let state_builder =
-            TestCatalogStateBuilder::new(persist_client).with_default_deploy_generation();
+        const VERSION: Version = Version::new(26, 0, 0);
+        let mut persist_cache = PersistClientCache::new_no_metrics();
+        persist_cache.cfg.build_version = VERSION;
+        let persist_client = persist_cache
+            .open(PersistLocation::new_in_mem())
+            .await
+            .unwrap();
+        let state_builder = TestCatalogStateBuilder::new(persist_client)
+            .with_default_deploy_generation()
+            .with_version(VERSION);
 
         // Initialize catalog.
         let _ = state_builder

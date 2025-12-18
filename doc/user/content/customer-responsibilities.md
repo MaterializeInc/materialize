@@ -1,24 +1,24 @@
 ---
-title: "Customer responsibility model"
-description: "Details about the Materialize's customer responsibility model."
+title: "Customer responsibility model (Cloud)"
+description: "Details about the Materialize Cloud's customer responsibility model."
 menu:
   main:
     parent: 'about'
-    weight: 10
+    weight: 25
 ---
 
-The Materialize platform is built with a **shared responsibility model** to
-ensure the highest levels of data integrity, availability, and resilience. This
-page outlines the specific responsibilities of customers to manage their data
-and connectivity effectively. Understanding and fulfilling these
+The Materialize Cloud platform is built with a **shared responsibility model**
+to ensure the highest levels of data integrity, availability, and resilience.
+This page outlines the specific responsibilities of customers to manage their
+data and connectivity effectively. Understanding and fulfilling these
 responsibilities is critical to leveraging the full potential of the platform.
 
 ### Backup
 
-As part of the Materialize shared responsibility model, customers are tasked
-with maintaining backups of their original data. While Materialize provides
-robust data processing capabilities, ensuring that you have a comprehensive
-backup strategy is crucial. This includes:
+As part of the Materialize Cloud's shared responsibility model, customers are
+tasked with maintaining backups of their original data. While Materialize
+provides robust data processing capabilities, ensuring that you have a
+comprehensive backup strategy is crucial. This includes:
 
 - **Regular backups**. Implementing regular backup schedules that align with
     your data recovery and business continuity plans.
@@ -66,7 +66,7 @@ This includes:
 ### Account management
 
 Tenant accounts and account permissions are set by the customer using native
-[access control](/security/access-control/) features.
+[access control](/manage/access-control/) features.
 2FA, SSO, and password requirements are configurable and highly recommended.
 
 ### Data accuracy

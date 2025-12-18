@@ -1,26 +1,4 @@
 aggregate_with_filter ::= aggregate_name '(' expression ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
-alter_cluster_set ::=
-  'ALTER' 'CLUSTER' name 'SET' '(' (cluster_option '=' value)* ')'
-  ('WITH' with_options)?
-alter_cluster_set_with_options ::= 'WITH' '(' 'WAIT' ( ( 'UNTIL' 'READY' '(' (wait_until_ready_option '='? value)* ')' ) | ( 'FOR' '='? duration ) ) ')'
-alter_cluster_reset ::=
-  'ALTER' 'CLUSTER' name 'RESET' '(' (cluster_option_name)* ')'
-alter_connection ::=
-  'ALTER' 'CONNECTION' 'IF EXISTS'? name
-    (
-      (
-        'SET' '(' option '=' value ')'
-        | ('DROP' | 'RESET') '(' option ')'
-      )
-      ( ','
-        (
-          'SET' '(' option '=' value ')'
-          | ('DROP' | 'RESET') '(' option ')'
-        )
-      ) *
-      | 'ROTATE' 'KEYS'
-    )
-    ( 'WITH'? '(' field val ( ',' field val )* ')' )?
 alter_default_privileges ::=
   'ALTER' 'DEFAULT' 'PRIVILEGES' 'FOR' (( 'ROLE' | 'USER' ) target_role (',' target_role)* | 'ALL' 'ROLES' ) ( 'IN' 'SCHEMA' schema_name (',' schema_name)* | 'IN' 'DATABASE' database_name (',' database_name)* )? ( abbreviated_grant | abbreviated_revoke )
 alter_network_policy::='ALTER' 'NETWORK POLICY' name '('  'RULES' ( '(' network_policy_rule (',' network_policy_rule)* ')' )? ')'
@@ -28,54 +6,10 @@ abbreviated_grant ::=
   'GRANT' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'TO' 'GROUP'? grantee (',' grantee)*
 abbreviated_revoke ::=
   'REVOKE' ((privilege (',' privilege)*) | 'ALL' 'PRIVILEGES'? ) 'ON' ('TABLES' | 'TYPES' | 'SECRETS' | 'CONNECTIONS' | 'DATABASES' | 'SCHEMAS' | 'CLUSTERS') 'FROM' 'GROUP'? revokee (',' revokee)*
-alter_owner ::=
-  'ALTER' ('CLUSTER' | 'CLUSTER REPLICA' | 'CONNECTION' | 'DATABASE' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'TYPE' | 'SECRET' ) name 'OWNER TO' new_owner
-alter_rename ::=
-  'ALTER' ('CONNECTION' | 'CLUSTER' | 'CLUSTER REPLICA' | 'INDEX' | 'SCHEMA' | 'SOURCE' | 'SINK' | 'VIEW' | 'MATERIALIZED VIEW' | 'TABLE' | 'SECRET' ) name 'RENAME TO' new_name
-alter_swap ::=
-  'ALTER' ('CLUSTER' | 'SCHEMA') name 'SWAP' 'WITH' target_name
-alter_sink ::=
-  'ALTER' 'SINK' name 'SET' 'FROM' item_name
-alter_table_set ::=
-  'ALTER' 'TABLE' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_table_reset ::=
-  'ALTER' 'TABLE' name 'RESET' '(' 'RETAIN HISTORY' ')'
-alter_index_set ::=
-  'ALTER' 'INDEX' name 'SET' ('ENABLED' | ('(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'))
-alter_index_reset ::=
-  'ALTER' 'INDEX' name 'RESET' '(' 'RETAIN HISTORY' ')'
-alter_materialized_view_set ::=
-  'ALTER' 'MATERIALIZED VIEW' name 'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_materialized_view_reset ::=
-  'ALTER' 'MATERIALIZED VIEW' name 'RESET' '(' 'RETAIN HISTORY' ')'
-alter_role ::=
-    'ALTER' 'ROLE' role_name ( alter_role_attributes | alter_role_set )
-alter_role_attributes ::= 'WITH'? 'INHERIT'
-alter_role_set ::= ('SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' ) | 'RESET' name)
-alter_secret ::=
-  'ALTER' 'SECRET' 'IF EXISTS'? name AS value
-alter_source ::=
-  'ALTER' 'SOURCE' 'IF EXISTS'? name (
-    alter_source_add_clause
-    | alter_source_set_retain_history_clause
-    | alter_source_reset_retain_history_clause
-  )
-alter_source_add_clause ::=
-  'ADD' ('SUBSOURCE' | 'TABLE') table_name ('AS' subsrc_name)?  (',' table_name ('AS' subsrc_name)? )* with_options
-alter_source_set_retain_history_clause ::=
-  'SET' '(' ('RETAIN HISTORY' '='? 'FOR' retention_period) ')'
-alter_source_reset_retain_history_clause ::=
-  'RESET' '(' 'RETAIN HISTORY' ')'
-alter_system_set_stmt ::=
-  'ALTER' 'SYSTEM' 'SET' name ( 'TO' | '=' ) ( value | 'DEFAULT' )
-alter_system_reset_stmt ::=
-  'ALTER' 'SYSTEM' 'RESET' name
 array_agg ::=
   'array_agg' '(' values  ( 'ORDER' 'BY' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? ( ',' col_ref ( 'ASC' | 'DESC' )? ( 'NULLS LAST' | 'NULLS FIRST' )? )* )? ')' ('FILTER' '(' 'WHERE' filter_clause ')')?
 as_of ::=
   'AS' 'OF' ( 'AT' 'LEAST' )? timestamp_expression
-close ::=
-  'CLOSE' cursor_name
 col_option ::=
   'NOT' 'NULL' |
   'DEFAULT' expr
@@ -158,8 +92,6 @@ create_materialized_view ::=
     ('IN CLUSTER' cluster_name)?
     ('WITH' with_options)?
     'AS' select_stmt
-create_role ::=
-    'CREATE' 'ROLE' role_name ('WITH'? 'INHERIT')?
 create_secret ::=
     'CREATE' 'SECRET' ('IF NOT EXISTS')? name 'AS' value
 create_schema ::=
@@ -259,14 +191,6 @@ create_view ::=
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' ('TEMP' | 'TEMPORARY')? 'VIEW' 'IF NOT EXISTS' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt |
   'CREATE' 'OR REPLACE' 'VIEW' view_name ( '(' col_ident ( ',' col_ident )* ')' )? 'AS' select_stmt
-create_table ::=
-  'CREATE' ('TEMP' | 'TEMPORARY')? 'TABLE' table_name
-  '(' ((col_name col_type col_option*) (',' col_name col_type col_option*)*)? ')'
-  with_options?
-deallocate ::=
-  'DEALLOCATE' ('PREPARE')?  (name | 'ALL')?
-declare ::=
-  'DECLARE' cursor_name 'CURSOR' ('WITHOUT' 'HOLD')? 'FOR' query
 insert ::=
   'INSERT' 'INTO' table_name ('AS'? alias)
   ( '(' (col_name) ( ',' col_name )* ')' )?
@@ -275,44 +199,6 @@ insert ::=
     | query
   )
   ( 'RETURNING' ( '*' | output_expression ( AS? output_name )? ) ( ',' ( '*' | output_expression ( AS? output_name )? ) )* )?
-delete_stmt ::=
-  'DELETE FROM' table_name ('AS'? alias)?
-  'USING' (from_item) ( ( ',' from_item ) )*
-  'WHERE' condition
-discard ::=
-  'DISCARD' ('TEMP' | 'TEMPORARY' | 'ALL')
-drop_connection ::=
-    'DROP' 'CONNECTION' ('IF EXISTS')? connection_name ('CASCADE' | 'RESTRICT')?
-drop_cluster ::=
-  'DROP' 'CLUSTER' ('IF EXISTS')? cluster_name ('CASCADE' | 'RESTRICT')?
-drop_cluster_replica ::=
-  'DROP' 'CLUSTER' 'REPLICA' ('IF EXISTS')? cluster_name.replica_name
-drop_database ::=
-    'DROP' 'DATABASE' ('IF EXISTS')? database_name ('CASCADE' | 'RESTRICT')?
-drop_materialized_view ::=
-  'DROP' 'MATERIALIZED VIEW' 'IF EXISTS'? view_name ('RESTRICT' | 'CASCADE')?
-drop_network_policy ::=
-  'DROP' 'NETWORK POLICY' 'IF EXISTS'? name
-drop_owned ::=
-  'DROP' 'OWNED' 'BY' role_name ( ',' role_name )* ('RESTRICT' | 'CASCADE')?
-drop_role ::=
-    'DROP' 'ROLE' ('IF EXISTS')? role_name
-drop_secret ::=
-    'DROP' 'SECRET' ('IF EXISTS')? secret_name ('CASCADE' | 'RESTRICT')?
-drop_schema ::=
-    'DROP' 'SCHEMA' ('IF EXISTS')? schema_name ('CASCADE' | 'RESTRICT')?
-drop_sink ::=
-  'DROP' 'SINK' ('IF' 'EXISTS')? sink_name
-drop_source ::=
-  'DROP' 'SOURCE' ('IF' 'EXISTS')? source_name ('RESTRICT' | 'CASCADE')?
-  drop_table ::=
-    'DROP' 'TABLE' ('IF' 'EXISTS')? table_name ('RESTRICT' | 'CASCADE')?
-drop_type ::=
-  'DROP' 'TYPE' ('IF' 'EXISTS')? data_type_name ('RESTRICT' | 'CASCADE')?
-drop_view ::=
-  'DROP' 'VIEW' ('IF' 'EXISTS')? view_name ('RESTRICT' | 'CASCADE')?
-drop_user ::=
-    'DROP' 'USER' ('IF EXISTS')? role_name
 execute ::=
   'EXECUTE' name   ('(' (parameter_value) ( ',' parameter_value )* ')')?
 explain_filter_pushdown ::=

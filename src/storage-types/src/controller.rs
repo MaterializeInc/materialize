@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
 use tracing::error;
 
-use crate::errors::DataflowError;
+use crate::errors::{CollectionMissing, DataflowError};
 use crate::instances::StorageInstanceId;
 use crate::sources::SourceData;
 
@@ -329,6 +329,12 @@ impl<T> From<AlterError> for StorageError<T> {
 impl<T> From<DataflowError> for StorageError<T> {
     fn from(error: DataflowError) -> Self {
         Self::DataflowError(error)
+    }
+}
+
+impl<T> From<CollectionMissing> for StorageError<T> {
+    fn from(err: CollectionMissing) -> Self {
+        Self::IdentifierMissing(err.0)
     }
 }
 

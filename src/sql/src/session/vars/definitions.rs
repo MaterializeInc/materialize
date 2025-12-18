@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use std::borrow::Cow;
+use std::num::NonZeroU32;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -686,6 +687,16 @@ pub static UNSAFE_NEW_TRANSACTION_WALL_TIME: VarDefinition = VarDefinition::new(
     true,
 );
 
+pub static SCRAM_ITERATIONS: VarDefinition = VarDefinition::new(
+    "scram_iterations",
+    // / The default iteration count as suggested by
+    // / <https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html>
+    value!(NonZeroU32; NonZeroU32::new(600_000).unwrap()),
+    "Iterations to use when hashing passwords. Higher iterations are more secure, but take longer to validated. \
+    Please consider the security risks before reducing this below the default value.",
+    true,
+);
+
 /// Tuning for RocksDB used by `UPSERT` sources that takes effect on restart.
 pub mod upsert_rocksdb {
     use super::*;
@@ -1325,7 +1336,7 @@ pub static ENABLE_DEFAULT_CONNECTION_VALIDATION: VarDefinition = VarDefinition::
 
 pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new(
     "statement_logging_max_data_credit",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(50 * 1024 * 1024)),
     // The idea is that during periods of low logging, tokens can accumulate up to this value,
     // and then be depleted during periods of high logging.
     "The maximum number of bytes that can be logged for statement logging in short burts, or NULL if unlimited (Materialize).",
@@ -1334,7 +1345,7 @@ pub static STATEMENT_LOGGING_MAX_DATA_CREDIT: VarDefinition = VarDefinition::new
 
 pub static STATEMENT_LOGGING_TARGET_DATA_RATE: VarDefinition = VarDefinition::new(
     "statement_logging_target_data_rate",
-    value!(Option<usize>; None),
+    value!(Option<usize>; Some(2071)),
     "The maximum sustained data rate of statement logging, in bytes per second, or NULL if unlimited (Materialize).",
     false,
 );
@@ -2204,6 +2215,18 @@ feature_flags!(
     {
         name: enable_iceberg_sink,
         desc: "Whether to enable the Iceberg sink.",
+        default: false,
+        enable_for_item_parsing: true,
+    },
+    {
+        name: enable_frontend_peek_sequencing, // currently, changes only take effect for new sessions
+        desc: "Enables the new peek sequencing code, which does most of its work in the Adapter Frontend instead of the Coordinator main task.",
+        default: false,
+        enable_for_item_parsing: false,
+    },
+    {
+        name: enable_replacement_materialized_views,
+        desc: "Whether to enable replacement materialized views.",
         default: false,
         enable_for_item_parsing: true,
     },

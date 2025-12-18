@@ -13,14 +13,16 @@ depending on the connection, you must explicitly drop them first, or use the
 
 ## Syntax
 
-{{< diagram "drop-connection.svg" >}}
+```mzsql
+DROP CONNECTION [IF EXISTS] <connection_name> [CASCADE|RESTRICT];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the specified connection does not exist.
-_connection&lowbar;name_ | The connection you want to drop. For available connections, see [`SHOW CONNECTIONS`](../show-connections).
-**CASCADE** | Remove the connection and its dependent objects.
-**RESTRICT** | Do not drop the connection if it has dependencies. _(Default)_
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified connection does not exist.
+`connection_name>` | The connection you want to drop. For available connections, see [`SHOW CONNECTIONS`](../show-connections).
+**CASCADE** | Optional. If specified, remove the connection and its dependent objects.
+**RESTRICT** | Optional. Do not drop the connection if it has dependencies. _(Default)_
 
 ## Examples
 

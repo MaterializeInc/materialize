@@ -41,6 +41,9 @@ on:
       - "src/catalog/src/builtin.rs"
       - test/sqllogictest/mz_catalog_server_index_accounting.slt
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     name: "Notify about changes to the SQL parser"
@@ -49,7 +52,7 @@ jobs:
     steps:
       - name: "Path filter"
         id: filter
-        uses: dorny/paths-filter@v2
+        uses: dorny/paths-filter@4512585405083f25c027a35db413c2b3b9006d50 # v2.11.1
         with:
           filters: |
             sql-parser:
@@ -63,6 +66,8 @@ jobs:
               - 'test/sqllogictest/mz_catalog_server_index_accounting.slt'
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: "Check Retained Metric Changes"
         id: check-retain-metrics
         if: steps.filter.outputs.builtin-rs == 'true'

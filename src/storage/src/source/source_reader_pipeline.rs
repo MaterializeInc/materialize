@@ -32,7 +32,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::stream::StreamExt;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -57,6 +57,7 @@ use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::capture::capture::Capture;
 use timely::dataflow::operators::capture::{Event, EventPusher};
 use timely::dataflow::operators::core::Map as _;
+use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::{Broadcast, CapabilitySet, Inspect, Leave};
 use timely::dataflow::scopes::Child;
@@ -177,7 +178,7 @@ pub fn create_raw_source<'g, G: Scope<Timestamp = ()>, C>(
 ) -> (
     BTreeMap<
         GlobalId,
-        Collection<
+        VecCollection<
             Child<'g, G, mz_repr::Timestamp>,
             Result<SourceOutput<C::Time>, DataflowError>,
             Diff,
@@ -334,11 +335,13 @@ where
         let name = format!("SourceGenericStats({})", id);
         let mut builder = OperatorBuilderRc::new(name, scope.clone());
 
-        let (mut health_output, derived_health) =
-            builder.new_output::<CapacityContainerBuilder<_>>();
+        let (health_output, derived_health) = builder.new_output();
+        let mut health_output =
+            OutputBuilder::<_, CapacityContainerBuilder<_>>::from(health_output);
         health_streams.push(derived_health);
 
-        let (mut output, new_export) = builder.new_output::<CapacityContainerBuilder<_>>();
+        let (output, new_export) = builder.new_output();
+        let mut output = OutputBuilder::<_, CapacityContainerBuilder<_>>::from(output);
 
         let mut input = builder.new_input(&export.inner, Pipeline);
         export_collections.insert(id, new_export.as_collection());
@@ -436,7 +439,7 @@ fn remap_operator<G, FromTime>(
     mut probed_upper: watch::Receiver<Option<Probe<FromTime>>>,
     mut ingested_upper: watch::Receiver<MutableAntichain<FromTime>>,
     remap_relation_desc: RelationDesc,
-) -> (Collection<G, FromTime, Diff>, PressOnDropButton)
+) -> (VecCollection<G, FromTime, Diff>, PressOnDropButton)
 where
     G: Scope<Timestamp = mz_repr::Timestamp>,
     FromTime: SourceTimestamp,
@@ -617,7 +620,7 @@ where
 /// virtual (through persist) feedback edge so that we convert the `IntoTime` resumption frontier
 /// into the `FromTime` frontier that is used with the source's `OffsetCommiter`.
 fn reclock_committed_upper<G, FromTime>(
-    bindings: &Collection<G, FromTime, Diff>,
+    bindings: &VecCollection<G, FromTime, Diff>,
     as_of: Antichain<G::Timestamp>,
     committed_upper: &Stream<G, ()>,
     id: GlobalId,
@@ -766,7 +769,7 @@ where
     let is_active_worker = active_worker == scope.index();
 
     let mut op = AsyncOperatorBuilder::new("synthesize_probes".into(), scope);
-    let (output, output_stream) = op.new_output();
+    let (output, output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
     let mut input = op.new_input_for(progress, Pipeline, &output);
 
     op.build(|caps| async move {

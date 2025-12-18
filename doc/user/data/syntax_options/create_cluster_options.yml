@@ -1,9 +1,9 @@
 columns:
-  - column: "Field"
+  - column: "Syntax element"
   - column: "Value"
   - column: "Description"
 rows:
-  - Field: "`SIZE`"
+  - Syntax element: "`SIZE`"
     Value: "text"
     Description: |
 
@@ -14,7 +14,7 @@ rows:
       See [Size](/sql/create-cluster#size) for details as well as legacy sizes
       available.
 
-  - Field: "`REPLICATION FACTOR`"
+  - Syntax element: "`REPLICATION FACTOR`"
     Value: "text"
     Description: |
 
@@ -23,7 +23,7 @@ rows:
 
       Default: `1`
 
-  - Field: "`MANAGED`"
+  - Syntax element: "`MANAGED`"
     Value: "bool"
     Description: >-
 
@@ -44,7 +44,7 @@ rows:
       {{</ tip >}}
 
       Default: `TRUE`
-  - Field: "`SCHEDULE`"
+  - Syntax element: "`SCHEDULE`"
     Value: "[`MANUAL`,`ON REFRESH`]"
     Description: |
 

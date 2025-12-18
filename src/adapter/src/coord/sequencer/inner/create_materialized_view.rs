@@ -21,7 +21,7 @@ use mz_repr::explain::{ExprHumanizerExt, TransientItem};
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::refresh_schedule::RefreshSchedule;
-use mz_repr::{CatalogItemId, Datum, Row};
+use mz_repr::{CatalogItemId, Datum, RelationVersion, Row, VersionedRelationDesc};
 use mz_sql::ast::ExplainStage;
 use mz_sql::catalog::CatalogError;
 use mz_sql::names::ResolvedIds;
@@ -29,7 +29,7 @@ use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql_parser::ast;
 use mz_sql_parser::ast::display::AstDisplay;
-use mz_storage_client::controller::{CollectionDescription, DataSource};
+use mz_storage_client::controller::CollectionDescription;
 use std::collections::BTreeMap;
 use timely::progress::Antichain;
 use tracing::Span;
@@ -178,7 +178,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(item) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
-        let gid = item.global_id();
+        let gid = item.global_id_writes();
 
         let create_sql = item.create_sql.clone();
         let plan_result = self
@@ -216,7 +216,7 @@ impl Coordinator {
 
     #[instrument]
     pub(super) fn explain_materialized_view(
-        &mut self,
+        &self,
         ctx: &ExecuteContext,
         plan::ExplainPlanPlan {
             stage,
@@ -231,7 +231,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(view) = self.catalog().get_entry(&id).item() else {
             unreachable!() // Asserted in `plan_explain_plan`.
         };
-        let gid = view.global_id();
+        let gid = view.global_id_writes();
 
         let Some(dataflow_metainfo) = self.catalog().try_get_dataflow_metainfo(&gid) else {
             if !id.is_system() {
@@ -315,7 +315,7 @@ impl Coordinator {
 
     #[instrument]
     fn create_materialized_view_validate(
-        &mut self,
+        &self,
         session: &Session,
         plan: plan::CreateMaterializedViewPlan,
         resolved_ids: ResolvedIds,
@@ -561,6 +561,7 @@ impl Coordinator {
                             mut create_sql,
                             expr: raw_expr,
                             dependencies,
+                            replacement_target,
                             cluster_id,
                             non_null_assertions,
                             compaction_window,
@@ -577,6 +578,23 @@ impl Coordinator {
             global_lir_plan,
             ..
         } = stage;
+
+        // Validate the replacement target, if one is given.
+        // TODO(alter-mv): Could we do this already in planning?
+        if let Some(target_id) = replacement_target {
+            let Some(target) = self.catalog().get_entry(&target_id).materialized_view() else {
+                return Err(AdapterError::internal(
+                    "create materialized view",
+                    "replacement target not a materialized view",
+                ));
+            };
+
+            // For now, we don't support schema evolution for materialized views.
+            if &target.desc.latest() != global_lir_plan.desc() {
+                return Err(AdapterError::Unstructured(anyhow!("incompatible schemas")));
+            }
+        }
+
         // Timestamp selection
         let id_bundle = dataflow_import_id_bundle(global_lir_plan.df_desc(), cluster_id);
 
@@ -626,6 +644,9 @@ impl Coordinator {
             create_sql = stmt.to_ast_string_stable();
         }
 
+        let desc = VersionedRelationDesc::new(global_lir_plan.desc().clone());
+        let collections = [(RelationVersion::root(), global_id)].into_iter().collect();
+
         let ops = vec![
             catalog::Op::DropObjects(
                 drop_ids
@@ -640,10 +661,11 @@ impl Coordinator {
                     create_sql,
                     raw_expr: raw_expr.into(),
                     optimized_expr: local_mir_plan.expr().into(),
-                    desc: global_lir_plan.desc().clone(),
-                    global_id,
+                    desc,
+                    collections,
                     resolved_ids,
                     dependencies,
+                    replacement_target,
                     cluster_id,
                     non_null_assertions,
                     custom_logical_compaction_window: compaction_window,
@@ -684,6 +706,18 @@ impl Coordinator {
 
                     let storage_metadata = coord.catalog.state().storage_metadata();
 
+                    let mut collection_desc =
+                        CollectionDescription::for_other(output_desc, Some(storage_as_of));
+                    let mut allow_writes = true;
+
+                    // If this MV is intended to replace another one, we need to start it in
+                    // read-only mode, targeting the shard of the replacement target.
+                    if let Some(target_id) = replacement_target {
+                        let target_gid = coord.catalog.get_entry(&target_id).latest_global_id();
+                        collection_desc.primary = Some(target_gid);
+                        allow_writes = false;
+                    }
+
                     // Announce the creation of the materialized view source.
                     coord
                         .controller
@@ -691,16 +725,7 @@ impl Coordinator {
                         .create_collections(
                             storage_metadata,
                             None,
-                            vec![(
-                                global_id,
-                                CollectionDescription {
-                                    desc: output_desc,
-                                    data_source: DataSource::Other,
-                                    since: Some(storage_as_of),
-                                    status_collection_id: None,
-                                    timeline: None,
-                                },
-                            )],
+                            vec![(global_id, collection_desc)],
                         )
                         .await
                         .unwrap_or_terminate("cannot fail to append");
@@ -719,6 +744,10 @@ impl Coordinator {
                             notice_builtin_updates_fut,
                         )
                         .await;
+
+                    if allow_writes {
+                        coord.allow_writes(cluster_id, global_id);
+                    }
                 })
             })
             .await;
@@ -816,7 +845,7 @@ impl Coordinator {
 
     #[instrument]
     async fn create_materialized_view_explain(
-        &mut self,
+        &self,
         session: &Session,
         CreateMaterializedViewExplain {
             global_id,
@@ -887,7 +916,7 @@ impl Coordinator {
         let CatalogItem::MaterializedView(mview) = self.catalog().get_entry(&item_id).item() else {
             unreachable!() // Asserted in `sequence_explain_pushdown`.
         };
-        let gid = mview.global_id();
+        let gid = mview.global_id_writes();
         let mview = mview.clone();
 
         let Some(plan) = self.catalog().try_get_physical_plan(&gid).cloned() else {
@@ -924,7 +953,7 @@ impl Coordinator {
             None => ResultSpec::value_all(),
         };
 
-        self.render_explain_pushdown(
+        self.execute_explain_pushdown_with_read_holds(
             ctx,
             as_of,
             mz_now,

@@ -54,7 +54,11 @@ use crate::util::viewable_variables;
 #[derive(Debug, Clone)]
 pub struct ComputeInstanceSnapshot {
     instance_id: ComputeInstanceId,
-    collections: BTreeSet<GlobalId>,
+    /// The collections that exist on this compute instance. If it's None, then any collection that
+    /// a caller asks us about is considered to exist.
+    /// TODO(peek-seq): Remove this completely once all callers are able to handle suddenly missing
+    /// collections, in which case we won't need a `ComputeInstanceSnapshot` at all.
+    collections: Option<BTreeSet<GlobalId>>,
 }
 
 impl ComputeInstanceSnapshot {
@@ -64,8 +68,22 @@ impl ComputeInstanceSnapshot {
             .collection_ids(id)
             .map(|collection_ids| Self {
                 instance_id: id,
-                collections: collection_ids.collect(),
+                collections: Some(collection_ids.collect()),
             })
+    }
+
+    pub fn new_from_parts(instance_id: ComputeInstanceId, collections: BTreeSet<GlobalId>) -> Self {
+        Self {
+            instance_id,
+            collections: Some(collections),
+        }
+    }
+
+    pub fn new_without_collections(instance_id: ComputeInstanceId) -> Self {
+        Self {
+            instance_id,
+            collections: None,
+        }
     }
 
     /// Return the ID of this compute instance.
@@ -73,14 +91,20 @@ impl ComputeInstanceSnapshot {
         self.instance_id
     }
 
-    /// Reports whether the instance contains the indicated collection.
+    /// Reports whether the instance contains the indicated collection. If the snapshot doesn't
+    /// track collections, then it returns true.
     pub fn contains_collection(&self, id: &GlobalId) -> bool {
-        self.collections.contains(id)
+        self.collections
+            .as_ref()
+            .map_or(true, |collections| collections.contains(id))
     }
 
     /// Inserts the given collection into the snapshot.
     pub fn insert_collection(&mut self, id: GlobalId) {
-        self.collections.insert(id);
+        self.collections
+            .as_mut()
+            .expect("insert_collection called on snapshot with None collections")
+            .insert(id);
     }
 }
 
@@ -197,11 +221,7 @@ impl<'a> DataflowBuilder<'a> {
                     };
                     let entry = self.catalog.get_entry(id);
                     let desc = entry
-                        .desc(
-                            &self
-                                .catalog
-                                .resolve_full_name(entry.name(), entry.conn_id()),
-                        )
+                        .relation_desc()
                         .expect("indexes can only be built on items with descs");
                     dataflow.import_index(index_id, index_desc, desc.typ().clone(), monotonic);
                 }
@@ -210,7 +230,7 @@ impl<'a> DataflowBuilder<'a> {
                 let entry = self.catalog.get_entry(id);
                 match entry.item() {
                     CatalogItem::Table(table) => {
-                        dataflow.import_source(*id, table.desc_for(id).typ().clone(), monotonic);
+                        dataflow.import_source(*id, table.desc_for(id).into_typ(), monotonic);
                     }
                     CatalogItem::Source(source) => {
                         dataflow.import_source(*id, source.desc.typ().clone(), monotonic);
@@ -220,7 +240,7 @@ impl<'a> DataflowBuilder<'a> {
                         self.import_view_into_dataflow(id, expr, dataflow, features)?;
                     }
                     CatalogItem::MaterializedView(mview) => {
-                        dataflow.import_source(*id, mview.desc.typ().clone(), monotonic);
+                        dataflow.import_source(*id, mview.desc_for(id).into_typ(), monotonic);
                     }
                     CatalogItem::Log(log) => {
                         dataflow.import_source(*id, log.variant.desc().typ().clone(), monotonic);

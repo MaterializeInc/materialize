@@ -207,7 +207,7 @@ impl Coordinator {
     }
 
     #[mz_ore::instrument(level = "debug")]
-    pub async fn storage_usage_fetch(&mut self) {
+    pub async fn storage_usage_fetch(&self) {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
         let client = self.storage_usage_client.clone();
 
@@ -262,7 +262,12 @@ impl Coordinator {
             .collect();
 
         match self.catalog_transact_inner(None, ops).await {
-            Ok(table_updates) => {
+            Ok((table_updates, catalog_updates)) => {
+                assert!(
+                    catalog_updates.is_empty(),
+                    "applying builtin table updates does not produce catalog implications"
+                );
+
                 let internal_cmd_tx = self.internal_cmd_tx.clone();
                 let task_span =
                     info_span!(parent: None, "coord::storage_usage_update::table_updates");
@@ -314,7 +319,7 @@ impl Coordinator {
             EpochMillis::try_from(self.storage_usage_collection_interval.as_millis())
                 .expect("storage usage collection interval must fit into u64");
         let offset =
-            rngs::SmallRng::from_seed(seed).gen_range(0..storage_usage_collection_interval_ms);
+            rngs::SmallRng::from_seed(seed).random_range(0..storage_usage_collection_interval_ms);
         let now_ts: EpochMillis = self.peek_local_write_ts().await.into();
 
         // 2) Determine the amount of ms between now and the next collection time.

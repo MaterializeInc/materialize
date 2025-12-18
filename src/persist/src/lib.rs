@@ -30,5 +30,7 @@ pub mod metrics;
 pub mod postgres;
 pub mod retry;
 pub mod s3;
+#[cfg(feature = "turmoil")]
+pub mod turmoil;
 pub mod unreliable;
 pub mod workload;

@@ -395,37 +395,18 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Increment the version in the catalog upgrade shard to the code's current version.
     async fn increment_catalog_upgrade_shard_version(&self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
-        let mut write_handle: WriteHandle<(), (), Timestamp, StorageDiff> = self
+
+        let () = self
             .persist_client
-            .open_writer(
+            .upgrade_version::<(), (), Timestamp, StorageDiff>(
                 upgrade_shard_id,
-                Arc::new(UnitSchema::default()),
-                Arc::new(UnitSchema::default()),
                 Diagnostics {
                     shard_name: UPGRADE_SHARD_NAME.to_string(),
-                    handle_purpose: "increment durable catalog upgrade shard version".to_string(),
+                    handle_purpose: "durable catalog state upgrade".to_string(),
                 },
             )
             .await
             .expect("invalid usage");
-        const EMPTY_UPDATES: &[(((), ()), Timestamp, StorageDiff)] = &[];
-        let mut upper = write_handle.fetch_recent_upper().await.clone();
-        loop {
-            let next_upper = upper
-                .iter()
-                .map(|timestamp| timestamp.step_forward())
-                .collect();
-            match write_handle
-                .compare_and_append(EMPTY_UPDATES, upper, next_upper)
-                .await
-                .expect("invalid usage")
-            {
-                Ok(()) => break,
-                Err(upper_mismatch) => {
-                    upper = upper_mismatch.current;
-                }
-            }
-        }
     }
 
     /// Fetch the current upper of the catalog state.
@@ -875,9 +856,7 @@ impl<U: ApplyUpdate<StateUpdateKind>> PersistHandle<StateUpdateKind, U> {
     ///
     /// The output is consolidated and sorted by timestamp in ascending order.
     #[mz_ore::instrument(level = "debug")]
-    async fn persist_snapshot(
-        &mut self,
-    ) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
+    async fn persist_snapshot(&self) -> impl Iterator<Item = StateUpdate> + DoubleEndedIterator {
         let mut read_handle = self.read_handle().await;
         let as_of = as_of(&read_handle, self.upper);
         let snapshot = snapshot_binary(&mut read_handle, as_of, &self.metrics)
@@ -998,16 +977,12 @@ impl UnopenedPersistCatalogState {
         // If this is `None`, no version was found in the upgrade shard. This is a brand-new
         // environment, and we don't need to worry about fencing existing users.
         if let Some(version_in_upgrade_shard) = version_in_upgrade_shard {
-            // IMPORTANT: We swap the order of arguments here! Normally it's
-            // `code_version, data_version`, and we check whether a given code
-            // version, which is usually _older_, is allowed to touch a shard
-            // that has been touched by a _future_ version.
-            //
-            // By inverting argument order, we check if our version is too far
-            // ahead of the version in the shard.
-            if mz_persist_client::cfg::check_data_version(&version_in_upgrade_shard, &version)
-                .is_err()
-            {
+            // Check that the current version of the code can handle data from the shard.
+            // (We used to reverse this check, to confirm that whatever code wrote the data
+            // in the shard would be able to read data written by the current version... but
+            // we now require the current code to be able to maintain compat with whatever
+            // data format versions pass this check.)
+            if !mz_persist_client::cfg::code_can_write_data(&version, &version_in_upgrade_shard) {
                 return Err(DurableCatalogError::IncompatiblePersistVersion {
                     found_version: version_in_upgrade_shard,
                     catalog_version: version,
@@ -1269,6 +1244,18 @@ impl UnopenedPersistCatalogState {
         let catalog_content_version = catalog.catalog_content_version.to_string();
         let txn = if is_initialized {
             let mut txn = catalog.transaction().await?;
+
+            // Ad-hoc migration: Initialize the `migration_version` expected by adapter to be
+            // present in existing catalogs.
+            //
+            // Note: Need to exclude read-only catalog mode here, because in that mode all
+            // transactions are expected to be no-ops.
+            // TODO: remove this once we only support upgrades from version >= 0.164
+            if txn.get_setting("migration_version".into()).is_none() && mode != Mode::Readonly {
+                let old_version = txn.get_catalog_content_version();
+                txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
+            }
+
             txn.set_catalog_content_version(catalog_content_version)?;
             txn
         } else {
@@ -1310,6 +1297,7 @@ impl UnopenedPersistCatalogState {
             catalog
                 .increment_catalog_upgrade_shard_version(self.update_applier.organization_id)
                 .await;
+
             let write_handle = catalog
                 .persist_client
                 .open_writer::<SourceData, (), Timestamp, i64>(
@@ -1609,6 +1597,10 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             .epoch
     }
 
+    fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
+
     #[mz_ore::instrument(level = "debug")]
     async fn expire(self: Box<Self>) {
         self.expire().await
@@ -1722,8 +1714,14 @@ impl DurableCatalogState for PersistCatalogState {
         matches!(self.mode, Mode::Savepoint)
     }
 
-    fn mark_bootstrap_complete(&mut self) {
+    async fn mark_bootstrap_complete(&mut self) {
         self.bootstrap_complete = true;
+        if matches!(self.mode, Mode::Writable) {
+            self.since_handle
+                .upgrade_version()
+                .await
+                .expect("invalid usage")
+        }
     }
 
     #[mz_ore::instrument(level = "debug")]

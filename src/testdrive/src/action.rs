@@ -39,7 +39,6 @@ use mz_persist_client::rpc::PubSubClientConnection;
 use mz_persist_client::{PersistClient, PersistLocation};
 use mz_sql::catalog::EnvironmentId;
 use mz_tls_util::make_tls;
-use rand::Rng;
 use rdkafka::ClientConfig;
 use rdkafka::producer::Producer;
 use regex::{Captures, Regex};
@@ -79,7 +78,7 @@ mod version_check;
 mod webhook;
 
 /// User-settable configuration parameters.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     // === Testdrive options. ===
     /// Variables to make available to the testdrive script.
@@ -113,6 +112,9 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    pub check_statement_logging: bool,
     /// Whether to automatically rewrite wrong results instead of failing.
     pub rewrite_results: bool,
 
@@ -132,8 +134,11 @@ pub struct Config {
     /// testdrive will connect to via HTTP.
     pub materialize_internal_http_port: u16,
     /// The port for the password endpoints of the materialize instance that
-    /// testdrive will connect to via HTTP.
+    /// testdrive will connect to via SQL.
     pub materialize_password_sql_port: u16,
+    /// The port for the SASL endpoints of the materialize instance that
+    /// testdrive will connect to via SQL.
+    pub materialize_sasl_sql_port: u16,
     /// Session parameters to set after connecting to materialize.
     pub materialize_params: Vec<(String, String)>,
     /// An optional catalog configuration.
@@ -195,6 +200,7 @@ pub struct MaterializeState {
     internal_sql_addr: String,
     internal_http_addr: String,
     password_sql_addr: String,
+    sasl_sql_addr: String,
     user: String,
     pgclient: tokio_postgres::Client,
     environment_id: EnvironmentId,
@@ -202,6 +208,9 @@ pub struct MaterializeState {
 }
 
 pub struct State {
+    // The Config that this `State` was originally created from.
+    pub config: Config,
+
     // === Testdrive state. ===
     arg_vars: BTreeMap<String, String>,
     cmd_vars: BTreeMap<String, String>,
@@ -214,6 +223,7 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    check_statement_logging: bool,
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
     regex_replacement: String,
@@ -337,6 +347,10 @@ impl State {
         self.cmd_vars.insert(
             "testdrive.materialize-password-sql-addr".into(),
             self.materialize.password_sql_addr.clone(),
+        );
+        self.cmd_vars.insert(
+            "testdrive.materialize-sasl-sql-addr".into(),
+            self.materialize.sasl_sql_addr.clone(),
         );
         self.cmd_vars.insert(
             "testdrive.materialize-user".into(),
@@ -929,7 +943,7 @@ fn substitute_vars(
 pub async fn create_state(
     config: &Config,
 ) -> Result<(State, impl Future<Output = Result<(), anyhow::Error>>), anyhow::Error> {
-    let seed = config.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
+    let seed = config.seed.unwrap_or_else(rand::random);
 
     let (_tempfile, temp_path) = match &config.temp_dir {
         Some(temp_dir) => {
@@ -959,10 +973,8 @@ pub async fn create_state(
         })
         .await?;
 
-    let pgconn_task = task::spawn(|| "pgconn_task", pgconn).map(|join| {
-        join.expect("pgconn_task unexpectedly canceled")
-            .context("running SQL connection")
-    });
+    let pgconn_task =
+        task::spawn(|| "pgconn_task", pgconn).map(|join| join.context("running SQL connection"));
 
     let materialize_state =
         create_materialize_state(&config, materialize_catalog_config, pgclient).await?;
@@ -1032,6 +1044,8 @@ pub async fn create_state(
     };
 
     let mut state = State {
+        config: config.clone(),
+
         // === Testdrive state. ===
         arg_vars: config.arg_vars.clone(),
         cmd_vars: BTreeMap::new(),
@@ -1044,6 +1058,7 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        check_statement_logging: config.check_statement_logging,
         consistency_checks_adhoc_skip: false,
         regex: None,
         regex_replacement: set::DEFAULT_REGEX_REPLACEMENT.into(),
@@ -1138,6 +1153,11 @@ async fn create_materialize_state(
         materialize_url.host_str().unwrap(),
         config.materialize_password_sql_port
     );
+    let materialize_sasl_sql_addr = format!(
+        "{}:{}",
+        materialize_url.host_str().unwrap(),
+        config.materialize_sasl_sql_port
+    );
     let materialize_internal_http_addr = format!(
         "{}:{}",
         materialize_internal_url.host_str().unwrap(),
@@ -1165,6 +1185,7 @@ async fn create_materialize_state(
         internal_sql_addr: materialize_internal_sql_addr,
         internal_http_addr: materialize_internal_http_addr,
         password_sql_addr: materialize_password_sql_addr,
+        sasl_sql_addr: materialize_sasl_sql_addr,
         user: materialize_user,
         pgclient,
         environment_id,

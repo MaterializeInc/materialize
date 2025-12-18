@@ -38,10 +38,6 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::{
 use mz_auth::password::Password;
 use mz_aws_secrets_controller::AwsSecretsController;
 use mz_build_info::BuildInfo;
-use mz_catalog::builtin::{
-    UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE,
-    UnsafeBuiltinTableFingerprintWhitespace,
-};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_cloud_resources::{AwsExternalIdPrefix, CloudResourceController};
 use mz_controller::ControllerConfig;
@@ -354,10 +350,10 @@ pub struct Args {
     )]
     metadata_backend_url: Option<SensitiveUrl>,
 
-    /// Helm chart version for self-hosted Materialize. This version does not correspond to the
-    /// Materialize (core) version (v0.125.0), but is time-based for our twice-a-year helm chart
-    /// releases: v25.1.Z, v25.2.Z in 2025, then v26.1.Z, v26.2.Z in 2026, and so on. This version
-    /// is displayed in addition in `SELECT mz_version()` if set.
+    /// Helm chart version for self-hosted Materialize. This version is supposed to correspond to
+    /// the Materialize (core) version. This version is displayed in addition in `SELECT
+    /// mz_version()` if set and if it differs from the Materialize (core) version (which it should
+    /// not!).
     #[clap(long, env = "HELM_CHART_VERSION")]
     helm_chart_version: Option<String>,
 
@@ -617,21 +613,13 @@ pub struct Args {
     tracing: TracingCliArgs,
 
     // === Testing options. ===
-    /// Injects arbitrary whitespace into builtin table fingerprints, which can
-    /// trigger builtin item migrations. The amount of whitespace is determined
-    /// by
-    /// `unsafe_builtin_table_fingerprint_whitespace_version`.
+    /// Forces the migration of all builtin storage collections using the
+    /// specified migration mechanism (either "evolution" or "replacement").
+    ///
     /// This argument is meant for testing only and as the names suggests
     /// should not be set in production.
     #[clap(long, value_enum, requires = "unsafe_mode")]
-    unsafe_builtin_table_fingerprint_whitespace: Option<UnsafeBuiltinTableFingerprintWhitespace>,
-    /// Controls the amount of whitespace injected by
-    /// `unsafe_builtin_table_fingerprint_whitespace`.
-    /// Incrementing this value can allow triggering multiple builtin
-    /// migrations from a single test. This argument is meant for testing only
-    /// and as the names suggests should not be set in production.
-    #[clap(long, requires = "unsafe_mode", default_value = "1")]
-    unsafe_builtin_table_fingerprint_whitespace_version: usize,
+    unsafe_force_builtin_schema_migration: Option<String>,
 }
 
 #[derive(ValueEnum, Debug, Clone)]
@@ -695,13 +683,9 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     // Configure testing options.
-    if let Some(fingerprint_whitespace) = args.unsafe_builtin_table_fingerprint_whitespace {
-        assert!(args.unsafe_mode);
-        let whitespace = "\n".repeat(args.unsafe_builtin_table_fingerprint_whitespace_version);
-        *UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE
-            .lock()
-            .expect("lock poisoned") = Some((fingerprint_whitespace, whitespace));
-    }
+    let force_builtin_schema_migration = args
+        .unsafe_force_builtin_schema_migration
+        .inspect(|_mechanism| assert!(args.unsafe_mode));
 
     // Start Tokio runtime.
 
@@ -731,7 +715,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     };
 
     let metrics_registry = MetricsRegistry::new();
-    let (tracing_handle, _tracing_guard) = runtime.block_on(args.tracing.configure_tracing(
+    let tracing_handle = runtime.block_on(args.tracing.configure_tracing(
         StaticTracingConfig {
             service_name: "environmentd",
             build_info: BUILD_INFO,
@@ -1168,6 +1152,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                 tracing_handle,
                 // Testing options.
                 now,
+                force_builtin_schema_migration,
             })
             .await
             .maybe_terminate("booting server")?;

@@ -4,7 +4,7 @@ description: "The Materialize Emulator is an all-in-one Docker image available o
 menu:
   main:
     parent: "get-started"
-    weight: 16
+    weight: 15
     name: "Download and run Materialize Emulator"
 
 ---
@@ -99,9 +99,8 @@ not suitable for full feature set evaluations or production workloads.
   Cloud
   account](https://materialize.com/register/?utm_campaign=General&utm_source=documentation).
   The full experience of Materialize is also available as a self-managed
-  offering. See [Self-managed Materialize].
+  offering. See [Self-managed Materialize](/self-managed-deployments/).
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 
 ### Technical Support
 

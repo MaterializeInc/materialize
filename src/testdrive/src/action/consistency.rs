@@ -13,14 +13,14 @@ use std::io::Write as _;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::action;
+use crate::action::{ControlFlow, Run, State};
+use crate::parser::{BuiltinCommand, LineReader, parse};
 use anyhow::{Context, anyhow, bail};
 use mz_ore::retry::{Retry, RetryResult};
 use mz_persist_client::{PersistLocation, ShardId};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-
-use crate::action::{ControlFlow, State};
-use crate::parser::BuiltinCommand;
 
 /// Level of consistency checks we should enable on a testdrive run.
 #[derive(clap::ValueEnum, Default, Debug, Copy, Clone, PartialEq, Eq)]
@@ -72,6 +72,13 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
 
     let coordinator = check_coordinator(state).await.context("coordinator");
     let catalog_state = check_catalog_state(state).await.context("catalog state");
+    let statement_logging_state = if state.check_statement_logging {
+        check_statement_logging(state)
+            .await
+            .context("statement logging state")
+    } else {
+        Ok(())
+    };
     // TODO(parkmycar): Fix subsources so they don't leak their shards and then add a leaked shards
     // consistency check.
 
@@ -82,6 +89,9 @@ pub async fn run_consistency_checks(state: &State) -> Result<ControlFlow, anyhow
     }
     if let Err(e) = catalog_state {
         writeln!(&mut msg, "catalog inconsistency: {e:?}")?;
+    }
+    if let Err(e) = statement_logging_state {
+        writeln!(&mut msg, "statement logging inconsistency: {e:?}")?;
     }
 
     if msg.is_empty() {
@@ -232,6 +242,77 @@ async fn check_catalog_state(state: &State) -> Result<(), anyhow::Error> {
 
         bail!("the in-memory state of the catalog does not match its on-disk state:\n{diff}");
     }
+
+    Ok(())
+}
+
+/// This currently checks only whether the statement log reports all statements to be in a finished
+/// state. (We used to have an assertion for roughly this in `ExecuteContextExtra`'s Drop, but that
+/// had to be removed due to <https://github.com/MaterializeInc/database-issues/issues/7304>)
+///
+/// Note that this check should succeed regardless of the statement logging sampling rate.
+///
+/// Ideally, we could run this at any moment successfully, but currently system restarts can mess
+/// this up: there is a buffering of statement log writes, with the buffers flushed every 5 seconds.
+/// So, if a system kill/restart comes at a bad moment, then some statements might get permanently
+/// stuck in an unfinished state in the statement log. Therefore, we currently run this only after
+/// normal `.td`s, but not after cluster tests and whatnot that kill/restart the system.
+/// (Also, this can take several seconds due to the 5 sec buffering, so we run this only in Nightly
+/// by default.)
+async fn check_statement_logging(orig_state: &State) -> Result<(), anyhow::Error> {
+    use crate::util::postgres::postgres_client;
+
+    // Create new Testdrive state, so that we create a new session to Materialize, and we forget any
+    // weird Testdrive setting that the `.td` file before us might have set.
+    let (mut state, state_cleanup) = action::create_state(&orig_state.config).await?;
+
+    // First, query the current value of enable_rbac_checks so we can restore it later
+    let mz_system_url = format!(
+        "postgres://mz_system:materialize@{}",
+        state.materialize.internal_sql_addr
+    );
+
+    let (client, _handle) = postgres_client(&mz_system_url, state.default_timeout)
+        .await
+        .context("connecting as mz_system to query enable_rbac_checks")?;
+
+    let row = client
+        .query_one("SHOW enable_rbac_checks", &[])
+        .await
+        .context("querying enable_rbac_checks")?;
+
+    let original_value: String = row.get(0);
+
+    // Create a testdrive script to check that all statements have finished executing.
+    // We disable RBAC checks so we can query mz_internal tables, similar to statement-logging.td.
+    // We restore the setting to its original value at the end.
+    let check_script = format!(
+        r#"
+$ postgres-execute connection=postgres://mz_system:materialize@{0}
+ALTER SYSTEM SET enable_rbac_checks = false
+
+> SELECT count(*)
+  FROM mz_internal.mz_recent_activity_log
+  WHERE (finished_at IS NULL OR finished_status IS NULL) AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%';
+0
+
+$ postgres-execute connection=postgres://mz_system:materialize@{0}
+ALTER SYSTEM SET enable_rbac_checks = {1}
+"#,
+        state.materialize.internal_sql_addr, original_value
+    );
+
+    let mut line_reader = LineReader::new(&check_script);
+    let cmds = parse(&mut line_reader).map_err(|e| anyhow!("{}", e.source))?;
+
+    for cmd in cmds {
+        cmd.run(&mut state)
+            .await
+            .map_err(|e| anyhow!("{}", e.source))?;
+    }
+
+    drop(state);
+    state_cleanup.await?;
 
     Ok(())
 }

@@ -52,11 +52,13 @@ fn main() {
         .type_attribute(".", "#[allow(missing_docs)]")
         .btree_map(["."])
         .bytes([
+            ".mz_persist_client.batch.ProtoBatch",
             ".mz_persist_client.internal.diff.ProtoStateFieldDiffs",
-            ".mz_persist_client.internal.state.ProtoHollowBatchPart",
-            ".mz_persist_client.internal.state.ProtoVersionedData",
-            ".mz_persist_client.internal.state.ProtoEncodedSchemas",
             ".mz_persist_client.internal.service.ProtoPushDiff",
+            ".mz_persist_client.internal.state.ProtoEncodedSchemas",
+            ".mz_persist_client.internal.state.ProtoHollowBatchPart",
+            ".mz_persist_client.internal.state.ProtoRunMeta",
+            ".mz_persist_client.internal.state.ProtoVersionedData",
         ]);
 
     // Setting `emit_rerun_if_changed(false)` below causes tonic to entirely

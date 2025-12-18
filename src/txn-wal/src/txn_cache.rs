@@ -951,10 +951,7 @@ where
                 continue;
             }
             let part_updates = txns_subscribe.fetch_batch_part(part).await;
-            let part_updates = part_updates.map(|((k, v), t, d)| {
-                let (k, v) = (k.expect("valid key"), v.expect("valid val"));
-                (C::decode(k, v), t, d)
-            });
+            let part_updates = part_updates.map(|((k, v), t, d)| (C::decode(k, v), t, d));
             if let Some(only_data_id) = only_data_id.as_ref() {
                 updates.extend(part_updates.filter(|(x, _, _)| x.data_id() == only_data_id));
             } else {
@@ -1163,10 +1160,7 @@ mod tests {
             snapshot.sort();
             snapshot
                 .into_iter()
-                .flat_map(|((k, v), _t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    std::iter::repeat(k).take(usize::try_from(d).unwrap())
-                })
+                .flat_map(|((k, ()), _t, d)| std::iter::repeat(k).take(usize::try_from(d).unwrap()))
                 .collect()
         }
 

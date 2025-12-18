@@ -12,62 +12,234 @@ be used to indicate that the privileges should be revoked from all roles
 
 ## Syntax
 
-{{< diagram "revoke-privilege.svg" >}}
+{{< note >}}
 
-### `privilege`
+The syntax supports the `ALL [PRIVILEGES]` shorthand to refer to all
+[*applicable* privileges](#applicable-privileges-to-revoke) for the
+object type.
 
-{{< diagram "privilege.svg" >}}
+{{</note>}}
 
-Field                                               | Use
-----------------------------------------------------|--------------------------------------------------
-_object_name_                                       | The object that privileges are being revoked from.
-**ALL** _object_type_ **IN SCHEMA** schema_name     | The privilege will be revoked from all objects of _object_type_ in _schema_name_.
-**ALL** _object_type_ **IN DATABASE** database_name | The privilege will be revoked from all objects of _object_type_ in _database_name_.
-**ALL** _object_type_                               | The privilege will be revoked from all objects of _object_type_, excluding system objects.
-_role_name_                                         | The role name that is losing privileges. Use the `PUBLIC` pseudo-role to revoke privileges from all roles.
-**SELECT**                                          | Allows reading rows from an object. The abbreviation for this privilege is 'r' (read).
-**INSERT**                                          | Allows inserting into an object. The abbreviation for this privilege is 'a' (append).
-**UPDATE**                                          | Allows updating an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'w' (write).
-**DELETE**                                          | Allows deleting from an object (requires **SELECT** if a read is necessary). The abbreviation for this privilege is 'd'.
-**CREATE**                                          | Allows creating a new object within another object. The abbreviation for this privilege is 'C'.
-**USAGE**                                           | Allows using an object or looking up members of an object. The abbreviation for this privilege is 'U'.
-**CREATEROLE**                                      | Allows creating, altering, deleting roles and the ability to grant and revoke role membership. This privilege is very powerful. It allows roles to grant and revoke membership in other roles, even if it doesn't have explicit membership in those roles. As a consequence, any role with this privilege can obtain the privileges of any other role in the system. The abbreviation for this privilege is 'R' (Role).
-**CREATEDB**                                        | Allows creating databases. The abbreviation for this privilege is 'B' (dataBase).
-**CREATECLUSTER**                                   | Allows creating clusters. The abbreviation for this privilege is 'N' (compute Node).
-**ALL PRIVILEGES**                                  | All applicable privileges for the provided object type.
+
+{{< tabs >}}
+
+<!-- ============ CLUSTER syntax ==============  -->
+
+{{< tab "Cluster" >}}
+
+For specific cluster(s):
+
+```mzsql
+REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+ON CLUSTER <name> [, ...]
+FROM <role_name> [, ... ]
+;
+```
+
+For all clusters:
+
+```mzsql
+REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+ON ALL CLUSTERS
+FROM <role_name> [, ... ]
+;
+```
+{{</ tab >}}
+
+<!-- ================== Connection syntax ======================  -->
+
+{{< tab "Connection">}}
+
+For specific connection(s):
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON CONNECTION <name> [, ...]
+FROM <role_name> [, ... ];
+```
+
+For all connections or all connections in specific schema(s) or in database(s):
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON ALL CONNECTIONS
+ [ IN <SCHEMA | DATABASE> <name> [, <name> ...] ]
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+<!-- ================== Database syntax =====================  -->
+
+{{< tab "Database">}}
+
+For specific database(s):
+
+```mzsql
+REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+ON DATABASE <name> [, ...]
+FROM <role_name> [, ... ];
+```
+
+For all database:
+
+```mzsql
+REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+ON ALL DATABASES
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+<!-- =============== Materialized view syntax ===================  -->
+
+{{< tab "Materialized view/view/source">}}
+
+{{< note >}}
+{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
+{{</ note >}}
+
+For specific materialized view(s)/view(s)/source(s):
+
+```mzsql
+REVOKE <SELECT | ALL [PRIVILEGES]>
+ON [TABLE] <name> [, <name> ...] -- For PostgreSQL compatibility, if specifying type, use TABLE
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+<!-- ==================== Schema syntax =====================  -->
+
+{{< tab "Schema">}}
+
+For specific schema(s):
+
+```mzsql
+REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+ON SCHEMA <name> [, ...]
+FROM <role_name> [, ... ];
+```
+
+For all schemas or all schemas in a specific database(s):
+
+```mzsql
+REVOKE <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+ON ALL SCHEMAS [IN DATABASE <name> [, <name> ...]]
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+<!-- ==================== Secret syntax =====================  -->
+
+{{< tab "Secret">}}
+
+For specific secret(s):
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]> [, ... ]
+ON SECRET <name> [, ...]
+FROM <role_name> [, ... ];
+```
+
+For all secrets or all secrets in a specific database(s):
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]> [, ... ]
+ON ALL SECRET [IN DATABASE <name> [, <name> ...]]
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+<!-- ==================== System syntax =====================  -->
+
+{{< tab "System">}}
+
+```mzsql
+REVOKE <CREATEROLE | CREATEDB | CREATECLUSTER | CREATENETWORKPOLICY | ALL [PRIVILEGES]> [, ... ]
+ON SYSTEM
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+<!-- ==================== Type syntax =======================  -->
+
+{{< tab "Type">}}
+
+For specific view(s):
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON TYPE <name> [, <name> ...]
+FROM <role_name> [, ... ];
+```
+
+For all types or all types in a specific schema(s) or in a specific database(s):
+
+```mzsql
+REVOKE <USAGE | ALL [PRIVILEGES]>
+ON ALL TYPES
+  [ IN <SCHEMA|DATABASE> <name> [, <name> ...] ]
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+<!-- ======================= Table syntax =====================  -->
+
+{{< tab "Table">}}
+
+For specific table(s):
+
+```mzsql
+REVOKE <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
+ON [TABLE] <name> [, <name> ...]
+FROM <role_name> [, ... ];
+```
+
+For all tables or all tables in a specific schema(s) or in a specific database(s):
+
+{{< note >}}
+
+{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
+
+{{</ note >}}
+
+```mzsql
+REVOKE <SELECT | INSERT | UPDATE | DELETE | ALL [PRIVILEGES]> [, ...]
+ON ALL TABLES
+  [ IN <SCHEMA|DATABASE> <name> [, <name> ...] ]
+FROM <role_name> [, ... ];
+```
+
+{{</ tab >}}
+
+{{</ tabs >}}
 
 ## Details
 
-The following tables describes which privileges are applicable to which objects:
+### Applicable privileges to revoke
 
-{{< note >}}
-For PostgreSQL compatibility reasons, you must specify `TABLE` as the object
-type for sources, views, and materialized views, or omit the object type.
-{{</ note >}}
+{{< tabs >}}
+{{< tab "By Privilege" >}}
+{{< yaml-table data="rbac/privileges_objects" >}}
+{{</ tab >}}
+{{< tab "By Object" >}}
+{{< yaml-table data="rbac/object_privileges" >}}
+{{</ tab >}}
+{{</ tabs >}}
 
-| Object type           | All privileges |
-|-----------------------|----------------|
-| `SYSTEM`              | RBN            |
-| `DATABASE`            | UC             |
-| `SCHEMA`              | UC             |
-| `TABLE`               | arwd           |
-| (`VIEW`)              | r              |
-| (`MATERIALIZED VIEW`) | r              |
-| `INDEX`               |                |
-| `TYPE`                | U              |
-| (`SOURCE`)            | r              |
-| `SINK`                |                |
-| `CONNECTION`          | U              |
-| `SECRET`              | U              |
-| `CLUSTER`             | UC             |
 
-Unlike PostgreSQL, `UPDATE` and `DELETE` always require `SELECT` privileges on the object being
-updated.
+### Privileges
 
-### Compatibility
+The privileges required to execute this statement are:
 
-For PostgreSQL compatibility reasons, you must specify `TABLE` as the object
-type for sources, views, and materialized views, or omit the object type.
+{{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md"
+>}}
+
 
 ## Examples
 
@@ -87,12 +259,6 @@ REVOKE ALL ON CLUSTER dev FROM joe;
 REVOKE CREATEDB ON SYSTEM FROM joe;
 ```
 
-## Privileges
-
-The privileges required to execute this statement are:
-
-{{< include-md file="shared-content/sql-command-privileges/revoke-privilege.md"
->}}
 
 ## Useful views
 
@@ -118,6 +284,6 @@ The privileges required to execute this statement are:
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`GRANT PRIVILEGE`](../revoke-privilege)
 - [`ALTER DEFAULT PRIVILEGES`](../alter-default-privileges)

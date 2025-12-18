@@ -15,7 +15,7 @@ use std::mem;
 use std::sync::Arc;
 use std::time::Instant;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
@@ -117,7 +117,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub fn new(machine: Machine<K, V, T, D>, isolated_runtime: Arc<IsolatedRuntime>) -> Self {
         let (gc_req_sender, mut gc_req_recv) =
@@ -168,7 +168,6 @@ where
                                 .await
                         })
                         .await
-                        .expect("gc_and_truncate failed")
                 };
                 machine.applier.metrics.gc.finished.inc();
                 machine.applier.shard_metrics.gc_finished.inc();

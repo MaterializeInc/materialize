@@ -96,6 +96,7 @@ class Materialized(Service):
         bootstrap_replica_size: str | None = None,
         default_replication_factor: int = 1,
         listeners_config_path: str = f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json",
+        config_sync_file_path: str | None = None,
         support_external_clusterd: bool = False,
         networks: (
             dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
@@ -220,7 +221,7 @@ class Materialized(Service):
 
         if force_migrations is not None and image is None:
             command += [
-                f"--unsafe-builtin-table-fingerprint-whitespace={force_migrations}",
+                f"--unsafe-force-builtin-schema-migration={force_migrations}",
             ]
             if not unsafe_mode:
                 command += ["--unsafe-mode"]
@@ -322,6 +323,12 @@ class Materialized(Service):
             volumes.append(f"{listeners_config_path}:/listeners_config")
             environment.append("MZ_LISTENERS_CONFIG_PATH=/listeners_config")
 
+        if config_sync_file_path is not None:
+            # assert os.path.exists(str(config_sync_file_path))
+            volumes.append(f"{config_sync_file_path}:/config_sync.json")
+            environment.append("MZ_CONFIG_SYNC_FILE_PATH=/config_sync.json")
+            environment.append("MZ_CONFIG_SYNC_LOOP_INTERVAL=100ms")
+
         if image_version is None or image_version >= "v0.140.0-dev":
             if "MZ_CI_LICENSE_KEY" in os.environ:
                 # We have to take care to write the license_key file atomically
@@ -348,7 +355,7 @@ class Materialized(Service):
             {
                 "depends_on": depends_graph,
                 "command": command,
-                "ports": [6875, 6876, 6877, 6878, 6880, 26257],
+                "ports": [6875, 6876, 6877, 6878, 6880, 6881, 26257],
                 "environment": environment,
                 "volumes": volumes,
                 "tmpfs": ["/tmp"],

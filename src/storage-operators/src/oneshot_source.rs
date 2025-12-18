@@ -336,8 +336,7 @@ where
                         info!(%worker_id, object = %object.name(), "splitting object");
                         format_.split_work(source_.clone(), object, checksum).await
                     })
-                    .await
-                    .expect("failed to spawn task")?;
+                    .await?;
 
                     requests.extend(work_requests);
                 }

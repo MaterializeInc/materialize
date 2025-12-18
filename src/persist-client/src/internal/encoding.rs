@@ -19,7 +19,7 @@ use bytes::{Buf, Bytes};
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use mz_ore::cast::CastInto;
-use mz_ore::{assert_none, halt};
+use mz_ore::{assert_none, halt, soft_panic_or_log};
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::{SeqNo, VersionedData};
 use mz_persist::metrics::ColumnarMetrics;
@@ -32,7 +32,7 @@ use proptest::strategy::Strategy;
 use prost::Message;
 use semver::Version;
 use serde::ser::SerializeStruct;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
@@ -192,6 +192,105 @@ impl<T: Message + Default> RustType<Bytes> for LazyProto<T> {
     }
 }
 
+/// Our Proto implementation, Prost, cannot handle unrecognized fields. This means that unexpected
+/// data will be dropped at deserialization time, which means that we can't reliably roundtrip data
+/// from future versions of the code, which causes trouble during upgrades and at other times.
+///
+/// This type works around the issue by defining an unstructured metadata map. Keys are expected to
+/// be well-known strings defined in the code; values are bytes, expected to be encoded protobuf.
+/// (The association between the two is lightly enforced with the affiliated [MetadataKey] type.)
+/// It's safe to add new metadata keys in new versions, since even unrecognized keys can be losslessly
+/// roundtripped. However, if the metadata is not safe for the old version to ignore -- perhaps it
+/// needs to be kept in sync with some other part of the struct -- you will need to use a more
+/// heavyweight migration for it.
+#[derive(Debug, Default, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub(crate) struct MetadataMap(BTreeMap<String, Bytes>);
+
+/// Associating a field name and an associated Proto message type, for lookup in a metadata map.
+///
+/// It is an error to reuse key names, or to change the type associated with a particular name.
+/// It is polite to choose short names, since they get serialized alongside every struct.
+#[allow(unused)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub(crate) struct MetadataKey<V, P = V> {
+    name: &'static str,
+    type_: PhantomData<(V, P)>,
+}
+
+impl<V, P> MetadataKey<V, P> {
+    #[allow(unused)]
+    pub(crate) const fn new(name: &'static str) -> Self {
+        MetadataKey {
+            name,
+            type_: PhantomData,
+        }
+    }
+}
+
+impl serde::Serialize for MetadataMap {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_map(self.0.iter())
+    }
+}
+
+impl MetadataMap {
+    /// Returns true iff no metadata keys have been set.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Serialize and insert a new key into the map, replacing any existing value for the key.
+    #[allow(unused)]
+    pub fn set<V: RustType<P>, P: prost::Message>(&mut self, key: MetadataKey<V, P>, value: V) {
+        self.0.insert(
+            String::from(key.name),
+            Bytes::from(value.into_proto_owned().encode_to_vec()),
+        );
+    }
+
+    /// Deserialize a key from the map, if it is present.
+    #[allow(unused)]
+    pub fn get<V: RustType<P>, P: prost::Message + Default>(
+        &self,
+        key: MetadataKey<V, P>,
+    ) -> Option<V> {
+        let proto = match P::decode(self.0.get(key.name)?.as_ref()) {
+            Ok(decoded) => decoded,
+            Err(err) => {
+                // This should be impossible unless one of the MetadataKey invariants are broken.
+                soft_panic_or_log!(
+                    "error when decoding {key}; was it redefined? {err}",
+                    key = key.name
+                );
+                return None;
+            }
+        };
+
+        match proto.into_rust() {
+            Ok(proto) => Some(proto),
+            Err(err) => {
+                // This should be impossible unless one of the MetadataKey invariants are broken.
+                soft_panic_or_log!(
+                    "error when decoding {key}; was it redefined? {err}",
+                    key = key.name
+                );
+                None
+            }
+        }
+    }
+}
+impl RustType<BTreeMap<String, Bytes>> for MetadataMap {
+    fn into_proto(&self) -> BTreeMap<String, Bytes> {
+        self.0.clone()
+    }
+    fn from_proto(proto: BTreeMap<String, Bytes>) -> Result<Self, TryFromProtoError> {
+        Ok(MetadataMap(proto))
+    }
+}
+
 pub(crate) fn parse_id(id_prefix: &str, id_type: &str, encoded: &str) -> Result<[u8; 16], String> {
     let uuid_encoded = match encoded.strip_prefix(id_prefix) {
         Some(x) => x,
@@ -202,14 +301,14 @@ pub(crate) fn parse_id(id_prefix: &str, id_type: &str, encoded: &str) -> Result<
     Ok(*uuid.as_bytes())
 }
 
-pub(crate) fn check_data_version(code_version: &Version, data_version: &Version) {
-    if let Err(msg) = cfg::check_data_version(code_version, data_version) {
+pub(crate) fn assert_code_can_read_data(code_version: &Version, data_version: &Version) {
+    if !cfg::code_can_read_data(code_version, data_version) {
         // We can't catch halts, so panic in test, so we can get unit test
         // coverage.
         if cfg!(test) {
-            panic!("{msg}");
+            panic!("code at version {code_version} cannot read data with version {data_version}");
         } else {
-            halt!("{msg}");
+            halt!("code at version {code_version} cannot read data with version {data_version}");
         }
     }
 }
@@ -324,7 +423,7 @@ impl<T: Timestamp + Lattice + Codec64> StateDiff<T> {
             // case, fail loudly.
             .expect("internal error: invalid encoded state");
         let diff = Self::from_proto(proto).expect("internal error: invalid encoded state");
-        check_data_version(build_version, &diff.applier_version);
+        assert_code_can_read_data(build_version, &diff.applier_version);
         diff
     }
 }
@@ -736,7 +835,7 @@ impl<T: Timestamp + Lattice + Codec64> UntypedState<T> {
         let state = Rollup::from_proto(proto)
             .expect("internal error: invalid encoded state")
             .state;
-        check_data_version(build_version, &state.state.applier_version);
+        assert_code_can_read_data(build_version, &state.state.collections.version);
         state
     }
 }
@@ -864,7 +963,7 @@ impl RustType<ProtoInlinedDiffs> for InlinedDiffs {
 impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
     fn into_proto(&self) -> ProtoRollup {
         ProtoRollup {
-            applier_version: self.state.state.applier_version.to_string(),
+            applier_version: self.state.state.collections.version.to_string(),
             shard_id: self.state.state.shard_id.into_proto(),
             seqno: self.state.state.seqno.into_proto(),
             walltime_ms: self.state.state.walltime_ms.into_proto(),
@@ -972,6 +1071,7 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             .transpose()?;
         let active_gc = x.active_gc.map(|gc| gc.into_rust()).transpose()?;
         let collections = StateCollections {
+            version: applier_version.clone(),
             rollups,
             active_rollup,
             active_gc,
@@ -983,7 +1083,6 @@ impl<T: Timestamp + Lattice + Codec64> RustType<ProtoRollup> for Rollup<T> {
             trace: x.trace.into_rust_if_some("trace")?,
         };
         let state = State {
-            applier_version,
             shard_id: x.shard_id.into_rust()?,
             seqno: x.seqno.into_rust()?,
             walltime_ms: x.walltime_ms,
@@ -1362,6 +1461,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatch> for HollowBatch<T> {
         parts.extend(proto.deprecated_keys.into_iter().map(|key| {
             RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey(key),
+                meta: Default::default(),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
                 structured_key_lower: None,
@@ -1418,6 +1518,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             deprecated_schema_id: self.deprecated_schema.into_proto(),
             id: self.id.into_proto(),
             len: self.len.into_proto(),
+            meta: self.meta.into_proto(),
         }
     }
 
@@ -1434,6 +1535,7 @@ impl RustType<ProtoRunMeta> for RunMeta {
             deprecated_schema: proto.deprecated_schema_id.into_rust()?,
             id: proto.id.into_rust()?,
             len: proto.len.into_rust()?,
+            meta: proto.meta.into_rust()?,
         })
     }
 }
@@ -1472,6 +1574,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for HollowRunRef<T> 
             schema_id: None,
             structured_key_lower: self.structured_key_lower.into_proto(),
             deprecated_schema_id: None,
+            metadata: BTreeMap::default(),
         };
         part
     }
@@ -1509,6 +1612,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 format: x.format.map(|f| f.into_proto()),
                 schema_id: x.schema_id.into_proto(),
                 deprecated_schema_id: x.deprecated_schema_id.into_proto(),
+                metadata: BTreeMap::default(),
             },
             BatchPart::Inline {
                 updates,
@@ -1526,6 +1630,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
                 format: None,
                 schema_id: schema_id.into_proto(),
                 deprecated_schema_id: deprecated_schema_id.into_proto(),
+                metadata: BTreeMap::default(),
             },
         }
     }
@@ -1541,6 +1646,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoHollowBatchPart> for BatchPart<T> {
             Some(proto_hollow_batch_part::Kind::Key(key)) => {
                 Ok(BatchPart::Hollow(HollowBatchPart {
                     key: key.into_rust()?,
+                    meta: proto.metadata.into_rust()?,
                     encoded_size_bytes: proto.encoded_size_bytes.into_rust()?,
                     key_lower: proto.key_lower.into(),
                     structured_key_lower: proto.structured_key_lower.into_rust()?,
@@ -1840,6 +1946,25 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
+    fn metadata_map() {
+        const COUNT: MetadataKey<u64> = MetadataKey::new("count");
+
+        let mut map = MetadataMap::default();
+        map.set(COUNT, 100);
+        let mut map = MetadataMap::from_proto(map.into_proto()).unwrap();
+        assert_eq!(map.get(COUNT), Some(100));
+
+        const ANTICHAIN: MetadataKey<Antichain<u64>, ProtoU64Antichain> =
+            MetadataKey::new("antichain");
+        assert_none!(map.get(ANTICHAIN));
+
+        map.set(ANTICHAIN, Antichain::from_elem(30));
+        let map = MetadataMap::from_proto(map.into_proto()).unwrap();
+        assert_eq!(map.get(COUNT), Some(100));
+        assert_eq!(map.get(ANTICHAIN), Some(Antichain::from_elem(30)));
+    }
+
+    #[mz_ore::test]
     fn applier_version_state() {
         let v1 = semver::Version::new(1, 0, 0);
         let v2 = semver::Version::new(2, 0, 0);
@@ -1916,6 +2041,7 @@ mod tests {
             ),
             vec![RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("a".into()),
+                meta: Default::default(),
                 encoded_size_bytes: 5,
                 key_lower: vec![],
                 structured_key_lower: None,
@@ -1943,6 +2069,7 @@ mod tests {
             .parts
             .push(RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                 key: PartialBatchKey("b".into()),
+                meta: Default::default(),
                 encoded_size_bytes: 0,
                 key_lower: vec![],
                 structured_key_lower: None,
@@ -2158,209 +2285,61 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn check_data_versions_with_self_managed_versions() {
-        #[track_caller]
-        fn testcase(
-            code: &str,
-            data: &str,
-            self_managed_versions: &[Version],
-            expected: Result<(), ()>,
-        ) {
-            let code = Version::parse(code).unwrap();
-            let data = Version::parse(data).unwrap();
-            let actual = cfg::check_data_version_with_self_managed_versions(
-                &code,
-                &data,
-                self_managed_versions,
-            )
-            .map_err(|_| ());
-            assert_eq!(actual, expected);
-        }
-
-        let none = [];
-        let one = [Version::new(0, 130, 0)];
-        let two = [Version::new(0, 130, 0), Version::new(0, 140, 0)];
-        let three = [
-            Version::new(0, 130, 0),
-            Version::new(0, 140, 0),
-            Version::new(0, 150, 0),
-        ];
-
-        testcase("0.130.0", "0.128.0", &none, Ok(()));
-        testcase("0.130.0", "0.129.0", &none, Ok(()));
-        testcase("0.130.0", "0.130.0", &none, Ok(()));
-        testcase("0.130.0", "0.130.1", &none, Ok(()));
-        testcase("0.130.1", "0.130.0", &none, Ok(()));
-        testcase("0.130.0", "0.131.0", &none, Ok(()));
-        testcase("0.130.0", "0.132.0", &none, Err(()));
-
-        testcase("0.129.0", "0.127.0", &none, Ok(()));
-        testcase("0.129.0", "0.128.0", &none, Ok(()));
-        testcase("0.129.0", "0.129.0", &none, Ok(()));
-        testcase("0.129.0", "0.129.1", &none, Ok(()));
-        testcase("0.129.1", "0.129.0", &none, Ok(()));
-        testcase("0.129.0", "0.130.0", &none, Ok(()));
-        testcase("0.129.0", "0.131.0", &none, Err(()));
-
-        testcase("0.130.0", "0.128.0", &one, Ok(()));
-        testcase("0.130.0", "0.129.0", &one, Ok(()));
-        testcase("0.130.0", "0.130.0", &one, Ok(()));
-        testcase("0.130.0", "0.130.1", &one, Ok(()));
-        testcase("0.130.1", "0.130.0", &one, Ok(()));
-        testcase("0.130.0", "0.131.0", &one, Ok(()));
-        testcase("0.130.0", "0.132.0", &one, Ok(()));
-
-        testcase("0.129.0", "0.127.0", &one, Ok(()));
-        testcase("0.129.0", "0.128.0", &one, Ok(()));
-        testcase("0.129.0", "0.129.0", &one, Ok(()));
-        testcase("0.129.0", "0.129.1", &one, Ok(()));
-        testcase("0.129.1", "0.129.0", &one, Ok(()));
-        testcase("0.129.0", "0.130.0", &one, Ok(()));
-        testcase("0.129.0", "0.131.0", &one, Err(()));
-
-        testcase("0.131.0", "0.129.0", &one, Ok(()));
-        testcase("0.131.0", "0.130.0", &one, Ok(()));
-        testcase("0.131.0", "0.131.0", &one, Ok(()));
-        testcase("0.131.0", "0.131.1", &one, Ok(()));
-        testcase("0.131.1", "0.131.0", &one, Ok(()));
-        testcase("0.131.0", "0.132.0", &one, Ok(()));
-        testcase("0.131.0", "0.133.0", &one, Err(()));
-
-        testcase("0.130.0", "0.128.0", &two, Ok(()));
-        testcase("0.130.0", "0.129.0", &two, Ok(()));
-        testcase("0.130.0", "0.130.0", &two, Ok(()));
-        testcase("0.130.0", "0.130.1", &two, Ok(()));
-        testcase("0.130.1", "0.130.0", &two, Ok(()));
-        testcase("0.130.0", "0.131.0", &two, Ok(()));
-        testcase("0.130.0", "0.132.0", &two, Ok(()));
-        testcase("0.130.0", "0.135.0", &two, Ok(()));
-        testcase("0.130.0", "0.138.0", &two, Ok(()));
-        testcase("0.130.0", "0.139.0", &two, Ok(()));
-        testcase("0.130.0", "0.140.0", &two, Ok(()));
-        testcase("0.130.9", "0.140.0", &two, Ok(()));
-        testcase("0.130.0", "0.140.1", &two, Ok(()));
-        testcase("0.130.3", "0.140.1", &two, Ok(()));
-        testcase("0.130.3", "0.140.9", &two, Ok(()));
-        testcase("0.130.0", "0.141.0", &two, Err(()));
-        testcase("0.129.0", "0.133.0", &two, Err(()));
-        testcase("0.129.0", "0.140.0", &two, Err(()));
-        testcase("0.131.0", "0.133.0", &two, Err(()));
-        testcase("0.131.0", "0.140.0", &two, Err(()));
-
-        testcase("0.130.0", "0.128.0", &three, Ok(()));
-        testcase("0.130.0", "0.129.0", &three, Ok(()));
-        testcase("0.130.0", "0.130.0", &three, Ok(()));
-        testcase("0.130.0", "0.130.1", &three, Ok(()));
-        testcase("0.130.1", "0.130.0", &three, Ok(()));
-        testcase("0.130.0", "0.131.0", &three, Ok(()));
-        testcase("0.130.0", "0.132.0", &three, Ok(()));
-        testcase("0.130.0", "0.135.0", &three, Ok(()));
-        testcase("0.130.0", "0.138.0", &three, Ok(()));
-        testcase("0.130.0", "0.139.0", &three, Ok(()));
-        testcase("0.130.0", "0.140.0", &three, Ok(()));
-        testcase("0.130.9", "0.140.0", &three, Ok(()));
-        testcase("0.130.0", "0.140.1", &three, Ok(()));
-        testcase("0.130.3", "0.140.1", &three, Ok(()));
-        testcase("0.130.3", "0.140.9", &three, Ok(()));
-        testcase("0.130.0", "0.141.0", &three, Err(()));
-        testcase("0.129.0", "0.133.0", &three, Err(()));
-        testcase("0.129.0", "0.140.0", &three, Err(()));
-        testcase("0.131.0", "0.133.0", &three, Err(()));
-        testcase("0.131.0", "0.140.0", &three, Err(()));
-        testcase("0.130.0", "0.150.0", &three, Err(()));
-
-        testcase("0.140.0", "0.138.0", &three, Ok(()));
-        testcase("0.140.0", "0.139.0", &three, Ok(()));
-        testcase("0.140.0", "0.140.0", &three, Ok(()));
-        testcase("0.140.0", "0.140.1", &three, Ok(()));
-        testcase("0.140.1", "0.140.0", &three, Ok(()));
-        testcase("0.140.0", "0.141.0", &three, Ok(()));
-        testcase("0.140.0", "0.142.0", &three, Ok(()));
-        testcase("0.140.0", "0.145.0", &three, Ok(()));
-        testcase("0.140.0", "0.148.0", &three, Ok(()));
-        testcase("0.140.0", "0.149.0", &three, Ok(()));
-        testcase("0.140.0", "0.150.0", &three, Ok(()));
-        testcase("0.140.9", "0.150.0", &three, Ok(()));
-        testcase("0.140.0", "0.150.1", &three, Ok(()));
-        testcase("0.140.3", "0.150.1", &three, Ok(()));
-        testcase("0.140.3", "0.150.9", &three, Ok(()));
-        testcase("0.140.0", "0.151.0", &three, Err(()));
-        testcase("0.139.0", "0.143.0", &three, Err(()));
-        testcase("0.139.0", "0.150.0", &three, Err(()));
-        testcase("0.141.0", "0.143.0", &three, Err(()));
-        testcase("0.141.0", "0.150.0", &three, Err(()));
-
-        testcase("0.150.0", "0.148.0", &three, Ok(()));
-        testcase("0.150.0", "0.149.0", &three, Ok(()));
-        testcase("0.150.0", "0.150.0", &three, Ok(()));
-        testcase("0.150.0", "0.150.1", &three, Ok(()));
-        testcase("0.150.1", "0.150.0", &three, Ok(()));
-        testcase("0.150.0", "0.151.0", &three, Ok(()));
-        testcase("0.150.0", "0.152.0", &three, Ok(()));
-        testcase("0.150.0", "0.155.0", &three, Ok(()));
-        testcase("0.150.0", "0.158.0", &three, Ok(()));
-        testcase("0.150.0", "0.159.0", &three, Ok(()));
-        testcase("0.150.0", "0.160.0", &three, Ok(()));
-        testcase("0.150.9", "0.160.0", &three, Ok(()));
-        testcase("0.150.0", "0.160.1", &three, Ok(()));
-        testcase("0.150.3", "0.160.1", &three, Ok(()));
-        testcase("0.150.3", "0.160.9", &three, Ok(()));
-        testcase("0.150.0", "0.161.0", &three, Ok(()));
-        testcase("0.149.0", "0.153.0", &three, Err(()));
-        testcase("0.149.0", "0.160.0", &three, Err(()));
-        testcase("0.151.0", "0.153.0", &three, Err(()));
-        testcase("0.151.0", "0.160.0", &three, Err(()));
-    }
-
-    #[mz_ore::test]
     fn check_data_versions() {
         #[track_caller]
         fn testcase(code: &str, data: &str, expected: Result<(), ()>) {
             let code = Version::parse(code).unwrap();
             let data = Version::parse(data).unwrap();
             #[allow(clippy::disallowed_methods)]
-            let actual =
-                std::panic::catch_unwind(|| check_data_version(&code, &data)).map_err(|_| ());
-            assert_eq!(actual, expected);
+            let actual = cfg::code_can_write_data(&code, &data)
+                .then_some(())
+                .ok_or(());
+            assert_eq!(actual, expected, "data at {data} read by code {code}");
         }
 
-        testcase("0.10.0-dev", "0.10.0-dev", Ok(()));
-        testcase("0.10.0-dev", "0.10.0", Ok(()));
+        testcase("0.160.0-dev", "0.160.0-dev", Ok(()));
+        testcase("0.160.0-dev", "0.160.0", Err(()));
         // Note: Probably useful to let tests use two arbitrary shas on main, at
         // the very least for things like git bisect.
-        testcase("0.10.0-dev", "0.11.0-dev", Ok(()));
-        testcase("0.10.0-dev", "0.11.0", Ok(()));
-        testcase("0.10.0-dev", "0.12.0-dev", Err(()));
-        testcase("0.10.0-dev", "0.12.0", Err(()));
-        testcase("0.10.0-dev", "0.13.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.161.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.161.0", Err(()));
+        testcase("0.160.0-dev", "0.162.0-dev", Err(()));
+        testcase("0.160.0-dev", "0.162.0", Err(()));
+        testcase("0.160.0-dev", "0.163.0-dev", Err(()));
 
-        testcase("0.10.0", "0.8.0-dev", Ok(()));
-        testcase("0.10.0", "0.8.0", Ok(()));
-        testcase("0.10.0", "0.9.0-dev", Ok(()));
-        testcase("0.10.0", "0.9.0", Ok(()));
-        testcase("0.10.0", "0.10.0-dev", Ok(()));
-        testcase("0.10.0", "0.10.0", Ok(()));
-        // Note: This is what it would look like to run a version of the catalog
-        // upgrade checker built from main.
-        testcase("0.10.0", "0.11.0-dev", Ok(()));
-        testcase("0.10.0", "0.11.0", Ok(()));
-        testcase("0.10.0", "0.11.1", Ok(()));
-        testcase("0.10.0", "0.11.1000000", Ok(()));
-        testcase("0.10.0", "0.12.0-dev", Err(()));
-        testcase("0.10.0", "0.12.0", Err(()));
-        testcase("0.10.0", "0.13.0-dev", Err(()));
+        testcase("0.160.0", "0.158.0-dev", Ok(()));
+        testcase("0.160.0", "0.158.0", Ok(()));
+        testcase("0.160.0", "0.159.0-dev", Ok(()));
+        testcase("0.160.0", "0.159.0", Ok(()));
+        testcase("0.160.0", "0.160.0-dev", Ok(()));
+        testcase("0.160.0", "0.160.0", Ok(()));
 
-        testcase("0.10.1", "0.9.0", Ok(()));
-        testcase("0.10.1", "0.10.0", Ok(()));
-        testcase("0.10.1", "0.11.0", Ok(()));
-        testcase("0.10.1", "0.11.1", Ok(()));
-        testcase("0.10.1", "0.11.100", Ok(()));
+        testcase("0.160.0", "0.161.0-dev", Err(()));
+        testcase("0.160.0", "0.161.0", Err(()));
+        testcase("0.160.0", "0.161.1", Err(()));
+        testcase("0.160.0", "0.161.1000000", Err(()));
+        testcase("0.160.0", "0.162.0-dev", Err(()));
+        testcase("0.160.0", "0.162.0", Err(()));
+        testcase("0.160.0", "0.163.0-dev", Err(()));
 
-        // This is probably a bad idea (seems as if we've downgraded from
-        // running v0.10.1 to v0.10.0, an earlier patch version of the same
-        // minor version), but not much we can do, given the `state_version =
-        // max(code_version, prev_state_version)` logic we need to prevent
-        // rolling back an arbitrary number of versions.
-        testcase("0.10.0", "0.10.1", Ok(()));
+        testcase("0.160.1", "0.159.0", Ok(()));
+        testcase("0.160.1", "0.160.0", Ok(()));
+        testcase("0.160.1", "0.161.0", Err(()));
+        testcase("0.160.1", "0.161.1", Err(()));
+        testcase("0.160.1", "0.161.100", Err(()));
+        testcase("0.160.0", "0.160.1", Err(()));
+
+        testcase("0.160.1", "26.0.0", Err(()));
+        testcase("26.0.0", "0.160.1", Ok(()));
+        testcase("26.2.0", "0.160.1", Ok(()));
+        testcase("26.200.200", "0.160.1", Ok(()));
+
+        testcase("27.0.0", "0.160.1", Err(()));
+        testcase("27.0.0", "0.16000.1", Err(()));
+        testcase("27.0.0", "26.0.1", Ok(()));
+        testcase("27.1000.100", "26.0.1", Ok(()));
+        testcase("28.0.0", "26.0.1", Err(()));
+        testcase("28.0.0", "26.1000.1", Err(()));
+        testcase("28.0.0", "27.0.0", Ok(()));
     }
 }

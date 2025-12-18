@@ -2,6 +2,10 @@
 
 All notable changes to the `mz` CLI will be documented in this file.
 
+## [0.3.1] - 2025-11-04
+
+Added `--environmentd-cpu-allocation` and `--environmentd-memory-allocation` to `mz region enable`. These are for internal use only.
+
 ## [0.3.0] - 2023-10-26
 
 This version includes a more secure app-password storage for macOS, and extends current features. Migration from old profiles to new ones will happen automatically.

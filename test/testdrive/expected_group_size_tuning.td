@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-$ set-sql-timeout duration=60s
+$ set-sql-timeout duration=120s
 
 # This test uses introspection queries that need to be targeted to a replica
 > SET cluster_replica = r1

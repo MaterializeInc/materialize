@@ -15,10 +15,9 @@ import json
 import subprocess
 from typing import TypeVar
 
-try:
-    from semver.version import Version
-except ImportError:
-    from semver import VersionInfo as Version  # type: ignore
+from semver.version import Version
+
+from materialize import MZ_ROOT
 
 T = TypeVar("T", bound="TypedVersionBase")
 
@@ -87,7 +86,7 @@ class TypedVersionBase(Version):
         return f"{self.get_prefix()}{self.str_without_prefix()}"
 
     def is_dev_version(self) -> bool:
-        return self.prerelease is not None
+        return self.prerelease == "dev"
 
 
 class MzVersion(TypedVersionBase):
@@ -107,7 +106,8 @@ class MzVersion(TypedVersionBase):
         """Uses the cargo mz-environmentd package info to get the version of current source code state"""
         metadata = json.loads(
             subprocess.check_output(
-                ["cargo", "metadata", "--no-deps", "--format-version=1"]
+                ["cargo", "metadata", "--no-deps", "--format-version=1"],
+                cwd=MZ_ROOT,
             )
         )
         for package in metadata["packages"]:

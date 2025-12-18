@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use arrow::array::{Array, Int64Array};
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::StreamExt;
@@ -391,7 +391,7 @@ impl<T: Clone> LowerBound<T> {
 impl<T, D, Sort> Consolidator<T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup + Ord,
+    D: Codec64 + Monoid + Ord,
     Sort: RowSort<T, D>,
 {
     /// Create a new [Self] instance with the given prefetch budget. This budget is a "soft limit"
@@ -431,7 +431,7 @@ where
 impl<T, D, Sort> Consolidator<T, D, Sort>
 where
     T: Timestamp + Codec64 + Lattice + Sync,
-    D: Codec64 + Semigroup + Ord,
+    D: Codec64 + Monoid + Ord,
     Sort: RowSort<T, D>,
 {
     /// Add another run of data to be consolidated.
@@ -597,9 +597,7 @@ where
 
                     let wrong_sort = data.run_meta.order != Some(RunOrder::Structured);
                     let fetch_result: anyhow::Result<FetchResult<T>> = match task.take() {
-                        Some(handle) => handle
-                            .await
-                            .unwrap_or_else(|join_err| Err(anyhow!(join_err))),
+                        Some(handle) => handle.await,
                         None => {
                             data.clone()
                                 .fetch(
@@ -848,7 +846,7 @@ struct PartRef<'a, T: Timestamp, D> {
     _phantom: PhantomData<D>,
 }
 
-impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Semigroup> PartRef<'a, T, D> {
+impl<'a, T: Timestamp + Codec64 + Lattice, D: Codec64 + Monoid> PartRef<'a, T, D> {
     fn update_peek(&mut self, part: &'a StructuredUpdates, filter: &FetchBatchFilter<T>) {
         let mut peek = part.get(self.row_index.index());
         while let Some((_kv, t, _d)) = &mut peek {
@@ -897,7 +895,7 @@ where
 impl<'a, T, D> ConsolidatingIter<'a, T, D>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup + Ord,
+    D: Codec64 + Monoid + Ord,
 {
     fn new(
         context: &'a str,
@@ -1013,7 +1011,7 @@ where
 impl<'a, T, D> Iterator for ConsolidatingIter<'a, T, D>
 where
     T: Timestamp + Codec64 + Lattice,
-    D: Codec64 + Semigroup + Ord,
+    D: Codec64 + Monoid + Ord,
 {
     type Item = (Indices, SortKV<'a>, T, D);
 
@@ -1273,6 +1271,7 @@ mod tests {
                             key: PartialBatchKey(
                                 "n0000000/p00000000-0000-0000-0000-000000000000".into(),
                             ),
+                            meta: Default::default(),
                             encoded_size_bytes,
                             key_lower: vec![],
                             structured_key_lower: None,

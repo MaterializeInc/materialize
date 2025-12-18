@@ -24,24 +24,30 @@ from uuid import uuid4
 import yaml
 
 from materialize import MZ_ROOT, ui
+from materialize.docker import image_registry
 
 DEV_IMAGE_TAG = "local-dev"
-DEFAULT_POSTGRES = (
-    "postgres://root@postgres.materialize.svc.cluster.local:5432/materialize"
-)
-DEFAULT_MINIO = "s3://minio:minio123@persist/persist?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
-
-IMAGE_REGISTRY = (
-    "ghcr.io/materializeinc" if ui.env_is_truthy("CI") else "materialize",
-)
+DEFAULT_POSTGRES = "postgres://materialize_user:materialize_pass@postgres.materialize.svc.cluster.local:5432/materialize_db?sslmode=disable"
+DEFAULT_MINIO = "s3://minio:minio123@bucket/12345678-1234-1234-1234-123456789012?endpoint=http%3A%2F%2Fminio.materialize.svc.cluster.local%3A9000&region=minio"
 
 
 def main():
     os.chdir(MZ_ROOT)
+    # Console is not on GHCR yet
+    os.environ["MZ_GHCR"] = "0"
 
     parser = argparse.ArgumentParser(
         prog="orchestratord",
-        description="""Runs orchestratord within a local kind cluster""",
+        description="Runs orchestratord within a local kind cluster",
+        usage="""
+For a new setup you can run:
+  kind delete cluster
+  kind create cluster --config misc/kind/cluster.yaml
+  kubectl create namespace materialize
+  kubectl apply -f misc/helm-charts/testing/postgres.yaml
+  kubectl apply -f misc/helm-charts/testing/minio.yaml
+  bin/orchestratord run
+  bin/orchestratord environment --license-key-file ~/license-key""",
     )
     parser.add_argument(
         "--kind-cluster-name",
@@ -117,6 +123,7 @@ def run(args: argparse.Namespace):
         "misc/helm-charts/operator",
         "--atomic",
         f"--set=operator.image.tag={DEV_IMAGE_TAG}",
+        f"--set=operator.image.repository={image_registry()}/orchestratord",
         "--create-namespace",
         f"--namespace={args.namespace}",
     ]
@@ -194,7 +201,7 @@ def environment(args: argparse.Namespace):
                 cluster=args.kind_cluster_name,
             )
         image_tag = DEV_IMAGE_TAG
-    environmentd_image_ref = f"{IMAGE_REGISTRY}/environmentd:{image_tag}"
+    environmentd_image_ref = f"{image_registry()}/environmentd:{image_tag}"
 
     try:
         kubectl(
@@ -267,7 +274,7 @@ def environment(args: argparse.Namespace):
     else:
         license_key_args = {}
         environment_id_args = {
-            "environment_id": environment_id,
+            "environmentId": environment_id,
         }
 
     backend_secret_name = f"materialize-backend-{environment_id}"
@@ -441,14 +448,14 @@ def acquire(image: str, dev: bool, cluster: str):
         [
             "docker",
             "tag",
-            f"{IMAGE_REGISTRY}/{image}:mzbuild-{fingerprint}",
-            f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
+            f"{image_registry()}/{image}:mzbuild-{fingerprint}",
+            f"{image_registry()}/{image}:{DEV_IMAGE_TAG}",
         ]
     )
     kind(
         "load",
         "docker-image",
-        f"{IMAGE_REGISTRY}/{image}:{DEV_IMAGE_TAG}",
+        f"{image_registry()}/{image}:{DEV_IMAGE_TAG}",
         cluster=cluster,
     )
 

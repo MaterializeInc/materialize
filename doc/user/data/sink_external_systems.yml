@@ -1,0 +1,31 @@
+columns:
+  - column: Method
+  - column: External system
+  - column: Guide(s) or Example(s)
+
+rows:
+  - External system: "Amazon S3 or S3-compatible storage"
+    Method: "Use `COPY TO` command"
+    Guide(s) or Example(s): |
+      - [Sink to Amazon S3](/serve-results/sink/s3/)
+
+  - External system: "Census supported destinations"
+    Method: "Use Census as an intermediate step"
+    Guide(s) or Example(s): |
+      - [Sink to Census](/serve-results/sink/census/)
+
+  - External system: "Snowflake and other systems that can read from S3"
+    Method: "Use `COPY TO` S3 or S3-compatible storage as an intermediate step"
+    Guide(s) or Example(s): |
+      - [Sink to Snowflake](/serve-results/sink/snowflake/)
+
+  - External system: "Kafka/Redpanda"
+    Method: "Use a native connector"
+    Guide(s) or Example(s): |
+      - [Sink to Kafka/Redpanda](/serve-results/sink/kafka/)
+
+  - External system: "Various"
+    Method: "Use `SUBSCRIBE`"
+    Guide(s) or Example(s): |
+      - [Sink to Postgres](https://github.com/MaterializeInc/mz-catalog-sync)
+      - [Sink to Redis](https://github.com/MaterializeIncLabs/mz-redis-sync)

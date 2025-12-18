@@ -15,7 +15,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use mz_ore::instrument;
@@ -66,7 +66,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     where
         K: Debug + Codec,
         V: Debug + Codec,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     {
         debug!(
             "unblock_read latest_write={:?} as_of={:?} for {:.9}",
@@ -141,11 +141,11 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     pub async fn snapshot_and_fetch<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-    ) -> Result<Vec<((Result<K, String>, Result<V, String>), T, D)>, Since<T>>
+    ) -> Result<Vec<((K, V), T, D)>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -163,7 +163,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -176,14 +176,11 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     pub async fn snapshot_and_stream<K, V, D>(
         &self,
         data_read: &mut ReadHandle<K, V, T, D>,
-    ) -> Result<
-        impl Stream<Item = ((Result<K, String>, Result<V, String>), T, D)> + use<K, V, T, D>,
-        Since<T>,
-    >
+    ) -> Result<impl Stream<Item = ((K, V), T, D)> + use<K, V, T, D>, Since<T>>
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -200,7 +197,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Semigroup + Codec64 + Send + Sync,
+        D: Monoid + Codec64 + Send + Sync,
         O: Opaque + Codec64,
     {
         // This is used by the optimizer in planning to get cost statistics, so
@@ -231,7 +228,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Ord + Semigroup + Codec64 + Send + Sync,
+        D: Ord + Monoid + Codec64 + Send + Sync,
     {
         // This is used by the optimizer in planning to get cost statistics, so
         // it can't use `unblock_read`. Instead use the "translated as_of"
@@ -261,7 +258,7 @@ impl<T: Timestamp + Lattice + TotalOrder + Codec64 + Sync> DataSnapshot<T> {
     where
         K: Debug + Codec + Ord,
         V: Debug + Codec + Ord,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     {
         let data_write = WriteHandle::from_read(data_read, "unblock_read");
         self.unblock_read(data_write).await;
@@ -413,7 +410,7 @@ impl<T: Timestamp + Lattice + Codec64 + Sync> TxnsRead<T> {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     {
         let (snapshot, rest) = self
             .send(|tx| TxnsReadCmd::DataSubscribe { data_id, as_of, tx })

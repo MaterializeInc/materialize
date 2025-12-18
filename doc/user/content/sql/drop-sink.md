@@ -12,11 +12,14 @@ menu:
 
 ## Syntax
 
-{{< diagram "drop-sink.svg" >}}
+```mzsql
+DROP SINK [IF EXISTS] <sink_name>;
+```
 
-Field | Use
-------|-----
-_sink&lowbar;name_ | The sink you want to drop. You can find available sink names through [`SHOW SINKS`](../show-sinks).
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified sink does not exist.
+`<sink_name>` | The sink you want to drop. You can find available sink names through [`SHOW SINKS`](../show-sinks).
 
 ## Examples
 

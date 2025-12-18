@@ -1,0 +1,34 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Test temporary objects, i.e., objects that exist only for the duration of a session. These are created with
+# `CREATE TEMP/TEMPORARY TABLE/VIEW`. The schema name is `mz_temp`.
+
+mode cockroach
+
+simple conn=conn_1
+CREATE TABLE t1(x int);
+----
+COMPLETE 0
+
+simple conn=conn_2
+CREATE TEMP VIEW v1 AS SELECT * FROM t1;
+----
+COMPLETE 0
+
+simple conn=conn_1
+DROP TABLE t1;
+----
+db error: ERROR: cannot drop table "t1": still depended upon by view "v1"
+HINT: Use DROP ... CASCADE to drop the dependent objects too.
+
+simple conn=conn_1
+DROP TABLE t1 CASCADE;
+----
+COMPLETE 0

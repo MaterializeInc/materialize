@@ -1,0 +1,21 @@
+columns:
+  - column: "Variable"
+
+rows:
+- "Variable": |
+
+    ```hcl
+    namespace = <string>
+    ```
+
+- "Variable": |
+
+    ```hcl
+    environment = <string>
+    ```
+
+- "Variable": |
+
+    ```hcl
+    database_password =  <string>
+    ```

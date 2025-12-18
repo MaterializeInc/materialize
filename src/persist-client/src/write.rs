@@ -13,14 +13,14 @@ use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
 use mz_dyncfg::Config;
-use mz_ore::instrument;
 use mz_ore::task::RuntimeExt;
+use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::location::Blob;
 use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64};
@@ -32,7 +32,7 @@ use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::runtime::Handle;
-use tracing::{Instrument, debug_span, info, warn};
+use tracing::{Instrument, debug_span, error, info, warn};
 use uuid::Uuid;
 
 use crate::batch::{
@@ -44,7 +44,7 @@ use crate::fetch::{
     EncodedPart, FetchBatchFilter, FetchedPart, PartDecodeFormat, VALIDATE_PART_BOUNDS_ON_READ,
 };
 use crate::internal::compact::{CompactConfig, Compactor};
-use crate::internal::encoding::{Schemas, check_data_version};
+use crate::internal::encoding::{Schemas, assert_code_can_read_data};
 use crate::internal::machine::{CompareAndAppendRes, ExpireFn, Machine};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, ShardMetrics};
 use crate::internal::state::{BatchPart, HandleDebugState, HollowBatch, RunOrder, RunPart};
@@ -60,7 +60,7 @@ pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
     "persist_validate_part_bounds_on_write",
-    true,
+    false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch being appended.",
 );
@@ -147,7 +147,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     pub(crate) fn new(
         cfg: PersistConfig,
@@ -160,14 +160,9 @@ where
         write_schemas: Schemas<K, V>,
     ) -> Self {
         let isolated_runtime = Arc::clone(&machine.isolated_runtime);
-        let compact = cfg.compaction_enabled.then(|| {
-            Compactor::new(
-                cfg.clone(),
-                Arc::clone(&metrics),
-                write_schemas.clone(),
-                gc.clone(),
-            )
-        });
+        let compact = cfg
+            .compaction_enabled
+            .then(|| Compactor::new(cfg.clone(), Arc::clone(&metrics), gc.clone()));
         let debug_state = HandleDebugState {
             hostname: cfg.hostname.to_owned(),
             purpose: purpose.to_owned(),
@@ -205,10 +200,12 @@ where
         )
     }
 
-    /// Whether or not this WriteHandle supports writing without enforcing batch
+    /// True iff this WriteHandle supports writing without enforcing batch
     /// bounds checks.
     pub fn validate_part_bounds_on_write(&self) -> bool {
-        VALIDATE_PART_BOUNDS_ON_WRITE.get(&self.cfg) && VALIDATE_PART_BOUNDS_ON_READ.get(&self.cfg)
+        // Note that we require validation when the read checks are enabled, even if the write-time
+        // checks would otherwise be disabled, to avoid batches that would fail at read time.
+        VALIDATE_PART_BOUNDS_ON_WRITE.get(&self.cfg) || VALIDATE_PART_BOUNDS_ON_READ.get(&self.cfg)
     }
 
     /// This handle's shard id.
@@ -223,26 +220,20 @@ where
 
     /// Registers the write schema, if it isn't already registered.
     ///
-    /// # Panics
-    ///
     /// This method expects that either the shard doesn't yet have any schema registered, or one of
     /// the registered schemas is the same as the write schema. If all registered schemas are
-    /// different from the write schema, it panics.
-    pub async fn ensure_schema_registered(&mut self) -> SchemaId {
+    /// different from the write schema, or the shard is a tombstone, it returns `None`.
+    pub async fn try_register_schema(&mut self) -> Option<SchemaId> {
         let Schemas { id, key, val } = &self.write_schemas;
 
         if let Some(id) = id {
-            return *id;
+            return Some(*id);
         }
 
         let (schema_id, maintenance) = self.machine.register_schema(key, val).await;
         maintenance.start_performing(&self.machine, &self.gc);
 
-        let Some(schema_id) = schema_id else {
-            panic!("unable to register schemas: {key:?} {val:?}");
-        };
-
-        self.write_schemas.id = Some(schema_id);
+        self.write_schemas.id = schema_id;
         schema_id
     }
 
@@ -557,6 +548,11 @@ where
     where
         D: Send + Sync,
     {
+        // Before we append any data, we require a registered write schema.
+        // We expect the caller to ensure our schema is already present... unless this shard is a
+        // tombstone, in which case this write is either a noop or will fail gracefully.
+        let schema_id = self.try_register_schema().await;
+
         for batch in batches.iter() {
             if self.machine.shard_id() != batch.shard_id() {
                 return Err(InvalidUsage::BatchNotFromThisShard {
@@ -564,7 +560,7 @@ where
                     handle_shard: self.machine.shard_id(),
                 });
             }
-            check_data_version(&self.cfg.build_version, &batch.version);
+            assert_code_can_read_data(&self.cfg.build_version, &batch.version);
             if self.cfg.build_version > batch.version {
                 info!(
                     shard_id =? self.machine.shard_id(),
@@ -574,10 +570,24 @@ where
                     TODO: Error on very old versions once the leaked blob detector exists."
                 )
             }
+            fn assert_schema<A: Codec>(writer_schema: &A::Schema, batch_schema: &bytes::Bytes) {
+                if batch_schema.is_empty() {
+                    // Schema is either trivial or missing!
+                    return;
+                }
+                let batch_schema: A::Schema = A::decode_schema(batch_schema);
+                if *writer_schema != batch_schema {
+                    error!(
+                        ?writer_schema,
+                        ?batch_schema,
+                        "writer and batch schemas should be identical"
+                    );
+                    soft_panic_or_log!("writer and batch schemas should be identical");
+                }
+            }
+            assert_schema::<K>(&*self.write_schemas.key, &batch.schemas.0);
+            assert_schema::<V>(&*self.write_schemas.val, &batch.schemas.1);
         }
-
-        // Before we append any data, we require a registered write schema.
-        self.ensure_schema_registered().await;
 
         let lower = expected_upper.clone();
         let upper = new_upper;
@@ -654,12 +664,7 @@ where
                                 fetched_part.next_with_storage(&mut key_storage, &mut val_storage)
                             {
                                 builder
-                                    .add(
-                                        &k.expect("decoded just-encoded key data"),
-                                        &v.expect("decoded just-encoded val data"),
-                                        &t,
-                                        &d,
-                                    )
+                                    .add(&k, &v, &t, &d)
                                     .await
                                     .expect("re-encoding just-decoded data");
                             }
@@ -714,8 +719,24 @@ where
                 }
             }
 
-            let combined_batch =
+            let mut combined_batch =
                 HollowBatch::new(desc.clone(), parts, num_updates, run_metas, run_splits);
+
+            // The batch may have been written by a writer without a registered schema.
+            // Ensure we have a schema ID in the batch metadata before we append, to avoid type
+            // confusion later.
+            match schema_id {
+                Some(schema_id) => {
+                    ensure_batch_schema(&mut combined_batch, self.shard_id(), schema_id);
+                }
+                None => {
+                    assert!(
+                        self.fetch_recent_upper().await.is_empty(),
+                        "fetching a schema id should only fail when the shard is tombstoned"
+                    )
+                }
+            }
+
             let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
@@ -815,6 +836,7 @@ where
             metrics: Arc::clone(&self.metrics),
             shard_metrics: Arc::clone(&self.machine.applier.shard_metrics),
             version: Version::parse(&batch.version).expect("valid transmittable batch"),
+            schemas: (batch.key_schema, batch.val_schema),
             batch: batch
                 .batch
                 .into_rust_if_some("ProtoBatch::batch")
@@ -1091,6 +1113,35 @@ impl<K: Codec, V: Codec, T, D> Drop for WriteHandle<K, V, T, D> {
     }
 }
 
+/// Ensure the given batch uses the given schema ID.
+///
+/// If the batch has no schema set, initialize it to the given one.
+/// If the batch has a schema set, assert that it matches the given one.
+fn ensure_batch_schema<T>(batch: &mut HollowBatch<T>, shard_id: ShardId, schema_id: SchemaId)
+where
+    T: Timestamp + Lattice + Codec64,
+{
+    let ensure = |id: &mut Option<SchemaId>| match id {
+        Some(id) => assert_eq!(*id, schema_id, "schema ID mismatch; shard={shard_id}"),
+        None => *id = Some(schema_id),
+    };
+
+    for run_meta in &mut batch.run_meta {
+        ensure(&mut run_meta.schema);
+    }
+    for part in &mut batch.parts {
+        match part {
+            RunPart::Single(BatchPart::Hollow(part)) => ensure(&mut part.schema_id),
+            RunPart::Single(BatchPart::Inline { schema_id, .. }) => ensure(schema_id),
+            RunPart::Many(_hollow_run_ref) => {
+                // TODO: Fetch the parts in this run and rewrite them too. Alternatively, make
+                // `run_meta` the only place we keep schema IDs, so rewriting parts isn't
+                // necessary.
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::str::FromStr;
@@ -1346,6 +1397,6 @@ mod tests {
             tx.send(next_upper).expect("send failed");
         }
 
-        task.await.expect("await failed");
+        task.await;
     }
 }

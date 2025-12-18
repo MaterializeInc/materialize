@@ -24,8 +24,8 @@ enum-kinds = "0.5.1"
 fail = { version = "0.5.1", features = ["failpoints"] }
 globset = "0.4.18"
 hex = "0.4.3"
-http = "1.2.0"
-iceberg = "0.6.0"
+http = "1.4.0"
+iceberg = "0.7.0"
 im = "15.1.0"
 ipnet = "2.11.0"
 itertools = "0.14.0"
@@ -70,8 +70,8 @@ mz-txn-wal = { path = "../txn-wal" }
 paste = "1.0"
 prometheus = { version = "0.14.0", default-features = false }
 protobuf-native = "0.3.2"
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = [
     "cmake-build",
@@ -79,22 +79,22 @@ rdkafka = { version = "0.29.0", features = [
     "libz-static",
     "zstd",
 ] }
-regex = "1.11.3"
+regex = "1.12.2"
 reqwest = "0.11.13"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.145"
 static_assertions = "1.1"
 thiserror = "2.0.17"
-tokio = { version = "1.44.1", features = ["fs"] }
-tokio-postgres = { version = "0.7.8", features = ["serde"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.19"
+tokio = { version = "1.48.0", features = ["fs"] }
+tokio-postgres = { version = "0.7.15", features = ["serde"] }
+tracing = "0.1.43"
+tracing-subscriber = "0.3.22"
 uncased = "0.9.7"
-uuid = { version = "1.18.1", features = ["serde", "v4"] }
+uuid = { version = "1.19.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-datadriven = "0.8.0"
+datadriven = "0.9.0"
 mz-lowertest = { path = "../lowertest" }
 
 [package.metadata.cargo-udeps.ignore]

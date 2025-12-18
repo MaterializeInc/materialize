@@ -28,7 +28,7 @@ use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::date::DateError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::adt::regex::Regex;
+use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use mz_repr::adt::timestamp::TimestampError;
 use mz_repr::strconv::{ParseError, ParseHexError};
 use mz_repr::{Datum, Row, RowArena, SqlColumnType, SqlScalarType};
@@ -782,11 +782,25 @@ impl MirScalarExpr {
                                 Err(err.clone()),
                                 e.typ(column_types).scalar_type,
                             );
-                        } else if let BinaryFunc::IsLikeMatch { case_insensitive } = func {
+                        } else if let BinaryFunc::IsLikeMatchCaseInsensitive(_) = func {
                             if expr2.is_literal() {
                                 // We can at least precompile the regex.
                                 let pattern = expr2.as_literal_str().unwrap();
-                                *e = match like_pattern::compile(pattern, *case_insensitive) {
+                                *e = match like_pattern::compile(pattern, true) {
+                                    Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
+                                        func::IsLikeMatch(matcher),
+                                    )),
+                                    Err(err) => MirScalarExpr::literal(
+                                        Err(err),
+                                        e.typ(column_types).scalar_type,
+                                    ),
+                                };
+                            }
+                        } else if let BinaryFunc::IsLikeMatchCaseSensitive(_) = func {
+                            if expr2.is_literal() {
+                                // We can at least precompile the regex.
+                                let pattern = expr2.as_literal_str().unwrap();
+                                *e = match like_pattern::compile(pattern, false) {
                                     Ok(matcher) => expr1.take().call_unary(UnaryFunc::IsLikeMatch(
                                         func::IsLikeMatch(matcher),
                                     )),
@@ -2892,8 +2906,8 @@ impl From<InvalidArrayError> for EvalError {
     }
 }
 
-impl From<regex::Error> for EvalError {
-    fn from(e: regex::Error) -> EvalError {
+impl From<RegexCompilationError> for EvalError {
+    fn from(e: RegexCompilationError) -> EvalError {
         EvalError::InvalidRegex(e.to_string().into())
     }
 }

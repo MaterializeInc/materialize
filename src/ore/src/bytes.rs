@@ -29,6 +29,7 @@ use bytes::{Buf, BufMut, Bytes, BytesMut};
 use internal::SegmentedReader;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
+use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
 #[cfg(feature = "parquet")]
@@ -46,7 +47,7 @@ use crate::cast::CastFrom;
 /// [`smallvec::SmallVec`] to store our [`Bytes`] segments, and `N` is how many `Bytes` we'll
 /// store inline before spilling to the heap. We default `N = 1`, so in the case of a single
 /// `Bytes` segment, we avoid one layer of indirection.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SegmentedBytes<const N: usize = 1> {
     /// Collection of non-contiguous segments, each segment is guaranteed to be non-empty.
     segments: SmallVec<[(Bytes, Padding); N]>,

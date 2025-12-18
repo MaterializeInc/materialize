@@ -19,7 +19,6 @@ pub mod stack;
 
 pub(crate) use alloc::alloc_aligned_zeroed;
 pub use alloc::{enable_columnar_lgalloc, set_enable_columnar_lgalloc};
-pub use provided_builder::ProvidedBuilder;
 
 mod alloc {
     use mz_ore::region::Region;
@@ -48,40 +47,5 @@ mod alloc {
     /// Set whether columnar allocations should come from lgalloc. Applies to future allocations.
     pub fn set_enable_columnar_lgalloc(enabled: bool) {
         ENABLE_COLUMNAR_LGALLOC.set(enabled);
-    }
-}
-
-mod provided_builder {
-    use timely::Container;
-    use timely::container::ContainerBuilder;
-
-    /// A container builder that doesn't support pushing elements, and is only suitable for pushing
-    /// whole containers at Timely sessions. See [`give_container`] for more information.
-    ///
-    ///  [`give_container`]: timely::dataflow::channels::pushers::buffer::Session::give_container
-    pub struct ProvidedBuilder<C> {
-        _marker: std::marker::PhantomData<C>,
-    }
-
-    impl<C> Default for ProvidedBuilder<C> {
-        fn default() -> Self {
-            Self {
-                _marker: std::marker::PhantomData,
-            }
-        }
-    }
-
-    impl<C: Container + Clone + 'static> ContainerBuilder for ProvidedBuilder<C> {
-        type Container = C;
-
-        #[inline(always)]
-        fn extract(&mut self) -> Option<&mut Self::Container> {
-            None
-        }
-
-        #[inline(always)]
-        fn finish(&mut self) -> Option<&mut Self::Container> {
-            None
-        }
     }
 }

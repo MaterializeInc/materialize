@@ -45,9 +45,6 @@ mkdir -m 777 "$cores"
 # Ignore SIGABRT
 sudo sysctl -w kernel.core_pattern="|/usr/bin/ci-filter-core.sh %s $cores/core.%E.%t"
 
-# 3 attempts to download the ci-builder
-bin/ci-builder run "$builder" echo || bin/ci-builder run "$builder" echo || bin/ci-builder run "$builder" echo
-
 # Start dependencies under a different heading so that the main heading is less
 # noisy. But not if the service is actually a workflow, in which case it will
 # do its own dependency management.
@@ -95,6 +92,9 @@ ci_uncollapsed_heading ":docker: Running \`$TEST_CMD\`"
 echo "$TEST_DESC"
 
 cleanup() {
+  # Don't run the cleanup function twice
+  trap - EXIT SIGTERM SIGINT
+
   # Buildkite exposes no way to check if a test timed out (and wasn't cancelled manually), so we have to calculate it ourselves
   START_TIME=$(date -d "$STEP_START_TIMESTAMP" +%s)
   END_TIME=$(date +%s)
@@ -221,7 +221,10 @@ cleanup() {
   if [ -n "${CI_COVERAGE_ENABLED:-}" ]; then
     mzcompose down --volumes || true
   else
-    mzcompose down --timeout=0 --volumes || true  # Ignore failures, we still want the rest of the cleanup
+    # Ignore failures, we still want the rest of the cleanup
+    mzcompose down --timeout=0 --volumes || true
+    # --timeout=0 can keep some alive, so retry in that case
+    mzcompose rm --force --stop --volumes || true
   fi
 
   echo "Finding core files"
@@ -344,10 +347,14 @@ cleanup() {
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] \
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] \
     && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]] \
-    && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ test\ .* ]] \
-    && [ "$BUILDKITE_LABEL" != "Cluster spec sheet" ]; then
+    && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
+    && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]]; then
       echo "+++ services.log is empty, failing"
       exit 1
+  fi
+
+  if [[ $CI_ANNOTATE_ERRORS_RESULT -ne 0 ]]; then
+    bin/clear-corrupted-cargo-target-dir run.log
   fi
 
   exit "$CI_ANNOTATE_ERRORS_RESULT"
@@ -355,9 +362,11 @@ cleanup() {
 
 trap cleanup EXIT SIGTERM SIGINT
 
-TEST_RESULT=0
+# When cancelled, always count as failed!
+TEST_RESULT=1
 # sed command to filter out ANSI command codes in run.log, while keeping them in Buildkite's view
-{ mzcompose run "${run_args[@]}" |& tee >(sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g" > run.log); } || TEST_RESULT=$?
+{ mzcompose run "${run_args[@]}" |& tee >(sed -r "s/\x1B\[[0-9;]*[A-Za-z]//g" > run.log); }
+TEST_RESULT=${PIPESTATUS[0]:-1}
 if [ "$TEST_RESULT" != "0" ]; then
     # Give the logs some time to log panics, otherwise they might be missing later
     sleep 10

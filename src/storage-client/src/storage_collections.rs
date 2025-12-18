@@ -46,8 +46,9 @@ use mz_storage_types::connections::ConnectionContext;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError, TxnsCodecRow};
 use mz_storage_types::dyncfgs::STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION;
+use mz_storage_types::errors::CollectionMissing;
 use mz_storage_types::parameters::StorageParameters;
-use mz_storage_types::read_holds::{ReadHold, ReadHoldError};
+use mz_storage_types::read_holds::ReadHold;
 use mz_storage_types::read_policy::ReadPolicy;
 use mz_storage_types::sources::{
     GenericSourceConnection, SourceData, SourceDesc, SourceEnvelope, SourceExport,
@@ -87,7 +88,7 @@ mod metrics;
 /// - Hands out [ReadHolds](ReadHold) that prevent a collection's since from
 /// advancing while it needs to be read at a specific time.
 #[async_trait]
-pub trait StorageCollections: Debug {
+pub trait StorageCollections: Debug + Sync {
     type Timestamp: TimelyTimestamp;
 
     /// On boot, reconcile this [StorageCollections] with outside state. We get
@@ -106,10 +107,7 @@ pub trait StorageCollections: Debug {
     fn update_parameters(&self, config_params: StorageParameters);
 
     /// Returns the [CollectionMetadata] of the collection identified by `id`.
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>>;
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing>;
 
     /// Acquire an iterator over [CollectionMetadata] for all active
     /// collections.
@@ -122,7 +120,7 @@ pub trait StorageCollections: Debug {
     fn collection_frontiers(
         &self,
         id: GlobalId,
-    ) -> Result<CollectionFrontiers<Self::Timestamp>, StorageError<Self::Timestamp>> {
+    ) -> Result<CollectionFrontiers<Self::Timestamp>, CollectionMissing> {
         let frontiers = self
             .collections_frontiers(vec![id])?
             .expect_element(|| "known to exist");
@@ -135,12 +133,12 @@ pub trait StorageCollections: Debug {
     fn collections_frontiers(
         &self,
         id: Vec<GlobalId>,
-    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>>;
+    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing>;
 
     /// Atomically gets and returns the frontiers of all active collections.
     ///
-    /// A collection is "active" when it has a non empty frontier of read
-    /// capabilties.
+    /// A collection is "active" when it has a non-empty frontier of read
+    /// capabilities.
     fn active_collection_frontiers(&self) -> Vec<CollectionFrontiers<Self::Timestamp>>;
 
     /// Checks whether a collection exists under the given `GlobalId`. Returns
@@ -343,7 +341,7 @@ pub trait StorageCollections: Debug {
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError>;
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing>;
 
     /// Get the time dependence for a storage collection. Returns no value if unknown or if
     /// the object isn't managed by storage.
@@ -351,6 +349,9 @@ pub trait StorageCollections: Debug {
         &self,
         id: GlobalId,
     ) -> Result<Option<TimeDependence>, TimeDependenceError>;
+
+    /// Returns the state of [`StorageCollections`] formatted as JSON.
+    fn dump(&self) -> Result<serde_json::Value, anyhow::Error>;
 }
 
 /// A cursor over a snapshot, allowing us to read just part of a snapshot in its
@@ -365,17 +366,9 @@ pub struct SnapshotCursor<T: Codec64 + TimelyTimestamp + Lattice> {
 impl<T: Codec64 + TimelyTimestamp + Lattice + Sync> SnapshotCursor<T> {
     pub async fn next(
         &mut self,
-    ) -> Option<
-        impl Iterator<
-            Item = (
-                (Result<SourceData, String>, Result<(), String>),
-                T,
-                StorageDiff,
-            ),
-        > + Sized
-        + '_,
-    > {
-        self.cursor.next().await
+    ) -> Option<impl Iterator<Item = (SourceData, T, StorageDiff)> + Sized + '_> {
+        let iter = self.cursor.next().await?;
+        Some(iter.map(|((k, ()), t, d)| (k, t, d)))
     }
 }
 
@@ -632,6 +625,19 @@ where
                 .await;
             SinceHandleWrapper::Leased(read_handle)
         } else {
+            // We're managing the data for this shard in read-write mode, which would fence out other
+            // processes in read-only mode; it's safe to upgrade the metadata version.
+            persist_client
+                .upgrade_version::<SourceData, (), T, StorageDiff>(
+                    shard,
+                    Diagnostics {
+                        shard_name: id.to_string(),
+                        handle_purpose: format!("controller data for {}", id),
+                    },
+                )
+                .await
+                .expect("invalid persist usage");
+
             let since_handle = self
                 .open_critical_handle(id, shard, since, persist_client)
                 .await;
@@ -889,24 +895,25 @@ where
         Ok(())
     }
 
-    /// Determine if this collection has another dependency.
-    ///
-    /// Currently, collections have either 0 or 1 dependencies.
+    /// Returns the given collection's dependencies.
     fn determine_collection_dependencies(
         &self,
         self_collections: &BTreeMap<GlobalId, CollectionState<T>>,
         source_id: GlobalId,
-        data_source: &DataSource<T>,
+        collection_desc: &CollectionDescription<T>,
     ) -> Result<Vec<GlobalId>, StorageError<T>> {
-        let dependencies = match &data_source {
+        let mut dependencies = Vec::new();
+
+        if let Some(id) = collection_desc.primary {
+            dependencies.push(id);
+        }
+
+        match &collection_desc.data_source {
             DataSource::Introspection(_)
             | DataSource::Webhook
-            | DataSource::Table { primary: None }
+            | DataSource::Table
             | DataSource::Progress
-            | DataSource::Other => Vec::new(),
-            DataSource::Table {
-                primary: Some(primary),
-            } => vec![*primary],
+            | DataSource::Other => (),
             DataSource::IngestionExport {
                 ingestion_id,
                 data_config,
@@ -922,20 +929,18 @@ where
                 };
 
                 match data_config.envelope {
-                    SourceEnvelope::CdcV2 => Vec::new(),
-                    _ => vec![ingestion.remap_collection_id],
+                    SourceEnvelope::CdcV2 => (),
+                    _ => dependencies.push(ingestion.remap_collection_id),
                 }
             }
             // Ingestions depend on their remap collection.
             DataSource::Ingestion(ingestion) => {
-                if ingestion.remap_collection_id == source_id {
-                    vec![]
-                } else {
-                    vec![ingestion.remap_collection_id]
+                if ingestion.remap_collection_id != source_id {
+                    dependencies.push(ingestion.remap_collection_id);
                 }
             }
-            DataSource::Sink { desc } => vec![desc.sink.from],
-        };
+            DataSource::Sink { desc } => dependencies.push(desc.sink.from),
+        }
 
         Ok(dependencies)
     }
@@ -1080,7 +1085,7 @@ where
     {
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             assert_eq!(txns_id, txns_read.txns_id());
@@ -1122,8 +1127,8 @@ where
                     let mut snapshot = Vec::with_capacity(contents.len());
                     for ((data, _), _, diff) in contents {
                         // TODO(petrosagg): We should accumulate the errors too and let the user
-                        // interprret the result
-                        let row = data.expect("invalid protobuf data").0?;
+                        // interpret the result
+                        let row = data.0?;
                         snapshot.push((row, diff));
                     }
                     Ok(snapshot)
@@ -1145,7 +1150,7 @@ where
 
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             assert_eq!(txns_id, txns_read.txns_id());
@@ -1178,14 +1183,7 @@ where
             };
 
             // Map our stream, unwrapping Persist internal errors.
-            let stream = stream
-                .map(|((k, _v), t, d)| {
-                    // TODO(parkmycar): We should accumulate the errors and pass them on to the
-                    // caller.
-                    let data = k.expect("error while streaming from Persist");
-                    (data, t, d)
-                })
-                .boxed();
+            let stream = stream.map(|((data, _v), t, d)| (data, t, d)).boxed();
             Ok(stream)
         }
         .boxed()
@@ -1329,12 +1327,9 @@ where
         let mut persist_compaction_commands = Vec::with_capacity(collections_net.len());
         for (key, (mut changes, frontier)) in collections_net {
             if !changes.is_empty() {
-                // If the table has a "primary" collection, let that collection drive compaction.
+                // If the collection has a "primary" collection, let that primary drive compaction.
                 let collection = collections.get(&key).expect("must still exist");
-                let should_emit_persist_compaction = !matches!(
-                    collection.description.data_source,
-                    DataSource::Table { primary: Some(_) }
-                );
+                let should_emit_persist_compaction = collection.description.primary.is_none();
 
                 if frontier.is_empty() {
                     info!(id = %key, "removing collection state because the since advanced to []!");
@@ -1423,16 +1418,13 @@ where
             .update(config_params);
     }
 
-    fn collection_metadata(
-        &self,
-        id: GlobalId,
-    ) -> Result<CollectionMetadata, StorageError<Self::Timestamp>> {
+    fn collection_metadata(&self, id: GlobalId) -> Result<CollectionMetadata, CollectionMissing> {
         let collections = self.collections.lock().expect("lock poisoned");
 
         collections
             .get(&id)
             .map(|c| c.collection_metadata.clone())
-            .ok_or(StorageError::IdentifierMissing(id))
+            .ok_or(CollectionMissing(id))
     }
 
     fn active_collection_metadatas(&self) -> Vec<(GlobalId, CollectionMetadata)> {
@@ -1448,7 +1440,7 @@ where
     fn collections_frontiers(
         &self,
         ids: Vec<GlobalId>,
-    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, StorageError<Self::Timestamp>> {
+    ) -> Result<Vec<CollectionFrontiers<Self::Timestamp>>, CollectionMissing> {
         if ids.is_empty() {
             return Ok(vec![]);
         }
@@ -1466,7 +1458,7 @@ where
                         implied_capability: c.implied_capability.clone(),
                         read_capabilities: c.read_capabilities.frontier().to_owned(),
                     })
-                    .ok_or(StorageError::IdentifierMissing(id))
+                    .ok_or(CollectionMissing(id))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -1630,7 +1622,7 @@ where
     {
         let metadata = match self.collection_metadata(id) {
             Ok(metadata) => metadata.clone(),
-            Err(e) => return async { Err(e) }.boxed(),
+            Err(e) => return async { Err(e.into()) }.boxed(),
         };
         let txns_read = metadata.txns_shard.as_ref().map(|txns_id| {
             // Ensure the txn's shard the controller has is the same that this
@@ -1704,7 +1696,7 @@ where
     > {
         let metadata = match self.collection_metadata(id) {
             Ok(m) => m,
-            Err(e) => return Box::pin(async move { Err(e) }),
+            Err(e) => return Box::pin(async move { Err(e.into()) }),
         };
         let persist = Arc::clone(&self.persist);
 
@@ -1867,11 +1859,20 @@ where
                     // somewhere
                     debug!("mapping GlobalId={} to shard ({})", id, metadata.data_shard);
 
+                    // If this collection has a primary, the primary is responsible for downgrading
+                    // the critical since and it would be an error if we did so here while opening
+                    // the since handle.
+                    let since = if description.primary.is_some() {
+                        None
+                    } else {
+                        description.since.as_ref()
+                    };
+
                     let (write, mut since_handle) = this
                         .open_data_handles(
                             &id,
                             metadata.data_shard,
-                            description.since.as_ref(),
+                            since,
                             metadata.relation_desc.clone(),
                             persist_client,
                         )
@@ -1893,7 +1894,7 @@ where
                         | DataSource::Progress
                         | DataSource::Other => {}
                         DataSource::Sink { .. } => {}
-                        DataSource::Table { .. } => {
+                        DataSource::Table => {
                             let register_ts = register_ts.expect(
                                 "caller should have provided a register_ts when creating a table",
                             );
@@ -1950,7 +1951,7 @@ where
             Sink(GlobalId),
         }
         to_register.sort_by_key(|(id, desc, ..)| match &desc.data_source {
-            DataSource::Table { .. } => DependencyOrder::Table(Reverse(*id)),
+            DataSource::Table => DependencyOrder::Table(Reverse(*id)),
             DataSource::Sink { .. } => DependencyOrder::Sink(*id),
             _ => DependencyOrder::Collection(*id),
         });
@@ -1964,11 +1965,8 @@ where
             let data_shard_since = since_handle.since().clone();
 
             // Determine if this collection has any dependencies.
-            let storage_dependencies = self.determine_collection_dependencies(
-                &*self_collections,
-                id,
-                &description.data_source,
-            )?;
+            let storage_dependencies =
+                self.determine_collection_dependencies(&*self_collections, id, &description)?;
 
             // Determine the initial since of the collection.
             let initial_since = match storage_dependencies
@@ -2075,7 +2073,7 @@ where
 
                     self_collections.insert(id, collection_state);
                 }
-                DataSource::Table { .. } => {
+                DataSource::Table => {
                     // See comment on self.initial_txn_upper on why we're doing
                     // this.
                     if is_in_txns(id, &metadata)
@@ -2252,7 +2250,7 @@ where
                 .ok_or_else(|| StorageError::IdentifierMissing(existing_collection))?;
 
             // TODO(alter_table): Support changes to sources.
-            if !matches!(&existing.description.data_source, DataSource::Table { .. }) {
+            if existing.description.data_source != DataSource::Table {
                 return Err(StorageError::IdentifierInvalid(existing_collection));
             }
 
@@ -2339,15 +2337,11 @@ where
                 .expect("existing collection missing");
 
             // A higher level should already be asserting this, but let's make sure.
-            assert!(matches!(
-                existing.description.data_source,
-                DataSource::Table { primary: None }
-            ));
+            assert_eq!(existing.description.data_source, DataSource::Table);
+            assert_none!(existing.description.primary);
 
             // The existing version of the table will depend on the new version.
-            existing.description.data_source = DataSource::Table {
-                primary: Some(new_collection),
-            };
+            existing.description.primary = Some(new_collection);
             existing.storage_dependencies.push(new_collection);
 
             // Copy over the frontiers from the previous version.
@@ -2365,8 +2359,8 @@ where
             let mut changes = ChangeBatch::new();
             changes.extend(implied_capability.iter().map(|t| (t.clone(), 1)));
 
-            // Note: The new collection is now the "primary collection" so we specify `None` here.
-            let collection_desc = CollectionDescription::for_table(new_desc.clone(), None);
+            // Note: The new collection is now the "primary collection".
+            let collection_desc = CollectionDescription::for_table(new_desc.clone());
             let collection_meta = CollectionMetadata {
                 persist_location: self.persist_location.clone(),
                 relation_desc: collection_desc.desc.clone(),
@@ -2512,7 +2506,7 @@ where
     fn acquire_read_holds(
         &self,
         desired_holds: Vec<GlobalId>,
-    ) -> Result<Vec<ReadHold<Self::Timestamp>>, ReadHoldError> {
+    ) -> Result<Vec<ReadHold<Self::Timestamp>>, CollectionMissing> {
         if desired_holds.is_empty() {
             return Ok(vec![]);
         }
@@ -2531,9 +2525,7 @@ where
         // to pass around ReadHold tokens, we might tighten this up and instead
         // acquire read holds at the implied capability.
         for id in desired_holds.iter() {
-            let collection = collections
-                .get(id)
-                .ok_or(ReadHoldError::CollectionMissing(*id))?;
+            let collection = collections.get(id).ok_or(CollectionMissing(*id))?;
             let since = collection.read_capabilities.frontier().to_owned();
             advanced_holds.push((*id, since));
         }
@@ -2611,6 +2603,55 @@ where
             };
         }
         Ok(result)
+    }
+
+    fn dump(&self) -> Result<serde_json::Value, anyhow::Error> {
+        // Destructure `self` here so we don't forget to consider dumping newly added fields.
+        let Self {
+            envd_epoch,
+            read_only,
+            finalizable_shards,
+            finalized_shards,
+            collections,
+            txns_read: _,
+            config,
+            initial_txn_upper,
+            persist_location,
+            persist: _,
+            cmd_tx: _,
+            holds_tx: _,
+            _background_task: _,
+            _finalize_shards_task: _,
+        } = self;
+
+        let finalizable_shards: Vec<_> = finalizable_shards
+            .lock()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let finalized_shards: Vec<_> = finalized_shards
+            .lock()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        let collections: BTreeMap<_, _> = collections
+            .lock()
+            .expect("poisoned")
+            .iter()
+            .map(|(id, c)| (id.to_string(), format!("{c:?}")))
+            .collect();
+        let config = format!("{:?}", config.lock().expect("poisoned"));
+
+        Ok(serde_json::json!({
+            "envd_epoch": envd_epoch,
+            "read_only": read_only,
+            "finalizable_shards": finalizable_shards,
+            "finalized_shards": finalized_shards,
+            "collections": collections,
+            "config": config,
+            "initial_txn_upper": initial_txn_upper,
+            "persist_location": format!("{persist_location:?}"),
+        }))
     }
 }
 
@@ -3031,7 +3072,7 @@ where
     }
 
     #[instrument(level = "debug")]
-    async fn update_write_frontiers(&mut self, updates: &[(GlobalId, &Antichain<T>)]) {
+    async fn update_write_frontiers(&self, updates: &[(GlobalId, &Antichain<T>)]) {
         let mut read_capability_changes = BTreeMap::default();
 
         let mut self_collections = self.collections.lock().expect("lock poisoned");

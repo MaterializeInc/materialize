@@ -184,7 +184,7 @@ When using a Confluent Schema Registry:
     and the value to the registry.
 
   * You can specify the
-    [fullnames](https://avro.apache.org/docs/current/specification/#names) for the
+    [fullnames](https://avro.apache.org/docs/++version++/specification/#names) for the
     Avro schemas Materialize generates using the `AVRO KEY FULLNAME` and `AVRO
     VALUE FULLNAME` [syntax](#syntax).
 

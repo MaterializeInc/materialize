@@ -28,9 +28,7 @@ use std::collections::BTreeMap;
 use std::hash::Hash;
 use std::string::ToString;
 use std::sync::LazyLock;
-use std::sync::Mutex;
 
-use clap::clap_derive::ValueEnum;
 use mz_compute_client::logging::{ComputeLog, DifferentialLog, LogVariant, TimelyLog};
 use mz_ore::collections::HashMap;
 use mz_pgrepr::oid;
@@ -61,7 +59,6 @@ use mz_storage_client::healthcheck::{
     REPLICA_STATUS_HISTORY_DESC, WALLCLOCK_LAG_HISTORY_DESC,
 };
 use mz_storage_client::statistics::{MZ_SINK_STATISTICS_RAW_DESC, MZ_SOURCE_STATISTICS_RAW_DESC};
-use rand::Rng;
 use serde::Serialize;
 
 use crate::durable::objects::SystemObjectDescription;
@@ -86,7 +83,7 @@ const BUILTIN_CLUSTER_REPLICA_NAME: &str = "r1";
 // mapping collection stored on disk.
 pub const RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL: &str = "<RUNTIME-ALTERABLE>";
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Builtin<T: 'static + TypeReference> {
     Log(&'static BuiltinLog),
     Table(&'static BuiltinTable),
@@ -161,7 +158,7 @@ pub struct BuiltinLog {
     pub access: Vec<MzAclItem>,
 }
 
-#[derive(Hash, Debug, PartialEq, Eq)]
+#[derive(Clone, Hash, Debug, PartialEq, Eq)]
 pub struct BuiltinTable {
     pub name: &'static str,
     pub schema: &'static str,
@@ -227,7 +224,7 @@ pub struct BuiltinType<T: TypeReference> {
     pub details: CatalogTypeDetails<T>,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct BuiltinFunc {
     pub schema: &'static str,
     pub name: &'static str,
@@ -350,48 +347,9 @@ impl Fingerprint for &BuiltinLog {
     }
 }
 
-/// Allows tests to inject arbitrary amounts of whitespace to forcibly change the fingerprint and
-/// trigger a builtin migration.
-#[derive(Debug, Clone, ValueEnum)]
-pub enum UnsafeBuiltinTableFingerprintWhitespace {
-    /// Inject whitespace into all builtin table fingerprints.
-    All,
-    /// Inject whitespace into half of the builtin table fingerprints,
-    /// which are randomly selected.
-    Half,
-}
-pub static UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE: Mutex<
-    Option<(UnsafeBuiltinTableFingerprintWhitespace, String)>,
-> = Mutex::new(None);
-
 impl Fingerprint for &BuiltinTable {
     fn fingerprint(&self) -> String {
-        // This is only called during bootstrapping, so it's not that big of a deal to lock a mutex,
-        // though it's not great.
-        let guard = UNSAFE_DO_NOT_CALL_THIS_IN_PRODUCTION_BUILTIN_TABLE_FINGERPRINT_WHITESPACE
-            .lock()
-            .expect("lock poisoned");
-        match &*guard {
-            // `mz_storage_usage_by_shard` can never be migrated.
-            _ if self.schema == MZ_STORAGE_USAGE_BY_SHARD.schema
-                && self.name == MZ_STORAGE_USAGE_BY_SHARD.name =>
-            {
-                self.desc.fingerprint()
-            }
-            Some((UnsafeBuiltinTableFingerprintWhitespace::All, whitespace)) => {
-                format!("{}{}", self.desc.fingerprint(), whitespace)
-            }
-            Some((UnsafeBuiltinTableFingerprintWhitespace::Half, whitespace)) => {
-                let mut rng = rand::thread_rng();
-                let migrate: bool = rng.r#gen();
-                if migrate {
-                    format!("{}{}", self.desc.fingerprint(), whitespace)
-                } else {
-                    self.desc.fingerprint()
-                }
-            }
-            None => self.desc.fingerprint(),
-        }
+        self.desc.fingerprint()
     }
 }
 
@@ -5587,6 +5545,28 @@ pub static MZ_LICENSE_KEYS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTab
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_REPLACEMENTS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_replacements",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_REPLACEMENTS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("target_id", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "id",
+            "The ID of the replacement object. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "target_id",
+            "The ID of the replacement target. Corresponds to `mz_objects.id`.",
+        ),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // These will be replaced with per-replica tables once source/sink multiplexing on
 // a single cluster is supported.
 pub static MZ_SOURCE_STATISTICS_RAW: LazyLock<BuiltinSource> = LazyLock::new(|| BuiltinSource {
@@ -5909,6 +5889,22 @@ pub static MZ_OBJECT_FULLY_QUALIFIED_NAMES: LazyLock<BuiltinView> = LazyLock::ne
     access: vec![PUBLIC_SELECT],
 });
 
+pub static MZ_OBJECT_GLOBAL_IDS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_object_global_ids",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_GLOBAL_IDS_OID,
+    desc: RelationDesc::builder()
+        .with_column("id", SqlScalarType::String.nullable(false))
+        .with_column("global_id", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        ("id", "Materialize's unique catalog item ID for the object."),
+        ("global_id", "A global ID for the object."),
+    ]),
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+});
+
 // TODO (SangJunBak): Remove once mz_object_history is released and used in the Console https://github.com/MaterializeInc/console/issues/3342
 pub static MZ_OBJECT_LIFETIMES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_lifetimes",
@@ -6200,12 +6196,12 @@ pub static MZ_MAPPABLE_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         ("global_id", "The global ID of the object."),
     ]),
     sql: "
-SELECT quote_ident(md.name) || '.' || quote_ident(ms.name) || '.' || quote_ident(mo.name) AS name, mgi.global_id AS global_id
+SELECT COALESCE(quote_ident(md.name) || '.', '') || quote_ident(ms.name) || '.' || quote_ident(mo.name) AS name, mgi.global_id AS global_id
 FROM      mz_catalog.mz_objects mo
-     JOIN mz_introspection.mz_compute_exports mce ON (mo.id = mce.export_id)
-     JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
-     JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id)
-     JOIN mz_introspection.mz_dataflow_global_ids mgi ON (mce.dataflow_id = mgi.id);",
+          JOIN mz_introspection.mz_compute_exports mce ON (mo.id = mce.export_id)
+          JOIN mz_catalog.mz_schemas ms ON (mo.schema_id = ms.id)
+          JOIN mz_introspection.mz_dataflow_global_ids mgi ON (mce.dataflow_id = mgi.id)
+     LEFT JOIN mz_catalog.mz_databases md ON (ms.database_id = md.id);",
     access: vec![PUBLIC_SELECT],
 }
 });
@@ -11134,11 +11130,12 @@ pub static MZ_SHOW_MATERIALIZED_VIEWS: LazyLock<BuiltinView> = LazyLock::new(|| 
         .finish(),
     column_comments: BTreeMap::new(),
     sql: "
-WITH comments AS (
-    SELECT id, comment
-    FROM mz_internal.mz_comments
-    WHERE object_type = 'materialized-view' AND object_sub_id IS NULL
-)
+WITH
+    comments AS (
+        SELECT id, comment
+        FROM mz_internal.mz_comments
+        WHERE object_type = 'materialized-view' AND object_sub_id IS NULL
+    )
 SELECT
     mviews.id as id,
     mviews.name,
@@ -12381,10 +12378,10 @@ replica_metrics_history AS (
     m.occurred_at,
     m.replica_id,
     r.size,
-    (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0)) / s.processes AS cpu_percent,
-    (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0)) / s.processes AS memory_percent,
-    (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0)) / s.processes AS disk_percent,
-    (SUM(m.heap_bytes::float8) / NULLIF(m.heap_limit, 0)) / s.processes AS heap_percent,
+    (SUM(m.cpu_nano_cores::float8) / NULLIF(s.cpu_nano_cores, 0)) / NULLIF(s.processes, 0) AS cpu_percent,
+    (SUM(m.memory_bytes::float8) / NULLIF(s.memory_bytes, 0)) / NULLIF(s.processes, 0) AS memory_percent,
+    (SUM(m.disk_bytes::float8) / NULLIF(s.disk_bytes, 0)) / NULLIF(s.processes, 0) AS disk_percent,
+    (SUM(m.heap_bytes::float8) / NULLIF(m.heap_limit, 0)) / NULLIF(s.processes, 0) AS heap_percent,
     SUM(m.disk_bytes::float8) AS disk_bytes,
     SUM(m.memory_bytes::float8) AS memory_bytes,
     s.disk_bytes::numeric * s.processes AS total_disk_bytes,
@@ -13865,6 +13862,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Table(&MZ_NETWORK_POLICIES),
         Builtin::Table(&MZ_NETWORK_POLICY_RULES),
         Builtin::Table(&MZ_LICENSE_KEYS),
+        Builtin::Table(&MZ_REPLACEMENTS),
         Builtin::View(&MZ_RELATIONS),
         Builtin::View(&MZ_OBJECT_OID_ALIAS),
         Builtin::View(&MZ_OBJECTS),
@@ -13872,6 +13870,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_OBJECTS_ID_NAMESPACE_TYPES),
         Builtin::View(&MZ_OBJECT_HISTORY),
         Builtin::View(&MZ_OBJECT_LIFETIMES),
+        Builtin::Table(&MZ_OBJECT_GLOBAL_IDS),
         Builtin::View(&MZ_ARRANGEMENT_SHARING_PER_WORKER),
         Builtin::View(&MZ_ARRANGEMENT_SHARING),
         Builtin::View(&MZ_ARRANGEMENT_SIZES_PER_WORKER),

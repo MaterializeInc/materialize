@@ -79,6 +79,9 @@ class ZeroDowntimeRestartEntireMz(Scenario):
 
 
 class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
+    def does_forced_migrations(self) -> bool:
+        return True
+
     def actions(self) -> list[Action]:
         system_parameter_defaults = get_default_system_parameters()
         return [
@@ -93,7 +96,7 @@ class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
                 deploy_generation=1,
                 mz_service="mz_2",
                 system_parameter_defaults=system_parameter_defaults,
-                force_migrations="all",
+                force_migrations="replacement",
             ),
             Manipulate(self, phase=1, mz_service="mz_1"),
             *wait_ready_and_promote("mz_2"),
@@ -102,7 +105,7 @@ class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
                 deploy_generation=2,
                 mz_service="mz_3",
                 system_parameter_defaults=system_parameter_defaults,
-                force_migrations="all",
+                force_migrations="replacement",
             ),
             Manipulate(self, phase=2, mz_service="mz_2"),
             *wait_ready_and_promote("mz_3"),
@@ -111,7 +114,7 @@ class ZeroDowntimeRestartEntireMzForcedMigrations(Scenario):
                 deploy_generation=3,
                 mz_service="mz_4",
                 system_parameter_defaults=system_parameter_defaults,
-                force_migrations="all",
+                force_migrations="replacement",
             ),
             Validate(self, mz_service="mz_3"),
             *wait_ready_and_promote("mz_4"),

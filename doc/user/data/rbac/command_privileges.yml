@@ -7,10 +7,20 @@ rows:
       {{< include-md
       file="shared-content/sql-command-privileges/alter-cluster.md"
       >}}
+  - Command: "[`ALTER CLUSTER REPLICA`](/sql/alter-cluster-replica)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-cluster-replica.md"
+      >}}
   - Command: "[`ALTER CONNECTION`](/sql/alter-connection)"
     Privileges: |
       {{< include-md
       file="shared-content/sql-command-privileges/alter-connection.md"
+      >}}
+  - Command: "[`ALTER DATABASE`](/sql/alter-database)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-database.md"
       >}}
   - Command: "[`ALTER DEFAULT PRIVILEGES`](/sql/alter-default-privileges)"
     Privileges: |
@@ -38,21 +48,11 @@ rows:
       {{< include-md
       file="shared-content/sql-command-privileges/alter-role.md"
       >}}
-  - Command: "[`ALTER ... OWNER`](/sql/alter-owner)"
-    Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-owner.md"
-      >}}
 
-  - Command: "[`ALTER ... RENAME`](/sql/alter-rename)"
+  - Command: "[`ALTER SCHEMA`](/sql/alter-schema)"
     Privileges: |
       {{< include-md
-      file="shared-content/sql-command-privileges/alter-rename.md"
-      >}}
-  - Command: "[`ALTER ... SWAP`](/sql/alter-swap)"
-    Privileges: |
-      {{< include-md
-      file="shared-content/sql-command-privileges/alter-swap.md"
+      file="shared-content/sql-command-privileges/alter-schema.md"
       >}}
   - Command: "[`ALTER SECRET`](/sql/alter-secret)"
     Privileges: |
@@ -79,8 +79,21 @@ rows:
       {{< include-md
       file="shared-content/sql-command-privileges/alter-system-set.md"
       >}}
-
-
+  - Command: "[`ALTER TABLE`](/sql/alter-table)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-table.md"
+      >}}
+  - Command: "[`ALTER TYPE`](/sql/alter-type)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-type.md"
+      >}}
+  - Command: "[`ALTER VIEW`](/sql/alter-view)"
+    Privileges: |
+      {{< include-md
+      file="shared-content/sql-command-privileges/alter-view.md"
+      >}}
   - Command: "[`COMMENT ON`](/sql/comment-on)"
     Privileges: |
       {{< include-md

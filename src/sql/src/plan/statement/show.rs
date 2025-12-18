@@ -577,17 +577,13 @@ fn show_materialized_views<'a>(
 
     let query = format!(
         "SELECT name, cluster, comment
-        FROM mz_internal.mz_show_materialized_views
-        WHERE {where_clause}"
+            FROM mz_internal.mz_show_materialized_views
+            WHERE {where_clause}"
     );
 
-    ShowSelect::new(
-        scx,
-        query,
-        filter,
-        None,
-        Some(&["name", "cluster", "comment"]),
-    )
+    let projection = vec!["name", "cluster", "comment"];
+
+    ShowSelect::new(scx, query, filter, None, Some(&projection))
 }
 
 fn show_sinks<'a>(

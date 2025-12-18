@@ -39,11 +39,11 @@ Materialize can decode Avro messages by integrating with a schema registry to re
 
 ##### Schema versioning
 
-The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued. In the future, we expect to support specifying a different subject name strategy.
+The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued.
 
 ##### Schema evolution
 
-As long as the writer schema changes in a [compatible way](https://avro.apache.org/docs/current/spec.html#Schema+Resolution), Materialize will continue using the original reader schema definition by mapping values from the new to the old schema version. To use the new version of the writer schema in Materialize, you need to **drop and recreate** the source.
+As long as the writer schema changes in a [compatible way](https://avro.apache.org/docs/++version++/specification/#schema-resolution), Materialize will continue using the original reader schema definition by mapping values from the new to the old schema version. To use the new version of the writer schema in Materialize, you need to **drop and recreate** the source.
 
 ##### Name collision
 
@@ -51,7 +51,7 @@ To avoid [case-sensitivity](/sql/identifiers/#case-sensitivity) conflicts with M
 
 ##### Supported types
 
-Materialize supports all [Avro types](https://avro.apache.org/docs/current/spec.html), _except for_ recursive types and union types in arrays.
+Materialize supports all [Avro types](https://avro.apache.org/docs/++version++/specification/), _except for_ recursive types and union types in arrays.
 
 ### JSON
 
@@ -105,7 +105,7 @@ Materialize can decode Protobuf messages by integrating with a schema registry o
 
 ##### Schema versioning
 
-The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued. In the future, we expect to support specifying a different subject name strategy.
+The _latest_ schema is retrieved using the [`TopicNameStrategy`](https://docs.confluent.io/current/schema-registry/serdes-develop/index.html) strategy at the time the `CREATE SOURCE` statement is issued.
 
 ##### Schema evolution
 
@@ -117,7 +117,7 @@ Materialize supports all [well-known](https://developers.google.com/protocol-buf
 
 ##### Multiple message schemas
 
-When using a schema registry with Protobuf sources, the registered schemas must contain exactly one `Message` definition. In the future, we expect to support schemas with multiple messages {{% gh-discussion 29603 %}}.
+When using a schema registry with Protobuf sources, the registered schemas must contain exactly one `Message` definition.
 
 ### Text/bytes
 
@@ -200,7 +200,7 @@ The Debezium envelope does not support upstream [`truncate` events](https://debe
 
 ##### Debezium metadata
 
-The envelope exposes the `before` and `after` value fields from change events. In the future, we expect to support additional metadata with information about the original context of the events, like `source.ts_ms`, `source.database` and `source.table`.
+The envelope exposes the `before` and `after` value fields from change events.
 
 ##### Duplicate handling
 

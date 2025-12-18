@@ -3,31 +3,27 @@ PostgreSQL database, or a MySQL database through an SSH tunnel connection. In
 this guide, you will create an SSH tunnel connection, configure your
 Materialize authentication settings, and create a source connection.
 
-## Before you begin
-
 Before you begin, make sure you have access to a bastion host. You will need:
 
 * The bastion host IP address and port number
 * The bastion host username
 
-## Create an SSH tunnel connection
+1. Create an SSH tunnel connection. In Materialize, create an [SSH tunnel
+   connection](/sql/create-connection/#ssh-tunnel) to the bastion host:
 
-In Materialize, create an [SSH tunnel connection](/sql/create-connection/#ssh-tunnel) to the bastion host:
+    ```mzsql
+    CREATE CONNECTION ssh_connection TO SSH TUNNEL (
+        HOST '<SSH_BASTION_HOST>',
+        USER '<SSH_BASTION_USER>',
+        PORT <SSH_BASTION_PORT>
+    );
+    ```
 
-```mzsql
-CREATE CONNECTION ssh_connection TO SSH TUNNEL (
-    HOST '<SSH_BASTION_HOST>',
-    USER '<SSH_BASTION_USER>',
-    PORT <SSH_BASTION_PORT>
-);
-```
-
-## Configure the SSH bastion host
-
-The bastion host needs a **public key** to connect to the Materialize tunnel you
-created in the previous step.
-
-1. Materialize stores public keys for SSH tunnels in the system catalog. Query [`mz_ssh_tunnel_connections`](/sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections) to retrieve the public keys for the SSH tunnel connection you just created:
+1. Configure the SSH bastion host. The bastion host needs a **public key** to
+connect to the Materialize tunnel you created in the previous step. Materialize
+stores public keys for SSH tunnels in the system catalog. Query
+[`mz_ssh_tunnel_connections`](/sql/system-catalog/mz_catalog/#mz_ssh_tunnel_connections)
+to retrieve the public keys for the SSH tunnel connection you just created:
 
     ```mzsql
     SELECT
@@ -59,7 +55,7 @@ created in the previous step.
     echo "ssh-ed25519 AAAA...hLYV materialize" >> ~/.ssh/authorized_keys
     ```
 
-3. Configure your internal firewall to allow the SSH bastion host to connect to your Kafka cluster or PostgreSQL instance.
+1. Configure your internal firewall to allow the SSH bastion host to connect to your Kafka cluster or PostgreSQL instance.
 
     If you are using a cloud provider like AWS or GCP, update the security group or firewall rules for your PostgreSQL instance or Kafka brokers.
 
@@ -76,7 +72,7 @@ created in the previous step.
 
     If the command hangs, double-check your security group and firewall settings. If the connection is successful, you can proceed to the next step.
 
-4. Verify the SSH tunnel connection from your source to your bastion host:
+1. Verify the SSH tunnel connection from your source to your bastion host:
 
     ```bash
     # Command for Linux
@@ -110,7 +106,7 @@ created in the previous step.
     sudo systemctl restart sshd
     ```
 
-5. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your bastion host to allow SSH traffic for those IP addresses only.
+1. Retrieve the static egress IPs from Materialize and configure the firewall rules (e.g. AWS Security Groups) for your bastion host to allow SSH traffic for those IP addresses only.
 
     ```mzsql
     SELECT * FROM mz_catalog.mz_egress_ips;
@@ -122,12 +118,12 @@ created in the previous step.
     XXX.100.27.23
     ```
 
-## Validate the SSH tunnel connection
+1. To confirm that the SSH tunnel connection is correctly configured, use the
+   [`VALIDATE CONNECTION`](/sql/validate-connection) command:
 
-To confirm that the SSH tunnel connection is correctly configured, use the [`VALIDATE CONNECTION`](/sql/validate-connection) command:
+   ```mzsql
+   VALIDATE CONNECTION ssh_connection;
+   ```
 
-```mzsql
-VALIDATE CONNECTION ssh_connection;
-```
-
-If no validation errors are returned, the connection can be used to create a source connection.
+   If no validation errors are returned, the connection can be used to create a
+   source connection.

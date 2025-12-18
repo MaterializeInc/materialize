@@ -1,0 +1,15 @@
+columns:
+  - column: col1
+  - column: commands
+rows:
+  - col1: "**Roles**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="role" >}}
+
+  - col1: "**Privileges**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="privilege" >}}
+
+  - col1: "**Owners**"
+    commands: |
+     {{< yaml-list data="sql_commands_all" label="owner" >}}

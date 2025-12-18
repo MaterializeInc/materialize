@@ -38,7 +38,9 @@ use mz_transform::TransformCtx;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::normalize_lets::normalize_lets;
 use mz_transform::notice::{IndexAlreadyExists, IndexKeyEmpty};
-use mz_transform::typecheck::{SharedContext as TypecheckContext, empty_context};
+use mz_transform::reprtypecheck::{
+    SharedContext as ReprTypecheckContext, empty_context as empty_repr_context,
+};
 
 use crate::optimize::dataflows::{
     ComputeInstanceSnapshot, DataflowBuilder, ExprPrepStyle, prep_relation_expr, prep_scalar_expr,
@@ -49,8 +51,8 @@ use crate::optimize::{
 };
 
 pub struct Optimizer {
-    /// A typechecking context to use throughout the optimizer pipeline.
-    typecheck_ctx: TypecheckContext,
+    /// A representation typechecking context to use throughout the optimizer pipeline.
+    repr_typecheck_ctx: ReprTypecheckContext,
     /// A snapshot of the catalog state.
     catalog: Arc<dyn OptimizerCatalog>,
     /// A snapshot of the cluster that will run the dataflows.
@@ -74,7 +76,7 @@ impl Optimizer {
         metrics: OptimizerMetrics,
     ) -> Self {
         Self {
-            typecheck_ctx: empty_context(),
+            repr_typecheck_ctx: empty_repr_context(),
             catalog,
             compute_instance,
             exported_index_id,
@@ -145,7 +147,7 @@ impl Optimize<Index> for Optimizer {
             .catalog
             .resolve_full_name(&index.name, on_entry.conn_id());
         let on_desc = on_entry
-            .desc(&full_name)
+            .relation_desc()
             .expect("can only create indexes on items with a valid description");
 
         let mut df_builder = {
@@ -176,9 +178,9 @@ impl Optimize<Index> for Optimizer {
             &df_builder,
             &mz_transform::EmptyStatisticsOracle, // TODO: wire proper stats
             &self.config.features,
-            &self.typecheck_ctx,
+            &self.repr_typecheck_ctx,
             &mut df_meta,
-            Some(&self.metrics),
+            Some(&mut self.metrics),
         );
         // Run global optimization.
         mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;

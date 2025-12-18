@@ -32,14 +32,6 @@ rows:
 
       Defaults to the `KUBERNETES_CONTEXT` environment variable.
 
-  - Option: "`--k8s-dump-secret-values <boolean>`"
-    Description: |
-
-      <a name="k8s-dump-secret-values"></a> If `true`, include unredacted secrets in the
-      dump. Use with caution.
-
-      Defaults to `false`.
-
   - Option: "`-h`, `--help`"
     Description: |
 

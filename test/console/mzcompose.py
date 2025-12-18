@@ -12,12 +12,14 @@ from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.testdrive import Testdrive
 
 SERVICES = [
     Redpanda(),
     Postgres(),
     MySql(),
+    SqlServer(),
     Testdrive(),
     Materialized(system_parameter_defaults={"enable_rbac_checks": "false"}),
 ]
@@ -28,6 +30,7 @@ def workflow_default(c: Composition) -> None:
         "redpanda",
         "postgres",
         "mysql",
+        "sql-server",
         "materialized",
         Service("testdrive", idle=True),
     )

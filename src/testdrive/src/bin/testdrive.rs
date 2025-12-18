@@ -27,9 +27,9 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::path::PathExt;
 use mz_ore::url::SensitiveUrl;
 use mz_testdrive::{CatalogConfig, Config, ConsistencyCheckLevel};
+use rand::SeedableRng;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
 #[allow(deprecated)] // fails with libraries still using old time lib
 use time::Instant;
 use tracing::info;
@@ -112,6 +112,10 @@ struct Args {
     /// Whether we skip coordinator and catalog consistency checks.
     #[clap(long, default_value_t = ConsistencyCheckLevel::default(), value_enum)]
     consistency_checks: ConsistencyCheckLevel,
+    /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
+    /// test file).
+    #[clap(long, action = ArgAction::SetTrue)]
+    check_statement_logging: bool,
     /// Which log messages to emit.
     ///
     /// See environmentd's `--startup-log-filter` option for details.
@@ -164,6 +168,11 @@ struct Args {
     /// The hostname is taken from `materialize_url`.
     #[clap(long, default_value = "6880", value_name = "PORT")]
     materialize_password_sql_port: u16,
+    /// The port on which Materialize is listening for password authenticated SQL connections.
+    ///
+    /// The hostname is taken from `materialize_url`.
+    #[clap(long, default_value = "6881", value_name = "PORT")]
+    materialize_sasl_sql_port: u16,
     /// Arbitrary session parameters for testdrive to set after connecting to
     /// Materialize.
     #[clap(long, value_name = "KEY=VAL", value_parser = parse_kafka_opt)]
@@ -411,6 +420,7 @@ async fn main() {
         initial_backoff: args.initial_backoff,
         backoff_factor: args.backoff_factor,
         consistency_checks: args.consistency_checks,
+        check_statement_logging: args.check_statement_logging,
         rewrite_results: args.rewrite_results,
 
         // === Materialize options. ===
@@ -421,6 +431,7 @@ async fn main() {
         materialize_internal_http_port: args.materialize_internal_http_port,
         materialize_use_https: args.materialize_use_https,
         materialize_password_sql_port: args.materialize_password_sql_port,
+        materialize_sasl_sql_port: args.materialize_sasl_sql_port,
         materialize_params: args.materialize_param,
         materialize_catalog_config,
         build_info: &BUILD_INFO,
@@ -502,7 +513,7 @@ async fn main() {
     }
 
     if args.shuffle_tests {
-        let seed = args.seed.unwrap_or_else(|| rand::thread_rng().r#gen());
+        let seed = args.seed.unwrap_or_else(rand::random);
         let mut rng = StdRng::seed_from_u64(seed.into());
         files.shuffle(&mut rng);
     }

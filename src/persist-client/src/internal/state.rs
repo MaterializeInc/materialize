@@ -9,7 +9,7 @@
 
 use anyhow::ensure;
 use async_stream::{stream, try_stream};
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use mz_persist::metrics::ColumnarMetrics;
 use proptest::prelude::{Arbitrary, Strategy};
 use std::borrow::Cow;
@@ -56,7 +56,9 @@ use uuid::Uuid;
 
 use crate::critical::CriticalReaderId;
 use crate::error::InvalidUsage;
-use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, parse_id};
+use crate::internal::encoding::{
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
+};
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
 use crate::internal::paths::{BlobKey, PartId, PartialBatchKey, PartialRollupKey, WriterKey};
@@ -104,7 +106,7 @@ pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
 /// We musn't enable this until we are fully deployed on the new version.
 pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
     "persist_rollup_use_active_rollup",
-    false,
+    true,
     "Whether to use the new active rollup tracking mechanism.",
 );
 
@@ -390,14 +392,16 @@ impl<T: Timestamp + Codec64> BatchPart<T> {
         }
     }
 
-    pub fn diffs_sum<D: Codec64 + Semigroup>(&self, metrics: &ColumnarMetrics) -> Option<D> {
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self, metrics: &ColumnarMetrics) -> Option<D> {
         match self {
             BatchPart::Hollow(x) => x.diffs_sum.map(D::decode),
-            BatchPart::Inline { updates, .. } => updates
-                .decode::<T>(metrics)
-                .expect("valid inline part")
-                .updates
-                .diffs_sum(),
+            BatchPart::Inline { updates, .. } => Some(
+                updates
+                    .decode::<T>(metrics)
+                    .expect("valid inline part")
+                    .updates
+                    .diffs_sum(),
+            ),
         }
     }
 }
@@ -451,7 +455,7 @@ impl<T> HollowRunRef<T> {
 
 impl<T: Timestamp + Codec64> HollowRunRef<T> {
     /// Stores the given runs and returns a [HollowRunRef] that points to them.
-    pub async fn set<D: Codec64 + Semigroup>(
+    pub async fn set<D: Codec64 + Monoid>(
         shard_id: ShardId,
         blob: &dyn Blob,
         writer: &WriterKey,
@@ -657,7 +661,7 @@ impl<T> RunPart<T>
 where
     T: Timestamp + Codec64,
 {
-    pub fn diffs_sum<D: Codec64 + Semigroup>(&self, metrics: &ColumnarMetrics) -> Option<D> {
+    pub fn diffs_sum<D: Codec64 + Monoid>(&self, metrics: &ColumnarMetrics) -> Option<D> {
         match self {
             Self::Single(p) => p.diffs_sum(metrics),
             Self::Many(hollow_run) => hollow_run.diffs_sum.map(D::decode),
@@ -816,6 +820,10 @@ pub struct RunMeta {
 
     /// The number of updates in this run, or `None` if the number is unknown.
     pub(crate) len: Option<usize>,
+
+    /// Additional unstructured metadata.
+    #[serde(skip_serializing_if = "MetadataMap::is_empty")]
+    pub(crate) meta: MetadataMap,
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.
@@ -823,6 +831,9 @@ pub struct RunMeta {
 pub struct HollowBatchPart<T> {
     /// Pointer usable to retrieve the updates.
     pub key: PartialBatchKey,
+    /// Miscellaneous metadata.
+    #[serde(skip_serializing_if = "MetadataMap::is_empty")]
+    pub meta: MetadataMap,
     /// The encoded size of this part.
     pub encoded_size_bytes: usize,
     /// A lower bound on the keys in the part. (By default, this the minimum
@@ -1211,6 +1222,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         // are added.
         let HollowBatchPart {
             key: self_key,
+            meta: self_meta,
             encoded_size_bytes: self_encoded_size_bytes,
             key_lower: self_key_lower,
             structured_key_lower: self_structured_key_lower,
@@ -1223,6 +1235,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         } = self;
         let HollowBatchPart {
             key: other_key,
+            meta: other_meta,
             encoded_size_bytes: other_encoded_size_bytes,
             key_lower: other_key_lower,
             structured_key_lower: other_structured_key_lower,
@@ -1235,6 +1248,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         } = other;
         (
             self_key,
+            self_meta,
             self_encoded_size_bytes,
             self_key_lower,
             self_structured_key_lower,
@@ -1247,6 +1261,7 @@ impl<T: Ord> Ord for HollowBatchPart<T> {
         )
             .cmp(&(
                 other_key,
+                other_meta,
                 other_encoded_size_bytes,
                 other_key_lower,
                 other_structured_key_lower,
@@ -1302,6 +1317,11 @@ pub struct NoOpStateTransition<T>(pub T);
 #[derive(Debug, Clone)]
 #[cfg_attr(any(test, debug_assertions), derive(PartialEq))]
 pub struct StateCollections<T> {
+    /// The version of this state. This is typically identical to the version of the code
+    /// that wrote it, but may diverge during 0dt upgrades and similar operations when a
+    /// new version of code is intentionally interoperating with an older state format.
+    pub(crate) version: Version,
+
     // - Invariant: `<= all reader.since`
     // - Invariant: Doesn't regress across state versions.
     pub(crate) last_gc_req: SeqNo,
@@ -1821,7 +1841,7 @@ where
         Continue(merge_reqs)
     }
 
-    pub fn apply_merge_res<D: Codec64 + Semigroup + PartialEq>(
+    pub fn apply_merge_res<D: Codec64 + Monoid + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
@@ -2219,7 +2239,6 @@ where
 #[derive(Debug)]
 #[cfg_attr(any(test, debug_assertions), derive(Clone, PartialEq))]
 pub struct State<T> {
-    pub(crate) applier_version: semver::Version,
     pub(crate) shard_id: ShardId,
 
     pub(crate) seqno: SeqNo,
@@ -2249,10 +2268,9 @@ pub struct TypedState<K, V, T, D> {
 
 impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     #[cfg(any(test, debug_assertions))]
-    pub(crate) fn clone(&self, applier_version: Version, hostname: String) -> Self {
+    pub(crate) fn clone(&self, hostname: String) -> Self {
         TypedState {
             state: State {
-                applier_version,
                 shard_id: self.shard_id.clone(),
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
@@ -2266,7 +2284,6 @@ impl<K, V, T: Clone, D> TypedState<K, V, T, D> {
     pub(crate) fn clone_for_rollup(&self) -> Self {
         TypedState {
             state: State {
-                applier_version: self.applier_version.clone(),
                 shard_id: self.shard_id.clone(),
                 seqno: self.seqno.clone(),
                 walltime_ms: self.walltime_ms,
@@ -2333,12 +2350,12 @@ where
         walltime_ms: u64,
     ) -> Self {
         let state = State {
-            applier_version,
             shard_id,
             seqno: SeqNo::minimum(),
             walltime_ms,
             hostname,
             collections: StateCollections {
+                version: applier_version,
                 last_gc_req: SeqNo::minimum(),
                 rollups: BTreeMap::new(),
                 active_rollup: None,
@@ -2364,19 +2381,15 @@ where
     where
         WorkFn: FnMut(SeqNo, &PersistConfig, &mut StateCollections<T>) -> ControlFlow<E, R>,
     {
-        // Now that we support one minor version of forward compatibility, tag
-        // each version of state with the _max_ version of code that has ever
-        // contributed to it. Otherwise, we'd erroneously allow rolling back an
-        // arbitrary number of versions if they were done one-by-one.
-        let new_applier_version = std::cmp::max(&self.applier_version, &cfg.build_version);
+        // We do not increment the version by default, though work_fn can if it chooses to.
         let mut new_state = State {
-            applier_version: new_applier_version.clone(),
             shard_id: self.shard_id,
             seqno: self.seqno.next(),
             walltime_ms: (cfg.now)(),
             hostname: cfg.hostname.clone(),
             collections: self.collections.clone(),
         };
+
         // Make sure walltime_ms is strictly increasing, in case clocks are
         // offset.
         if new_state.walltime_ms <= self.walltime_ms {
@@ -2747,13 +2760,13 @@ fn serialize_diffs_sum<S: Serializer>(val: &Option<[u8; 8]>, s: S) -> Result<S::
 impl<T: Serialize + Timestamp + Lattice> Serialize for State<T> {
     fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         let State {
-            applier_version,
             shard_id,
             seqno,
             walltime_ms,
             hostname,
             collections:
                 StateCollections {
+                    version: applier_version,
                     last_gc_req,
                     rollups,
                     active_rollup,
@@ -2833,12 +2846,12 @@ pub(crate) mod tests {
     use proptest::strategy::ValueTree;
 
     use crate::InvalidUsage::{InvalidBounds, InvalidEmptyTimeInterval};
-    use crate::PersistLocation;
     use crate::cache::PersistClientCache;
     use crate::internal::encoding::any_some_lazy_part_stats;
     use crate::internal::paths::RollupId;
     use crate::internal::trace::tests::any_trace;
     use crate::tests::new_test_client_cache;
+    use crate::{Diagnostics, PersistLocation};
 
     use super::*;
 
@@ -2998,6 +3011,7 @@ pub(crate) mod tests {
             )| {
                 HollowBatchPart {
                     key,
+                    meta: Default::default(),
                     encoded_size_bytes,
                     key_lower,
                     structured_key_lower: None,
@@ -3135,12 +3149,12 @@ pub(crate) mod tests {
                 (shard_id, seqno, walltime_ms, hostname, last_gc_req, rollups, active_rollup),
                 (active_gc, leased_readers, critical_readers, writers, schemas, trace),
             )| State {
-                applier_version: semver::Version::new(1, 2, 3),
                 shard_id,
                 seqno,
                 walltime_ms,
                 hostname,
                 collections: StateCollections {
+                    version: Version::new(1, 2, 3),
                     last_gc_req,
                     rollups,
                     active_rollup,
@@ -3171,6 +3185,7 @@ pub(crate) mod tests {
                 .map(|x| {
                     RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
+                        meta: Default::default(),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
                         structured_key_lower: None,
@@ -4380,6 +4395,10 @@ pub(crate) mod tests {
             let client = clients.open(PersistLocation::new_in_mem()).await.unwrap();
             // Run in a task so we can catch the panic.
             mz_ore::task::spawn(|| version.to_string(), async move {
+                let () = client
+                    .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+                    .await
+                    .expect("valid usage");
                 let (mut write, _) = client.expect_open::<String, (), u64, i64>(shard_id).await;
                 let current = *write.upper().as_option().unwrap();
                 // Do a write so that we tag the state with the version.
@@ -4387,6 +4406,7 @@ pub(crate) mod tests {
                     .expect_compare_and_append_batch(&mut [], current, current + 1)
                     .await;
             })
+            .into_tokio_handle()
             .await
         }
 
@@ -4398,9 +4418,9 @@ pub(crate) mod tests {
         let res = open_and_write(&mut clients, Version::new(0, 11, 0), shard_id).await;
         assert_ok!(res);
 
-        // Downgrade to v0.10.0 is allowed.
+        // Downgrade to v0.10.0 is no longer allowed.
         let res = open_and_write(&mut clients, Version::new(0, 10, 0), shard_id).await;
-        assert_ok!(res);
+        assert!(res.unwrap_err().is_panic());
 
         // Downgrade to v0.9.0 is _NOT_ allowed.
         let res = open_and_write(&mut clients, Version::new(0, 9, 0), shard_id).await;

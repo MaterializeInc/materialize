@@ -6,19 +6,21 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER SYSTEM RESET` globally restores the value of a configuration parameter to
-its default value. This command is an alternative spelling for [`ALTER SYSTEM
-SET...TO DEFAULT`](../alter-system-set).
+Use `ALTER SYSTEM RESET` to globally restore the value of a configuration
+parameter to its default value. This command is an alternative spelling for
+[`ALTER SYSTEM SET...TO DEFAULT`](../alter-system-set).
 
 To see the current value of a configuration parameter, use [`SHOW`](../show).
 
 ## Syntax
 
-{{< diagram "alter-system-reset-stmt.svg" >}}
+```mzsql
+ALTER SYSTEM RESET <config>;
+```
 
-Field  | Use
--------|-----
-_name_ | The configuration parameter's name.
+Syntax element | Description
+---------------|------------
+`<config>`     | The configuration parameter's name.
 
 {{% configuration-parameters %}}
 

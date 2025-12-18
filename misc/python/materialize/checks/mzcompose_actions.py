@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any
 from materialize import MZ_ROOT
 from materialize.checks.actions import Action
 from materialize.checks.executors import Executor
+from materialize.docker import image_registry
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.materialized import DeploymentStatus, Materialized
@@ -67,8 +68,21 @@ class StartMz(MzcomposeAction):
     def execute(self, e: Executor) -> None:
         c = e.mzcompose_composition()
 
-        image = f"materialize/materialized:{self.tag}" if self.tag is not None else None
+        image = (
+            f"{image_registry()}/materialized:{self.tag}"
+            if self.tag is not None
+            else None
+        )
         print(f"Starting Mz using image {image}, mz_service {self.mz_service}")
+
+        listeners_config_path = (
+            f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive.json"
+        )
+
+        if not self.tag or self.tag >= MzVersion.parse_mz("v0.158.0-dev"):
+            listeners_config_path = (
+                f"{MZ_ROOT}/src/materialized/ci/listener_configs/testdrive_sasl.json"
+            )
 
         mz = Materialized(
             name=self.mz_service,
@@ -89,6 +103,7 @@ class StartMz(MzcomposeAction):
             publish=self.publish,
             default_replication_factor=2,
             support_external_clusterd=True,
+            listeners_config_path=listeners_config_path,
         )
 
         # Don't fail since we are careful to explicitly kill and collect logs

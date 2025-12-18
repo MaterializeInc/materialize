@@ -1,0 +1,11 @@
+columns:
+  - column: "Port"
+  - column: "Description"
+
+rows:
+  - "Port": "6875"
+    "Description": "For SQL connections to the database"
+  - "Port": "6876"
+    "Description": "For HTTP(S) connections to the database"
+  - "Port": "8080"
+    "Description": "For HTTP(S) connections to Materialize Console"

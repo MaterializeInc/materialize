@@ -81,12 +81,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use differential_dataflow::AsCollection;
 use futures::{FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::future::InTask;
 use mz_postgres_util::PostgresError;
 use mz_postgres_util::{Client, simple_query_opt};
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
+use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
 use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
@@ -99,7 +101,6 @@ use postgres_replication::protocol::{LogicalReplicationMessage, ReplicationMessa
 use serde::{Deserialize, Serialize};
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
-use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::Concat;
 use timely::dataflow::operators::Operator;
@@ -156,7 +157,8 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
     let (data_output, data_stream) = builder.new_output();
     let (_upper_output, upper_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (definite_error_handle, definite_errors) = builder.new_output();
+    let (definite_error_handle, definite_errors) =
+        builder.new_output::<CapacityContainerBuilder<_>>();
     let (probe_output, probe_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let mut rewind_input =
@@ -562,9 +564,11 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
         .map::<Vec<_>, _, _>(Clone::clone)
         .unary(round_robin, "PgCastReplicationRows", |_, _| {
             move |input, output| {
-                while let Some((time, data)) = input.next() {
+                input.for_each_time(|time, data| {
                     let mut session = output.session(&time);
-                    for ((oid, output_index, event), time, diff) in data.drain(..) {
+                    for ((oid, output_index, event), time, diff) in
+                        data.flat_map(|data| data.drain(..))
+                    {
                         let output = &table_info
                             .get(&oid)
                             .and_then(|outputs| outputs.get(&output_index))
@@ -581,7 +585,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
 
                         session.give(((output_index, event), time, diff));
                     }
-                }
+                });
             }
         })
         .as_collection();
@@ -610,11 +614,7 @@ async fn raw_stream<'a>(
     publication: &'a str,
     resume_lsn: MzOffset,
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
-    probe_output: &'a AsyncOutputHandle<
-        MzOffset,
-        CapacityContainerBuilder<Vec<Probe<MzOffset>>>,
-        Tee<MzOffset, Vec<Probe<MzOffset>>>,
-    >,
+    probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
 ) -> Result<
     Result<
@@ -633,8 +633,12 @@ async fn raw_stream<'a>(
     // Skip the timeline ID check for sources without a known timeline ID
     // (sources created before the timeline ID was added to the source details)
     if let Some(expected_timeline_id) = timeline_id {
-        if let Err(err) =
-            ensure_replication_timeline_id(&replication_client, expected_timeline_id).await?
+        if let Err(err) = ensure_replication_timeline_id(
+            &replication_client,
+            expected_timeline_id,
+            config.config.config_set(),
+        )
+        .await?
         {
             return Ok(Err(err));
         }
@@ -1070,15 +1074,23 @@ async fn ensure_publication_exists(
 async fn ensure_replication_timeline_id(
     replication_client: &Client,
     expected_timeline_id: &u64,
+    config_set: &ConfigSet,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
     let timeline_id = mz_postgres_util::get_timeline_id(replication_client).await?;
     if timeline_id == *expected_timeline_id {
         Ok(Ok(()))
     } else {
-        Ok(Err(DefiniteError::InvalidTimelineId {
-            expected: *expected_timeline_id,
-            actual: timeline_id,
-        }))
+        if PG_SOURCE_VALIDATE_TIMELINE.get(config_set) {
+            Ok(Err(DefiniteError::InvalidTimelineId {
+                expected: *expected_timeline_id,
+                actual: timeline_id,
+            }))
+        } else {
+            tracing::warn!(
+                "Timeline ID mismatch ignored: expected={expected_timeline_id} actual={timeline_id}"
+            );
+            Ok(Ok(()))
+        }
     }
 }
 

@@ -23,6 +23,10 @@
 //! collection of a dataflow, which is manipulated with `set_read_policy()`. Eventually, a
 //! collection is dropped with `drop_collections()`.
 //!
+//! A dataflow can be in read-only or read-write mode. In read-only mode, the dataflow does not
+//! modify any persistent state. Sending a `allow_write` message to the compute instance will
+//! transition the dataflow to read-write mode, allowing it to write to persistent sinks.
+//!
 //! Created dataflows will prevent the compaction of their inputs, including other compute
 //! collections but also collections managed by the storage layer. Each dataflow input is prevented
 //! from compacting beyond the allowed compaction of each of its outputs, ensuring that we can
@@ -60,7 +64,6 @@ use timely::PartialOrder;
 use timely::progress::{Antichain, Timestamp};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{self, MissedTickBehavior};
-use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -76,12 +79,12 @@ use crate::metrics::ComputeControllerMetrics;
 use crate::protocol::command::{ComputeParameters, PeekTarget};
 use crate::protocol::response::{PeekResponse, SubscribeBatch};
 
-mod instance;
 mod introspection;
 mod replica;
 mod sequential_hydration;
 
 pub mod error;
+pub mod instance;
 
 pub(crate) type StorageCollections<T> = Arc<
     dyn mz_storage_client::storage_collections::StorageCollections<Timestamp = T> + Send + Sync,
@@ -334,6 +337,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
         self.instances.get(&id).ok_or(InstanceMissing(id))
     }
 
+    /// Return an `instance::Client` for the indicated compute instance.
+    pub fn instance_client(
+        &self,
+        id: ComputeInstanceId,
+    ) -> Result<instance::Client<T>, InstanceMissing> {
+        self.instance(id).map(|instance| instance.client.clone())
+    }
+
     /// Return a mutable reference to the indicated compute instance.
     fn instance_mut(
         &mut self,
@@ -481,23 +492,14 @@ impl<T: ComputeControllerTimestamp> ComputeController<T> {
             .map(|(id, wc)| (id.to_string(), format!("{wc:?}")))
             .collect();
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
-        let map = serde_json::Map::from_iter([
-            field("instances", instances_dump)?,
-            field("instance_workload_classes", instance_workload_classes)?,
-            field("initialized", initialized)?,
-            field("read_only", read_only)?,
-            field("stashed_response", format!("{stashed_response:?}"))?,
-            field("maintenance_scheduled", maintenance_scheduled)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "instances": instances_dump,
+            "instance_workload_classes": instance_workload_classes,
+            "initialized": initialized,
+            "read_only": read_only,
+            "stashed_response": format!("{stashed_response:?}"),
+            "maintenance_scheduled": maintenance_scheduled,
+        }))
     }
 }
 
@@ -537,6 +539,7 @@ where
             Arc::clone(&self.dyncfg),
             self.response_tx.clone(),
             self.introspection_tx.clone(),
+            self.read_only,
         );
 
         let instance = InstanceState::new(client, collections);
@@ -550,10 +553,6 @@ where
         let instance = self.instances.get_mut(&id).expect("instance just added");
         if self.initialized {
             instance.call(Instance::initialization_complete);
-        }
-
-        if !self.read_only {
-            instance.call(Instance::allow_writes);
         }
 
         let mut config_params = self.config.clone();
@@ -1041,6 +1040,29 @@ where
             instance.call(Instance::maintain);
         }
     }
+
+    /// Allow writes for the specified collections on `instance_id`.
+    ///
+    /// If this controller is in read-only mode, this is a no-op.
+    pub fn allow_writes(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
+        if self.read_only {
+            tracing::debug!("Skipping allow_writes in read-only mode");
+            return Ok(());
+        }
+
+        let instance = self.instance_mut(instance_id)?;
+
+        // Validation
+        instance.collection(collection_id)?;
+
+        instance.call(move |i| i.allow_writes(collection_id).expect("validated"));
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -1063,39 +1085,32 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
         self.collections.get(&id).ok_or(CollectionMissing(id))
     }
 
+    /// Calls the given function on the instance task. Does not await the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance corresponding to `self` does not exist.
     fn call<F>(&self, f: F)
     where
         F: FnOnce(&mut Instance<T>) + Send + 'static,
     {
-        let otel_ctx = OpenTelemetryContext::obtain();
-        self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call").entered();
-                otel_ctx.attach_as_parent();
-
-                f(instance)
-            }))
-            .expect("instance not dropped");
+        self.client.call(f).expect("instance not dropped")
     }
 
+    /// Calls the given function on the instance task, and awaits the result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the instance corresponding to `self` does not exist.
     async fn call_sync<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = oneshot::channel();
-        let otel_ctx = OpenTelemetryContext::obtain();
         self.client
-            .send(Box::new(move |instance| {
-                let _span = debug_span!("instance::call_sync").entered();
-                otel_ctx.attach_as_parent();
-
-                let result = f(instance);
-                let _ = tx.send(result);
-            }))
-            .expect("instance not dropped");
-
-        rx.await.expect("instance not dropped")
+            .call_sync(f)
+            .await
+            .expect("instance not dropped")
     }
 
     /// Acquires a [`ReadHold`] for the identified compute collection.
@@ -1144,20 +1159,11 @@ impl<T: ComputeControllerTimestamp> InstanceState<T> {
             .map(|(id, c)| (id.to_string(), format!("{c:?}")))
             .collect();
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
-        let map = serde_json::Map::from_iter([
-            field("instance", instance)?,
-            field("replicas", replicas)?,
-            field("collections", collections)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "instance": instance,
+            "replicas": replicas,
+            "collections": collections,
+        }))
     }
 }
 

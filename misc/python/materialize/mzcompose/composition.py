@@ -21,6 +21,7 @@ import importlib
 import importlib.abc
 import importlib.util
 import inspect
+import io
 import json
 import os
 import re
@@ -44,6 +45,7 @@ import yaml
 from psycopg import Connection, Cursor
 
 from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
+from materialize.docker import image_registry
 from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service as MzComposeService
 from materialize.mzcompose.services.materialized import (
@@ -361,8 +363,8 @@ class Composition:
         ]
 
         for retry in range(1, max_tries + 1):
-            stdout_result = ""
-            stderr_result = ""
+            stdout_result = io.StringIO()
+            stderr_result = io.StringIO()
             file.seek(0)
             try:
                 if capture_and_print:
@@ -391,19 +393,21 @@ class Composition:
                     while running:
                         running = False
                         for key, val in sel.select():
-                            output = ""
+                            output = io.StringIO()
                             while True:
                                 new_output = key.fileobj.read(1024)  # type: ignore
                                 if not new_output:
                                     break
-                                output += new_output
-                            if not output:
+                                output.write(new_output)
+                            contents = output.getvalue()
+                            output.close()
+                            if not contents:
                                 continue
                             # Keep running as long as stdout or stderr have any content
                             running = True
                             if key.fileobj is p.stdout:
                                 if print_prefix:
-                                    for line in output.splitlines(keepends=True):
+                                    for line in contents.splitlines(keepends=True):
                                         print(
                                             f"{print_prefix}{line}",
                                             end="",
@@ -411,14 +415,14 @@ class Composition:
                                         )
                                 else:
                                     print(
-                                        output,
+                                        contents,
                                         end="",
                                         flush=True,
                                     )
-                                stdout_result += output
+                                stdout_result.write(contents)
                             else:
                                 if print_prefix:
-                                    for line in output.splitlines(keepends=True):
+                                    for line in contents.splitlines(keepends=True):
                                         print(
                                             f"{print_prefix}{line}",
                                             end="",
@@ -427,21 +431,28 @@ class Composition:
                                         )
                                 else:
                                     print(
-                                        output,
+                                        contents,
                                         end="",
                                         file=sys.stderr,
                                         flush=True,
                                     )
-                                stderr_result += output
+                                stderr_result.write(contents)
                     p.wait()
                     retcode = p.poll()
                     assert retcode is not None
+                    stdout_contents = stdout_result.getvalue()
+                    stdout_result.close()
+                    stderr_contents = stderr_result.getvalue()
+                    stderr_result.close()
                     if check and retcode:
                         raise subprocess.CalledProcessError(
-                            retcode, p.args, output=stdout_result, stderr=stderr_result
+                            retcode,
+                            p.args,
+                            output=stdout_contents,
+                            stderr=stderr_contents,
                         )
                     return subprocess.CompletedProcess(
-                        p.args, retcode, stdout_result, stderr_result
+                        p.args, retcode, stdout_contents, stderr_contents
                     )
                 else:
                     return subprocess.run(
@@ -1114,7 +1125,7 @@ class Composition:
             self.kill("materialized")
             with self.override(
                 Materialized(
-                    image=f"materialize/materialized:{version}",
+                    image=f"{image_registry()}/materialized:{version}",
                     environment_extra=["MZ_DEPLOY_GENERATION=1"],
                     healthcheck=LEADER_STATUS_HEALTHCHECK,
                 )
@@ -1453,7 +1464,7 @@ class Composition:
         input: str,
         service: str = "testdrive",
         args: list[str] = [],
-        caller: Traceback | None = None,
+        caller: Traceback | str | None = None,
         mz_service: str | None = None,
         quiet: bool = False,
         silent: bool = False,
@@ -1471,7 +1482,13 @@ class Composition:
         """
 
         caller = caller or getframeinfo(stack()[1][0])
-        args = args + [f"--source={caller.filename}:{caller.lineno}"]
+        args = args + [
+            (
+                f"--source={caller.filename}:{caller.lineno}"
+                if isinstance(caller, Traceback)
+                else f"--source={caller}"
+            )
+        ]
 
         if mz_service is not None:
             args = args + [
@@ -1526,7 +1543,9 @@ class Composition:
             """,
         )
 
-    def restore_cockroach(self, mz_service: str = "materialized") -> None:
+    def restore_cockroach(
+        self, mz_service: str = "materialized", restart_mz: bool = True
+    ) -> None:
         self.kill(mz_service)
         self.exec(
             "cockroach",
@@ -1553,7 +1572,8 @@ class Composition:
             f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@cockroach:26257?options=--search_path=consensus",
         )
-        self.up(mz_service)
+        if restart_mz:
+            self.up(mz_service)
 
     def backup_postgres(self) -> None:
         backup = self.exec(
@@ -1566,7 +1586,9 @@ class Composition:
         with open("backup.sql", "w") as f:
             f.write(backup)
 
-    def restore_postgres(self, mz_service: str = "materialized") -> None:
+    def restore_postgres(
+        self, mz_service: str = "materialized", restart_mz: bool = True
+    ) -> None:
         self.kill(mz_service)
         self.kill("postgres-metadata")
         self.rm("postgres-metadata")
@@ -1592,7 +1614,8 @@ class Composition:
             f"--blob-uri={minio_blob_uri()}",
             "--consensus-uri=postgres://root@postgres-metadata:26257?options=--search_path=consensus",
         )
-        self.up(mz_service)
+        if restart_mz:
+            self.up(mz_service)
 
     def backup(self) -> None:
         if self.metadata_store() == "cockroach":
@@ -1600,11 +1623,13 @@ class Composition:
         else:
             self.backup_postgres()
 
-    def restore(self, mz_service: str = "materialized") -> None:
+    def restore(
+        self, mz_service: str = "materialized", restart_mz: bool = True
+    ) -> None:
         if self.metadata_store() == "cockroach":
-            self.restore_cockroach(mz_service)
+            self.restore_cockroach(mz_service, restart_mz)
         else:
-            self.restore_postgres(mz_service)
+            self.restore_postgres(mz_service, restart_mz)
 
     def await_mz_deployment_status(
         self,
@@ -1613,7 +1638,12 @@ class Composition:
         timeout: int | None = None,
         sleep_time: float | None = 1.0,
     ) -> None:
-        timeout = timeout or (1800 if ui.env_is_truthy("CI_COVERAGE_ENABLED") else 900)
+        timeout_default = 1200
+        timeout = timeout or (
+            timeout_default * 2
+            if ui.env_is_truthy("CI_COVERAGE_ENABLED")
+            else timeout_default
+        )
         print(
             f"Awaiting {mz_service} deployment status {status.value} for {timeout}s",
             end="",
@@ -1659,21 +1689,65 @@ class Composition:
         )
         assert result["result"] == "Success", f"Unexpected result {result}"
 
-    def cloud_hostname(self, quiet: bool = False) -> str:
-        """Uses the mz command line tool to get the hostname of the cloud instance"""
+    def cloud_hostname(
+        self, quiet: bool = False, timeout_secs: int = 180, poll_interval: float = 2.0
+    ) -> str:
+        """Uses the mz command line tool to get the hostname of the cloud instance, waiting until the region is ready."""
         if not quiet:
             print("Obtaining hostname of cloud instance ...")
-        region_status = self.run("mz", "region", "show", capture=True, rm=True)
-        sql_line = region_status.stdout.split("\n")[2]
-        cloud_url = sql_line.split("\t")[1].strip()
-        # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
-        cloud_hostname = urllib.parse.urlparse("https://" + cloud_url).hostname
-        return str(cloud_hostname)
+
+        deadline = time.time() + timeout_secs
+        last_msg = ""
+
+        while time.time() < deadline:
+            proc = self.run(
+                "mz",
+                "region",
+                "show",
+                capture=True,
+                capture_stderr=True,
+                rm=True,
+                check=False,
+                silent=True,
+            )
+            out = proc.stdout or ""
+            err = proc.stderr or ""
+
+            if proc.returncode == 0:
+                lines = out.splitlines()
+                if len(lines) >= 3:
+                    line = lines[2]
+                    parts = line.split("\t")
+                    if len(parts) >= 2:
+                        cloud_url = parts[1].strip()
+                        # It is necessary to append the 'https://' protocol; otherwise, urllib can't parse it correctly.
+                        hostname = urllib.parse.urlparse(
+                            "https://" + cloud_url
+                        ).hostname
+                        if hostname:
+                            return str(hostname)
+                        else:
+                            last_msg = f"failed to parse hostname from URL: {cloud_url}"
+                    else:
+                        last_msg = f"unexpected region show output (no tab in line 3): {line!r}"
+                else:
+                    last_msg = f"unexpected region show output (too few lines): {out!r}"
+            else:
+                last_msg = (out + "\n" + err).strip()
+
+            time.sleep(poll_interval)
+
+        raise UIError(
+            f"failed to obtain cloud hostname within {timeout_secs}s: {last_msg}"
+        )
 
     T = TypeVar("T")
 
     def test_parts(self, parts: list[T], process_func: Callable[[T], Any]) -> None:
         priority: dict[str, int] = {}
+
+        if not parts:
+            raise ValueError("No parts to test selected, check your parameters")
 
         # TODO(def-): Revisit if this is worth enabling, currently adds ~15 seconds to each run
         # if buildkite.is_in_buildkite():

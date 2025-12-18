@@ -19,7 +19,7 @@ bytesize = "2.1.0"
 chrono = { version = "0.4.39", default-features = false, features = ["std"] }
 clap = { version = "4.5.23", features = ["derive"] }
 derivative = "2.2.0"
-differential-dataflow = "0.17.0"
+differential-dataflow = "0.18.0"
 futures = "0.3.31"
 ipnet = "2.11.0"
 itertools = "0.14.0"
@@ -50,13 +50,13 @@ mz-sql-parser = { path = "../sql-parser" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-transform = { path = "../transform" }
-openssl = { version = "0.10.74", features = ["vendored"] }
+openssl = { version = "0.10.75", features = ["vendored"] }
 paste = "1.0.11"
 prometheus = { version = "0.14.0", default-features = false }
-proptest = { version = "1.7.0", default-features = false, features = ["std"] }
-proptest-derive = { version = "0.5.1", features = ["boxed_union"] }
+proptest = { version = "1.9.0", default-features = false, features = ["std"] }
+proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = "0.13.5"
-rand = "0.8.5"
+rand = "0.9.2"
 semver = { version = "1.0.27" }
 serde = "1.0.219"
 serde_json = "1.0.145"
@@ -64,15 +64,15 @@ serde_plain = "1.0.2"
 static_assertions = "1.1"
 sha2 = "0.10.9"
 thiserror = "2.0.17"
-timely = "0.24.0"
-tokio = { version = "1.44.1" }
-tracing = "0.1.37"
-uuid = "1.18.1"
+timely = "0.25.1"
+tokio = { version = "1.48.0" }
+tracing = "0.1.43"
+uuid = "1.19.0"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
 base64 = "0.22.1"
-insta = "1.43"
+insta = "1.44"
 
 [features]
 default = ["workspace-hack"]

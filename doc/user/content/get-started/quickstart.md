@@ -4,7 +4,7 @@ description: "Learn the basics of Materialize."
 menu:
   main:
     parent: "get-started"
-    weight: 15
+    weight: 10
     name: "Quickstart"
 aliases:
   - /katacoda/
@@ -53,9 +53,9 @@ Alternatively:
 Emulator](/get-started/install-materialize-emulator/). However, the Materialize
 Emulator does not provide the full experience of using Materialize.
 
-- You can run against your [Self-managed Materialize].
+- You can run against your [Self-managed
+  Materialize](/self-managed-deployments/).
 
-[Self-managed Materialize]: https://materialize.com/docs/self-managed/v25.2/
 
 ## Step 0. Open the SQL Shell
 

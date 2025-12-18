@@ -24,7 +24,7 @@ use std::time::Instant;
 use anyhow::anyhow;
 use arrow::array::ArrayRef;
 use differential_dataflow::Hashable;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
@@ -162,7 +162,7 @@ pub fn shard_source<'g, K, V, T, D, DT, G, C>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -316,7 +316,7 @@ pub(crate) fn shard_source_descs<K, V, D, G>(
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     G: Scope,
     // TODO: Figure out how to get rid of the TotalOrder bound :(.
     G::Timestamp: Timestamp + Lattice + Codec64 + TotalOrder + Sync,
@@ -359,7 +359,7 @@ where
 
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
-    let (descs_output, descs_stream) = builder.new_output();
+    let (descs_output, descs_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     #[allow(clippy::await_holding_refcell_ref)]
     let shutdown_button = builder.build(move |caps| async move {
@@ -402,7 +402,6 @@ where
             }
         })
         .await
-        .expect("reader creation shouldn't panic")
         .expect("could not open persist shard");
 
         // Wait for the start signal only after we have obtained a read handle. This makes "cannot
@@ -602,13 +601,13 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     G: Scope,
     G::Timestamp: Refines<T>,
 {
     let mut builder =
         AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
-    let (fetched_output, fetched_stream) = builder.new_output();
+    let (fetched_output, fetched_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
     let (completed_fetches_output, completed_fetches_stream) =
         builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
     let mut descs_input = builder.new_input_for_many(
@@ -638,7 +637,6 @@ where
             }
         })
         .await
-        .expect("fetcher creation shouldn't panic")
         .expect("shard codecs should not change");
 
         while let Some(event) = descs_input.next().await {

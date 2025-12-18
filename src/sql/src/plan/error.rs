@@ -70,6 +70,10 @@ pub enum PlanError {
         table: Option<PartialItemName>,
         column: ColumnName,
     },
+    ItemWithoutColumns {
+        name: String,
+        item_type: CatalogItemType,
+    },
     WrongJoinTypeForLateralColumn {
         table: Option<PartialItemName>,
         column: ColumnName,
@@ -142,6 +146,14 @@ pub enum PlanError {
     InvalidVersion {
         name: String,
         version: String,
+    },
+    InvalidSinkFrom {
+        name: String,
+        item_type: CatalogItemType,
+    },
+    InvalidDependency {
+        name: String,
+        item_type: CatalogItemType,
     },
     MangedReplicaName(String),
     ParserStatement(ParserStatementError),
@@ -298,6 +310,12 @@ pub enum PlanError {
     },
     /// AS OF or UP TO should be an expression that is castable and simplifiable to a non-null mz_timestamp value.
     InvalidAsOfUpTo,
+    InvalidReplacement {
+        item_type: CatalogItemType,
+        item_name: PartialItemName,
+        replacement_type: CatalogItemType,
+        replacement_name: PartialItemName,
+    },
     // TODO(benesch): eventually all errors should be structured.
     Unstructured(String),
 }
@@ -527,6 +545,10 @@ impl fmt::Display for PlanError {
                 "column {} must appear in the GROUP BY clause or be used in an aggregate function",
                 ColumnDisplay { table, column },
             ),
+            Self::ItemWithoutColumns { name, item_type } => {
+                let name = name.quoted();
+                write!(f, "{item_type} {name} does not have columns")
+            }
             Self::WrongJoinTypeForLateralColumn { table, column } => write!(
                 f,
                 "column {} cannot be referenced from this part of the query: \
@@ -636,6 +658,13 @@ impl fmt::Display for PlanError {
             },
             Self::InvalidVersion { name, version } => {
                 write!(f, "invalid version {} for {}", version.quoted(), name.quoted())
+            },
+            Self::InvalidSinkFrom { name, item_type } => {
+                write!(f, "{name} is a {item_type}, which cannot be exported as a sink")
+            },
+            Self::InvalidDependency { name, item_type } => {
+                let a = if *item_type == CatalogItemType::Index { "an" } else { "a" };
+                write!(f, "{name} is {a} {item_type}, which cannot be depended upon")
             },
             Self::DropViewOnMaterializedView(name)
             | Self::AlterViewOnMaterializedView(name)
@@ -830,7 +859,10 @@ impl fmt::Display for PlanError {
                 write!(f, "cursor {} does not exist", name.quoted())
             }
             Self::CopyFromTargetTableDropped { target_name: name } => write!(f, "COPY FROM's target table {} was dropped", name.quoted()),
-            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value")
+            Self::InvalidAsOfUpTo => write!(f, "AS OF or UP TO should be castable to a (non-null) mz_timestamp value"),
+            Self::InvalidReplacement { item_type, item_name, replacement_type, replacement_name } => {
+                write!(f, "cannot replace {item_type} {item_name} with {replacement_type} {replacement_name}")
+            }
         }
     }
 }

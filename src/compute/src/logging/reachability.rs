@@ -22,7 +22,9 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Column, columnar_exchange};
 use mz_timely_util::replay::MzReplay;
 use timely::dataflow::Scope;
-use timely::dataflow::channels::pact::ExchangeCore;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
+use timely::dataflow::operators::Operator;
+use timely::dataflow::operators::generic::operator::empty;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::logging::initialize::ReachabilityEvent;
@@ -53,47 +55,54 @@ pub(super) fn construct<G: Scope<Timestamp = Timestamp>>(
         type UpdatesKey = (bool, usize, usize, usize, Timestamp);
 
         type CB = ColumnBuilder<((UpdatesKey, ()), Timestamp, Diff)>;
-        let (updates, token) = event_queue.links.mz_replay::<_, CB, _>(
-            scope,
-            "reachability logs",
-            config.interval,
-            event_queue.activator,
-            move |mut session, data| {
-                // If logging is disabled, we still need to install the indexes, but we can leave them
-                // empty. We do so by immediately filtering all logs events.
-                if !enable_logging {
-                    return;
-                }
-                for (time, (operator_id, massaged)) in data.borrow().into_index_iter() {
-                    let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
-                    let time_ms: Timestamp = time_ms.try_into().expect("must fit");
-                    for (source, port, update_type, ts, diff) in massaged.into_iter() {
-                        let datum = (update_type, operator_id, source, port, ts);
-                        session.give(((datum, ()), time_ms, diff));
-                    }
-                }
-            },
-        );
+        let (logs, token) = if enable_logging {
+            event_queue.links.mz_replay(
+                scope,
+                "reachability logs",
+                config.interval,
+                event_queue.activator,
+            )
+        } else {
+            let token: Rc<dyn std::any::Any> = Rc::new(Box::new(()));
+            (empty(scope), token)
+        };
+        let logs = logs.unary::<CB, _, _, _>(Pipeline, "FlatMapReachability", move |_,_| move |input, output| {
+            input.for_each_time(|time, data| {
+                output.session_with_builder(&time)
+                    .give_iterator(data.flat_map(|d|
+                        d.borrow().into_index_iter().flat_map(move |(time, (operator_id, massaged))| {
+                            let time_ms = ((time.as_millis() / interval_ms) + 1) * interval_ms;
+                            let time_ms: Timestamp = time_ms.try_into().expect("must fit");
+                            massaged.into_iter().map(move |(source, port, update_type, ts, diff)| {
+                                let datum = (update_type, operator_id, source, port, ts);
+                                ((datum, ()), time_ms, diff)
+                            })
+                        }
+                    )));
+            });
+        });
 
         // Restrict results by those logs that are meant to be active.
         let logs_active = [LogVariant::Timely(TimelyLog::Reachability)];
         let worker_id = scope.index();
 
         let updates = consolidate_and_pack::<_, Col2ValBatcher<UpdatesKey, _, _, _>, ColumnBuilder<_>, _, _>(
-            &updates,
+            &logs,
             TimelyLog::Reachability,
-            move |((datum, ()), time, diff), packer, session| {
-                let (update_type, operator_id, source, port, ts) = datum;
-                let update_type = if *update_type { "source" } else { "target" };
-                let data = packer.pack_slice(&[
-                    Datum::UInt64(u64::cast_from(*operator_id)),
-                    Datum::UInt64(u64::cast_from(worker_id)),
-                    Datum::UInt64(u64::cast_from(*source)),
-                    Datum::UInt64(u64::cast_from(*port)),
-                    Datum::String(update_type),
-                    Datum::from(*ts),
-                ]);
-                session.give((data, time, diff));
+            move |data, packer, session| {
+                for ((datum, ()), time, diff) in data.iter() {
+                    let (update_type, operator_id, source, port, ts) = datum;
+                    let update_type = if *update_type { "source" } else { "target" };
+                    let data = packer.pack_slice(&[
+                        Datum::UInt64(u64::cast_from(*operator_id)),
+                        Datum::UInt64(u64::cast_from(worker_id)),
+                        Datum::UInt64(u64::cast_from(*source)),
+                        Datum::UInt64(u64::cast_from(*port)),
+                        Datum::String(update_type),
+                        Datum::from(*ts),
+                    ]);
+                    session.give((data, time, diff));
+                }
             }
         );
 

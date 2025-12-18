@@ -15,18 +15,18 @@ askama = { version = "0.12.1", default-features = false, features = ["config", "
 axum = "0.7.5"
 axum-extra = { version = "0.9.3", features = ["typed-header"] }
 headers = "0.4.1"
-http = "1.2.0"
+http = "1.4.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
 include_dir = "0.7.4"
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "tracing"] }
 prometheus = { version = "0.14.0", default-features = false }
 serde = "1.0.219"
 serde_json = { version = "1.0.145" }
-tokio = { version = "1.44.1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5.2", features = ["balance", "buffer", "filter", "limit", "retry", "timeout", "util"] }
-tower-http = { version = "0.6.6", features = ["auth", "cors", "map-response-body", "trace", "util"] }
-tracing = "0.1.37"
-tracing-subscriber = "0.3.19"
+tower-http = { version = "0.6.7", features = ["auth", "cors", "map-response-body", "trace", "util"] }
+tracing = "0.1.43"
+tracing-subscriber = "0.3.22"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]

@@ -109,7 +109,7 @@ impl SchedulingDecision {
 impl Coordinator {
     #[mz_ore::instrument(level = "debug")]
     /// Call each scheduling policy.
-    pub(crate) async fn check_scheduling_policies(&mut self) {
+    pub(crate) async fn check_scheduling_policies(&self) {
         // (So far, we have only this one policy.)
         self.check_refresh_policy();
     }
@@ -148,9 +148,9 @@ impl Coordinator {
                                         let (_since, write_frontier) = self
                                             .controller
                                             .storage
-                                            .collection_frontiers(mv.global_id())
+                                            .collection_frontiers(mv.global_id_writes())
                                             .expect("the storage controller should know about MVs that exist in the catalog");
-                                        (mv.global_id(), write_frontier, refresh_schedule)
+                                        (mv.global_id_writes(), write_frontier, refresh_schedule)
                                     })
                                 } else {
                                     None

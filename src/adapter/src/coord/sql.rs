@@ -141,7 +141,7 @@ impl Coordinator {
 
     /// Verify a portal is still valid.
     pub(crate) fn verify_portal(
-        &self,
+        catalog: &Catalog,
         session: &mut Session,
         name: &str,
     ) -> Result<(), AdapterError> {
@@ -150,7 +150,7 @@ impl Coordinator {
             None => return Err(AdapterError::UnknownCursor(name.to_string())),
         };
         if let Some(new_revision) = Self::verify_statement_revision(
-            self.catalog(),
+            catalog,
             session,
             portal.stmt.as_deref(),
             &portal.desc,

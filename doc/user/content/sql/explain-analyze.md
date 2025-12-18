@@ -8,6 +8,7 @@ menu:
 
 `EXPLAIN ANALYZE`:
 
+- Summarizes cluster status.
 - Reports on the performance of indexes and materialized views.
 - Provide the execution plan annotated with TopK hints. The TopK
   query pattern groups by some key and return the first K elements within each
@@ -29,8 +30,13 @@ EXPLAIN ANALYZE
 FOR INDEX <name> | MATERIALIZED VIEW <name>
 [ AS SQL ]
 ;
-```
 
+EXPLAIN ANALYZE CLUSTER
+      CPU [, MEMORY] [WITH SKEW]
+    | MEMORY [, CPU] [WITH SKEW]
+[ AS SQL ]
+;
+```
 {{< tip >}}
 If you want to specify both `CPU` or `MEMORY`, they may be listed in any order;
 however, each may appear only once.
@@ -38,10 +44,10 @@ however, each may appear only once.
 
 Parameter    | Description
 -------------|-----
-**CPU**      | Annotates the LIR plan with the consumed CPU time information `total_elapsed` for each operator (not inclusive of its child operators).
-**MEMORY**   | Annotates the LIR plan with the consumed memory information `total_memory` and number of records `total_records` for each operator.
+**CPU**      | Reports consumed CPU time information `total_elapsed` for each operator (not inclusive of its child operators; `FOR INDEX`, `FOR MATERIALIZED VIEW`) or for each object in the current cluster (`CLUSTER`).
+**MEMORY**   | Reports consumed memory information `total_memory` and number of records `total_records` for each operator (not including child operators; `FOR INDEX`, `FOR MATERIALIZED VIEW`) or for each object in the current cluster (`CLUSTER`).
 **WITH SKEW** | *Optional.* If specified, includes additional information about average and per-worker consumption and ratios (of `CPU` and/or `MEMORY`).
-**HINTS**    | Annotates the LIR plan with [TopK hints].
+**HINTS**    | Annotates the LIR plan with [TopK hints] (`FOR INDEX`, `FOR MATERIALIZED VIEW`).
 **AS SQL**   | *Optional.* If specified, returns the SQL associated with the specified `EXPLAIN ANALYZE` command without executing it. You can modify this SQL as a starting point to create customized queries.
 
 ## Privileges
@@ -289,6 +295,37 @@ The results show that the `TopK` operator uses `11MB` of memory, less than a thi
 |       Stream u5             |              |               |
 |     Arrange                 | 601 kB       |         15502 |
 |       Read u4               |              |               |
+
+### `EXPLAIN ANALYZE CLUSTER ...`
+
+It is possible to look at overall cluster status, rather than individual indexes or materialized views. This is useful for quickly identifying skewed dataflows as well as which dataflows are taking up the most resources.
+
+Running `EXPLAIN ANALYZE CLUSTER MEMORY, CPU` will identify which dataflows are using the most resources. Running this statement on a small cluster with 4 workers, we find:
+
+|             object              | global_id |  total_elapsed  | total_memory | total_records |
+|:--------------------------------|----------:|----------------:|-------------:|--------------:|
+| materialize.public.wins_by_item | u8        | 00:00:50.731033 | 42 MB        |        861512 |
+| materialize.public.wins_by_item | u9        | 00:00:00.992696 | 406 kB       |         15950 |
+
+Note that the output is sorted by `total_elapsed`---the output is ordered by whichever property is listed first. Here it _also_ happens to be sorted by `total_memory` and `total_records`: the dataflows processing the most data took the most time. On a cluster with dozens of indexes and materialized views, `EXPLAIN ANALYZE CLUSTER` reveals which dataflows are consuming the most resources.
+
+We can quickly find skewed dataflows on a cluster by running `EXPLAIN ANALYZE CLUSTER MEMORY WITH SKEW`; here is an example on a small cluster with 4 workers:
+
+| object                          | global_id | worker_id | max_operator_memory_ratio | worker_memory | avg_memory | total_memory | max_operator_records_ratio | worker_records | avg_records | total_records |
+|:--------------------------------|----------:|----------:|--------------------------:|--------------:|-----------:|-------------:|---------------------------:|---------------:|------------:|--------------:|
+| materialize.public.wins_by_item | u9        | 2         |                      1.63 | 164 kB        | 101 kB     | 404 kB       |                       1.62 |           6411 |      3968.5 |         15874 |
+| materialize.public.wins_by_item | u9        | 1         |                      1.58 | 159 kB        | 101 kB     | 404 kB       |                       1.58 |           6286 |      3968.5 |         15874 |
+| materialize.public.wins_by_item | u8        | 1         |                      1.06 | 10 MB         | 10 MB      | 41 MB        |                          1 |         213718 |    214325.5 |        857302 |
+| materialize.public.wins_by_item | u8        | 0         |                      1.01 | 10 MB         | 10 MB      | 41 MB        |                          1 |         215075 |    214325.5 |        857302 |
+| materialize.public.wins_by_item | u8        | 3         |                      1.01 | 10 MB         | 10 MB      | 41 MB        |                          1 |         214020 |    214325.5 |        857302 |
+| materialize.public.wins_by_item | u8        | 2         |                         1 | 10 MB         | 10 MB      | 41 MB        |                          1 |         214489 |    214325.5 |        857302 |
+| materialize.public.wins_by_item | u9        | 0         |                      0.79 | 80 kB         | 101 kB     | 404 kB       |                        0.8 |           3177 |      3968.5 |         15874 |
+| materialize.public.wins_by_item | u9        | 3         |                         0 | 272 bytes     | 101 kB     | 404 kB       |                            |                |      3968.5 |         15874 |
+
+The `u9` and `u8` dataflows make up the `wins_by_item` dataflow (where `u8` does the work and `u9` arranges it).
+Both dataflows run on all four workers.
+We report the `max_operator_memory_ratio` for each worker on each dataflow: what is the ratio of that dataflow's memory usage to the average memory usage across all workers?
+Note that the output results are sorted by `max_operator_memory_ratio`, making it easy to spot skew. Here, workers 1 and 2 hold most of the records; worker 0 has half as many, and worker 3 has none at all.
 
 ### `EXPLAIN ANALYZE ... AS SQL`
 

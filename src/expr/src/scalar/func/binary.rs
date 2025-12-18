@@ -200,7 +200,8 @@ mod derive {
         AgeTimestampTz,
         ArrayArrayConcat,
         ArrayContains,
-        // ArrayContainsArray { rev: bool },
+        ArrayContainsArray,
+        ArrayContainsArrayRev,
         ArrayLength,
         ArrayLower,
         ArrayRemove,
@@ -273,24 +274,26 @@ mod derive {
         GetByte,
         Gt,
         Gte,
-        // IsLikeMatch
+        IsLikeMatchCaseInsensitive,
+        IsLikeMatchCaseSensitive,
         // IsRegexpMatch
         JsonbConcat,
         JsonbContainsJsonb,
         JsonbContainsString,
         JsonbDeleteInt64,
         JsonbDeleteString,
-        // JsonbGetInt64,
-        // JsonbGetInt64Stringify,
-        // JsonbGetPath,
-        // JsonbGetPathStringify,
-        // JsonbGetString,
-        // JsonbGetStringStringify,
+        JsonbGetInt64,
+        JsonbGetInt64Stringify,
+        JsonbGetPath,
+        JsonbGetPathStringify,
+        JsonbGetString,
+        JsonbGetStringStringify,
         Left,
         LikeEscape,
-        // ListContainsList
+        ListContainsList,
+        ListContainsListRev,
         ListElementConcat,
-        // ListLengthMax
+        ListLengthMax,
         ListListConcat,
         ListRemove,
         LogNumeric(LogBaseNumeric),
@@ -333,7 +336,8 @@ mod derive {
         RangeAfter,
         RangeBefore,
         // RangeContainsElem
-        // RangeContainsRange
+        RangeContainsRange,
+        RangeContainsRangeRev,
         RangeDifference,
         RangeIntersection,
         RangeOverlaps,
@@ -807,48 +811,6 @@ mod test {
             &i32_ty,
         );
 
-        check(
-            func::RangeContainsRange,
-            BF::RangeContainsRange { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::RangeContainsRangeRev,
-            BF::RangeContainsRange { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
-
-        // JsonbGet* have a `stringify` parameter that doesn't work with the sqlfunc macro.
-        // check(func::JsonbGetInt64, BF::JsonbGetInt64, &i32_ty, &i32_ty);
-        // check(func::JsonbGetString, BF::JsonbGetString, &i32_ty, &i32_ty);
-        // check(func::JsonbGetPath, BF::JsonbGetPath, &i32_ty, &i32_ty);
-        check(
-            func::ListContainsList,
-            BF::ListContainsList { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ListContainsListRev,
-            BF::ListContainsList { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
-
         // check(func::ListLength, BF::ListLength, &i32_ty, &i32_ty);
-        check(
-            func::ArrayContainsArray,
-            BF::ArrayContainsArray { rev: false },
-            &i32_ty,
-            &i32_ty,
-        );
-        check(
-            func::ArrayContainsArrayRev,
-            BF::ArrayContainsArray { rev: true },
-            &i32_ty,
-            &i32_ty,
-        );
     }
 }

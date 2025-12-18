@@ -47,7 +47,6 @@ use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
-use rand::Rng;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -270,6 +269,10 @@ impl<T: TimestampManipulation> Session<T> {
         ))
     }
 
+    pub(crate) fn qcell_ro<'a, T2: 'a>(&'a self, cell: &'a Arc<QCell<T2>>) -> &'a T2 {
+        self.qcell_owner.ro(&*cell)
+    }
+
     pub(crate) fn qcell_rw<'a, T2: 'a>(&'a mut self, cell: &'a Arc<QCell<T2>>) -> &'a mut T2 {
         self.qcell_owner.rw(&*cell)
     }
@@ -346,7 +349,7 @@ impl<T: TimestampManipulation> Session<T> {
             notices_tx,
             notices_rx,
             next_transaction_id: 0,
-            secret_key: rand::thread_rng().r#gen(),
+            secret_key: rand::random(),
             external_metadata_rx,
             qcell_owner: QCellOwner::new(),
             session_oracles: BTreeMap::new(),
@@ -1184,7 +1187,7 @@ impl<T: TimestampManipulation> TransactionStatus<T> {
         }
     }
 
-    /// Whether the transaction is in a multi-statement, immediate transaction.
+    /// Whether we are in a multi-statement transaction, AND the query is immediate.
     pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
         self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
     }

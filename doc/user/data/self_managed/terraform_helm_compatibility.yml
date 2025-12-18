@@ -1,0 +1,11 @@
+columns:
+  - column: "terraform-helm-materialize"
+  - column: "Notes"
+  - column: "Release date"
+
+rows:
+  - "terraform-helm-materialize": "v0.1.35"
+    "Notes": |
+      - Released as part of v26.0.0.
+      - Uses as default Materialize Operator version: `v26.0.0`
+    "Release date": "2025-11-18"

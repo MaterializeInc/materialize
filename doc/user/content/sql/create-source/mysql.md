@@ -18,6 +18,8 @@ MySQL database, you first need to tweak its configuration to enable
 access and authentication parameters.
 {{% /create-source/intro %}}
 
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
+
 ## Syntax
 
 {{< note >}}
@@ -143,11 +145,6 @@ When you define a source, Materialize will automatically:
    source as change events stream in, as a result of `INSERT`, `UPDATE` and
    `DELETE` operations in the upstream MySQL database.
 
-It's important to note that the schema metadata is captured when the source is
-initially created, and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a MySQL source and want to
-replicate them to Materialize, the source must be dropped and recreated.
-
 ##### MySQL schemas
 
 `CREATE SOURCE` will attempt to create each upstream table in the same schema as
@@ -197,7 +194,8 @@ debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
 
 ## Known limitations
 
-{{< include-md file="shared-content/mysql-considerations.md" >}}
+{{% include-from-yaml data="mysql_source_details"
+name="mysql-considerations" %}}
 
 ## Examples
 
@@ -231,12 +229,14 @@ CREATE CONNECTION mysql_connection TO MYSQL (
 );
 ```
 
-If your MySQL server is not exposed to the public internet, you can
-[tunnel the connection](/sql/create-connection/#network-security-connections)
-through an AWS PrivateLink service or an SSH bastion host SSH bastion host.
+If your MySQL server is not exposed to the public internet, you can [tunnel the
+connection](/sql/create-connection/#network-security-connections) through an AWS
+PrivateLink service (Materialize Cloud) or an SSH bastion host SSH bastion host.
 
 {{< tabs tabID="1" >}}
-{{< tab "AWS PrivateLink">}}
+{{< tab "AWS PrivateLink (Materialize Cloud)">}}
+
+{{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
 ```mzsql
 CREATE CONNECTION privatelink_svc TO AWS PRIVATELINK (

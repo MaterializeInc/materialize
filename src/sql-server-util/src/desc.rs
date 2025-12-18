@@ -38,6 +38,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
+use crate::desc::proto_sql_server_table_constraint::ConstraintType;
 use crate::{SqlServerDecodeError, SqlServerError};
 
 include!(concat!(env!("OUT_DIR"), "/mz_sql_server_util.rs"));
@@ -59,6 +60,8 @@ pub struct SqlServerTableDesc {
     pub name: Arc<str>,
     /// Columns for the table.
     pub columns: Box<[SqlServerColumnDesc]>,
+    /// Constraints for the table.
+    pub constraints: Vec<SqlServerTableConstraint>,
 }
 
 impl SqlServerTableDesc {
@@ -66,17 +69,25 @@ impl SqlServerTableDesc {
     ///
     /// Note: Not all columns from SQL Server can be ingested into Materialize. To determine if a
     /// column is supported see [`SqlServerColumnDesc::decode_type`].
-    pub fn new(raw: SqlServerTableRaw) -> Self {
+    pub fn new(
+        raw: SqlServerTableRaw,
+        raw_constraints: Vec<SqlServerTableConstraintRaw>,
+    ) -> Result<Self, SqlServerError> {
         let columns: Box<[_]> = raw
             .columns
             .into_iter()
             .map(SqlServerColumnDesc::new)
             .collect();
-        SqlServerTableDesc {
+        let constraints = raw_constraints
+            .into_iter()
+            .map(SqlServerTableConstraint::try_from)
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(SqlServerTableDesc {
             schema_name: raw.schema_name,
             name: raw.name,
             columns,
-        }
+            constraints,
+        })
     }
 
     /// Returns the [`SqlServerQualifiedTableName`] for this [`SqlServerTableDesc`].
@@ -121,6 +132,7 @@ impl RustType<ProtoSqlServerTableDesc> for SqlServerTableDesc {
             name: self.name.to_string(),
             schema_name: self.schema_name.to_string(),
             columns: self.columns.iter().map(|c| c.into_proto()).collect(),
+            constraints: self.constraints.iter().map(|c| c.into_proto()).collect(),
         }
     }
 
@@ -130,10 +142,99 @@ impl RustType<ProtoSqlServerTableDesc> for SqlServerTableDesc {
             .into_iter()
             .map(|c| c.into_rust())
             .collect::<Result<_, _>>()?;
+        let constraints = proto
+            .constraints
+            .into_iter()
+            .map(|c| c.into_rust())
+            .collect::<Result<_, _>>()?;
         Ok(SqlServerTableDesc {
             schema_name: proto.schema_name.into(),
             name: proto.name.into(),
             columns,
+            constraints,
+        })
+    }
+}
+
+/// SQL Server table constraint type (e.g. PRIMARY KEY, UNIQUE, etc.)
+/// See <https://learn.microsoft.com/en-us/sql/relational-databases/system-information-schema-views/table-constraints-transact-sql?view=sql-server-ver17>
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Arbitrary)]
+pub enum SqlServerTableConstraintType {
+    PrimaryKey,
+    Unique,
+}
+
+impl TryFrom<String> for SqlServerTableConstraintType {
+    type Error = SqlServerError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_str() {
+            "PRIMARY KEY" => Ok(Self::PrimaryKey),
+            "UNIQUE" => Ok(Self::Unique),
+            name => Err(SqlServerError::InvalidData {
+                column_name: "constraint_type".into(),
+                error: format!("Unknown constraint type: {name}"),
+            }),
+        }
+    }
+}
+
+impl RustType<proto_sql_server_table_constraint::ConstraintType> for SqlServerTableConstraintType {
+    fn into_proto(&self) -> proto_sql_server_table_constraint::ConstraintType {
+        match self {
+            SqlServerTableConstraintType::PrimaryKey => ConstraintType::PrimaryKey(()),
+            SqlServerTableConstraintType::Unique => ConstraintType::Unique(()),
+        }
+    }
+
+    fn from_proto(
+        proto: proto_sql_server_table_constraint::ConstraintType,
+    ) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(match proto {
+            ConstraintType::PrimaryKey(_) => SqlServerTableConstraintType::PrimaryKey,
+            ConstraintType::Unique(_) => SqlServerTableConstraintType::Unique,
+        })
+    }
+}
+
+/// SQL Server table constraint.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Arbitrary)]
+pub struct SqlServerTableConstraint {
+    pub constraint_name: String,
+    pub constraint_type: SqlServerTableConstraintType,
+    pub column_names: Vec<String>,
+}
+
+impl TryFrom<SqlServerTableConstraintRaw> for SqlServerTableConstraint {
+    type Error = SqlServerError;
+
+    fn try_from(value: SqlServerTableConstraintRaw) -> Result<Self, Self::Error> {
+        Ok(SqlServerTableConstraint {
+            constraint_name: value.constraint_name,
+            constraint_type: value.constraint_type.try_into()?,
+            column_names: value.columns,
+        })
+    }
+}
+
+impl RustType<ProtoSqlServerTableConstraint> for SqlServerTableConstraint {
+    fn into_proto(&self) -> ProtoSqlServerTableConstraint {
+        ProtoSqlServerTableConstraint {
+            constraint_name: self.constraint_name.clone(),
+            constraint_type: Some(self.constraint_type.into_proto()),
+            column_names: self.column_names.clone(),
+        }
+    }
+
+    fn from_proto(
+        proto: ProtoSqlServerTableConstraint,
+    ) -> Result<Self, mz_proto::TryFromProtoError> {
+        Ok(SqlServerTableConstraint {
+            constraint_name: proto.constraint_name,
+            constraint_type: proto
+                .constraint_type
+                .into_rust_if_some("ProtoSqlServerTableConstraint::constraint_type")?,
+            column_names: proto.column_names,
         })
     }
 }
@@ -189,7 +290,8 @@ pub struct SqlServerColumnDesc {
     /// Note: This type might differ from the `decode_type`, e.g. a user can
     /// specify `TEXT COLUMNS` to decode columns as text.
     pub column_type: Option<SqlColumnType>,
-    /// If this column is part of the primary key for the table, and the name of the constraint.
+    /// This field is deprecated and will be removed in a future version.  This exists only for the
+    /// purpose of migrating from old representations.
     pub primary_key_constraint: Option<Arc<str>>,
     /// Rust type we should parse the data from a [`tiberius::Row`] as.
     pub decode_type: SqlServerColumnDecodeType,
@@ -223,7 +325,7 @@ impl SqlServerColumnDesc {
         };
         SqlServerColumnDesc {
             name: Arc::clone(&raw.name),
-            primary_key_constraint: raw.primary_key_constraint.clone(),
+            primary_key_constraint: None,
             column_type,
             decode_type,
             raw_type: Arc::clone(&raw.data_type),
@@ -528,8 +630,6 @@ pub struct SqlServerColumnRaw {
     pub data_type: Arc<str>,
     /// Whether or not the column is nullable.
     pub is_nullable: bool,
-    /// If the column is part of the primary key for the table, and the name of the constraint.
-    pub primary_key_constraint: Option<Arc<str>>,
     /// Maximum length (in bytes) of the column.
     ///
     /// For `varchar(max)`, `nvarchar(max)`, `varbinary(max)`, or `xml` this will be `-1`. For
@@ -546,6 +646,14 @@ pub struct SqlServerColumnRaw {
     pub scale: u8,
     /// Whether the column is computed.
     pub is_computed: bool,
+}
+
+/// Raw metadata for a table constraint.
+#[derive(Clone, Debug)]
+pub struct SqlServerTableConstraintRaw {
+    pub constraint_name: String,
+    pub constraint_type: String,
+    pub columns: Vec<String>,
 }
 
 /// Rust type that we should use when reading a column from SQL Server.
@@ -1049,7 +1157,6 @@ mod tests {
                 name: name.into(),
                 data_type: data_type.into(),
                 is_nullable: false,
-                primary_key_constraint: None,
                 max_length: 0,
                 precision: 0,
                 scale: 0,
@@ -1147,7 +1254,7 @@ mod tests {
             }),
             columns: sql_server_columns.into(),
         };
-        let sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
+        let sql_server_desc = SqlServerTableDesc::new(sql_server_desc, vec![]).unwrap();
 
         let max_length = Some(VarCharMaxLength::try_from(16).unwrap());
         let relation_desc = RelationDesc::builder()
@@ -1231,7 +1338,7 @@ mod tests {
                 }),
                 columns: columns.into(),
             };
-            let mut sql_server_desc = SqlServerTableDesc::new(sql_server_desc);
+            let mut sql_server_desc = SqlServerTableDesc::new(sql_server_desc, vec![]).unwrap();
             sql_server_desc.apply_text_columns(&BTreeSet::from(["a"]));
 
             // We should support decoding every datatype to a string.

@@ -23,14 +23,17 @@ import subprocess
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from enum import Enum
 from typing import Any
 
+import psycopg
 import requests
 import yaml
+from psycopg import sql as psycopg_sql
 from semver.version import Version
 
-from materialize import MZ_ROOT, ci_util, git, spawn
+from materialize import MZ_ROOT, buildkite, ci_util, git, spawn
 from materialize.mz_version import MzVersion
 from materialize.mzcompose.composition import (
     Composition,
@@ -40,9 +43,18 @@ from materialize.mzcompose.composition import (
 from materialize.mzcompose.services.balancerd import Balancerd
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.environmentd import Environmentd
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.mz_debug import MzDebug
 from materialize.mzcompose.services.orchestratord import Orchestratord
 from materialize.mzcompose.services.testdrive import Testdrive
-from materialize.util import all_subclasses
+from materialize.test_analytics.config.test_analytics_db_config import (
+    create_test_analytics_config,
+)
+from materialize.test_analytics.data.upgrade_downtime import (
+    upgrade_downtime_result_storage,
+)
+from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
+from materialize.util import PropagatingThread, all_subclasses
 from materialize.version_list import (
     get_all_self_managed_versions,
     get_self_managed_versions,
@@ -54,7 +66,25 @@ SERVICES = [
     Environmentd(),
     Clusterd(),
     Balancerd(),
+    MzDebug(),
+    Mz(app_password=""),
 ]
+
+
+def run_mz_debug() -> None:
+    # TODO: Hangs a lot in CI
+    # Only using capture because it's too noisy
+    # spawn.capture(
+    #     [
+    #         "./mz-debug",
+    #         "self-managed",
+    #         "--k8s-namespace",
+    #         "materialize-environment",
+    #         "--mz-instance-name",
+    #         "12345678-1234-1234-1234-123456789012",
+    #     ]
+    # )
+    pass
 
 
 def get_tag(tag: str | None = None) -> str:
@@ -64,8 +94,48 @@ def get_tag(tag: str | None = None) -> str:
     return tag or f"v{ci_util.get_mz_version()}--pr.g{git.rev_parse('HEAD')}"
 
 
+def get_version(tag: str | None = None) -> MzVersion:
+    return MzVersion.parse_mz(get_tag(tag))
+
+
 def get_image(image: str, tag: str | None) -> str:
     return f'{image.rsplit(":", 1)[0]}:{get_tag(tag)}'
+
+
+def get_upgrade_target(
+    rng: random.Random, current_version: MzVersion, versions: list[MzVersion]
+) -> MzVersion:
+    for version in rng.sample(versions, k=len(versions)):
+        if version <= current_version:
+            continue
+        if (
+            current_version.major == 0
+            and current_version.minor == 130
+            and version.major == 0
+            and version.minor == 147
+        ):
+            return version
+        if (
+            current_version.major == 0
+            and current_version.minor == 147
+            and current_version.patch < 20
+            and version.major == 0
+            and version.minor == 147
+        ):
+            return version
+        if (
+            current_version.major == 0
+            and current_version.minor == 147
+            and current_version.patch >= 20
+            and version.major == 26
+            and version.minor == 0
+        ):
+            return version
+        if current_version.major >= 26 and current_version.major + 1 >= version.major:
+            return version
+    raise ValueError(
+        f"No potential upgrade target for {current_version} found in {versions}"
+    )
 
 
 def get_pod_data(
@@ -113,6 +183,56 @@ def get_environmentd_data() -> dict[str, Any]:
     )
 
 
+@contextmanager
+def port_forward_environmentd(
+    port: int = 6875,
+    namespace: str = "materialize-environment",
+) -> Iterator[int]:
+    """
+    Context manager that sets up port forwarding to environmentd.
+
+    Usage:
+        with port_forward_environmentd() as port:
+            conn = psycopg.connect(f"host=localhost port={port} user=materialize")
+            # ... use connection ...
+    """
+    environmentd = get_environmentd_data()
+    pod_name = environmentd["items"][0]["metadata"]["name"]
+
+    process = subprocess.Popen(
+        [
+            "kubectl",
+            "port-forward",
+            f"pod/{pod_name}",
+            f"{port}:{port}",
+            "-n",
+            namespace,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    try:
+        # Wait briefly for port-forward to establish
+        time.sleep(2)
+
+        # Check if process is still running
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise RuntimeError(
+                f"Port forward failed to start: stdout={stdout.decode()}, stderr={stderr.decode()}"
+            )
+
+        yield port
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
 def retry(fn: Callable, timeout: int) -> None:
     end_time = (
         datetime.datetime.now() + datetime.timedelta(seconds=timeout)
@@ -128,14 +248,16 @@ def retry(fn: Callable, timeout: int) -> None:
 
 
 # TODO: Cover src/cloud-resources/src/crd/materialize.rs
-# TODO: Cover https://materialize.com/docs/self-managed/v25.2/installation/configuration/
+# TODO: Cover https://materialize.com/docs/installation/configuration/
 
 
 class Modification:
     pick_by_default: bool = True
 
     def __init__(self, value: Any):
-        assert value in self.values(), f"Expected {value} to be in {self.values()}"
+        assert value in self.values(
+            get_version()
+        ), f"Expected {value} to be in {self.values(get_version())}"
         self.value = value
 
     def to_dict(self) -> dict[str, Any]:
@@ -166,7 +288,7 @@ class Modification:
         return subclass(data["value"])
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         raise NotImplementedError
 
     @classmethod
@@ -174,8 +296,8 @@ class Modification:
         return cls.failed_reconciliation_values()
 
     @classmethod
-    def good_values(cls) -> list[Any]:
-        return [value for value in cls.values() if value not in cls.bad_values()]
+    def good_values(cls, version: MzVersion) -> list[Any]:
+        return [value for value in cls.values(version) if value not in cls.bad_values()]
 
     @classmethod
     def failed_reconciliation_values(cls) -> list[Any]:
@@ -198,13 +320,14 @@ def all_modifications() -> list[type[Modification]]:
 
 class LicenseKey(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
-        # TODO: Add back "del" when https://github.com/MaterializeInc/database-issues/issues/9599 is resolved
+    def values(cls, version: MzVersion) -> list[Any]:
+        # TODO: Reenable "del" when database-issues#9928 is fixed
+        # return ["valid", "invalid", "del"]
         return ["valid", "invalid"]
 
     @classmethod
     def failed_reconciliation_values(cls) -> list[Any]:
-        return ["invalid"]
+        return ["invalid", "del"]
 
     @classmethod
     def default(cls) -> Any:
@@ -220,7 +343,9 @@ class LicenseKey(Modification):
         elif self.value == "del":
             del definition["secret"]["stringData"]["license_key"]
         else:
-            raise ValueError(f"Unknown value {self.value}, only know {self.values()}")
+            raise ValueError(
+                f"Unknown value {self.value}, only know {self.values(get_version())}"
+            )
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
@@ -231,35 +356,27 @@ class LicenseKey(Modification):
         def check() -> None:
             environmentd = get_environmentd_data()
             envs = environmentd["items"][0]["spec"]["containers"][0]["env"]
-            if self.value == "del" or (mods[LicenseKeyCheck] == False):
-                for env in envs:
-                    assert (
-                        env["name"] != "MZ_LICENSE_KEY"
-                    ), f"Expected MZ_LICENSE_KEY to be missing, but is in {envs}"
-            elif self.value == "valid":
-                for env in envs:
-                    if env["name"] != "MZ_LICENSE_KEY":
-                        continue
-                    expected = "/license_key/license_key"
-                    assert (
-                        env["value"] == expected
-                    ), f"Expected license key to be set to {expected}, but is {env['value']}"
-                    break
-                else:
-                    assert (
-                        False
-                    ), f"Expected to find MZ_LICENSE_KEY in env variables, but only found {envs}"
-                ready = environmentd["items"][0]["status"]["containerStatuses"][0][
-                    "ready"
-                ]
-                assert ready, "Expected environmentd to be in ready state"
+            for env in envs:
+                if env["name"] != "MZ_LICENSE_KEY":
+                    continue
+                expected = "/license_key/license_key"
+                assert (
+                    env["value"] == expected
+                ), f"Expected license key to be set to {expected}, but is {env['value']}"
+                break
+            else:
+                assert (
+                    False
+                ), f"Expected to find MZ_LICENSE_KEY in env variables, but only found {envs}"
+            ready = environmentd["items"][0]["status"]["containerStatuses"][0]["ready"]
+            assert ready, "Expected environmentd to be in ready state"
 
         retry(check, 240)
 
 
 class LicenseKeyCheck(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         # TODO: Reenable False when fixed
         return [None, True]
 
@@ -289,7 +406,7 @@ class LicenseKeyCheck(Modification):
 
 class BalancerdEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -330,7 +447,7 @@ class BalancerdEnabled(Modification):
 
 class BalancerdNodeSelector(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             {},
             # TODO: Reenable when we create nodes with these labels
@@ -370,7 +487,7 @@ class BalancerdNodeSelector(Modification):
 
 class ConsoleEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -412,7 +529,7 @@ class ConsoleEnabled(Modification):
 
 class EnableRBAC(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -441,7 +558,7 @@ class EnvironmentdImageRef(Modification):
     pick_by_default = False
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [str(version) for version in get_all_self_managed_versions()] + [
             get_tag()
         ]
@@ -464,7 +581,7 @@ class EnvironmentdImageRef(Modification):
             image = environmentd["items"][0]["spec"]["containers"][0]["image"]
             expected = f"materialize/environmentd:{self.value}"
             assert (
-                image == expected
+                image == expected or f"ghcr.io/materializeinc/{image}" == expected
             ), f"Expected environmentd image {expected}, but found {image}"
 
         retry(check, 240)
@@ -475,7 +592,7 @@ class NumMaterializeEnvironments(Modification):
     pick_by_default = False
 
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [1, 2]
 
     @classmethod
@@ -542,7 +659,7 @@ class NumMaterializeEnvironments(Modification):
 
 class TelemetryEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -568,7 +685,7 @@ class TelemetryEnabled(Modification):
 
 class TelemetrySegmentClientSide(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -594,7 +711,7 @@ class TelemetrySegmentClientSide(Modification):
 
 class ObservabilityEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -610,7 +727,7 @@ class ObservabilityEnabled(Modification):
 
 class ObservabilityPodMetricsEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -638,7 +755,7 @@ class ObservabilityPodMetricsEnabled(Modification):
 
 class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -667,7 +784,7 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
 # TODO: Fix in upgrade tests
 # class BalancerdReplicas(Modification):
 #     @classmethod
-#     def values(cls) -> list[Any]:
+#     def values(cls, version: MzVersion) -> list[Any]:
 #         return [None, 1, 2]
 #
 #     @classmethod
@@ -695,7 +812,7 @@ class ObservabilityPrometheusScrapeAnnotationsEnabled(Modification):
 
 class ConsoleReplicas(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [None, 1, 2]
 
     @classmethod
@@ -722,6 +839,123 @@ class ConsoleReplicas(Modification):
         retry(check_replicas, 120)
 
 
+class SystemParamConfigMap(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        result: list[Any] = [None]
+        if version >= MzVersion.parse_mz("v26.1.0"):
+            result.append({"max_connections": 1000})
+        return result
+
+    @classmethod
+    def default(cls) -> Any:
+        return None
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        if self.value is not None:
+            # Create a configmap with system parameters
+            configmap_name = "system-params-test"
+
+            # First create the configmap in the cluster
+            configmap = {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": configmap_name,
+                    "namespace": "materialize-environment",
+                },
+                "data": {
+                    "system-params.json": json.dumps(self.value),
+                },
+            }
+            # Apply the configmap (will be done in init/run)
+            definition["system_params_configmap"] = configmap
+            # Set the configmap name in the Materialize spec
+            definition["materialize"]["spec"][
+                "systemParameterConfigmapName"
+            ] = configmap_name
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        if self.value is None:
+            return
+
+        def check() -> None:
+            environmentd = get_environmentd_data()
+
+            # Check that the volume is mounted
+            volumes = environmentd["items"][0]["spec"]["volumes"]
+            volume_found = False
+            for volume in volumes:
+                if volume.get("name") == "system-params":
+                    assert (
+                        volume.get("configMap") is not None
+                    ), f"Expected configMap in volume, but found {volume}"
+                    assert (
+                        volume["configMap"]["name"] == "system-params-test"
+                    ), f"Expected configmap name system-params-test, but found {volume['configMap']['name']}"
+                    volume_found = True
+                    break
+            assert volume_found, f"Expected to find system-params volume in {volumes}"
+
+            # Check that the volume mount is present
+            volume_mounts = environmentd["items"][0]["spec"]["containers"][0][
+                "volumeMounts"
+            ]
+            volume_mount_found = False
+            for mount in volume_mounts:
+                if mount.get("name") == "system-params":
+                    assert (
+                        mount.get("mountPath") == "/system-params"
+                    ), f"Expected mount path /system-params, but found {mount['mountPath']}"
+                    volume_mount_found = True
+                    break
+            assert (
+                volume_mount_found
+            ), f"Expected to find system-params volume mount in {volume_mounts}"
+
+            # Check that the config-sync-file-path arg is present
+            args = environmentd["items"][0]["spec"]["containers"][0]["args"]
+            expected_arg = "--config-sync-file-path=/system-params/system-params.json"
+            assert any(
+                expected_arg in arg for arg in args
+            ), f"Expected {expected_arg} in environmentd args, but only found: {args}"
+
+        retry(check, 240)
+
+        version = MzVersion.parse_mz(mods[EnvironmentdImageRef])
+        auth = mods[AuthenticatorKind]
+        port = (
+            6875
+            if (version >= MzVersion.parse_mz("v0.147.0") and auth == "Password")
+            or (version >= MzVersion.parse_mz("v26.0.0") and auth == "Sasl")
+            else 6877
+        )
+
+        # Validate that the system parameters have actually been applied via SQL
+        def check_system_params() -> None:
+            with port_forward_environmentd(port) as used_port:
+                with psycopg.connect(
+                    f"host=localhost port={used_port} user=mz_system password=superpassword sslmode=disable"
+                ) as conn:
+                    with conn.cursor() as cur:
+                        for param_name, expected_value in self.value.items():
+                            cur.execute(
+                                psycopg_sql.SQL("SHOW {}").format(
+                                    psycopg_sql.Identifier(param_name)
+                                )
+                            )
+                            result = cur.fetchone()
+                            assert (
+                                result is not None
+                            ), f"No result for SHOW {param_name}"
+                            actual_value = result[0]
+                            assert str(actual_value) == str(
+                                expected_value
+                            ), f"Expected {param_name}={expected_value}, but got {actual_value}"
+
+        retry(check_system_params, 240)
+
+
 def validate_cluster_replica_size(
     size: dict[str, Any], swap_enabled: bool, storage_class_name_set: bool
 ):
@@ -734,7 +968,7 @@ def validate_cluster_replica_size(
         assert size["swap_enabled"]
     elif storage_class_name_set:
         assert size["disk_limit"] != "0"
-        assert "swap_enabled" not in size
+        assert not size["swap_enabled"]
     else:
         assert size["disk_limit"] == "0"
 
@@ -767,7 +1001,7 @@ def validate_container_resources(
 
 class SwapEnabledGlobal(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -820,7 +1054,7 @@ class SwapEnabledGlobal(Modification):
 
 class StorageClass(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [True, False]
 
     @classmethod
@@ -873,7 +1107,7 @@ class StorageClass(Modification):
 
 class EnvironmentdResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -923,7 +1157,7 @@ class EnvironmentdResources(Modification):
 
 class BalancerdResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -978,7 +1212,7 @@ class BalancerdResources(Modification):
 
 class ConsoleResources(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
+    def values(cls, version: MzVersion) -> list[Any]:
         return [
             None,
             {
@@ -1028,10 +1262,14 @@ class ConsoleResources(Modification):
 
 class AuthenticatorKind(Modification):
     @classmethod
-    def values(cls) -> list[Any]:
-        # TODO: Reenable with Password for >= v0.147.7 only
-        # return ["None", "Password"]
-        return ["None"]
+    def values(cls, version: MzVersion) -> list[Any]:
+        # Test None, Password (v0.147.7+), and Sasl
+        result = ["None"]
+        if version >= MzVersion.parse_mz("v0.147.7"):
+            result.append("Password")
+        if version >= MzVersion.parse_mz("v26.0.0"):
+            result.append("Sasl")
+        return result
 
     @classmethod
     def default(cls) -> Any:
@@ -1039,7 +1277,7 @@ class AuthenticatorKind(Modification):
 
     def modify(self, definition: dict[str, Any]) -> None:
         definition["materialize"]["spec"]["authenticatorKind"] = self.value
-        if self.value == "Password":
+        if self.value == "Password" or self.value == "Sasl":
             definition["secret"]["stringData"][
                 "external_login_password_mz_system"
             ] = "superpassword"
@@ -1055,9 +1293,13 @@ class AuthenticatorKind(Modification):
         if self.value == "Password" and version <= MzVersion.parse_mz("v0.147.6"):
             return
 
+        if self.value == "Sasl" and version < MzVersion.parse_mz("v26.0.0"):
+            return
+
         port = (
             6875
-            if version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password"
+            if (version >= MzVersion.parse_mz("v0.147.0") and self.value == "Password")
+            or (version >= MzVersion.parse_mz("v26.0.0") and self.value == "Sasl")
             else 6877
         )
         for i in range(120):
@@ -1102,17 +1344,106 @@ class AuthenticatorKind(Modification):
 
         time.sleep(1)
         try:
+            # Verify listener configuration
+            listeners_cm = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "cm",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+                stderr=subprocess.STDOUT,
+            ).splitlines()
+            listeners_cm = [cm for cm in listeners_cm if "listeners" in cm]
+            if listeners_cm:
+                listeners_json = spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        listeners_cm[0],
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "jsonpath={.data.listeners\\.json}",
+                    ],
+                    stderr=subprocess.STDOUT,
+                )
+                import json
+
+                listeners = json.loads(listeners_json)
+
+                # Verify SQL listener authenticator
+                sql_auth = (
+                    listeners.get("sql", {})
+                    .get("external", {})
+                    .get("authenticator_kind")
+                )
+                http_auth = (
+                    listeners.get("http", {})
+                    .get("external", {})
+                    .get("authenticator_kind")
+                )
+
+                if self.value == "Sasl":
+                    assert (
+                        sql_auth == "Sasl"
+                    ), f"Expected SQL listener to use Sasl, got {sql_auth}"
+                    assert (
+                        http_auth == "Password"
+                    ), f"Expected HTTP listener to use Password with Sasl mode, got {http_auth}"
+                    print(f"SASL mode verified: SQL={sql_auth}, HTTP={http_auth}")
+                elif self.value == "Password":
+                    assert (
+                        sql_auth == "Password"
+                    ), f"Expected SQL listener to use Password, got {sql_auth}"
+                    assert (
+                        http_auth == "Password"
+                    ), f"Expected HTTP listener to use Password, got {http_auth}"
+                    print(f"Password mode verified: SQL={sql_auth}, HTTP={http_auth}")
+                elif self.value == "None":
+                    assert (
+                        sql_auth == "None"
+                    ), f"Expected SQL listener to use None, got {sql_auth}"
+                    assert (
+                        http_auth == "None"
+                    ), f"Expected HTTP listener to use None, got {http_auth}"
+                    print(f"None mode verified: SQL={sql_auth}, HTTP={http_auth}")
+
             # TODO: Figure out why this is not working in CI, but works locally
             pass
             # psycopg.connect(
             #     host="127.0.0.1",
             #     user="mz_system",
-            #     password="superpassword" if self.value == "Password" else None,
+            #     password="superpassword" if (self.value == "Password" or self.value == "Sasl") else None,
             #     dbname="materialize",
             #     port=port,
             # )
         finally:
             os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+
+
+class RolloutStrategy(Modification):
+    @classmethod
+    def values(cls, version: MzVersion) -> list[Any]:
+        return [
+            "WaitUntilReady",
+            "ManuallyPromote",
+            "ImmediatelyPromoteCausingDowntime",
+        ]
+
+    @classmethod
+    def default(cls) -> Any:
+        return "WaitUntilReady"
+
+    def modify(self, definition: dict[str, Any]) -> None:
+        definition["materialize"]["spec"]["rolloutStrategy"] = self.value
+
+    def validate(self, mods: dict[type[Modification], Any]) -> None:
+        # This is validated in post_run_check
+        return
 
 
 class Properties(Enum):
@@ -1127,7 +1458,9 @@ class Action(Enum):
     UpgradeChain = "upgrade-chain"
 
 
-def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
+def workflow_documentation_defaults(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
     parser.add_argument(
         "--tag",
         type=str,
@@ -1135,10 +1468,23 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
-    current_version = get_tag(args.tag)
+    c.up(Service("mz-debug", idle=True))
+    c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
 
-    # Following https://materialize.com/docs/self-managed/v25.2/installation/install-on-local-kind/
-    for version in reversed(get_self_managed_versions() + [current_version]):
+    current_version = get_version(args.tag)
+
+    # Following https://materialize.com/docs/installation/install-on-local-kind/
+    # orchestratord test can't run against future versions, so ignore those
+    versions = reversed(
+        [
+            version
+            for version in get_self_managed_versions()
+            if version < current_version
+        ]
+        + [current_version]
+    )
+    for version in versions:
+        print(f"--- Running with defaults against {version}")
         dir = "my-local-mz"
         if os.path.exists(dir):
             shutil.rmtree(dir)
@@ -1214,7 +1560,7 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
                 "--namespace=materialize",
                 "--create-namespace",
                 "--version",
-                "v25.3.0",
+                "v26.0.0",
                 "--set",
                 "observability.podMetrics.enabled=true",
                 "-f",
@@ -1279,6 +1625,7 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
             materialize_setup[2]["spec"][
                 "environmentdImageRef"
             ] = f"materialize/environmentd:{version}"
+        if version >= MzVersion.parse_mz("v26.0.0"):
             # Self-managed v25.1/2 don't require a license key yet
             materialize_setup[1]["stringData"]["license_key"] = os.environ[
                 "MZ_CI_LICENSE_KEY"
@@ -1372,6 +1719,256 @@ def workflow_defaults(c: Composition, parser: WorkflowArgumentParser) -> None:
                 ]
             )
             raise ValueError("Never completed")
+        run_mz_debug()
+
+
+class ModSource:
+    def __init__(self, mod_classes: list[type[Modification]]):
+        self.mod_classes = mod_classes
+
+    def next_mods(self, version: MzVersion) -> list[Modification]:
+        raise NotImplementedError
+
+
+class DefaultModSource(ModSource):
+    def __init__(self, mod_classes: list[type[Modification]]):
+        super().__init__(mod_classes)
+        self.state = 0
+
+    def next_mods(self, version: MzVersion) -> list[Modification]:
+        if self.state == 0:
+            self.state += 1
+            return [cls(cls.default()) for cls in self.mod_classes]
+        elif self.state == 1:
+            self.state += 1
+            return [NumMaterializeEnvironments(2)]
+        else:
+            raise StopIteration
+
+
+class IndividualModSource(ModSource):
+    def __init__(self, mod_classes: list[type[Modification]]):
+        super().__init__(mod_classes)
+        self._iters_by_version: dict[object, Iterator[list[Modification]]] = {}
+
+    def _iter_values_for_version(
+        self, version: MzVersion
+    ) -> Iterator[list[Modification]]:
+        for cls in self.mod_classes:
+            for value in cls.values(version):
+                yield [cls(value)]
+
+    def next_mods(self, version: MzVersion) -> list[Modification]:
+        it = self._iters_by_version.setdefault(
+            version, self._iter_values_for_version(version)
+        )
+        try:
+            return next(it)
+        except StopIteration:
+            del self._iters_by_version[version]
+            raise
+
+
+class CombineModSource(ModSource):
+    def __init__(self, mod_classes: list[type[Modification]], rng: random.Random):
+        super().__init__(mod_classes)
+        self.rng = rng
+
+    def next_mods(self, version: MzVersion) -> list[Modification]:
+        return [
+            cls(self.rng.choice(cls.good_values(version))) for cls in self.mod_classes
+        ]
+
+
+def make_mod_source(
+    properties: Properties, mod_classes: list[type[Modification]], rng: random.Random
+):
+    if properties == Properties.Defaults:
+        return DefaultModSource(mod_classes)
+    elif properties == Properties.Individual:
+        return IndividualModSource(mod_classes)
+    elif properties == Properties.Combine:
+        return CombineModSource(mod_classes, rng)
+    else:
+        raise ValueError(f"Unhandled properties: {properties}")
+
+
+# Bump this version if the upgrade-downtime workflow is changed in a way that changes the results uploaded to test analytics
+UPGRADE_DOWNTIME_SCENARIO_VERSION = "1.0.0"
+# Used for uploading test analytics results
+ORCHESTRATORD_TEST_VERSION = "1.0.0"
+
+
+def upload_upgrade_downtime_to_test_analytics(
+    composition: Composition,
+    downtime_initial: float,
+    downtime_upgrade: float,
+    was_successful: bool,
+) -> None:
+    if not buildkite.is_in_buildkite():
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(composition))
+    test_analytics.builds.add_build_job(was_successful=was_successful)
+
+    result_entries = [
+        upgrade_downtime_result_storage.UpgradeDowntimeResultEntry(
+            scenario="upgrade-downtime",
+            scenario_version=UPGRADE_DOWNTIME_SCENARIO_VERSION,
+            downtime_initial=downtime_initial,
+            downtime_upgrade=downtime_upgrade,
+        )
+    ]
+
+    test_analytics.upgrade_downtime_results.add_result(
+        framework_version=ORCHESTRATORD_TEST_VERSION,
+        results=result_entries,
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded results.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
+
+
+def workflow_upgrade_downtime(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+
+    running = True
+    downtimes: list[float] = []
+
+    def measure_downtime() -> None:
+        port_forward_process = None
+        connect_port_forward = True
+        try:
+            start_time = time.time()
+            while running:
+                if connect_port_forward:
+                    if port_forward_process:
+                        os.killpg(os.getpgid(port_forward_process.pid), signal.SIGTERM)
+                        port_forward_process = None
+                    try:
+                        balancerd_name = spawn.capture(
+                            [
+                                "kubectl",
+                                "get",
+                                "pods",
+                                "-l",
+                                "app=balancerd",
+                                "-n",
+                                "materialize-environment",
+                                "-o",
+                                "jsonpath={.items[0].metadata.name}",
+                            ]
+                        ).strip()
+                    except subprocess.CalledProcessError:
+                        # balancerd can take a bit to start up
+                        time.sleep(1)
+                        continue
+                    port_forward_process = subprocess.Popen(
+                        [
+                            "kubectl",
+                            "port-forward",
+                            f"pod/{balancerd_name}",
+                            "-n",
+                            "materialize-environment",
+                            "6875:6875",
+                        ],
+                        preexec_fn=os.setpgrp,
+                    )
+                    connect_port_forward = False
+                time.sleep(1)
+                try:
+                    with psycopg.connect(
+                        "postgres://materialize@127.0.0.1:6875/materialize",
+                        autocommit=True,
+                    ) as conn:
+                        with conn.cursor() as cur:
+                            cur.execute("SELECT 1")
+                except psycopg.OperationalError:
+                    connect_port_forward = True
+                    continue
+                runtime = time.time() - start_time - 1
+                print(f"Time: {runtime}s")
+                if runtime > 1:
+                    downtimes.append(runtime)
+                start_time = time.time()
+        finally:
+            if port_forward_process:
+                os.killpg(os.getpgid(port_forward_process.pid), signal.SIGTERM)
+        if len(downtimes) == 1:
+            downtimes.insert(0, 0)
+
+    definition = setup(c, args)
+    init(definition)
+    run(definition, False)
+    thread = PropagatingThread(target=measure_downtime)
+    thread.start()
+    time.sleep(10)  # some time to make sure the thread runs fine
+    request = str(uuid.uuid4())
+    definition["materialize"]["spec"]["requestRollout"] = request
+    definition["materialize"]["spec"]["forceRollout"] = request
+    run(definition, False)
+    time.sleep(120)  # some time to make sure there is no downtime later
+    running = False
+    thread.join()
+
+    assert len(downtimes) == 2, f"Wrong number of downtimes: {downtimes}"
+
+    test_failed = False
+    max_downtime = 15
+    upgrade_downtime = downtimes[-1]
+    if upgrade_downtime > max_downtime:
+        print(
+            f"SELECT 1 after upgrade took more than {max_downtime}s: {upgrade_downtime}s"
+        )
+        test_failed = True
+
+    upload_upgrade_downtime_to_test_analytics(
+        c, downtimes[0], downtimes[1], not test_failed
+    )
+    assert not test_failed
+
+
+def workflow_balancer(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--recreate-cluster",
+        action=argparse.BooleanOptionalAction,
+        help="Recreate cluster if it exists already",
+    )
+    parser.add_argument(
+        "--tag",
+        type=str,
+        help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
+    )
+    args = parser.parse_args()
+    definition = setup(c, args)
+    init(definition)
+    run_balancer(definition, False)
 
 
 def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
@@ -1384,6 +1981,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--tag",
         type=str,
         help="Custom version tag to use",
+    )
+    parser.add_argument(
+        "--orchestratord-override",
+        default=True,
+        action=argparse.BooleanOptionalAction,
+        help="Override orchestratord tag",
     )
     parser.add_argument("--seed", type=str, default=random.randrange(1000000))
     parser.add_argument("--scenario", type=str)
@@ -1402,74 +2005,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     print(f"--- Random seed is {args.seed}")
 
-    kind_version = Version.parse(spawn.capture(["kind", "version"]).split(" ")[1][1:])
-    assert kind_version >= Version.parse(
-        "0.29.0"
-    ), f"kind >= v0.29.0 required, while you are on {kind_version}"
-
-    c.up(Service("testdrive", idle=True))
-
-    cluster = "kind"
-    clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
-    if cluster not in clusters or args.recreate_cluster:
-        setup(cluster)
-
-    if not args.tag:
-        services = [
-            "orchestratord",
-            "environmentd",
-            "clusterd",
-            "balancerd",
-        ]
-        c.invoke("pull", *services)
-        for service in services:
-            spawn.runv(
-                [
-                    "docker",
-                    "tag",
-                    c.compose["services"][service]["image"],
-                    get_image(c.compose["services"][service]["image"], None),
-                ]
-            )
-        spawn.runv(
-            ["kind", "load", "docker-image", "--name", cluster]
-            + [
-                get_image(c.compose["services"][service]["image"], None)
-                for service in services
-            ]
-        )
-
-    definition: dict[str, Any] = {}
-
-    with open(MZ_ROOT / "misc" / "helm-charts" / "operator" / "values.yaml") as f:
-        definition["operator"] = yaml.load(f, Loader=yaml.Loader)
-    with open(MZ_ROOT / "misc" / "helm-charts" / "testing" / "materialize.yaml") as f:
-        materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
-        assert len(materialize_setup) == 3
-        definition["namespace"] = materialize_setup[0]
-        definition["secret"] = materialize_setup[1]
-        definition["materialize"] = materialize_setup[2]
-
-    definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
-    # TODO: database-issues#9696, makes environmentd -> clusterd connections fail
-    # definition["operator"]["networkPolicies"]["enabled"] = True
-    # definition["operator"]["networkPolicies"]["internal"]["enabled"] = True
-    # definition["operator"]["networkPolicies"]["egress"]["enabled"] = True
-    # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
-    # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
-    definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
-    definition["operator"]["clusterd"]["nodeSelector"][
-        "workload"
-    ] = "materialize-instance"
-    definition["operator"]["environmentd"]["nodeSelector"][
-        "workload"
-    ] = "materialize-instance"
-    definition["secret"]["stringData"]["license_key"] = os.environ["MZ_CI_LICENSE_KEY"]
-    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
-        c.compose["services"]["environmentd"]["image"], args.tag
-    )
-    # kubectl get endpoints mzel5y3f42l6-cluster-u1-replica-u1-gen-1 -n materialize-environment -o json
-    # more than one address
+    definition = setup(c, args)
 
     rng = random.Random(args.seed)
 
@@ -1500,138 +2036,296 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     action = Action(args.action)
     properties = Properties(args.properties)
+    mod_source = make_mod_source(properties, mod_classes, rng)
 
-    def get_mods() -> Iterator[list[Modification]]:
-        if properties == Properties.Defaults:
-            yield [mod_class(mod_class.default()) for mod_class in mod_classes]
-            yield [NumMaterializeEnvironments(2)]
-        elif properties == Properties.Individual:
-            for mod_class in mod_classes:
-                for value in mod_class.values():
-                    yield [mod_class(value)]
-        elif properties == Properties.Combine:
-            assert args.runtime
-            while time.time() < end_time:
-                yield [
-                    mod_class(rng.choice(mod_class.good_values()))
-                    for mod_class in mod_classes
-                ]
-        else:
-            raise ValueError(f"Unhandled properties value {properties}")
-
-    mods_it = get_mods()
+    end_time = (
+        datetime.datetime.now() + datetime.timedelta(seconds=args.runtime or 1800)
+    ).timestamp()
+    versions = get_all_self_managed_versions()
 
     try:
-        if action == Action.Noop:
-            for mods in mods_it:
+        while time.time() < end_time:
+            if action == Action.Noop:
+                mods = mod_source.next_mods(get_version(args.tag))
+                if args.tag:
+                    mods.append(EnvironmentdImageRef(str(args.tag)))
                 run_scenario([mods], definition)
-        elif action == Action.Upgrade:
-            assert args.runtime
-            end_time = (
-                datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
-            ).timestamp()
-            versions = get_all_self_managed_versions()
-            while time.time() < end_time:
-                selected_versions = sorted(list(rng.sample(versions, 2)))
-                try:
-                    mod = next(mods_it)
-                except StopIteration:
-                    mods_it = get_mods()
-                    mod = next(mods_it)
+
+            elif action == Action.Upgrade:
+                current_version = rng.choice(versions[:-1])
+                target_version = get_upgrade_target(rng, current_version, versions)
+                mods = mod_source.next_mods(current_version)
                 scenario = [
-                    [EnvironmentdImageRef(str(version))] + mod
-                    for version in selected_versions
+                    [EnvironmentdImageRef(str(v))] + mods
+                    for v in (current_version, target_version)
                 ]
                 run_scenario(scenario, definition)
-        elif action == Action.UpgradeChain:
-            assert args.runtime
-            end_time = (
-                datetime.datetime.now() + datetime.timedelta(seconds=args.runtime)
-            ).timestamp()
-            versions = get_all_self_managed_versions()
-            while time.time() < end_time:
-                random.randint(2, len(versions))
-                selected_versions = sorted(list(rng.sample(versions, 2)))
+
+            elif action == Action.UpgradeChain:
+                current_version = rng.choice(versions)
+                chain = [current_version]
+                next_version = current_version
+
                 try:
-                    mod = next(mods_it)
-                except StopIteration:
-                    mods_it = get_mods()
-                    mod = next(mods_it)
+                    for _ in range(len(versions)):
+                        next_version = get_upgrade_target(rng, next_version, versions)
+                        chain.append(next_version)
+                except ValueError:
+                    # We can't upgrade any further, just run the test as far as it goes now
+                    pass
+
+                mods = mod_source.next_mods(current_version)
                 scenario = [
-                    [EnvironmentdImageRef(str(version))] + mod for version in versions
+                    [EnvironmentdImageRef(str(version))] + mods for version in chain
                 ]
-                assert len(scenario) == len(
-                    versions
-                ), f"Expected scenario with {len(versions)} steps, but only found: {scenario}"
                 run_scenario(scenario, definition)
-        else:
-            raise ValueError(f"Unhandled action {action}")
+
+            else:
+                raise ValueError(f"Unhandled action {action}")
     except StopIteration:
         pass
 
 
-def setup(cluster: str):
-    spawn.runv(["kind", "delete", "cluster", "--name", cluster])
-    spawn.runv(
-        [
-            "kind",
-            "create",
-            "cluster",
-            "--name",
-            cluster,
-            "--config",
-            MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
-        ]
-    )
-    spawn.runv(
-        [
-            "helm",
-            "repo",
-            "add",
-            "metrics-server",
-            "https://kubernetes-sigs.github.io/metrics-server/",
-        ]
-    )
-    spawn.runv(["helm", "repo", "update", "metrics-server"])
-    spawn.runv(
-        [
-            "helm",
-            "install",
-            "metrics-server",
-            "metrics-server/metrics-server",
-            "--namespace",
-            "kube-system",
-            "--set",
-            "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
-        ]
-    )
+def setup(c: Composition, args) -> dict[str, Any]:
+    c.up(Service("testdrive", idle=True), Service("mz-debug", idle=True))
+    c.invoke("cp", "mz-debug:/usr/local/bin/mz-debug", ".")
 
-    spawn.runv(["kubectl", "create", "namespace", "materialize"])
+    cluster = "kind"
+    clusters = spawn.capture(["kind", "get", "clusters"]).strip().split("\n")
+    if cluster not in clusters or args.recreate_cluster:
+        kind_version = Version.parse(
+            spawn.capture(["kind", "version"]).split(" ")[1][1:]
+        )
+        assert kind_version >= Version.parse(
+            "0.29.0"
+        ), f"kind >= v0.29.0 required, while you are on {kind_version}"
 
-    spawn.runv(
-        [
-            "kubectl",
-            "apply",
-            "-f",
-            MZ_ROOT / "misc" / "helm-charts" / "testing" / "postgres.yaml",
+        spawn.runv(["kind", "delete", "cluster", "--name", cluster])
+
+        try:
+            spawn.runv(["docker", "network", "create", "kind"])
+        except:
+            pass
+        try:
+            spawn.runv(["docker", "stop", "proxy-dockerhub"])
+        except:
+            pass
+        try:
+            spawn.runv(["docker", "rm", "proxy-dockerhub"])
+        except:
+            pass
+        try:
+            spawn.runv(["docker", "stop", "proxy-ghcr"])
+        except:
+            pass
+        try:
+            spawn.runv(["docker", "rm", "proxy-ghcr"])
+        except:
+            pass
+
+        dockerhub_username = os.getenv("DOCKERHUB_USERNAME")
+        dockerhub_token = os.getenv("DOCKERHUB_ACCESS_TOKEN")
+        spawn.runv(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                "proxy-dockerhub",
+                "--restart=always",
+                "--net=kind",
+                "-v",
+                f"{MZ_ROOT}/misc/kind/cache/dockerhub:/var/lib/registry",
+                "-e",
+                "REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io",
+                *(
+                    [
+                        "-e",
+                        f"REGISTRY_PROXY_USERNAME={dockerhub_username}",
+                        "-e",
+                        f"REGISTRY_PROXY_PASSWORD={dockerhub_token}",
+                    ]
+                    if dockerhub_username and dockerhub_token
+                    else []
+                ),
+                "registry:2",
+            ]
+        )
+
+        ghcr_username = "materialize-bot"
+        ghcr_token = os.getenv("GITHUB_GHCR_TOKEN")
+        spawn.runv(
+            [
+                "docker",
+                "run",
+                "-d",
+                "--name",
+                "proxy-ghcr",
+                "--restart=always",
+                "--net=kind",
+                "-v",
+                f"{MZ_ROOT}/misc/kind/cache/ghcr:/var/lib/registry",
+                "-e",
+                "REGISTRY_PROXY_REMOTEURL=https://ghcr.io",
+                *(
+                    [
+                        "-e",
+                        f"REGISTRY_PROXY_USERNAME={ghcr_username}",
+                        "-e",
+                        f"REGISTRY_PROXY_PASSWORD={ghcr_token}",
+                    ]
+                    if ghcr_username and ghcr_token
+                    else []
+                ),
+                "registry:2",
+            ]
+        )
+
+        with (
+            open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml.tmpl") as in_file,
+            open(MZ_ROOT / "test" / "orchestratord" / "cluster.yaml", "w") as out_file,
+        ):
+            text = in_file.read()
+            out_file.write(
+                text.replace(
+                    "$DOCKER_CONFIG",
+                    os.getenv("DOCKER_CONFIG", f'{os.environ["HOME"]}/.docker'),
+                )
+            )
+
+        spawn.runv(
+            [
+                "kind",
+                "create",
+                "cluster",
+                "--name",
+                cluster,
+                "--config",
+                MZ_ROOT / "test" / "orchestratord" / "cluster.yaml",
+            ]
+        )
+        spawn.runv(
+            [
+                "helm",
+                "repo",
+                "add",
+                "metrics-server",
+                "https://kubernetes-sigs.github.io/metrics-server/",
+            ]
+        )
+        spawn.runv(["helm", "repo", "update", "metrics-server"])
+        spawn.runv(
+            [
+                "helm",
+                "install",
+                "metrics-server",
+                "metrics-server/metrics-server",
+                "--namespace",
+                "kube-system",
+                "--set",
+                "args={--kubelet-insecure-tls,--kubelet-preferred-address-types=InternalIP,Hostname,ExternalIP}",
+            ]
+        )
+
+        spawn.runv(["kubectl", "create", "namespace", "materialize"])
+
+        spawn.runv(
+            [
+                "kubectl",
+                "apply",
+                "-f",
+                MZ_ROOT / "misc" / "helm-charts" / "testing" / "postgres.yaml",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "apply",
+                "-f",
+                MZ_ROOT / "misc" / "helm-charts" / "testing" / "minio.yaml",
+            ]
+        )
+        spawn.runv(
+            [
+                "kubectl",
+                "apply",
+                "-f",
+                MZ_ROOT / "test" / "orchestratord" / "storageclass.yaml",
+            ]
+        )
+
+    if not args.tag:
+        services = [
+            "orchestratord",
+            "environmentd",
+            "clusterd",
+            "balancerd",
         ]
+        c.up(*[Service(service, idle=True) for service in services])
+        for service in services:
+            spawn.runv(
+                [
+                    "docker",
+                    "tag",
+                    c.compose["services"][service]["image"],
+                    get_image(c.compose["services"][service]["image"], None),
+                ]
+            )
+        spawn.runv(
+            ["kind", "load", "docker-image", "--name", cluster]
+            + [
+                get_image(c.compose["services"][service]["image"], None)
+                for service in services
+            ]
+        )
+
+    definition: dict[str, Any] = {}
+
+    with open(MZ_ROOT / "misc" / "helm-charts" / "operator" / "values.yaml") as f:
+        definition["operator"] = yaml.load(f, Loader=yaml.Loader)
+    with open(MZ_ROOT / "misc" / "helm-charts" / "testing" / "materialize.yaml") as f:
+        materialize_setup = list(yaml.load_all(f, Loader=yaml.Loader))
+        assert len(materialize_setup) == 3
+        definition["namespace"] = materialize_setup[0]
+        definition["secret"] = materialize_setup[1]
+        definition["materialize"] = materialize_setup[2]
+    with open(MZ_ROOT / "misc" / "helm-charts" / "testing" / "balancer.yaml") as f:
+        definition["balancer"] = yaml.load(f, Loader=yaml.Loader)
+
+    get_version(args.tag)
+    if args.orchestratord_override:
+        definition["operator"]["operator"]["image"]["tag"] = get_tag(args.tag)
+    # TODO: database-issues#9696, makes environmentd -> clusterd connections fail
+    # definition["operator"]["networkPolicies"]["enabled"] = True
+    # definition["operator"]["networkPolicies"]["internal"]["enabled"] = True
+    # definition["operator"]["networkPolicies"]["egress"]["enabled"] = True
+    # definition["operator"]["networkPolicies"]["ingress"]["enabled"] = True
+    # TODO: Remove when fixed: error: unexpected argument '--disable-license-key-checks' found
+    definition["operator"]["operator"]["args"]["enableLicenseKeyChecks"] = True
+    definition["operator"]["clusterd"]["nodeSelector"][
+        "workload"
+    ] = "materialize-instance"
+    definition["operator"]["environmentd"]["nodeSelector"][
+        "workload"
+    ] = "materialize-instance"
+    definition["secret"]["stringData"]["license_key"] = os.environ["MZ_CI_LICENSE_KEY"]
+    definition["materialize"]["spec"]["environmentdImageRef"] = get_image(
+        c.compose["services"]["environmentd"]["image"], args.tag
     )
-    spawn.runv(
-        [
-            "kubectl",
-            "apply",
-            "-f",
-            MZ_ROOT / "misc" / "helm-charts" / "testing" / "minio.yaml",
-        ]
+    definition["balancer"]["spec"]["balancerdImageRef"] = get_image(
+        c.compose["services"]["balancerd"]["image"], args.tag
     )
-    spawn.runv(
-        [
-            "kubectl",
-            "apply",
-            "-f",
-            MZ_ROOT / "test" / "orchestratord" / "storageclass.yaml",
-        ]
-    )
+    # this is just a hack to get balancerd to start up, sending requests
+    # won't actually work
+    definition["balancer"]["spec"]["staticRouting"][
+        "environmentdNamespace"
+    ] = "materialize"
+    definition["balancer"]["spec"]["staticRouting"][
+        "environmentdServiceName"
+    ] = "postgres"
+    # kubectl get endpoints mzel5y3f42l6-cluster-u1-replica-u1-gen-1 -n materialize-environment -o json
+    # more than one address
+    return definition
 
 
 DONE_SCENARIOS = set()
@@ -1656,18 +2350,14 @@ def run_scenario(
                 mod.modify(definition)
                 if mod.value in mod.failed_reconciliation_values():
                     expect_fail = True
-        if not initialize:
-            definition["materialize"]["spec"][
-                "rolloutStrategy"
-            ] = "ImmediatelyPromoteCausingDowntime"
-            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
-            run(definition, expect_fail)
         if initialize:
             init(definition)
             run(definition, expect_fail)
             initialize = False  # only initialize once
         else:
-            upgrade(definition, expect_fail)
+            upgrade_operator_helm_chart(definition, expect_fail)
+            definition["materialize"]["spec"]["requestRollout"] = str(uuid.uuid4())
+            run(definition, expect_fail)
         mod_dict = {mod.__class__: mod.value for mod in mods}
         for subclass in all_subclasses(Modification):
             if subclass not in mod_dict:
@@ -1681,6 +2371,9 @@ def run_scenario(
                 f"Reproduce with bin/mzcompose --find orchestratord run default --recreate-cluster --scenario='{scenario_json}'"
             )
             raise
+        finally:
+            if not expect_fail:
+                run_mz_debug()
 
 
 def init(definition: dict[str, Any]) -> None:
@@ -1707,7 +2400,7 @@ def init(definition: dict[str, Any]) -> None:
             "--namespace=materialize",
             "--create-namespace",
             "--version",
-            "v25.3.0",
+            "v26.0.0",
             "-f",
             "-",
         ],
@@ -1716,7 +2409,7 @@ def init(definition: dict[str, Any]) -> None:
         stderr=subprocess.DEVNULL,
     )
 
-    for i in range(120):
+    for i in range(240):
         try:
             spawn.capture(
                 [
@@ -1740,7 +2433,7 @@ def init(definition: dict[str, Any]) -> None:
         raise ValueError("Never completed")
 
 
-def upgrade(definition: dict[str, Any], expect_fail: bool) -> None:
+def upgrade_operator_helm_chart(definition: dict[str, Any], expect_fail: bool) -> None:
     spawn.runv(
         [
             "helm",
@@ -1749,7 +2442,7 @@ def upgrade(definition: dict[str, Any], expect_fail: bool) -> None:
             MZ_ROOT / "misc" / "helm-charts" / "operator",
             "--namespace=materialize",
             "--version",
-            "v25.3.0",
+            "v26.0.0",
             "-f",
             "-",
         ],
@@ -1757,7 +2450,6 @@ def upgrade(definition: dict[str, Any], expect_fail: bool) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    post_run_check(definition, expect_fail)
 
 
 def run(definition: dict[str, Any], expect_fail: bool) -> None:
@@ -1768,6 +2460,8 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
     ]
     if "materialize2" in definition:
         defs.append(definition["materialize2"])
+    if "system_params_configmap" in definition:
+        defs.append(definition["system_params_configmap"])
     try:
         spawn.runv(
             ["kubectl", "apply", "-f", "-"],
@@ -1776,12 +2470,47 @@ def run(definition: dict[str, Any], expect_fail: bool) -> None:
     except subprocess.CalledProcessError as e:
         print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
         raise
-    post_run_check(definition, expect_fail)
 
+    if definition["materialize"]["spec"].get("rolloutStrategy") == "ManuallyPromote":
+        # First wait for it to become ready to promote, but not yet promoted
+        for _ in range(900):
+            time.sleep(1)
+            if is_ready_to_manually_promote():
+                break
+        else:
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "yaml",
+                ],
+            )
+            raise RuntimeError("Never became ready for manual promotion")
 
-def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
-    for i in range(60):
-        try:
+        # Wait to see that it doesn't promote
+        time.sleep(30)
+        if not is_ready_to_manually_promote():
+            spawn.runv(
+                [
+                    "kubectl",
+                    "get",
+                    "materializes",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "yaml",
+                ],
+            )
+            raise RuntimeError(
+                "Stopped being ready for manual promotion before promoting"
+            )
+
+        # Manually promote it
+        mz = json.loads(
             spawn.capture(
                 [
                     "kubectl",
@@ -1789,14 +2518,97 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
                     "materializes",
                     "-n",
                     "materialize-environment",
+                    "-o",
+                    "json",
                 ],
                 stderr=subprocess.DEVNULL,
             )
-            break
+        )["items"][0]
+        definition["materialize"]["spec"]["forcePromote"] = mz["spec"]["requestRollout"]
+        try:
+            spawn.runv(
+                ["kubectl", "apply", "-f", "-"],
+                stdin=yaml.dump(definition["materialize"]).encode(),
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
+            raise
+
+    post_run_check(definition, expect_fail)
+
+
+def is_ready_to_manually_promote():
+    data = json.loads(
+        spawn.capture(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "json",
+            ],
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    conditions = data["items"][0].get("status", {}).get("conditions")
+    return (
+        conditions is not None
+        and conditions[0]["type"] == "UpToDate"
+        and conditions[0]["status"] == "Unknown"
+        and conditions[0]["reason"] == "ReadyToPromote"
+    )
+
+
+def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
+    for i in range(900):
+        time.sleep(1)
+        try:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "materializes",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+            )
+            status = data["items"][0].get("status")
+            if not status:
+                continue
+            if expect_fail:
+                break
+            if (
+                not status["conditions"]
+                or status["conditions"][0]["type"] != "UpToDate"
+                or status["conditions"][0]["status"] != "True"
+            ):
+                continue
+            if (
+                status["lastCompletedRolloutRequest"]
+                == data["items"][0]["spec"]["requestRollout"]
+            ):
+                break
         except subprocess.CalledProcessError:
             pass
-        time.sleep(1)
     else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "materializes",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "yaml",
+            ],
+        )
         raise ValueError("Never completed")
 
     for i in range(480):
@@ -1855,5 +2667,121 @@ def post_run_check(definition: dict[str, Any], expect_fail: bool) -> None:
             ]
         )
         raise ValueError("Never completed")
-    # Wait a bit for the status to stabilize
-    time.sleep(60)
+
+
+def run_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
+    defs = [
+        definition["namespace"],
+        definition["balancer"],
+    ]
+    try:
+        spawn.runv(
+            ["kubectl", "apply", "-f", "-"],
+            stdin=yaml.dump_all(defs).encode(),
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to apply: {e.stdout}\nSTDERR:{e.stderr}")
+        raise
+    post_run_check_balancer(definition, expect_fail)
+
+
+def post_run_check_balancer(definition: dict[str, Any], expect_fail: bool) -> None:
+    for i in range(60):
+        time.sleep(1)
+        try:
+            data = json.loads(
+                spawn.capture(
+                    [
+                        "kubectl",
+                        "get",
+                        "balancers",
+                        "-n",
+                        "materialize-environment",
+                        "-o",
+                        "json",
+                    ],
+                    stderr=subprocess.DEVNULL,
+                )
+            )
+            status = data["items"][0].get("status")
+            if not status:
+                continue
+            if expect_fail:
+                break
+            if not status["conditions"] or status["conditions"][0]["type"] != "Ready":
+                continue
+            if status["conditions"][0]["status"] == "True":
+                break
+        except subprocess.CalledProcessError:
+            pass
+    else:
+        spawn.runv(
+            [
+                "kubectl",
+                "get",
+                "balancers",
+                "-n",
+                "materialize-environment",
+                "-o",
+                "yaml",
+            ],
+        )
+        raise ValueError("Never completed")
+
+    for i in range(120):
+        print("kubectl get balancer pods")
+        try:
+            status = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=balancerd",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "jsonpath={.items[0].status.phase}",
+                ],
+                stderr=subprocess.DEVNULL,
+            )
+            if status in ["Running", "Error", "CrashLoopBackOff"]:
+                assert not expect_fail
+                break
+        except subprocess.CalledProcessError:
+            if expect_fail:
+                try:
+                    logs = spawn.capture(
+                        [
+                            "kubectl",
+                            "logs",
+                            "-l",
+                            "app.kubernetes.io/instance=operator",
+                            "-n",
+                            "materialize",
+                        ],
+                        stderr=subprocess.DEVNULL,
+                    )
+                    if (
+                        f"ERROR k8s_controller::controller: Balancer reconciliation error. err=reconciler for object Balancer.v1alpha1.materialize.cloud/{definition['balancer']['metadata']['name']}.materialize-environment failed"
+                        in logs
+                    ):
+                        break
+                except subprocess.CalledProcessError:
+                    pass
+
+        time.sleep(1)
+    else:
+        # Helps to debug
+        spawn.runv(
+            [
+                "kubectl",
+                "describe",
+                "pod",
+                "-l",
+                "app=balancerd",
+                "-n",
+                "materialize-environment",
+            ]
+        )
+        raise ValueError("Never completed")

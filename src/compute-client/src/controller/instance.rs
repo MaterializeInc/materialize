@@ -41,13 +41,13 @@ use mz_repr::{Datum, Diff, GlobalId, RelationDesc, Row};
 use mz_storage_client::controller::{IntrospectionType, WallclockLag, WallclockLagHistogramPeriod};
 use mz_storage_types::read_holds::{self, ReadHold};
 use mz_storage_types::read_policy::ReadPolicy;
-use serde::Serialize;
 use thiserror::Error;
 use timely::PartialOrder;
 use timely::progress::frontier::MutableAntichain;
 use timely::progress::{Antichain, ChangeBatch, Timestamp};
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::{mpsc, oneshot};
+use tracing::debug_span;
 use uuid::Uuid;
 
 use crate::controller::error::{
@@ -103,13 +103,30 @@ impl From<CollectionMissing> for DataflowCreationError {
 }
 
 #[derive(Error, Debug)]
-pub(super) enum PeekError {
+#[error("the instance has shut down")]
+pub(super) struct InstanceShutDown;
+
+/// Errors arising during peek processing.
+#[derive(Error, Debug)]
+pub enum PeekError {
+    /// The replica that the peek was issued against does not exist.
     #[error("replica does not exist: {0}")]
     ReplicaMissing(ReplicaId),
+    /// The read hold that was passed in is against the wrong collection.
     #[error("read hold ID does not match peeked collection: {0}")]
     ReadHoldIdMismatch(GlobalId),
+    /// The read hold that was passed in is for a later time than the peek's timestamp.
     #[error("insufficient read hold provided: {0}")]
     ReadHoldInsufficient(GlobalId),
+    /// The peek's target instance has shut down.
+    #[error("the instance has shut down")]
+    InstanceShutDown,
+}
+
+impl From<InstanceShutDown> for PeekError {
+    fn from(_error: InstanceShutDown) -> Self {
+        Self::InstanceShutDown
+    }
 }
 
 #[derive(Error, Debug)]
@@ -127,12 +144,12 @@ impl From<CollectionMissing> for ReadPolicyError {
 }
 
 /// A command sent to an [`Instance`] task.
-pub type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
+type Command<T> = Box<dyn FnOnce(&mut Instance<T>) + Send>;
 
-/// A client for an [`Instance`] task.
+/// A client for an `Instance` task.
 #[derive(Clone, derivative::Derivative)]
 #[derivative(Debug)]
-pub(super) struct Client<T: ComputeControllerTimestamp> {
+pub struct Client<T: ComputeControllerTimestamp> {
     /// A sender for commands for the instance.
     command_tx: mpsc::UnboundedSender<Command<T>>,
     /// A sender for read hold changes for collections installed on the instance.
@@ -141,12 +158,46 @@ pub(super) struct Client<T: ComputeControllerTimestamp> {
 }
 
 impl<T: ComputeControllerTimestamp> Client<T> {
-    pub fn send(&self, command: Command<T>) -> Result<(), SendError<Command<T>>> {
-        self.command_tx.send(command)
+    pub(super) fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
+        Arc::clone(&self.read_hold_tx)
     }
 
-    pub fn read_hold_tx(&self) -> read_holds::ChangeTx<T> {
-        Arc::clone(&self.read_hold_tx)
+    /// Call a method to be run on the instance task, by sending a message to the instance.
+    /// Does not wait for a response message.
+    pub(super) fn call<F>(&self, f: F) -> Result<(), InstanceShutDown>
+    where
+        F: FnOnce(&mut Instance<T>) + Send + 'static,
+    {
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.command_tx
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call").entered();
+                otel_ctx.attach_as_parent();
+
+                f(instance)
+            }))
+            .map_err(|_send_error| InstanceShutDown)
+    }
+
+    /// Call a method to be run on the instance task, by sending a message to the instance and
+    /// waiting for a response message.
+    pub(super) async fn call_sync<F, R>(&self, f: F) -> Result<R, InstanceShutDown>
+    where
+        F: FnOnce(&mut Instance<T>) -> R + Send + 'static,
+        R: Send + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        let otel_ctx = OpenTelemetryContext::obtain();
+        self.command_tx
+            .send(Box::new(move |instance| {
+                let _span = debug_span!("instance::call_sync").entered();
+                otel_ctx.attach_as_parent();
+                let result = f(instance);
+                let _ = tx.send(result);
+            }))
+            .map_err(|_send_error| InstanceShutDown)?;
+
+        rx.await.map_err(|_| InstanceShutDown)
     }
 }
 
@@ -154,7 +205,7 @@ impl<T> Client<T>
 where
     T: ComputeControllerTimestamp,
 {
-    pub fn spawn(
+    pub(super) fn spawn(
         id: ComputeInstanceId,
         build_info: &'static BuildInfo,
         storage: StorageCollections<T>,
@@ -166,6 +217,7 @@ where
         dyncfg: Arc<ConfigSet>,
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
+        read_only: bool,
     ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
 
@@ -195,6 +247,7 @@ where
                 response_tx,
                 Arc::clone(&read_hold_tx),
                 introspection_tx,
+                read_only,
             )
             .run(),
         );
@@ -203,6 +256,57 @@ where
             command_tx,
             read_hold_tx,
         }
+    }
+
+    /// Acquires a `ReadHold` and collection write frontier for each of the identified compute
+    /// collections.
+    pub async fn acquire_read_holds_and_collection_write_frontiers(
+        &self,
+        ids: Vec<GlobalId>,
+    ) -> Result<Vec<(GlobalId, ReadHold<T>, Antichain<T>)>, CollectionLookupError> {
+        self.call_sync(move |i| {
+            let mut result = Vec::new();
+            for id in ids.into_iter() {
+                result.push((
+                    id,
+                    i.acquire_read_hold(id)?,
+                    i.collection_write_frontier(id)?,
+                ));
+            }
+            Ok(result)
+        })
+        .await?
+    }
+
+    /// Issue a peek by calling into the instance task.
+    pub async fn peek(
+        &self,
+        peek_target: PeekTarget,
+        literal_constraints: Option<Vec<Row>>,
+        uuid: Uuid,
+        timestamp: T,
+        result_desc: RelationDesc,
+        finishing: RowSetFinishing,
+        map_filter_project: mz_expr::SafeMfpPlan,
+        target_read_hold: ReadHold<T>,
+        target_replica: Option<ReplicaId>,
+        peek_response_tx: oneshot::Sender<PeekResponse>,
+    ) -> Result<(), PeekError> {
+        self.call_sync(move |i| {
+            i.peek(
+                peek_target,
+                literal_constraints,
+                uuid,
+                timestamp,
+                result_desc,
+                finishing,
+                map_filter_project,
+                target_read_hold,
+                target_replica,
+                peek_response_tx,
+            )
+        })
+        .await?
     }
 }
 
@@ -218,11 +322,10 @@ pub(super) struct Instance<T: ComputeControllerTimestamp> {
     storage_collections: StorageCollections<T>,
     /// Whether instance initialization has been completed.
     initialized: bool,
-    /// Whether or not this instance is in read-only mode.
+    /// Whether this instance is in read-only mode.
     ///
-    /// When in read-only mode, neither the controller nor the instances
-    /// controlled by it are allowed to affect changes to external systems
-    /// (largely persist).
+    /// When in read-only mode, this instance will not update persistent state, such as
+    /// wallclock lag introspection.
     read_only: bool,
     /// The workload class of this instance.
     ///
@@ -843,17 +946,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         Ok(all_hydrated)
     }
 
-    /// Returns `true` if all non-transient, non-excluded collections are hydrated on at least one
-    /// replica.
-    ///
-    /// This also returns `true` in case this cluster does not have any
-    /// replicas.
-    #[mz_ore::instrument(level = "debug")]
-    pub fn collections_hydrated(&self, exclude_collections: &BTreeSet<GlobalId>) -> bool {
-        self.collections_hydrated_on_replicas(None, exclude_collections)
-            .expect("Cannot error if target_replica_ids is None")
-    }
-
     /// Clean up collection state that is not needed anymore.
     ///
     /// Three conditions need to be true before we can remove state for a collection:
@@ -926,14 +1018,6 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
             replica_rx: _,
         } = self;
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
         let replicas: BTreeMap<_, _> = replicas
             .iter()
             .map(|(id, replica)| Ok((id.to_string(), replica.dump()?)))
@@ -953,18 +1037,22 @@ impl<T: ComputeControllerTimestamp> Instance<T> {
         let copy_tos: Vec<_> = copy_tos.iter().map(|id| id.to_string()).collect();
         let wallclock_lag_last_recorded = format!("{wallclock_lag_last_recorded:?}");
 
-        let map = serde_json::Map::from_iter([
-            field("initialized", initialized)?,
-            field("read_only", read_only)?,
-            field("workload_class", workload_class)?,
-            field("replicas", replicas)?,
-            field("collections", collections)?,
-            field("peeks", peeks)?,
-            field("subscribes", subscribes)?,
-            field("copy_tos", copy_tos)?,
-            field("wallclock_lag_last_recorded", wallclock_lag_last_recorded)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "initialized": initialized,
+            "read_only": read_only,
+            "workload_class": workload_class,
+            "replicas": replicas,
+            "collections": collections,
+            "peeks": peeks,
+            "subscribes": subscribes,
+            "copy_tos": copy_tos,
+            "wallclock_lag_last_recorded": wallclock_lag_last_recorded,
+        }))
+    }
+
+    /// Reports the current write frontier for the identified compute collection.
+    fn collection_write_frontier(&self, id: GlobalId) -> Result<Antichain<T>, CollectionMissing> {
+        Ok(self.collection(id)?.write_frontier())
     }
 }
 
@@ -985,6 +1073,7 @@ where
         response_tx: mpsc::UnboundedSender<ComputeControllerResponse<T>>,
         read_hold_tx: read_holds::ChangeTx<T>,
         introspection_tx: mpsc::UnboundedSender<IntrospectionUpdates>,
+        read_only: bool,
     ) -> Self {
         let mut collections = BTreeMap::new();
         let mut log_sources = BTreeMap::new();
@@ -1012,7 +1101,7 @@ where
             storage_collections: storage,
             peek_stash_persist_location,
             initialized: false,
-            read_only: true,
+            read_only,
             workload_class: None,
             replicas: Default::default(),
             collections,
@@ -1090,15 +1179,31 @@ where
         }
     }
 
-    /// Allows this instance to affect writes to external systems (persist).
+    /// Allows collections to affect writes to external systems (persist).
     ///
     /// Calling this method repeatedly has no effect.
     #[mz_ore::instrument(level = "debug")]
-    pub fn allow_writes(&mut self) {
-        if self.read_only {
-            self.read_only = false;
-            self.send(ComputeCommand::AllowWrites);
+    pub fn allow_writes(&mut self, collection_id: GlobalId) -> Result<(), CollectionMissing> {
+        let collection = self.collection_mut(collection_id)?;
+
+        // Do not send redundant allow-writes commands.
+        if !collection.read_only {
+            return Ok(());
         }
+
+        // Don't send allow-writes for collections that are not installed.
+        let as_of = collection.read_frontier();
+
+        // If the collection has an empty `as_of`, it was either never installed on the replica or
+        // has since been dropped. In either case the replica does not expect any commands for it.
+        if as_of.is_empty() {
+            return Ok(());
+        }
+
+        collection.read_only = false;
+        self.send(ComputeCommand::AllowWrites(collection_id));
+
+        Ok(())
     }
 
     /// Shut down this instance.
@@ -1646,8 +1751,9 @@ where
     ) -> Result<(), PeekError> {
         use PeekError::*;
 
-        // Downgrade the provided read hold to the peek time.
         let target_id = peek_target.id();
+
+        // Downgrade the provided read hold to the peek time.
         if read_hold.id() != target_id {
             return Err(ReadHoldIdMismatch(read_hold.id()));
         }
@@ -2321,6 +2427,26 @@ where
         }
     }
 
+    /// Acquires a `ReadHold` for the identified compute collection.
+    ///
+    /// This mirrors the logic used by the controller-side `InstanceState::acquire_read_hold`,
+    /// but executes on the instance task itself.
+    fn acquire_read_hold(&self, id: GlobalId) -> Result<ReadHold<T>, CollectionMissing> {
+        // Similarly to InstanceState::acquire_read_hold and StorageCollections::acquire_read_holds,
+        // we acquire read holds at the earliest possible time rather than returning a copy
+        // of the implied read hold. This is so that dependents can acquire read holds on
+        // compute dependencies at frontiers that are held back by other read holds the caller
+        // has previously taken.
+        let collection = self.collection(id)?;
+        let since = collection.shared.lock_read_capabilities(|caps| {
+            let since = caps.frontier().to_owned();
+            caps.update_iter(since.iter().map(|t| (t.clone(), 1)));
+            since
+        });
+        let hold = ReadHold::new(id, since, Arc::clone(&self.read_hold_tx));
+        Ok(hold)
+    }
+
     /// Process pending maintenance work.
     ///
     /// This method is invoked periodically by the global controller.
@@ -2358,6 +2484,11 @@ struct CollectionState<T: ComputeControllerTimestamp> {
     /// Whether this collection has been scheduled, i.e., the controller has sent a `Schedule`
     /// command for it.
     scheduled: bool,
+
+    /// Whether this collection is in read-only mode.
+    ///
+    /// When in read-only mode, the dataflow is not allowed to affect external state (largely persist).
+    read_only: bool,
 
     /// State shared with the `ComputeController`.
     shared: SharedCollectionState<T>,
@@ -2456,6 +2587,7 @@ impl<T: ComputeControllerTimestamp> CollectionState<T> {
             log_collection: false,
             dropped: false,
             scheduled: false,
+            read_only: true,
             shared,
             implied_read_hold,
             warmup_read_hold,
@@ -2535,10 +2667,11 @@ pub(super) struct SharedCollectionState<T> {
     /// This accumulation contains the capabilities held by all [`ReadHold`]s given out for the
     /// collection, including `implied_read_hold` and `warmup_read_hold`.
     ///
-    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_change`] and
-    /// `ComputeController::acquire_read_hold`. Nobody else should modify read capabilities
-    /// directly. Instead, collection users should manage read holds through [`ReadHold`] objects
-    /// acquired through `ComputeController::acquire_read_hold`.
+    /// NOTE: This field may only be modified by [`Instance::apply_read_hold_change`],
+    /// [`Instance::acquire_read_hold`], and `ComputeController::acquire_read_hold`.
+    /// Nobody else should modify read capabilities directly. Instead, collection users should
+    /// manage read holds through [`ReadHold`] objects acquired through
+    /// `ComputeController::acquire_read_hold`.
     ///
     /// TODO(teskje): Restructure the code to enforce the above in the type system.
     read_capabilities: Arc<Mutex<MutableAntichain<T>>>,
@@ -3005,25 +3138,16 @@ impl<T: ComputeControllerTimestamp> ReplicaState<T> {
             collections,
         } = self;
 
-        fn field(
-            key: &str,
-            value: impl Serialize,
-        ) -> Result<(String, serde_json::Value), anyhow::Error> {
-            let value = serde_json::to_value(value)?;
-            Ok((key.to_string(), value))
-        }
-
         let collections: BTreeMap<_, _> = collections
             .iter()
             .map(|(id, collection)| (id.to_string(), format!("{collection:?}")))
             .collect();
 
-        let map = serde_json::Map::from_iter([
-            field("id", id.to_string())?,
-            field("collections", collections)?,
-            field("epoch", epoch)?,
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "id": id.to_string(),
+            "collections": collections,
+            "epoch": epoch,
+        }))
     }
 }
 

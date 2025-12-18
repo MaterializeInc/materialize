@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use arrow::array::{Array, Int64Array};
 use bytes::Bytes;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::StreamExt;
@@ -51,7 +51,9 @@ use crate::async_runtime::IsolatedRuntime;
 use crate::cfg::{BATCH_BUILDER_MAX_OUTSTANDING_PARTS, MiB};
 use crate::error::InvalidUsage;
 use crate::internal::compact::{CompactConfig, Compactor};
-use crate::internal::encoding::{LazyInlineBatchPart, LazyPartStats, LazyProto, Schemas};
+use crate::internal::encoding::{
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, Schemas,
+};
 use crate::internal::machine::retry_external;
 use crate::internal::merge::{MergeTree, Pending};
 use crate::internal::metrics::{BatchWriteMetrics, Metrics, RetryMetrics, ShardMetrics};
@@ -78,6 +80,9 @@ pub struct Batch<K, V, T, D> {
 
     /// The version of Materialize which wrote this batch.
     pub(crate) version: Version,
+
+    /// The encoded schemas of the data in the batch.
+    pub(crate) schemas: (Bytes, Bytes),
 
     /// A handle to the data represented by this batch.
     pub(crate) batch: HollowBatch<T>,
@@ -111,7 +116,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub(crate) fn new(
         batch_delete_enabled: bool,
@@ -119,6 +124,7 @@ where
         blob: Arc<dyn Blob>,
         shard_metrics: Arc<ShardMetrics>,
         version: Version,
+        schemas: (Bytes, Bytes),
         batch: HollowBatch<T>,
     ) -> Self {
         Self {
@@ -126,6 +132,7 @@ where
             metrics,
             shard_metrics,
             version,
+            schemas,
             batch,
             blob,
             _phantom: PhantomData,
@@ -207,6 +214,8 @@ where
             shard_id: self.shard_metrics.shard_id.into_proto(),
             version: self.version.to_string(),
             batch: Some(self.batch.into_proto()),
+            key_schema: self.schemas.0.clone(),
+            val_schema: self.schemas.1.clone(),
         };
         self.mark_consumed();
         ret
@@ -241,8 +250,7 @@ where
                 let updates = updates
                     .decode::<T>(&self.metrics.columnar)
                     .expect("valid inline part");
-                let diffs_sum =
-                    diffs_sum::<D>(updates.updates.diffs()).expect("inline parts are not empty");
+                let diffs_sum = diffs_sum::<D>(updates.updates.diffs());
                 let mut write_schemas = write_schemas.clone();
                 write_schemas.id = *schema_id;
 
@@ -266,7 +274,7 @@ where
                     )
                     .instrument(write_span),
                 );
-                let part = handle.await.expect("part write task failed");
+                let part = handle.await;
                 parts.push(RunPart::Single(part));
             }
         }
@@ -284,7 +292,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + TotalOrder,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     /// Efficiently rewrites the timestamps in this not-yet-committed batch.
     ///
@@ -519,7 +527,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub(crate) fn new(
         builder: BatchBuilderInternal<K, V, T, D>,
@@ -651,7 +659,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub(crate) fn new(
         _cfg: BatchBuilderConfig,
@@ -716,6 +724,7 @@ where
                 } else {
                     None
                 },
+                meta: MetadataMap::default(),
             });
             run_parts.extend(parts);
         }
@@ -727,6 +736,10 @@ where
             self.blob,
             shard_metrics,
             self.version,
+            (
+                K::encode_schema(&*self.write_schemas.key),
+                V::encode_schema(&*self.write_schemas.val),
+            ),
             HollowBatch::new(desc, run_parts, total_updates, run_meta, run_splits),
         );
 
@@ -743,7 +756,7 @@ where
         if num_updates == 0 {
             return;
         }
-        let diffs_sum = diffs_sum::<D>(&columnar.diff).expect("part is non empty");
+        let diffs_sum = diffs_sum::<D>(&columnar.diff);
 
         let start = Instant::now();
         self.parts
@@ -819,7 +832,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         K: Codec + Debug,
         V: Codec + Debug,
         T: Lattice + Send + Sync,
-        D: Semigroup + Ord + Codec64 + Send + Sync,
+        D: Monoid + Ord + Codec64 + Send + Sync,
     {
         let writing_runs = {
             let cfg = cfg.clone();
@@ -861,6 +874,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                                         } else {
                                             None
                                         },
+                                        meta: MetadataMap::default(),
                                     },
                                     completed_run.parts,
                                 )
@@ -915,7 +929,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
         }
     }
 
-    pub(crate) fn new_ordered<D: Semigroup + Codec64>(
+    pub(crate) fn new_ordered<D: Monoid + Codec64>(
         cfg: BatchBuilderConfig,
         order: RunOrder,
         metrics: Arc<Metrics>,
@@ -1240,8 +1254,7 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
                 )
             })
             .instrument(debug_span!("batch::encode_part"))
-            .await
-            .expect("part encode task failed");
+            .await;
         // Can't use the `CodecMetrics::encode` helper because of async.
         metrics.codecs.batch.encode_count.inc();
         metrics
@@ -1280,8 +1293,10 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
             stats
         });
 
+        let meta = MetadataMap::default();
         BatchPart::Hollow(HollowBatchPart {
             key: partial_key,
+            meta,
             encoded_size_bytes: payload_len,
             key_lower,
             structured_key_lower,
@@ -1477,16 +1492,12 @@ impl<T: Timestamp> PartDeletes<T> {
 }
 
 /// Returns the total sum of diffs or None if there were no updates.
-fn diffs_sum<D: Semigroup + Codec64>(updates: &Int64Array) -> Option<D> {
-    let mut sum = None;
+fn diffs_sum<D: Monoid + Codec64>(updates: &Int64Array) -> D {
+    let mut sum = D::zero();
     for d in updates.values().iter() {
         let d = D::decode(d.to_le_bytes());
-        match &mut sum {
-            None => sum = Some(d),
-            Some(x) => x.plus_equals(&d),
-        }
+        sum.plus_equals(&d);
     }
-
     sum
 }
 
@@ -1727,7 +1738,7 @@ mod tests {
             .await;
 
         let (actual, _) = read.expect_listen(0).await.read_until(&3).await;
-        let expected = vec![(((Ok("foo".to_owned())), Ok(())), 2, 1)];
+        let expected = vec![((("foo".to_owned()), ()), 2, 1)];
         assert_eq!(actual, expected);
     }
 

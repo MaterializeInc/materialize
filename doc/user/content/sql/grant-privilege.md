@@ -7,7 +7,7 @@ menu:
 ---
 
 `GRANT PRIVILEGE` grants privileges to [database
-role(s)](/security/access-control/manage-roles/).
+role(s)](/sql/create-role/).
 
 ## Syntax
 
@@ -92,7 +92,7 @@ TO <role_name> [, ... ];
 {{< tab "Materialized view/view/source">}}
 
 {{< note >}}
-{{< include-md file="shared-content/rbac/privilege-for-views-mat-views.md" >}}
+{{< include-md file="shared-content/rbac-cloud/privilege-for-views-mat-views.md" >}}
 {{</ note >}}
 
 For specific materialized view(s)/view(s)/source(s):
@@ -134,7 +134,7 @@ TO <role_name> [, ... ];
 For specific secret(s):
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON SECRET <name> [, ...]
 TO <role_name> [, ... ];
 ```
@@ -142,7 +142,7 @@ TO <role_name> [, ... ];
 For all secrets or all secrets in a specific database(s):
 
 ```mzsql
-GRANT <USAGE | CREATE | ALL [PRIVILEGES]> [, ... ]
+GRANT <USAGE | ALL [PRIVILEGES]> [, ... ]
 ON ALL SECRET [IN DATABASE <name> [, <name> ...]]
 TO <role_name> [, ... ];
 ```
@@ -200,7 +200,7 @@ For all tables or all tables in a specific schema(s) or in a specific database(s
 
 {{< note >}}
 
-{{< include-md file="shared-content/rbac/grant-privilege-all-tables.md" >}}
+{{< include-md file="shared-content/rbac-cloud/grant-privilege-all-tables.md" >}}
 
 {{</ note >}}
 
@@ -277,6 +277,6 @@ GRANT CREATEDB ON SYSTEM TO source_owners;
 - [`DROP USER`](../drop-user)
 - [`GRANT ROLE`](../grant-role)
 - [`REVOKE ROLE`](../revoke-role)
-- [`ALTER OWNER`](../alter-owner)
+- [`ALTER OWNER`](/sql/#rbac)
 - [`REVOKE PRIVILEGE`](../revoke-privilege)
 - [`ALTER DEFAULT PRIVILEGES`](../alter-default-privileges)

@@ -123,7 +123,7 @@ async fn main() -> ExitCode {
         startup_log_filter: args.log_filter.clone(),
         ..Default::default()
     };
-    let (tracing_handle, _tracing_guard) = tracing_args
+    let tracing_handle = tracing_args
         .configure_tracing(
             StaticTracingConfig {
                 service_name: "sqllogictest",

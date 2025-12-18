@@ -37,15 +37,16 @@ impl BuildInfo {
     /// Constructs a human-readable version string.
     pub fn human_version(&self, helm_chart_version: Option<String>) -> String {
         if let Some(ref helm_chart_version) = helm_chart_version {
-            format!(
-                "v{} ({}, helm chart: {})",
-                self.version,
-                &self.sha[..9],
-                helm_chart_version
-            )
-        } else {
-            format!("v{} ({})", self.version, &self.sha[..9])
+            if helm_chart_version != &self.version {
+                return format!(
+                    "v{} ({}, helm chart: {})",
+                    self.version,
+                    &self.sha[..9],
+                    helm_chart_version
+                );
+            }
         }
+        format!("v{} ({})", self.version, &self.sha[..9])
     }
 
     /// Returns the version as a rich [semantic version][semver].

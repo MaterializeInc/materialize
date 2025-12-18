@@ -19,6 +19,7 @@ use mz_catalog::durable::{
     DurableCatalogState, EXPRESSION_CACHE_SHARD_KEY, Epoch, FenceError,
     MOCK_AUTHENTICATION_NONCE_KEY, Schema, TestCatalogStateBuilder, test_bootstrap_args,
 };
+use mz_catalog_protos::objects::{SettingKey, SettingValue};
 use mz_ore::cast::usize_to_u64;
 use mz_ore::collections::HashSet;
 use mz_ore::now::{NOW_ZERO, SYSTEM_TIME};
@@ -488,7 +489,7 @@ async fn test_persist_open() {
 async fn test_open(state_builder: TestCatalogStateBuilder) {
     let state_builder = state_builder.with_default_deploy_generation();
 
-    let (snapshot, audit_log) = {
+    let (mut snapshot, audit_log) = {
         let mut state = state_builder
             .clone()
             .unwrap_build()
@@ -532,6 +533,18 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
             .unwrap()
             .0;
 
+        // Because of the ad-hoc migration for `migration_version`, reopening the catalog does
+        // change this version currently.
+        // TODO: remove this once we only support upgrades from version >= 0.164
+        snapshot.settings.insert(
+            SettingKey {
+                name: "migration_version".into(),
+            },
+            SettingValue {
+                value: "0.0.0".into(),
+            },
+        );
+
         assert_eq!(state.epoch(), Epoch::new(3).expect("known to be non-zero"));
         assert_eq!(state.snapshot().await.unwrap(), snapshot);
         assert_eq!(state.get_audit_logs().await.unwrap(), audit_log);
@@ -558,12 +571,14 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_unopened_deploy_generation_fencing() {
-    let persist_client = PersistClient::new_for_tests().await;
+    let mut persist_cache = PersistClientCache::new_no_metrics();
+    persist_cache.cfg.build_version = semver::Version::new(0, 1, 0);
+    let persist_client = persist_cache
+        .open(PersistLocation::new_in_mem())
+        .await
+        .unwrap();
     let state_builder = TestCatalogStateBuilder::new(persist_client);
-    test_unopened_deploy_generation_fencing(state_builder).await;
-}
 
-async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogStateBuilder) {
     // Initialize catalog.
     let deploy_generation = 0;
     let version = semver::Version::new(0, 1, 0);
@@ -654,10 +669,7 @@ async fn test_unopened_deploy_generation_fencing(state_builder: TestCatalogState
         .await
         .unwrap_err();
     assert!(
-        matches!(
-            err,
-            DurableCatalogError::Fence(FenceError::DeployGeneration { .. })
-        ),
+        matches!(err, DurableCatalogError::IncompatiblePersistVersion { .. }),
         "unexpected err: {err:?}"
     );
 }
@@ -893,8 +905,14 @@ async fn test_persist_version_fencing() {
     }
 
     testcase("0.10.0", "0.10.0", Ok(())).await;
-    testcase("0.10.0", "0.11.0", Ok(())).await;
-    testcase("0.10.0", "0.12.0", Err(())).await;
+    testcase("0.147.0", "0.148.1", Ok(())).await;
+    testcase("0.10.0", "0.148.1", Err(())).await;
+    testcase("0.147.0", "0.158.0", Ok(())).await;
+    testcase("0.147.0", "26.0.0", Ok(())).await;
+    testcase("0.160.0", "26.0.0", Ok(())).await;
+    testcase("26.0.0", "26.10.0", Ok(())).await;
+    testcase("26.1.0", "27.0.0", Ok(())).await;
+    testcase("0.147.0", "27.0.0", Err(())).await;
 }
 
 #[mz_ore::test(tokio::test)]
@@ -952,7 +970,7 @@ async fn test_concurrent_open(state_builder: TestCatalogStateBuilder) {
         .unwrap()
         .0;
 
-    state_handle.await.unwrap();
+    state_handle.await;
 
     // Open again to ensure that we didn't commit an invalid retraction.
     let _state = state_builder

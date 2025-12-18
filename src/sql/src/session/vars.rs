@@ -68,6 +68,7 @@ use std::clone::Clone;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::net::IpAddr;
+use std::num::NonZeroU32;
 use std::string::ToString;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -85,7 +86,6 @@ use mz_repr::user::ExternalUserMetadata;
 use mz_tracing::{CloneableEnvFilter, SerializableDirective};
 use serde::Serialize;
 use thiserror::Error;
-use tracing::error;
 use uncased::UncasedStr;
 
 use crate::ast::Ident;
@@ -1200,6 +1200,7 @@ impl SystemVars {
             &USER_STORAGE_MANAGED_COLLECTIONS_BATCH_DURATION,
             &FORCE_SOURCE_TABLE_SYNTAX,
             &OPTIMIZER_E2E_LATENCY_WARNING_THRESHOLD,
+            &SCRAM_ITERATIONS,
         ];
 
         let dyncfgs = mz_dyncfgs::all_dyncfgs();
@@ -1886,6 +1887,10 @@ impl SystemVars {
         *self.expect_config_value(UncasedStr::new(
             mz_persist_client::stats::STATS_FILTER_ENABLED.name(),
         ))
+    }
+
+    pub fn scram_iterations(&self) -> NonZeroU32 {
+        *self.expect_value(&SCRAM_ITERATIONS)
     }
 
     pub fn dyncfg_updates(&self) -> ConfigUpdates {

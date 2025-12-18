@@ -6,12 +6,14 @@ menu:
     parent: "commands"
 ---
 
-`CLOSE` closes a cursor previously opened with [`DECLARE`](/sql/declare).
+Use `CLOSE` to close a cursor previously opened with [`DECLARE`](/sql/declare).
 
 ## Syntax
 
-{{< diagram "close.svg" >}}
+```mzsql
+CLOSE <cursor_name>;
+```
 
-Field | Use
-------|-----
-_cursor&lowbar;name_ | The name of an open cursor to close.
+Syntax element | Description
+---------------|------------
+`<cursor_name>` | The name of an open cursor to close.

@@ -17,7 +17,7 @@ use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::arrangement::Arranged;
 use differential_dataflow::trace::TraceReader;
-use differential_dataflow::{AsCollection, Collection, Data};
+use differential_dataflow::{AsCollection, Data, VecCollection};
 use mz_compute_types::dyncfgs::{ENABLE_MZ_JOIN_CORE, LINEAR_JOIN_YIELDING};
 use mz_compute_types::plan::join::JoinClosure;
 use mz_compute_types::plan::join::linear_join::{LinearJoinPlan, LinearStagePlan};
@@ -36,7 +36,7 @@ use timely::progress::timestamp::Refines;
 
 use crate::extensions::arrange::MzArrangeCore;
 use crate::render::RenderTimestamp;
-use crate::render::context::{ArrangementFlavor, CollectionBundle, Context, ShutdownProbe};
+use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::row_spine::{RowRowBuilder, RowRowSpine};
 use crate::typedefs::{MzTimestamp, RowRowAgent, RowRowEnter};
@@ -97,9 +97,8 @@ impl LinearJoinSpec {
         &self,
         arranged1: &Arranged<G, Tr1>,
         arranged2: &Arranged<G, Tr2>,
-        shutdown_probe: ShutdownProbe,
         result: L,
-    ) -> Collection<G, I::Item, Diff>
+    ) -> VecCollection<G, I::Item, Diff>
     where
         G: Scope,
         G::Timestamp: Lattice,
@@ -121,19 +120,19 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, shutdown_probe, result, yield_fn).as_collection()
+                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
             }
         }
     }
@@ -194,7 +193,7 @@ where
     T: MzTimestamp,
 {
     /// Streamed data as a collection.
-    Collection(Collection<G, Row, Diff>),
+    Collection(VecCollection<G, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<G, RowRowAgent<G::Timestamp, Diff>>),
     /// An imported arrangement.
@@ -348,8 +347,8 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
-        errors: &mut Vec<Collection<S, DataflowError, Diff>>,
-    ) -> Collection<S, Row, Diff>
+        errors: &mut Vec<VecCollection<S, DataflowError, Diff>>,
+    ) -> VecCollection<S, Row, Diff>
     where
         S: Scope<Timestamp = G::Timestamp>,
     {
@@ -410,7 +409,7 @@ where
 
         match joined {
             JoinedFlavor::Collection(_) => {
-                unreachable!("JoinedFlavor::Collection variant avoided at top of method");
+                unreachable!("JoinedFlavor::VecCollection variant avoided at top of method");
             }
             JoinedFlavor::Local(local) => match arrangement {
                 ArrangementFlavor::Local(oks, errs1) => {
@@ -471,8 +470,8 @@ where
         next_input: Arranged<S, Tr2>,
         closure: JoinClosure,
     ) -> (
-        Collection<S, Row, Diff>,
-        Option<Collection<S, DataflowError, Diff>>,
+        VecCollection<S, Row, Diff>,
+        Option<VecCollection<S, DataflowError, Diff>>,
     )
     where
         S: Scope<Timestamp = G::Timestamp>,
@@ -490,26 +489,21 @@ where
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
-                .render(
-                    &prev_keyed,
-                    &next_input,
-                    self.shutdown_probe.clone(),
-                    move |key, old, new| {
-                        let mut row_builder = SharedRow::get();
-                        let temp_storage = RowArena::new();
+                .render(&prev_keyed, &next_input, move |key, old, new| {
+                    let mut row_builder = SharedRow::get();
+                    let temp_storage = RowArena::new();
 
-                        let mut datums_local = datums.borrow();
-                        datums_local.extend(key.to_datum_iter());
-                        datums_local.extend(old.to_datum_iter());
-                        datums_local.extend(new.to_datum_iter());
+                    let mut datums_local = datums.borrow();
+                    datums_local.extend(key.to_datum_iter());
+                    datums_local.extend(old.to_datum_iter());
+                    datums_local.extend(new.to_datum_iter());
 
-                        closure
-                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                            .map(|row| row.cloned())
-                            .map_err(DataflowError::from)
-                            .transpose()
-                    },
-                )
+                    closure
+                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                        .map(|row| row.cloned())
+                        .map_err(DataflowError::from)
+                        .transpose()
+                })
                 .inner
                 .ok_err(|(x, t, d)| {
                     // TODO(mcsherry): consider `ok_err()` for `Collection`.
@@ -521,25 +515,22 @@ where
 
             (oks.as_collection(), Some(err.as_collection()))
         } else {
-            let oks = self.linear_join_spec.render(
-                &prev_keyed,
-                &next_input,
-                self.shutdown_probe.clone(),
-                move |key, old, new| {
-                    let mut row_builder = SharedRow::get();
-                    let temp_storage = RowArena::new();
+            let oks =
+                self.linear_join_spec
+                    .render(&prev_keyed, &next_input, move |key, old, new| {
+                        let mut row_builder = SharedRow::get();
+                        let temp_storage = RowArena::new();
 
-                    let mut datums_local = datums.borrow();
-                    datums_local.extend(key.to_datum_iter());
-                    datums_local.extend(old.to_datum_iter());
-                    datums_local.extend(new.to_datum_iter());
+                        let mut datums_local = datums.borrow();
+                        datums_local.extend(key.to_datum_iter());
+                        datums_local.extend(old.to_datum_iter());
+                        datums_local.extend(new.to_datum_iter());
 
-                    closure
-                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                        .expect("Closure claimed to never error")
-                        .cloned()
-                },
-            );
+                        closure
+                            .apply(&mut datums_local, &temp_storage, &mut row_builder)
+                            .expect("Closure claimed to never error")
+                            .cloned()
+                    });
 
             (oks, None)
         }

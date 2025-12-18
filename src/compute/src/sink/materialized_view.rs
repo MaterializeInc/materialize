@@ -120,7 +120,7 @@ use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use differential_dataflow::{AsCollection, Collection, Hashable};
+use differential_dataflow::{AsCollection, Hashable, VecCollection};
 use futures::StreamExt;
 use mz_compute_types::sinks::{ComputeSinkDesc, MaterializedViewSinkConnection};
 use mz_dyncfg::ConfigSet;
@@ -167,9 +167,9 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         start_signal: StartSignal,
-        mut ok_collection: Collection<G, Row, Diff>,
-        mut err_collection: Collection<G, DataflowError, Diff>,
-        _ct_times: Option<Collection<G, (), Diff>>,
+        mut ok_collection: VecCollection<G, Row, Diff>,
+        mut err_collection: VecCollection<G, DataflowError, Diff>,
+        _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // Attach probes reporting the compute frontier.
@@ -196,6 +196,8 @@ where
             )
         }
 
+        let read_only_rx = collection_state.read_only_rx.clone();
+
         let token = persist_sink(
             sink_id,
             &self.storage_metadata,
@@ -204,6 +206,7 @@ where
             as_of,
             compute_state,
             start_signal,
+            read_only_rx,
         );
         Some(token)
     }
@@ -230,11 +233,12 @@ type SharedSinkFrontier = Rc<RefCell<Antichain<Timestamp>>>;
 pub(super) fn persist_sink<S>(
     sink_id: GlobalId,
     target: &CollectionMetadata,
-    ok_collection: Collection<S, Row, Diff>,
-    err_collection: Collection<S, DataflowError, Diff>,
+    ok_collection: VecCollection<S, Row, Diff>,
+    err_collection: VecCollection<S, DataflowError, Diff>,
     as_of: Antichain<Timestamp>,
     compute_state: &mut ComputeState,
     start_signal: StartSignal,
+    read_only_rx: watch::Receiver<bool>,
 ) -> Rc<dyn Any>
 where
     S: Scope<Timestamp = Timestamp>,
@@ -262,7 +266,7 @@ where
         sink_id,
         persist_api.clone(),
         as_of.clone(),
-        compute_state.read_only_rx.clone(),
+        read_only_rx,
         &desired,
     );
 
@@ -500,7 +504,7 @@ mod mint {
         let desired_outputs = OkErr::new(ok_output, err_output);
         let desired_output_streams = OkErr::new(ok_stream, err_stream);
 
-        let (desc_output, desc_output_stream) = op.new_output();
+        let (desc_output, desc_output_stream) = op.new_output::<CapacityContainerBuilder<_>>();
 
         let mut desired_inputs = OkErr {
             ok: op.new_input_for(&desired.ok, Pipeline, &desired_outputs.ok),
@@ -765,7 +769,8 @@ mod write {
         let name = operator_name(sink_id, "write");
         let mut op = OperatorBuilder::new(name, scope);
 
-        let (batches_output, batches_output_stream) = op.new_output();
+        let (batches_output, batches_output_stream) =
+            op.new_output::<CapacityContainerBuilder<_>>();
 
         // It is important that we exchange the `desired` and `persist` data the same way, so
         // updates that cancel each other out end up on the same worker.
@@ -1323,6 +1328,10 @@ mod append {
                     Ok(()) => return Ok(upper),
                     Err(mismatch) if PartialOrder::less_than(&mismatch.current, &lower) => {
                         advance_shard_upper(&mut self.persist_writer, lower.clone()).await;
+
+                        // At this point the shard's since and upper are likely the same, a state
+                        // that is likely to hit edge-cases in logic reasoning about frontiers.
+                        fail::fail_point!("mv_advanced_upper");
                     }
                     Err(mismatch) => return Err(mismatch.current),
                 }

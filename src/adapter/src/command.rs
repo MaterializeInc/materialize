@@ -11,25 +11,34 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use derivative::Derivative;
 use enum_kinds::EnumKind;
 use futures::Stream;
 use mz_adapter_types::connection::{ConnectionId, ConnectionIdType};
 use mz_auth::password::Password;
+use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_expr::RowSetFinishing;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_no_log;
 use mz_ore::tracing::OpenTelemetryContext;
+use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
+use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, RowIterator};
+use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator, SqlRelationType};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
-use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_sql::plan::{ExecuteTimeout, Plan, PlanKind, SideEffectingFunc};
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
+use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -37,13 +46,14 @@ use crate::catalog::Catalog;
 use crate::coord::ExecuteContextExtra;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::consistency::CoordinatorInconsistencies;
-use crate::coord::peek::PeekResponseUnary;
+use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
+use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::error::AdapterError;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::Transmittable;
 use crate::webhook::AppendWebhookResponse;
-use crate::{AdapterNotice, AppendWebhookError};
+use crate::{AdapterNotice, AppendWebhookError, ReadHolds};
 
 #[derive(Debug)]
 pub struct CatalogSnapshot {
@@ -153,6 +163,73 @@ pub enum Command {
     Dump {
         tx: oneshot::Sender<Result<serde_json::Value, anyhow::Error>>,
     },
+
+    GetComputeInstanceClient {
+        instance_id: ComputeInstanceId,
+        tx: oneshot::Sender<
+            Result<
+                mz_compute_client::controller::instance::Client<mz_repr::Timestamp>,
+                mz_compute_client::controller::error::InstanceMissing,
+            >,
+        >,
+    },
+
+    GetOracle {
+        timeline: Timeline,
+        tx: oneshot::Sender<
+            Result<Arc<dyn TimestampOracle<mz_repr::Timestamp> + Send + Sync>, AdapterError>,
+        >,
+    },
+
+    DetermineRealTimeRecentTimestamp {
+        source_ids: BTreeSet<GlobalId>,
+        real_time_recency_timeout: Duration,
+        tx: oneshot::Sender<Result<Option<mz_repr::Timestamp>, AdapterError>>,
+    },
+
+    GetTransactionReadHoldsBundle {
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Option<ReadHolds<mz_repr::Timestamp>>>,
+    },
+
+    /// _Merges_ the given read holds into the given connection's stored transaction read holds.
+    StoreTransactionReadHolds {
+        conn_id: ConnectionId,
+        read_holds: ReadHolds<mz_repr::Timestamp>,
+        tx: oneshot::Sender<()>,
+    },
+
+    ExecuteSlowPathPeek {
+        dataflow_plan: Box<PeekDataflowPlan<mz_repr::Timestamp>>,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
+        finishing: RowSetFinishing,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        intermediate_result_type: SqlRelationType,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        max_result_size: u64,
+        max_query_result_size: Option<u64>,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    ExecuteCopyTo {
+        df_desc: Box<DataflowDescription<mz_compute_types::plan::Plan>>,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
+
+    /// Execute a side-effecting function from the frontend peek path.
+    ExecuteSideEffectingFunc {
+        plan: SideEffectingFunc,
+        conn_id: ConnectionId,
+        /// The current role of the session, used for RBAC checks.
+        current_role: RoleId,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    },
 }
 
 impl Command {
@@ -172,7 +249,15 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. }
+            | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::GetTransactionReadHoldsBundle { .. }
+            | Command::StoreTransactionReadHolds { .. }
+            | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteCopyTo { .. }
+            | Command::ExecuteSideEffectingFunc { .. } => None,
         }
     }
 
@@ -192,7 +277,15 @@ impl Command {
             | Command::SetSystemVars { .. }
             | Command::RetireExecute { .. }
             | Command::CheckConsistency { .. }
-            | Command::Dump { .. } => None,
+            | Command::Dump { .. }
+            | Command::GetComputeInstanceClient { .. }
+            | Command::GetOracle { .. }
+            | Command::DetermineRealTimeRecentTimestamp { .. }
+            | Command::GetTransactionReadHoldsBundle { .. }
+            | Command::StoreTransactionReadHolds { .. }
+            | Command::ExecuteSlowPathPeek { .. }
+            | Command::ExecuteCopyTo { .. }
+            | Command::ExecuteSideEffectingFunc { .. } => None,
         }
     }
 }
@@ -216,6 +309,15 @@ pub struct StartupResponse {
     /// Map of (name, VarInput::Flat) tuples of session default variables that should be set.
     pub session_defaults: BTreeMap<String, OwnedVarInput>,
     pub catalog: Arc<Catalog>,
+    pub storage_collections: Arc<
+        dyn mz_storage_client::storage_collections::StorageCollections<
+                Timestamp = mz_repr::Timestamp,
+            > + Send
+            + Sync,
+    >,
+    pub transient_id_gen: Arc<TransientIdGen>,
+    pub optimizer_metrics: OptimizerMetrics,
+    pub persist_client: PersistClient,
 }
 
 /// The response to [`Client::authenticate`](crate::Client::authenticate).
@@ -644,6 +746,7 @@ impl ExecuteResponse {
             | AlterSource
             | AlterSink
             | AlterTableAddColumn
+            | AlterMaterializedViewApplyReplacement
             | AlterNetworkPolicy => &[AlteredObject],
             AlterDefaultPrivileges => &[AlteredDefaultPrivileges],
             AlterSetCluster => &[AlteredObject],

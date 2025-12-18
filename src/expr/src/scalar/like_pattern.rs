@@ -13,7 +13,7 @@ use std::str::FromStr;
 use derivative::Derivative;
 use mz_lowertest::MzReflect;
 use mz_ore::fmt::FormatBuffer;
-use mz_repr::adt::regex::Regex;
+use mz_repr::adt::regex::{Regex, RegexCompilationError};
 use serde::{Deserialize, Serialize};
 
 use crate::scalar::EvalError;
@@ -346,7 +346,10 @@ fn build_regex(subpatterns: &[Subpattern], case_insensitive: bool) -> Result<Reg
     r.push('$');
     match Regex::new(&r, case_insensitive) {
         Ok(regex) => Ok(regex),
-        Err(regex::Error::CompiledTooBig(_)) => Err(EvalError::LikePatternTooLong),
+        Err(RegexCompilationError::PatternTooLarge { .. }) => Err(EvalError::LikePatternTooLong),
+        Err(RegexCompilationError::RegexError(regex::Error::CompiledTooBig(_))) => {
+            Err(EvalError::LikePatternTooLong)
+        }
         Err(e) => Err(EvalError::Internal(
             format!("build_regex produced invalid regex: {}", e).into(),
         )),

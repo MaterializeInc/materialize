@@ -286,7 +286,7 @@ pub fn plan_insert_query(
             table_name.full_name_str()
         );
     }
-    let desc = table.desc(&scx.catalog.resolve_full_name(table.name()))?;
+    let desc = table.relation_desc().expect("table has desc");
     let mut defaults = table
         .writable_table_details()
         .ok_or_else(|| {
@@ -503,7 +503,15 @@ pub fn plan_copy_item(
 > {
     let item = scx.get_item_by_resolved_name(&item_name)?;
     let fullname = scx.catalog.resolve_full_name(item.name());
-    let table_desc = item.desc(&fullname)?.into_owned();
+    let table_desc = match item.relation_desc() {
+        Some(desc) => desc.into_owned(),
+        None => {
+            return Err(PlanError::InvalidDependency {
+                name: fullname.to_string(),
+                item_type: item.item_type(),
+            });
+        }
+    };
     let mut ordering = Vec::with_capacity(columns.len());
 
     // TODO(cf2): The logic here to create the `source_desc` and the MFP are a bit duplicated and
@@ -660,7 +668,6 @@ pub fn plan_copy_from_rows(
         .try_get_item(&target_id)
         .ok_or_else(|| PlanError::CopyFromTargetTableDropped { target_name })?
         .at_version(RelationVersionSelector::Latest);
-    let desc = table.desc(&catalog.resolve_full_name(table.name()))?;
 
     let mut defaults = table
         .writable_table_details()
@@ -671,6 +678,7 @@ pub fn plan_copy_from_rows(
         transform_ast::transform(&scx, default)?;
     }
 
+    let desc = table.relation_desc().expect("table has desc");
     let column_types = columns
         .iter()
         .map(|x| desc.get_type(x).clone())
@@ -805,7 +813,7 @@ pub fn plan_mutation_query_inner(
     // Derive structs for operation from validated table
     let (mut get, scope) = qcx.resolve_table_name(table_name)?;
     let scope = plan_table_alias(scope, alias.as_ref())?;
-    let desc = item.desc(&qcx.scx.catalog.resolve_full_name(item.name()))?;
+    let desc = item.relation_desc().expect("table has desc");
     let relation_type = qcx.relation_type(&get);
 
     if using.is_empty() {
@@ -1619,7 +1627,7 @@ fn plan_query_inner(qcx: &mut QueryContext, q: &Query<Aug>) -> Result<PlannedQue
             let mut bindings = Vec::new();
             for (id, value, shadowed_val) in cte_bindings.into_iter() {
                 if let Some(cte) = qcx.ctes.remove(&id) {
-                    bindings.push((cte.name, id, value, cte.desc.typ().clone()));
+                    bindings.push((cte.name, id, value, cte.desc.into_typ()));
                 }
                 if let Some(shadowed_val) = shadowed_val {
                     qcx.ctes.insert(id, shadowed_val);
@@ -2025,8 +2033,8 @@ fn plan_set_expr(
             ) -> Result<(HirRelationExpr, Scope), PlanError> {
                 let rows = vec![plan.row.iter().collect::<Vec<_>>()];
                 let desc = desc.relation_desc.expect("must exist");
-                let expr = HirRelationExpr::constant(rows, desc.typ().clone());
                 let scope = Scope::from_source(None, desc.iter_names());
+                let expr = HirRelationExpr::constant(rows, desc.into_typ());
                 Ok((expr, scope))
             }
 
@@ -4490,7 +4498,12 @@ fn plan_like(
             expr_func::LikeEscape,
         );
     }
-    let like = haystack.call_binary(pattern, BinaryFunc::IsLikeMatch { case_insensitive });
+    let func: BinaryFunc = if case_insensitive {
+        expr_func::IsLikeMatchCaseInsensitive.into()
+    } else {
+        expr_func::IsLikeMatchCaseSensitive.into()
+    };
+    let like = haystack.call_binary(pattern, func);
     if not {
         Ok(like.call_unary(UnaryFunc::Not(expr_func::Not)))
     } else {
@@ -4535,7 +4548,7 @@ fn plan_subscript_jsonb(
             },
             exprs,
         ),
-        BinaryFunc::JsonbGetPath,
+        expr_func::JsonbGetPath,
     );
     Ok(expr.into())
 }
@@ -6559,16 +6572,22 @@ impl<'a> QueryContext<'a> {
                 version,
                 ..
             } => {
-                let name = full_name.into();
                 let item = self.scx.get_item(&id).at_version(version);
-                let desc = item
-                    .desc(&self.scx.catalog.resolve_full_name(item.name()))?
-                    .clone();
+                let desc = match item.relation_desc() {
+                    Some(desc) => desc.clone(),
+                    None => {
+                        return Err(PlanError::InvalidDependency {
+                            name: full_name.to_string(),
+                            item_type: item.item_type(),
+                        });
+                    }
+                };
                 let expr = HirRelationExpr::Get {
                     id: Id::Global(item.global_id()),
                     typ: desc.typ().clone(),
                 };
 
+                let name = full_name.into();
                 let scope = Scope::from_source(Some(name), desc.iter_names().cloned());
 
                 Ok((expr, scope))

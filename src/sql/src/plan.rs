@@ -193,6 +193,7 @@ pub enum Plan {
     AlterRole(AlterRolePlan),
     AlterOwner(AlterOwnerPlan),
     AlterTableAddColumn(AlterTablePlan),
+    AlterMaterializedViewApplyReplacement(AlterMaterializedViewApplyReplacementPlan),
     AlterNetworkPolicy(AlterNetworkPolicyPlan),
     Declare(DeclarePlan),
     Fetch(FetchPlan),
@@ -253,6 +254,10 @@ impl Plan {
             StatementKind::AlterTableAddColumn => {
                 &[PlanKind::AlterNoop, PlanKind::AlterTableAddColumn]
             }
+            StatementKind::AlterMaterializedViewApplyReplacement => &[
+                PlanKind::AlterNoop,
+                PlanKind::AlterMaterializedViewApplyReplacement,
+            ],
             StatementKind::Close => &[PlanKind::Close],
             StatementKind::Comment => &[PlanKind::Comment],
             StatementKind::Commit => &[PlanKind::CommitTransaction],
@@ -291,7 +296,8 @@ impl Plan {
             StatementKind::Execute => &[PlanKind::Execute],
             StatementKind::ExplainPlan => &[PlanKind::ExplainPlan],
             StatementKind::ExplainPushdown => &[PlanKind::ExplainPushdown],
-            StatementKind::ExplainAnalyze => &[PlanKind::Select],
+            StatementKind::ExplainAnalyzeObject => &[PlanKind::Select],
+            StatementKind::ExplainAnalyzeCluster => &[PlanKind::Select],
             StatementKind::ExplainTimestamp => &[PlanKind::ExplainTimestamp],
             StatementKind::ExplainSinkSchema => &[PlanKind::ExplainSinkSchema],
             StatementKind::Fetch => &[PlanKind::Fetch],
@@ -444,6 +450,9 @@ impl Plan {
                 ObjectType::NetworkPolicy => "alter network policy owner",
             },
             Plan::AlterTableAddColumn(_) => "alter table add column",
+            Plan::AlterMaterializedViewApplyReplacement(_) => {
+                "alter materialized view apply replacement"
+            }
             Plan::Declare(_) => "declare",
             Plan::Fetch(_) => "fetch",
             Plan::Close(_) => "close",
@@ -854,7 +863,7 @@ pub struct SelectPlan {
     pub when: QueryWhen,
     /// Instructions how to form the result set.
     pub finishing: RowSetFinishing,
-    /// For `COPY TO`, the format to use.
+    /// For `COPY TO STDOUT`, the format to use.
     pub copy_to: Option<CopyFormat>,
 }
 
@@ -986,6 +995,10 @@ pub enum CopyFromFilter {
     Pattern(String),
 }
 
+/// `COPY TO S3`
+///
+/// (This is a completely different thing from `COPY TO STDOUT`. That is a `Plan::Select` with
+/// `copy_to` set.)
 #[derive(Debug, Clone)]
 pub struct CopyToPlan {
     /// The select query plan whose data will be copied to destination uri.
@@ -1324,6 +1337,12 @@ pub struct AlterTablePlan {
 }
 
 #[derive(Debug)]
+pub struct AlterMaterializedViewApplyReplacementPlan {
+    pub id: CatalogItemId,
+    pub replacement_id: CatalogItemId,
+}
+
+#[derive(Debug)]
 pub struct DeclarePlan {
     pub name: String,
     pub stmt: Statement<Raw>,
@@ -1547,11 +1566,10 @@ impl WebhookValidation {
         );
 
         match tokio::time::timeout(Self::MAX_REDUCE_TIME, reduce_task).await {
-            Ok(Ok(reduced_expr)) => {
+            Ok(reduced_expr) => {
                 *expression = reduced_expr;
                 Ok(())
             }
-            Ok(Err(_)) => Err("joining task"),
             Err(_) => Err("timeout"),
         }
     }
@@ -1785,6 +1803,7 @@ pub struct Sink {
     // TODO(guswynn): this probably should just be in the `connection`.
     pub envelope: SinkEnvelope,
     pub version: u64,
+    pub commit_interval: Option<Duration>,
 }
 
 #[derive(Clone, Debug)]
@@ -1811,6 +1830,7 @@ pub struct MaterializedView {
     pub dependencies: DependencyIds,
     /// Columns of this view.
     pub column_names: Vec<ColumnName>,
+    pub replacement_target: Option<CatalogItemId>,
     /// Cluster this materialized view will get installed on.
     pub cluster_id: ClusterId,
     pub non_null_assertions: Vec<usize>,

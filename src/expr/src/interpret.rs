@@ -688,11 +688,11 @@ impl SpecialBinary {
         }
 
         match func {
-            BinaryFunc::JsonbGetString => Some(SpecialBinary {
+            BinaryFunc::JsonbGetString(_) => Some(SpecialBinary {
                 map_fn: |l, r| jsonb_get_string(l, r, false),
                 pushdownable: (true, false),
             }),
-            BinaryFunc::JsonbGetStringStringify => Some(SpecialBinary {
+            BinaryFunc::JsonbGetStringStringify(_) => Some(SpecialBinary {
                 map_fn: |l, r| jsonb_get_string(l, r, true),
                 pushdownable: (true, false),
             }),
@@ -1180,8 +1180,8 @@ mod tests {
             Lte.into(),
             Gte.into(),
             DateTruncUnitsTimestamp.into(),
-            BinaryFunc::JsonbGetString,
-            BinaryFunc::JsonbGetStringStringify,
+            JsonbGetString.into(),
+            JsonbGetStringStringify.into(),
         ]
     }
 
@@ -1203,7 +1203,7 @@ mod tests {
                         .scalar_type
                         .base_eq(&SqlScalarType::Timestamp { precision: None })
             }
-            JsonbGetString | JsonbGetStringStringify => {
+            JsonbGetString(_) | JsonbGetStringStringify(_) => {
                 arg0.scalar_type.base_eq(&SqlScalarType::Jsonb)
                     && arg1.scalar_type.base_eq(&SqlScalarType::String)
             }
@@ -1570,17 +1570,15 @@ mod tests {
     fn test_jsonb() {
         let arena = RowArena::new();
 
-        let expr = MirScalarExpr::CallUnary {
-            func: UnaryFunc::CastJsonbToNumeric(CastJsonbToNumeric(None)),
-            expr: Box::new(MirScalarExpr::CallBinary {
-                func: BinaryFunc::JsonbGetString,
-                expr1: Box::new(MirScalarExpr::column(0)),
-                expr2: Box::new(MirScalarExpr::Literal(
+        let expr = MirScalarExpr::column(0)
+            .call_binary(
+                MirScalarExpr::Literal(
                     Ok(Row::pack_slice(&["ts".into()])),
                     SqlScalarType::String.nullable(false),
-                )),
-            }),
-        };
+                ),
+                JsonbGetString,
+            )
+            .call_unary(CastJsonbToNumeric(None));
 
         let relation = SqlRelationType::new(vec![SqlScalarType::Jsonb.nullable(true)]);
         let mut interpreter = ColumnSpecs::new(&relation, &arena);

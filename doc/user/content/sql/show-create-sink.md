@@ -11,7 +11,7 @@ menu:
 ## Syntax
 
 ```sql
-SHOW [REDACTED] CREATE SINK <sink_name>
+SHOW [REDACTED] CREATE SINK <sink_name>;
 ```
 
 {{< yaml-table data="show_create_redacted_option" >}}

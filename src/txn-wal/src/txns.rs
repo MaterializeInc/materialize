@@ -14,7 +14,7 @@ use std::fmt::Debug;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
@@ -117,7 +117,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Monoid + Ord + Codec64 + Send + Sync,
     O: Opaque + Debug + Codec64,
     C: TxnsCodec,
 {
@@ -220,7 +220,12 @@ where
             // schema registered. Importantly, we must register a data shard's
             // schema _before_ we publish it to the txns shard.
             for data_write in &mut data_writes {
-                data_write.ensure_schema_registered().await;
+                // Note that if this fails we'll bail out farther down in any case,
+                // so we might as well fail fast.
+                data_write
+                    .try_register_schema()
+                    .await
+                    .expect("schema should be registered");
             }
 
             let updates = data_writes
@@ -702,6 +707,17 @@ where
         .await
     }
 
+    /// Upgrade the version on the backing shard.
+    ///
+    /// In practice, this will likely only be called from the singleton
+    /// controller process.
+    pub async fn upgrade_version(&mut self) {
+        self.txns_since
+            .upgrade_version()
+            .await
+            .expect("invalid usage")
+    }
+
     /// Returns the [ShardId] of the txns shard.
     pub fn txns_id(&self) -> ShardId {
         self.txns_write.shard_id()
@@ -755,7 +771,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     async fn open_data_write_for_apply(&self, data_id: ShardId) -> DataWriteApply<K, V, T, D> {
         let diagnostics = Diagnostics::from_purpose("txn data");
@@ -892,7 +908,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
-    D: Semigroup + Ord + Codec64 + Send + Sync,
+    D: Monoid + Ord + Codec64 + Send + Sync,
 {
     pub(crate) async fn maybe_replace_with_batch_schema(&mut self, batches: &[Batch<K, V, T, D>]) {
         // TODO: Remove this once everything is rolled out and we're sure it's
@@ -1604,7 +1620,7 @@ mod tests {
         let mut max_ts = 0;
         let mut reads = Vec::new();
         for worker in workers {
-            let (t, mut r) = worker.await.unwrap();
+            let (t, mut r) = worker.await;
             max_ts = std::cmp::max(max_ts, t);
             reads.append(&mut r);
         }
@@ -1622,7 +1638,7 @@ mod tests {
             info!("now waiting for reads {}", max_ts);
             for (tx, data_id, as_of, subscribe) in reads {
                 let _ = tx.send(max_ts + 1);
-                let output = subscribe.await.unwrap();
+                let output = subscribe.await;
                 log.assert_eq(data_id, as_of, max_ts + 1, output);
             }
         })
@@ -1689,7 +1705,8 @@ mod tests {
             txn.write(&d0, "bar".into(), (), 1).await;
             // This panics.
             let _ = txn.commit_at(&mut txns1, 3).await;
-        });
+        })
+        .into_tokio_handle();
         assert!(res.await.is_err());
 
         // Forgetting the data shard removes it, so we don't leave the schema

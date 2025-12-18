@@ -13,7 +13,7 @@ use std::ops::DerefMut;
 use std::rc::Rc;
 
 use differential_dataflow::consolidation::consolidate_updates;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use mz_compute_client::protocol::response::{SubscribeBatch, SubscribeResponse};
 use mz_compute_types::sinks::{ComputeSinkDesc, SubscribeSinkConnection};
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
@@ -41,9 +41,9 @@ where
         sink_id: GlobalId,
         as_of: Antichain<Timestamp>,
         _start_signal: StartSignal,
-        sinked_collection: Collection<G, Row, Diff>,
-        err_collection: Collection<G, DataflowError, Diff>,
-        _ct_times: Option<Collection<G, (), Diff>>,
+        sinked_collection: VecCollection<G, Row, Diff>,
+        err_collection: VecCollection<G, DataflowError, Diff>,
+        _ct_times: Option<VecCollection<G, (), Diff>>,
         output_probe: &Handle<Timestamp>,
     ) -> Option<Rc<dyn Any>> {
         // An encapsulation of the Subscribe response protocol.
@@ -83,8 +83,8 @@ where
 }
 
 fn subscribe<G>(
-    sinked_collection: Collection<G, Row, Diff>,
-    err_collection: Collection<G, DataflowError, Diff>,
+    sinked_collection: VecCollection<G, Row, Diff>,
+    err_collection: VecCollection<G, DataflowError, Diff>,
     sink_id: GlobalId,
     with_snapshot: bool,
     as_of: Antichain<G::Timestamp>,

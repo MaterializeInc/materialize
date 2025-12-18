@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n    sqlname = \"=\",\n    propagates_nulls = true,\n    negate = \"Some(NotEq.into())\"\n)]\nfn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {\n    if a == Datum::Null || b == Datum::Null { Datum::Null } else { Datum::from(a == b) }\n}\n"
+expression: "#[sqlfunc(is_infix_op = true, sqlname = \"=\", negate = \"Some(NotEq.into())\")]\nfn eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {\n    a == b\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -17,9 +17,9 @@ expression: "#[sqlfunc(\n    output_type = \"bool\",\n    is_infix_op = true,\n 
 )]
 pub struct Eq;
 impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Eq {
-    type Input1 = Datum<'a>;
-    type Input2 = Datum<'a>;
-    type Output = Datum<'a>;
+    type Input1 = ExcludeNull<Datum<'a>>;
+    type Input2 = ExcludeNull<Datum<'a>>;
+    type Output = bool;
     fn call(
         &self,
         a: Self::Input1,
@@ -34,7 +34,7 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Eq {
         input_type_b: mz_repr::SqlColumnType,
     ) -> mz_repr::SqlColumnType {
         use mz_repr::AsColumnType;
-        let output = <bool>::as_column_type();
+        let output = Self::Output::as_column_type();
         let propagates_nulls = crate::func::binary::EagerBinaryFunc::propagates_nulls(
             self,
         );
@@ -46,17 +46,11 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for Eq {
                         && (input_type_a.nullable || input_type_b.nullable)),
             )
     }
-    fn introduces_nulls(&self) -> bool {
-        <bool as ::mz_repr::DatumType<'_, ()>>::nullable()
-    }
     fn is_infix_op(&self) -> bool {
         true
     }
     fn negate(&self) -> Option<crate::BinaryFunc> {
         Some(NotEq.into())
-    }
-    fn propagates_nulls(&self) -> bool {
-        true
     }
 }
 impl std::fmt::Display for Eq {
@@ -64,6 +58,6 @@ impl std::fmt::Display for Eq {
         f.write_str("=")
     }
 }
-fn eq<'a>(a: Datum<'a>, b: Datum<'a>) -> Datum<'a> {
-    if a == Datum::Null || b == Datum::Null { Datum::Null } else { Datum::from(a == b) }
+fn eq<'a>(a: ExcludeNull<Datum<'a>>, b: ExcludeNull<Datum<'a>>) -> bool {
+    a == b
 }

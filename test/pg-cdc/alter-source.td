@@ -203,9 +203,9 @@ INSERT INTO table_e VALUES (3, 'three');
 3
 4
 
-> SHOW MATERIALIZED VIEWS
-mv_e quickstart ""
-mv_f quickstart ""
+> SELECT name FROM mz_materialized_views
+mv_e
+mv_f
 
 # RESTRICT works
 ! DROP TABLE table_e RESTRICT;
@@ -226,7 +226,7 @@ contains:cannot drop table "table_e": still depended upon by materialized view "
 > SHOW TABLES
 table_g               ""
 
-> SHOW MATERIALIZED VIEWS
+> SELECT name FROM mz_materialized_views
 
 > DROP TABLE table_g;
 

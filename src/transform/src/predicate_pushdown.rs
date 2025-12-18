@@ -31,7 +31,7 @@
 //! use mz_ore::id_gen::IdGen;
 //! use mz_repr::{SqlColumnType, Datum, SqlRelationType, SqlScalarType};
 //! use mz_repr::optimize::OptimizerFeatures;
-//! use mz_transform::{typecheck, Transform, TransformCtx};
+//! use mz_transform::{reprtypecheck, typecheck,Transform, TransformCtx};
 //! use mz_transform::dataflow::DataflowMetainfo;
 //!
 //! use mz_transform::predicate_pushdown::PredicatePushdown;
@@ -65,8 +65,9 @@
 //!
 //! let features = OptimizerFeatures::default();
 //! let typecheck_ctx = typecheck::empty_context();
+//! let repr_typecheck_ctx = reprtypecheck::empty_context();
 //! let mut df_meta = DataflowMetainfo::default();
-//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &mut df_meta, None, None);
+//! let mut transform_ctx = TransformCtx::local(&features, &typecheck_ctx, &repr_typecheck_ctx, &mut df_meta, None, None);
 //!
 //! PredicatePushdown::default().transform(&mut expr, &mut transform_ctx);
 //!
@@ -343,7 +344,7 @@ impl PredicatePushdown {
                             }
 
                             if !push_down.is_empty() {
-                                *inner = Box::new(inner.take_dangerous().filter(push_down));
+                                **inner = inner.take_dangerous().filter(push_down);
                             }
                             self.action(inner, get_predicates)?;
 
@@ -387,7 +388,7 @@ impl PredicatePushdown {
                             std::mem::swap(&mut retain, predicates);
 
                             if !push_down.is_empty() {
-                                *input = Box::new(input.take_dangerous().filter(push_down));
+                                **input = input.take_dangerous().filter(push_down);
                             }
 
                             self.action(input, get_predicates)?;
@@ -454,7 +455,7 @@ impl PredicatePushdown {
                         }
                         MirRelationExpr::Union { base, inputs } => {
                             let predicates = std::mem::take(predicates);
-                            *base = Box::new(base.take_dangerous().filter(predicates.clone()));
+                            **base = base.take_dangerous().filter(predicates.clone());
                             self.action(base, get_predicates)?;
                             for input in inputs {
                                 *input = input.take_dangerous().filter(predicates.clone());

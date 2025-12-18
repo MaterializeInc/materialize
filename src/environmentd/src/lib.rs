@@ -209,6 +209,9 @@ pub struct Config {
     // === Testing options. ===
     /// A now generation function for mocking time.
     pub now: NowFn,
+    /// If `Some`, force running builtin schema migration using the specified
+    /// migration mechanism ("evolution" or "replacement").
+    pub force_builtin_schema_migration: Option<String>,
 }
 
 /// Configuration for the Catalog.
@@ -467,13 +470,16 @@ impl Listeners {
         let system_parameter_sync_config =
             match (config.launchdarkly_sdk_key, config.config_sync_file_path) {
                 (None, None) => None,
-                (None, Some(f)) => Some(SystemParameterSyncConfig::new(
-                    config.environment_id.clone(),
-                    &BUILD_INFO,
-                    &config.metrics_registry,
-                    config.launchdarkly_key_map,
-                    SystemParameterSyncClientConfig::File { path: f },
-                )),
+                (None, Some(f)) => {
+                    info!("Using config file path {:?}", f);
+                    Some(SystemParameterSyncConfig::new(
+                        config.environment_id.clone(),
+                        &BUILD_INFO,
+                        &config.metrics_registry,
+                        config.launchdarkly_key_map,
+                        SystemParameterSyncClientConfig::File { path: f },
+                    ))
+                }
                 (Some(key), None) => Some(SystemParameterSyncConfig::new(
                     config.environment_id.clone(),
                     &BUILD_INFO,
@@ -786,6 +792,7 @@ impl Listeners {
             helm_chart_version: config.helm_chart_version.clone(),
             license_key: config.license_key,
             external_login_password_mz_system: config.external_login_password_mz_system,
+            force_builtin_schema_migration: config.force_builtin_schema_migration,
         })
         .instrument(info_span!("adapter::serve"))
         .await?;

@@ -179,7 +179,7 @@ impl KafkaSourceConnection {
                 Ok(current_upper)
             }
         })
-        .await?
+        .await
     }
 }
 

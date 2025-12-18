@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 darling = "0.20.11"
-insta = { version = "1.43", optional = true, features = ["serde"] }
+insta = { version = "1.44", optional = true, features = ["serde"] }
 prettyplease = { version = "0.2", optional = true }
 proc-macro2 = "1.0"
 quote = "1.0"
@@ -19,7 +19,7 @@ syn = { version = "2.0", features = ["extra-traits"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
 [dev-dependencies]
-insta = { version = "1.43", features = ["serde"] }
+insta = { version = "1.44", features = ["serde"] }
 mz-ore = { path = "../ore", features = ["test"] }
 prettyplease = "0.2"
 

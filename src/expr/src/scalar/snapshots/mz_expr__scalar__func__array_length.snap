@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-expression: "#[sqlfunc(\n    is_infix_op = true,\n    sqlname = \"array_length\",\n    propagates_nulls = true,\n    introduces_nulls = true\n)]\nfn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {\n    let i = match usize::try_from(b) {\n        Ok(0) | Err(_) => return Ok(None),\n        Ok(n) => n - 1,\n    };\n    Ok(\n        match a.dims().into_iter().nth(i) {\n            None => None,\n            Some(dim) => {\n                Some(\n                    dim\n                        .length\n                        .try_into()\n                        .map_err(|_| EvalError::Int32OutOfRange(\n                            dim.length.to_string().into(),\n                        ))?,\n                )\n            }\n        },\n    )\n}\n"
+expression: "#[sqlfunc(sqlname = \"array_length\", propagates_nulls = true, introduces_nulls = true)]\nfn array_length<'a>(a: Array<'a>, b: i64) -> Result<Option<i32>, EvalError> {\n    let i = match usize::try_from(b) {\n        Ok(0) | Err(_) => return Ok(None),\n        Ok(n) => n - 1,\n    };\n    Ok(\n        match a.dims().into_iter().nth(i) {\n            None => None,\n            Some(dim) => {\n                Some(\n                    dim\n                        .length\n                        .try_into()\n                        .map_err(|_| EvalError::Int32OutOfRange(\n                            dim.length.to_string().into(),\n                        ))?,\n                )\n            }\n        },\n    )\n}\n"
 ---
 #[derive(
     proptest_derive::Arbitrary,
@@ -47,9 +47,6 @@ impl<'a> crate::func::binary::EagerBinaryFunc<'a> for ArrayLength {
             )
     }
     fn introduces_nulls(&self) -> bool {
-        true
-    }
-    fn is_infix_op(&self) -> bool {
         true
     }
     fn propagates_nulls(&self) -> bool {

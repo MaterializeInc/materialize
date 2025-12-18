@@ -45,8 +45,7 @@ use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
 use mz_ore::task;
 use mz_ore::tracing::{
-    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingGuard,
-    TracingHandle,
+    OpenTelemetryConfig, StderrLogConfig, StderrLogFormat, TracingConfig, TracingHandle,
 };
 use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
@@ -270,12 +269,14 @@ impl TestHarness {
 
     /// Starts a runtime and returns a [`TestServerWithRuntime`].
     pub fn start_blocking(self) -> TestServerWithRuntime {
-        stacker::grow(mz_ore::stack::STACK_SIZE, || {
-            let runtime = Runtime::new().expect("failed to spawn runtime for test");
-            let runtime = Arc::new(runtime);
-            let server = runtime.block_on(self.start());
-            TestServerWithRuntime { runtime, server }
-        })
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(mz_ore::stack::STACK_SIZE)
+            .build()
+            .expect("failed to spawn runtime for test");
+        let runtime = Arc::new(runtime);
+        let server = runtime.block_on(self.start());
+        TestServerWithRuntime { runtime, server }
     }
 
     pub fn data_directory(mut self, data_directory: impl Into<PathBuf>) -> Self {
@@ -680,7 +681,7 @@ impl Listeners {
             orchestrator,
             config.orchestrator_tracing_cli_args,
         ));
-        let (tracing_handle, tracing_guard) = if config.enable_tracing {
+        let tracing_handle = if config.enable_tracing {
             let config = TracingConfig::<fn(&tracing::Metadata) -> sentry_tracing::EventFilter> {
                 service_name: "environmentd",
                 stderr_log: StderrLogConfig {
@@ -705,10 +706,9 @@ impl Listeners {
                 registry: metrics_registry.clone(),
                 capture: config.capture,
             };
-            let (tracing_handle, tracing_guard) = mz_ore::tracing::configure(config).await?;
-            (tracing_handle, Some(tracing_guard))
+            mz_ore::tracing::configure(config).await?
         } else {
-            (TracingHandle::disabled(), None)
+            TracingHandle::disabled()
         };
         let host_name = format!(
             "localhost:{}",
@@ -792,6 +792,7 @@ impl Listeners {
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
+                force_builtin_schema_migration: None,
             })
             .await?;
 
@@ -800,7 +801,6 @@ impl Listeners {
             metrics_registry,
             _temp_dir: temp_dir,
             _scratch_dir: scratch_dir,
-            _tracing_guard: tracing_guard,
         })
     }
 }
@@ -812,7 +812,6 @@ pub struct TestServer {
     /// The `TempDir`s are saved to prevent them from being dropped, and thus cleaned up too early.
     _temp_dir: Option<TempDir>,
     _scratch_dir: TempDir,
-    _tracing_guard: Option<TracingGuard>,
 }
 
 impl TestServer {
@@ -826,6 +825,17 @@ impl TestServer {
         for flag in flags {
             internal_client
                 .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .await
+                .unwrap();
+        }
+    }
+
+    pub async fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let internal_client = self.connect().internal().await.unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
                 .await
                 .unwrap();
         }
@@ -1158,6 +1168,17 @@ impl TestServerWithRuntime {
         for flag in flags {
             internal_client
                 .batch_execute(&format!("ALTER SYSTEM SET {} = true;", flag))
+                .unwrap();
+        }
+    }
+
+    /// Disable LaunchDarkly feature flags.
+    pub fn disable_feature_flags(&self, flags: &[&'static str]) {
+        let mut internal_client = self.connect_internal(postgres::NoTls).unwrap();
+
+        for flag in flags {
+            internal_client
+                .batch_execute(&format!("ALTER SYSTEM SET {} = false;", flag))
                 .unwrap();
         }
     }
@@ -1509,7 +1530,8 @@ pub fn auth_with_ws(
                 password: "".into(),
                 options,
             })
-            .unwrap(),
+            .unwrap()
+            .into(),
         ),
     )
 }

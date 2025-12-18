@@ -17,7 +17,8 @@ use tracing::Span;
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::command::ExecuteResponse;
-use crate::coord::sequencer::inner::{check_log_reads, return_if_err};
+use crate::coord::sequencer::inner::return_if_err;
+use crate::coord::sequencer::{check_log_reads, emit_optimizer_notices};
 use crate::coord::{
     Coordinator, Message, PlanValidity, StageResult, Staged, SubscribeFinish, SubscribeOptimizeMir,
     SubscribeStage, SubscribeTimestampOptimizeLir, TargetCluster,
@@ -44,9 +45,7 @@ impl Staged for SubscribeStage {
         ctx: &mut ExecuteContext,
     ) -> Result<StageResult<Box<Self>>, AdapterError> {
         match self {
-            SubscribeStage::OptimizeMir(stage) => {
-                coord.subscribe_optimize_mir(ctx.session(), stage)
-            }
+            SubscribeStage::OptimizeMir(stage) => coord.subscribe_optimize_mir(stage),
             SubscribeStage::TimestampOptimizeLir(stage) => {
                 coord.subscribe_timestamp_optimize_lir(ctx, stage).await
             }
@@ -84,7 +83,7 @@ impl Coordinator {
 
     #[instrument]
     fn subscribe_validate(
-        &mut self,
+        &self,
         session: &mut Session,
         plan: plan::SubscribePlan,
         target_cluster: TargetCluster,
@@ -170,8 +169,7 @@ impl Coordinator {
 
     #[instrument]
     fn subscribe_optimize_mir(
-        &mut self,
-        session: &Session,
+        &self,
         SubscribeOptimizeMir {
             mut validity,
             plan,
@@ -193,7 +191,6 @@ impl Coordinator {
             .expect("compute instance does not exist");
         let (_, view_id) = self.allocate_transient_id();
         let (_, sink_id) = self.allocate_transient_id();
-        let conn_id = session.conn_id().clone();
         let debug_name = format!("subscribe-{}", sink_id);
         let optimizer_config = optimize::OptimizerConfig::from(self.catalog().system_config())
             .override_from(&self.catalog.get_cluster(cluster_id).config.features());
@@ -204,7 +201,6 @@ impl Coordinator {
             compute_instance,
             view_id,
             sink_id,
-            Some(conn_id),
             *with_snapshot,
             *up_to,
             debug_name,
@@ -287,7 +283,7 @@ impl Coordinator {
             }
         }
 
-        self.store_transaction_read_holds(ctx.session(), read_holds);
+        self.store_transaction_read_holds(ctx.session().conn_id().clone(), read_holds);
 
         let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
 
@@ -356,7 +352,7 @@ impl Coordinator {
         let (df_desc, df_meta) = global_lir_plan.unapply();
 
         // Emit notices.
-        self.emit_optimizer_notices(ctx.session(), &df_meta.optimizer_notices);
+        emit_optimizer_notices(&*self.catalog, ctx.session(), &df_meta.optimizer_notices);
 
         // Add metadata for the new SUBSCRIBE.
         let write_notify_fut = self

@@ -8,6 +8,7 @@ menu:
     identifier: 'concepts-indexes'
 aliases:
   - /get-started/key-concepts/#indexes
+  - /self-managed/v25.1/concepts/indexes/
 ---
 
 ## Overview

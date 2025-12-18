@@ -11,7 +11,7 @@
     "@babel/preset-env": "^7.9.5",
     "@babel/preset-typescript": "^7.9.0",
     "@types/jest": "^27.0.0",
-    "@types/pg": "^8.15.6",
+    "@types/pg": "^8.16.0",
     "babel-jest": "^27.0.0",
     "jest": "^27.0.0",
     "pg": "^8.16.3",

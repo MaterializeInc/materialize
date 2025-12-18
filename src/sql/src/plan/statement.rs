@@ -126,6 +126,9 @@ pub fn describe(
         Statement::AlterCluster(stmt) => ddl::describe_alter_cluster_set_options(&scx, stmt)?,
         Statement::AlterConnection(stmt) => ddl::describe_alter_connection(&scx, stmt)?,
         Statement::AlterIndex(stmt) => ddl::describe_alter_index_options(&scx, stmt)?,
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::describe_alter_materialized_view_apply_replacement(&scx, stmt)?
+        }
         Statement::AlterObjectRename(stmt) => ddl::describe_alter_object_rename(&scx, stmt)?,
         Statement::AlterObjectSwap(stmt) => ddl::describe_alter_object_swap(&scx, stmt)?,
         Statement::AlterRetainHistory(stmt) => ddl::describe_alter_retain_history(&scx, stmt)?,
@@ -231,7 +234,10 @@ pub fn describe(
         Statement::Delete(stmt) => dml::describe_delete(&scx, stmt)?,
         Statement::ExplainPlan(stmt) => dml::describe_explain_plan(&scx, stmt)?,
         Statement::ExplainPushdown(stmt) => dml::describe_explain_pushdown(&scx, stmt)?,
-        Statement::ExplainAnalyze(stmt) => dml::describe_explain_analyze(&scx, stmt)?,
+        Statement::ExplainAnalyzeObject(stmt) => dml::describe_explain_analyze_object(&scx, stmt)?,
+        Statement::ExplainAnalyzeCluster(stmt) => {
+            dml::describe_explain_analyze_cluster(&scx, stmt)?
+        }
         Statement::ExplainTimestamp(stmt) => dml::describe_explain_timestamp(&scx, stmt)?,
         Statement::ExplainSinkSchema(stmt) => dml::describe_explain_schema(&scx, stmt)?,
         Statement::Insert(stmt) => dml::describe_insert(&scx, stmt)?,
@@ -319,6 +325,9 @@ pub fn plan(
         Statement::AlterCluster(stmt) => ddl::plan_alter_cluster(scx, stmt),
         Statement::AlterConnection(stmt) => ddl::plan_alter_connection(scx, stmt),
         Statement::AlterIndex(stmt) => ddl::plan_alter_index_options(scx, stmt),
+        Statement::AlterMaterializedViewApplyReplacement(stmt) => {
+            ddl::plan_alter_materialized_view_apply_replacement(scx, stmt)
+        }
         Statement::AlterObjectRename(stmt) => ddl::plan_alter_object_rename(scx, stmt),
         Statement::AlterObjectSwap(stmt) => ddl::plan_alter_object_swap(scx, stmt),
         Statement::AlterRetainHistory(stmt) => ddl::plan_alter_retain_history(scx, stmt),
@@ -369,7 +378,12 @@ pub fn plan(
         Statement::Delete(stmt) => dml::plan_delete(scx, stmt, params),
         Statement::ExplainPlan(stmt) => dml::plan_explain_plan(scx, stmt, params),
         Statement::ExplainPushdown(stmt) => dml::plan_explain_pushdown(scx, stmt, params),
-        Statement::ExplainAnalyze(stmt) => dml::plan_explain_analyze(scx, stmt, params),
+        Statement::ExplainAnalyzeObject(stmt) => {
+            dml::plan_explain_analyze_object(scx, stmt, params)
+        }
+        Statement::ExplainAnalyzeCluster(stmt) => {
+            dml::plan_explain_analyze_cluster(scx, stmt, params)
+        }
         Statement::ExplainTimestamp(stmt) => dml::plan_explain_timestamp(scx, stmt),
         Statement::ExplainSinkSchema(stmt) => dml::plan_explain_schema(scx, stmt),
         Statement::Insert(stmt) => dml::plan_insert(scx, stmt, params),
@@ -613,16 +627,12 @@ impl<'a> StatementContext<'a> {
         &self,
         name: PartialItemName,
     ) -> Result<QualifiedItemName, PlanError> {
-        if let Some(name) = name.schema {
-            if name
-                != self
-                    .get_schema(
-                        &ResolvedDatabaseSpecifier::Ambient,
-                        &SchemaSpecifier::Temporary,
-                    )
-                    .name()
-                    .schema
-            {
+        // Compare against the MZ_TEMP_SCHEMA constant directly instead of calling
+        // get_schema(), because with lazy temporary schema creation, the temp
+        // schema may not exist yet. (This is similar to what `allocate_temporary_full_name` was
+        // doing already before making temporary schemas lazy.)
+        if let Some(schema_name) = name.schema {
+            if schema_name != mz_repr::namespaces::MZ_TEMP_SCHEMA {
                 return Err(PlanError::InvalidTemporarySchema);
             }
         }
@@ -1041,6 +1051,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::AlterCluster(_) => DDL,
             Statement::AlterConnection(_) => DDL,
             Statement::AlterIndex(_) => DDL,
+            Statement::AlterMaterializedViewApplyReplacement(_) => DDL,
             Statement::AlterObjectRename(_) => DDL,
             Statement::AlterObjectSwap(_) => DDL,
             Statement::AlterNetworkPolicy(_) => DDL,
@@ -1091,7 +1102,8 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Delete(_) => DML,
             Statement::ExplainPlan(_) => DML,
             Statement::ExplainPushdown(_) => DML,
-            Statement::ExplainAnalyze(_) => DML,
+            Statement::ExplainAnalyzeObject(_) => DML,
+            Statement::ExplainAnalyzeCluster(_) => DML,
             Statement::ExplainTimestamp(_) => DML,
             Statement::ExplainSinkSchema(_) => DML,
             Statement::Insert(_) => DML,

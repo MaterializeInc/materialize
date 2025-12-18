@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! The compute protocol defines the communication between the compute controller and indiviual
+//! The compute protocol defines the communication between the compute controller and individual
 //! compute replicas.
 //!
 //! # Overview
@@ -21,7 +21,7 @@
 //! gracefully handle messages that don’t reflect the state of the world described by the messages
 //! they have previously sent. In other words, messages sent take effect only eventually. For
 //! example, after the compute controller has instructed the replica to cancel a peek (by sending a
-//! [`CancelPeek`] command, it must still be ready to accept non-[`Canceled`] responses to the
+//! [`CancelPeek`] command), it must still be ready to accept non-[`Canceled`] responses to the
 //! peek. Similarly, if a replica receives a [`CancelPeek`] command for a peek it has already
 //! answered, it must handle that command gracefully (e.g., by ignoring it).
 //!
@@ -39,12 +39,11 @@
 //!
 //! # Protocol Stages
 //!
-//! The compute protocol consists of four stages that must be transitioned in order:
+//! The compute protocol consists of three stages that must be transitioned in order:
 //!
 //!   1. Creation
 //!   2. Initialization
-//!   3. Computation (read-only)
-//!   4. Computation (read-write)
+//!   3. Computation
 //!
 //! ## Creation Stage
 //!
@@ -74,21 +73,17 @@
 //! The replica may send responses to computation commands it receives. It may also opt to defer
 //! sending responses to the computation stages instead.
 //!
-//! ## Computation Stage (read-only)
+//! ## Computation Stage
 //!
 //! This computation stage begins as soon as the compute controller has sent the
 //! [`InitializationComplete`] command. In this stage, the compute controller instructs the replica
 //! to create and maintain dataflows, and to perform peeks on indexes exported by dataflows.
 //!
-//! While in the read-only computation stage, the replica must not affect
-//! changes to external systems (writes). For the most part this means it cannot
-//! write to persist. The replica can transition out of the read-only stage when
-//! receiving an [`AllowWrites`] command.
-//!
 //! The compute controller may send any number of computation commands:
 //!
 //!   - [`CreateDataflow`]
 //!   - [`Schedule`]
+//!   - [`AllowWrites`]
 //!   - [`AllowCompaction`]
 //!   - [`Peek`]
 //!   - [`CancelPeek`]
@@ -101,13 +96,23 @@
 //! The replica must send the required responses to computation commands. This includes commands it
 //! has received in the initialization phase that have not already been responded to.
 //!
-//! ## Computation Stage (read-write)
+//! # Read-only and read-write dataflows
 //!
-//! The read-write computation stage is exactly like the read-only computation stage, with the
-//! addition that now the replica _can_ affect writes to external systems. This stage begins once
-//! the controller has sent the [`AllowWrites`] command.
+//! All dataflows are initially read-only. While in read-only mode, the dataflow must not affect
+//! changes to external systems (writes). For the most part this means it cannot
+//! write to persist. The dataflow can transition out of read-only mode when
+//! receiving an [`AllowWrites`] command.
 //!
-//! The replica cannot transition back to the read-only computation stage from the read-write stage.
+//! The read-write mode is exactly like the read-only mode, with the
+//! addition that now the dataflow _can_ affect writes to external systems. This mode begins once
+//! the controller has sent the [`AllowWrites`] command for a specific collection.
+//!
+//! A dataflow cannot transition back to read-only mode from read-write mode.
+//!
+//! Note that the controller manages dataflows implicitly by their exports. If a dataflow
+//! had multiple exports, the controller would allow writes for each of them separately.
+//! This is something we may want to revisit in the future if we have dataflows with
+//! multiple exports.
 //!
 //! [`ComputeCommand`]: self::command::ComputeCommand
 //! [`Hello`]: self::command::ComputeCommand::Hello

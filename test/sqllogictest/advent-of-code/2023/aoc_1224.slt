@@ -130,7 +130,7 @@ Explained Query:
                 Project (#1, #3..=#6) // { arity: 5 }
                   Filter (#1{r} < 10) // { arity: 7 }
                     Map (regexp_split_to_array[" ", case_insensitive=false](array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{r}))), text_to_numeric(btrim(array_index(#2, 1), ",")), text_to_numeric(btrim(array_index(#2, 3), ",")), text_to_numeric(btrim(array_index(#2, 5), ",")), text_to_numeric(btrim(array_index(#2, 7), ","))) // { arity: 7 }
-                      FlatMap generate_series(1, (regexp_split_to_array["\n", case_insensitive=false](#0{input}) array_length 1), 1) // { arity: 2 }
+                      FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                         ReadStorage materialize.public.input // { arity: 1 }
               ArrangeBy keys=[[]] // { arity: 1 }
                 Constant // { arity: 1 }

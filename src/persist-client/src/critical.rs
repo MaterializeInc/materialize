@@ -13,7 +13,7 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::time::Duration;
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use mz_ore::instrument;
 use mz_ore::now::EpochMillis;
@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
 use uuid::Uuid;
 
+use crate::error::InvalidUsage;
 use crate::internal::machine::Machine;
 use crate::internal::state::Since;
 use crate::stats::SnapshotStats;
@@ -114,7 +115,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
     O: Opaque + Codec64,
 {
     pub(crate) fn new(
@@ -321,6 +322,19 @@ where
                 shard_id: machine.shard_id(),
                 num_updates,
             })
+        }
+    }
+
+    /// Upgrade the version associated with this shard, applying any state migrations. This
+    /// is irrevocable and will fence out old versions: it should only be run only once Materialize
+    /// has fully committed to the new version.
+    pub async fn upgrade_version(&self) -> Result<(), InvalidUsage<T>> {
+        match self.machine.upgrade_version().await {
+            Ok(maintenance) => {
+                let () = maintenance.perform(&self.machine, &self.gc).await;
+                Ok(())
+            }
+            Err(version) => Err(InvalidUsage::IncompatibleVersion { version }),
         }
     }
 

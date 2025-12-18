@@ -42,15 +42,12 @@ use mz_ore::future::yield_now;
 use mz_repr::Diff;
 use timely::container::{CapacityContainerBuilder, PushInto, SizableContainer};
 use timely::dataflow::channels::pact::Pipeline;
-use timely::dataflow::channels::pushers::Tee;
-use timely::dataflow::operators::generic::OutputHandleCore;
+use timely::dataflow::operators::generic::OutputBuilderSession;
 use timely::dataflow::operators::{Capability, Operator};
 use timely::dataflow::{Scope, StreamCore};
 use timely::progress::timestamp::Timestamp;
 use timely::{Container, PartialOrder};
 use tracing::trace;
-
-use crate::render::context::ShutdownProbe;
 
 /// Joins two arranged collections with the same key type.
 ///
@@ -60,7 +57,6 @@ use crate::render::context::ShutdownProbe;
 pub(super) fn mz_join_core<G, Tr1, Tr2, L, I, YFn, C>(
     arranged1: &Arranged<G, Tr1>,
     arranged2: &Arranged<G, Tr2>,
-    shutdown_probe: ShutdownProbe,
     result: L,
     yield_fn: YFn,
 ) -> StreamCore<G, C>
@@ -207,26 +203,7 @@ where
             let mut trace1_option = Some(trace1);
             let mut trace2_option = Some(trace2);
 
-            move |input1, input2, output| {
-                // If the dataflow is shutting down, discard all existing and future work.
-                if shutdown_probe.in_shutdown() {
-                    trace!(operator_id, "shutting down");
-
-                    // Discard data at the inputs.
-                    input1.for_each(|_cap, _data| ());
-                    input2.for_each(|_cap, _data| ());
-
-                    // Discard queued work.
-                    todo1.discard();
-                    todo2.discard();
-
-                    // Stop holding on to input traces.
-                    trace1_option = None;
-                    trace2_option = None;
-
-                    return;
-                }
-
+            move |(input1, frontier1), (input2, frontier2), output| {
                 // 1. Consuming input.
                 //
                 // The join computation repeatedly accepts batches of updates from each of its inputs.
@@ -428,14 +405,14 @@ where
 
                 // Maintain `trace1`. Drop if `input2` is empty, or advance based on future needs.
                 if let Some(trace1) = trace1_option.as_mut() {
-                    if input2.frontier().is_empty() {
+                    if frontier2.is_empty() {
                         trace!(operator_id, input = 1, "dropping trace handle");
                         trace1_option = None;
                     } else {
                         trace!(
                             operator_id,
                             input = 1,
-                            logical = ?*input2.frontier().frontier(),
+                            logical = ?*frontier2.frontier(),
                             physical = ?acknowledged1.elements(),
                             "advancing trace compaction",
                         );
@@ -443,7 +420,7 @@ where
                         // Allow `trace1` to compact logically up to the frontier we may yet receive,
                         // in the opposing input (`input2`). All `input2` times will be beyond this
                         // frontier, and joined times only need to be accurate when advanced to it.
-                        trace1.set_logical_compaction(input2.frontier().frontier());
+                        trace1.set_logical_compaction(frontier2.frontier());
                         // Allow `trace1` to compact physically up to the upper bound of batches we
                         // have received in its input (`input1`). We will not require a cursor that
                         // is not beyond this bound.
@@ -453,14 +430,14 @@ where
 
                 // Maintain `trace2`. Drop if `input1` is empty, or advance based on future needs.
                 if let Some(trace2) = trace2_option.as_mut() {
-                    if input1.frontier().is_empty() {
+                    if frontier1.is_empty() {
                         trace!(operator_id, input = 2, "dropping trace handle");
                         trace2_option = None;
                     } else {
                         trace!(
                             operator_id,
                             input = 2,
-                            logical = ?*input1.frontier().frontier(),
+                            logical = ?*frontier1.frontier(),
                             physical = ?acknowledged2.elements(),
                             "advancing trace compaction",
                         );
@@ -468,7 +445,7 @@ where
                         // Allow `trace2` to compact logically up to the frontier we may yet receive,
                         // in the opposing input (`input1`). All `input1` times will be beyond this
                         // frontier, and joined times only need to be accurate when advanced to it.
-                        trace2.set_logical_compaction(input1.frontier().frontier());
+                        trace2.set_logical_compaction(frontier1.frontier());
                         // Allow `trace2` to compact physically up to the upper bound of batches we
                         // have received in its input (`input2`). We will not require a cursor that
                         // is not beyond this bound.
@@ -556,15 +533,10 @@ where
         self.todo.push_back((Box::pin(fut), capability));
     }
 
-    /// Discard all pending work.
-    fn discard(&mut self) {
-        self.todo = Default::default();
-    }
-
     /// Process pending work until none is remaining or `yield_fn` requests a yield.
     fn process<C, YFn>(
         &mut self,
-        output: &mut OutputHandleCore<C1::Time, CapacityContainerBuilder<C>, Tee<C1::Time, C>>,
+        output: &mut OutputBuilderSession<'_, C1::Time, CapacityContainerBuilder<C>>,
         yield_fn: YFn,
     ) where
         C: Container + SizableContainer + PushInto<(D, C1::Time, Diff)> + Data,

@@ -149,7 +149,7 @@ impl MemBlobConfig {
 }
 
 /// An in-memory implementation of [Blob].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MemBlob {
     core: Arc<tokio::sync::Mutex<MemBlobCore>>,
 }
@@ -201,7 +201,7 @@ impl Blob for MemBlob {
 }
 
 /// An in-memory implementation of [Consensus].
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct MemConsensus {
     // TODO: This was intended to be a tokio::sync::Mutex but that seems to
     // regularly deadlock in the `concurrency` test.

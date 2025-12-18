@@ -97,6 +97,8 @@ pub use crate::catalog::transact::{
 };
 use crate::command::CatalogDump;
 use crate::coord::TargetCluster;
+#[cfg(test)]
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::session::{Portal, PreparedStatement, Session};
 use crate::util::ResultExt;
 use crate::{AdapterError, AdapterNotice, ExecuteResponse};
@@ -684,6 +686,7 @@ impl Catalog {
                 unsafe_mode: true,
                 all_features: false,
                 build_info,
+                deploy_generation: 0,
                 environment_id: environment_id.unwrap_or_else(EnvironmentId::for_tests),
                 read_only,
                 now,
@@ -721,6 +724,7 @@ impl Catalog {
                 builtin_item_migration_config: BuiltinItemMigrationConfig {
                     persist_client: persist_client.clone(),
                     read_only,
+                    force_migration: None,
                 },
                 persist_client,
                 enable_expression_cache_override,
@@ -1056,6 +1060,16 @@ impl Catalog {
         self.state.get_schema(database_spec, schema_spec, conn_id)
     }
 
+    pub fn try_get_schema(
+        &self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_spec: &SchemaSpecifier,
+        conn_id: &ConnectionId,
+    ) -> Option<&Schema> {
+        self.state
+            .try_get_schema(database_spec, schema_spec, conn_id)
+    }
+
     pub fn get_mz_catalog_schema_id(&self) -> SchemaId {
         self.state.get_mz_catalog_schema_id()
     }
@@ -1115,9 +1129,12 @@ impl Catalog {
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        self.state.temporary_schemas[conn_id]
-            .items
-            .contains_key(item_name)
+        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        self.state
+            .temporary_schemas
+            .get(conn_id)
+            .map(|schema| schema.items.contains_key(item_name))
+            .unwrap_or(false)
     }
 
     /// Drops schema for connection if it exists. Returns an error if it exists and has items.
@@ -1507,10 +1524,19 @@ impl Catalog {
     #[cfg(test)]
     async fn sync_to_current_updates(
         &mut self,
-    ) -> Result<Vec<BuiltinTableUpdate<&'static BuiltinTable>>, CatalogError> {
+    ) -> Result<
+        (
+            Vec<BuiltinTableUpdate<&'static BuiltinTable>>,
+            Vec<ParsedStateUpdate>,
+        ),
+        CatalogError,
+    > {
         let updates = self.storage().await.sync_to_current_updates().await?;
-        let builtin_table_updates = self.state.apply_updates(updates)?;
-        Ok(builtin_table_updates)
+        let (builtin_table_updates, catalog_updates) = self
+            .state
+            .apply_updates(updates, &mut state::LocalExpressionCache::Closed)
+            .await;
+        Ok((builtin_table_updates, catalog_updates))
     }
 }
 
@@ -2207,7 +2233,11 @@ impl SessionCatalog for ConnCatalog<'_> {
                 Some(self.get_database(id).privileges())
             }
             SystemObjectId::Object(ObjectId::Schema((database_spec, schema_spec))) => {
-                Some(self.get_schema(database_spec, schema_spec).privileges())
+                // For temporary schemas that haven't been created yet (lazy creation),
+                // we return None - the RBAC check will need to handle this case.
+                self.state
+                    .try_get_schema(database_spec, schema_spec, &self.conn_id)
+                    .map(|schema| schema.privileges())
             }
             SystemObjectId::Object(ObjectId::Item(id)) => Some(self.get_item(id).privileges()),
             SystemObjectId::Object(ObjectId::NetworkPolicy(id)) => {
@@ -2242,7 +2272,22 @@ impl SessionCatalog for ConnCatalog<'_> {
 
     /// Returns a [`PartialItemName`] with the minimum amount of qualifiers to unambiguously resolve
     /// the object.
+    ///
+    /// Warning: This is broken for temporary objects. Don't use this function for serious stuff,
+    /// i.e., don't expect that what you get back is a thing you can resolve. Current usages are
+    /// only for error msgs and other humanizations.
     fn minimal_qualification(&self, qualified_name: &QualifiedItemName) -> PartialItemName {
+        if qualified_name.qualifiers.schema_spec.is_temporary() {
+            // All bets are off. Just give up and return the qualified name as is.
+            // TODO: Figure out what's going on with temporary objects.
+
+            // See e.g. `temporary_objects.slt` fail if you comment this out, which has the repro
+            // from https://github.com/MaterializeInc/database-issues/issues/9973#issuecomment-3646382143
+            // There is also https://github.com/MaterializeInc/database-issues/issues/9974, for
+            // which we don't have a simple repro.
+            return qualified_name.item.clone().into();
+        }
+
         let database_id = match &qualified_name.qualifiers.database_spec {
             ResolvedDatabaseSpecifier::Ambient => None,
             ResolvedDatabaseSpecifier::Id(id)
@@ -2804,8 +2849,7 @@ mod tests {
                     .expect("unable to resolve item")
                     .at_version(RelationVersionSelector::Latest);
 
-                let full_name = conn_catalog.resolve_full_name(item.name());
-                let actual_desc = item.desc(&full_name).expect("invalid item type");
+                let actual_desc = item.relation_desc().expect("invalid item type");
                 for (index, ((actual_name, actual_typ), (expected_name, expected_typ))) in
                     actual_desc.iter().zip_eq(expected_desc.iter()).enumerate()
                 {
@@ -3370,7 +3414,7 @@ mod tests {
 
         let handles = Catalog::with_debug(|catalog| async { inner(catalog) }).await;
         for handle in handles {
-            handle.await.expect("must succeed");
+            handle.await;
         }
     }
 
@@ -3565,11 +3609,8 @@ mod tests {
                     // TODO(alter_table)
                     .at_version(RelationVersionSelector::Latest);
                 let full_name = conn_catalog.resolve_full_name(item.name());
-                for col_type in item
-                    .desc(&full_name)
-                    .expect("invalid item type")
-                    .iter_types()
-                {
+                let desc = item.relation_desc().expect("invalid item type");
+                for col_type in desc.iter_types() {
                     match &col_type.scalar_type {
                         typ @ SqlScalarType::UInt16
                         | typ @ SqlScalarType::UInt32

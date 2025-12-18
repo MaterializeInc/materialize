@@ -1,0 +1,144 @@
+- name: mysql-source-prereq
+  content: |
+    To create a source from MySQL 5.7+, you must first:
+
+    - **Configure upstream MySQL instance**
+      - Enable GTID-based binlog replication
+      - Create a replication user and password for Materialize to use to connect.
+    - **Configure network security**
+      - Ensure Materialize can connect to your MySQL instance.
+    - **Create a connection to MySQL in Materialize**
+      - The connection setup depends on the network security configuration.
+
+    For details, see the [MySQL integration
+    guides](/ingest-data/mysql/#integration-guides).
+
+- name: mysql-supported-types
+  content: |
+    Materialize natively supports the following MySQL types:
+
+    <ul style="column-count: 3">
+    <li><code>bigint</code></li>
+    <li><code>binary</code></li>
+    <li><code>bit</code></li>
+    <li><code>blob</code></li>
+    <li><code>boolean</code></li>
+    <li><code>char</code></li>
+    <li><code>date</code></li>
+    <li><code>datetime</code></li>
+    <li><code>decimal</code></li>
+    <li><code>double</code></li>
+    <li><code>float</code></li>
+    <li><code>int</code></li>
+    <li><code>json</code></li>
+    <li><code>longblob</code></li>
+    <li><code>longtext</code></li>
+    <li><code>mediumblob</code></li>
+    <li><code>mediumint</code></li>
+    <li><code>mediumtext</code></li>
+    <li><code>numeric</code></li>
+    <li><code>real</code></li>
+    <li><code>smallint</code></li>
+    <li><code>text</code></li>
+    <li><code>time</code></li>
+    <li><code>timestamp</code></li>
+    <li><code>tinyblob</code></li>
+    <li><code>tinyint</code></li>
+    <li><code>tinytext</code></li>
+    <li><code>varbinary</code></li>
+    <li><code>varchar</code></li>
+    </ul>
+
+- name: mysql-unsupported-types
+  content: |
+    When replicating tables that contain the **unsupported [data
+    types](/sql/types/)**, you can:
+
+    - Use [`TEXT COLUMNS`
+      option](/sql/create-source/mysql/#handling-unsupported-types) for the
+      following unsupported  MySQL types:
+
+      - `enum`
+      - `year`
+
+      The specified columns will be treated as `text` and will not offer the
+      expected MySQL type features.
+
+    - Use the [`EXCLUDE COLUMNS`](/sql/create-source/mysql/#excluding-columns)
+    option to exclude any columns that contain unsupported data types.
+
+- name: mysql-truncation-restriction
+  content: |
+    Avoid truncating upstream tables that are being replicated into Materialize.
+    If a replicated upstream table is truncated, the corresponding
+    subsource in Materialize becomes inaccessible and will not
+    produce any data until it is recreated.
+
+    Instead of truncating, use an unqualified `DELETE` to remove all rows from
+    the upstream table:
+
+    ```mzsql
+    DELETE FROM t;
+    ```
+
+- name: mysql-compatible-schema-changes-legacy
+  content: |
+
+    - Adding columns to tables. Materialize will **not ingest** new columns
+    added upstream unless you use [`DROP SOURCE`](/sql/alter-source/#context) to
+    first drop the affected subsource, and then add the table back to the source
+    using [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/).
+
+    - Dropping columns that were added after the source was created. These
+    columns are never ingested, so you can drop them without issue.
+
+    - Adding or removing `NOT NULL` constraints to tables that were nullable
+    when the source was created.
+
+- name: mysql-incompatible-schema-changes-legacy
+  content: |
+    All other schema changes to upstream tables will set the corresponding
+    subsource into an error state, which prevents you from reading from the
+    subsource.
+
+    To handle incompatible [schema changes](#schema-changes), use [`DROP
+    SOURCE`](/sql/alter-source/#context) to first drop the affected subsource,
+    and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add the
+    subsource back to the source. When you add the subsource, it will have the
+    updated schema from the corresponding upstream table.
+
+- name: mysql-considerations
+  content: |
+    ### Schema changes
+
+    {{< include-md file="shared-content/schema-changes-in-progress.md" >}}
+
+    Materialize supports schema changes in the upstream database as follows:
+
+    #### Compatible schema changes
+
+    {{% include-from-yaml data="mysql_source_details"
+    name="mysql-compatible-schema-changes-legacy" %}}
+
+    #### Incompatible schema changes
+
+    {{% include-from-yaml data="mysql_source_details"
+    name="mysql-incompatible-schema-changes-legacy" %}}
+
+    ### Supported types
+
+    {{% include-from-yaml data="mysql_source_details"
+    name="mysql-supported-types" %}}
+
+    {{% include-from-yaml data="mysql_source_details"
+    name="mysql-unsupported-types" %}}
+
+    ### Truncation
+
+    {{% include-from-yaml data="mysql_source_details"
+    name="mysql-truncation-restriction" %}}
+
+    ### Modifying an existing source
+
+    {{< include-md
+    file="shared-content/alter-source-snapshot-blocking-behavior.md" >}}

@@ -49,13 +49,13 @@
 
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::mem;
 use std::ops::Range;
 use std::sync::Arc;
 
 use arrayvec::ArrayVec;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use itertools::Itertools;
@@ -668,7 +668,7 @@ impl<T: Timestamp + Lattice> Trace<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> Trace<T> {
-    pub fn apply_merge_res_checked<D: Codec64 + Semigroup + PartialEq>(
+    pub fn apply_merge_res_checked<D: Codec64 + Monoid + PartialEq>(
         &mut self,
         res: &FueledMergeRes<T>,
         metrics: &ColumnarMetrics,
@@ -725,6 +725,12 @@ pub enum CompactionInput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SpineId(pub usize, pub usize);
+
+impl Display for SpineId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}, {})", self.0, self.1)
+    }
+}
 
 impl Serialize for SpineId {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -955,45 +961,35 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
-    fn diffs_sum<'a, D: Semigroup + Codec64>(
-        parts: impl Iterator<Item = &'a RunPart<T>>,
+    fn diffs_sum<'a, D: Monoid + Codec64>(
+        parts: impl IntoIterator<Item = &'a RunPart<T>>,
         metrics: &ColumnarMetrics,
     ) -> Option<D> {
-        parts
-            .map(|p| p.diffs_sum::<D>(metrics))
-            .reduce(|a, b| match (a, b) {
-                (Some(mut a), Some(b)) => {
-                    a.plus_equals(&b);
-                    Some(a)
-                }
-                _ => None,
-            })
-            .flatten()
+        let mut sum = D::zero();
+        for part in parts {
+            sum.plus_equals(&part.diffs_sum::<D>(metrics)?);
+        }
+        Some(sum)
     }
 
-    fn diffs_sum_for_runs<D: Semigroup + Codec64>(
+    /// Get the diff sum from the given batch for the given runs.
+    /// Returns `None` if the runs aren't present or any parts don't have statistics.
+    fn diffs_sum_for_runs<D: Monoid + Codec64>(
         batch: &HollowBatch<T>,
         run_ids: &[RunId],
         metrics: &ColumnarMetrics,
     ) -> Option<D> {
-        let mut run_ids: BTreeSet<RunId> = run_ids.into_iter().cloned().collect();
-        if run_ids.is_empty() {
-            return None;
+        let mut run_ids = BTreeSet::from_iter(run_ids.iter().copied());
+        let mut sum = D::zero();
+
+        for (meta, run) in batch.runs() {
+            let id = meta.id?;
+            if run_ids.remove(&id) {
+                sum.plus_equals(&Self::diffs_sum(run, metrics)?);
+            }
         }
 
-        let parts = batch
-            .runs()
-            .filter(|(meta, _)| {
-                let id = meta.id.expect("id should be present at this point");
-                run_ids.remove(&id)
-            })
-            .flat_map(|(_, parts)| parts);
-
-        let sum = Self::diffs_sum(parts, metrics);
-
-        assert!(run_ids.is_empty(), "all runs must be present in the batch");
-
-        sum
+        run_ids.is_empty().then_some(sum)
     }
 
     fn maybe_replace_with_tombstone(&mut self, desc: &Description<T>) -> ApplyMergeResult {
@@ -1083,7 +1079,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         metrics: &ColumnarMetrics,
     ) -> ApplyMergeResult
     where
-        D: Semigroup + Codec64 + PartialEq + Debug,
+        D: Monoid + Codec64 + PartialEq + Debug,
     {
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
@@ -1121,7 +1117,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         metrics: &ColumnarMetrics,
     ) -> ApplyMergeResult
     where
-        D: Semigroup + Codec64 + PartialEq + Debug,
+        D: Monoid + Codec64 + PartialEq + Debug,
     {
         let range = self
             .parts
@@ -1186,7 +1182,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         metrics: &ColumnarMetrics,
     ) -> ApplyMergeResult
     where
-        D: Semigroup + Codec64 + PartialEq + Debug,
+        D: Monoid + Codec64 + PartialEq + Debug,
     {
         if runs.is_empty() {
             return ApplyMergeResult::NotAppliedNoMatch;
@@ -1249,26 +1245,16 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         new_diffs_sum: Option<D>,
         context: &str,
     ) where
-        D: Semigroup + Codec64 + PartialEq + Debug,
+        D: Monoid + Codec64 + PartialEq + Debug,
     {
-        match (new_diffs_sum, old_diffs_sum) {
-            (None, Some(old)) => {
-                if !D::is_zero(&old) {
-                    panic!(
-                        "merge res diffs sum is None, but spine batch diffs sum ({:?}) is not zero ({})",
-                        old, context
-                    );
-                }
-            }
-            (Some(new_diffs_sum), Some(old_diffs_sum)) => {
-                assert_eq!(
-                    old_diffs_sum, new_diffs_sum,
-                    "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?}) ({})",
-                    new_diffs_sum, old_diffs_sum, context
-                );
-            }
-            _ => {}
-        };
+        let new_diffs_sum = new_diffs_sum.unwrap_or_else(D::zero);
+        if let Some(old_diffs_sum) = old_diffs_sum {
+            assert_eq!(
+                old_diffs_sum, new_diffs_sum,
+                "merge res diffs sum ({:?}) did not match spine batch diffs sum ({:?}) ({})",
+                new_diffs_sum, old_diffs_sum, context
+            )
+        }
     }
 
     /// This is the "legacy" way of replacing a spine batch with a merge result.
@@ -1282,7 +1268,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         metrics: &ColumnarMetrics,
     ) -> ApplyMergeResult
     where
-        D: Semigroup + Codec64 + PartialEq + Debug,
+        D: Monoid + Codec64 + PartialEq + Debug,
     {
         // The spine's and merge res's sinces don't need to match (which could occur if Spine
         // has been reloaded from state due to compare_and_set mismatch), but if so, the Spine
@@ -1463,6 +1449,12 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         });
         new_parts.extend_from_slice(&parts[range.end..]);
 
+        let res = if range.len() == parts.len() {
+            ApplyMergeResult::AppliedExact
+        } else {
+            ApplyMergeResult::AppliedSubset
+        };
+
         let new_spine_batch = SpineBatch {
             id: *id,
             desc: desc.to_owned(),
@@ -1476,7 +1468,7 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         }
 
         *self = new_spine_batch;
-        ApplyMergeResult::AppliedSubset
+        res
     }
 }
 
@@ -2587,5 +2579,58 @@ pub(crate) mod tests {
 
             prop_assert!(new_batch.run_meta.len() == batch.run_meta.len() - runs.len() + to_replace.run_meta.len());
         });
+    }
+
+    #[mz_ore::test]
+    fn test_perform_subset_replacement() {
+        let batch1 = crate::internal::state::tests::hollow::<u64>(0, 10, &["a"], 10);
+        let batch2 = crate::internal::state::tests::hollow::<u64>(10, 20, &["b"], 10);
+        let batch3 = crate::internal::state::tests::hollow::<u64>(20, 30, &["c"], 10);
+
+        let id_batch1 = IdHollowBatch {
+            id: SpineId(0, 1),
+            batch: Arc::new(batch1.clone()),
+        };
+        let id_batch2 = IdHollowBatch {
+            id: SpineId(1, 2),
+            batch: Arc::new(batch2.clone()),
+        };
+        let id_batch3 = IdHollowBatch {
+            id: SpineId(2, 3),
+            batch: Arc::new(batch3.clone()),
+        };
+
+        let spine_batch = SpineBatch {
+            id: SpineId(0, 3),
+            desc: Description::new(
+                Antichain::from_elem(0),
+                Antichain::from_elem(30),
+                Antichain::from_elem(0),
+            ),
+            parts: vec![id_batch1, id_batch2, id_batch3],
+            active_compaction: None,
+            len: 30,
+        };
+
+        let res_exact = crate::internal::state::tests::hollow::<u64>(0, 30, &["d"], 30);
+        let mut sb_exact = spine_batch.clone();
+        let result = sb_exact.perform_subset_replacement(&res_exact, SpineId(0, 3), 0..3, None);
+        assert!(matches!(result, ApplyMergeResult::AppliedExact));
+        assert_eq!(sb_exact.parts.len(), 1);
+        assert_eq!(sb_exact.len(), 30);
+
+        let res_subset = crate::internal::state::tests::hollow::<u64>(0, 20, &["e"], 20);
+        let mut sb_subset = spine_batch.clone();
+        let result = sb_subset.perform_subset_replacement(&res_subset, SpineId(0, 2), 0..2, None);
+        assert!(matches!(result, ApplyMergeResult::AppliedSubset));
+        assert_eq!(sb_subset.parts.len(), 2); // One new part + one old part
+        assert_eq!(sb_subset.len(), 30);
+
+        let res_too_big = crate::internal::state::tests::hollow::<u64>(0, 30, &["f"], 31);
+        let mut sb_too_big = spine_batch.clone();
+        let result = sb_too_big.perform_subset_replacement(&res_too_big, SpineId(0, 3), 0..3, None);
+        assert!(matches!(result, ApplyMergeResult::NotAppliedTooManyUpdates));
+        assert_eq!(sb_too_big.parts.len(), 3);
+        assert_eq!(sb_too_big.len(), 30);
     }
 }

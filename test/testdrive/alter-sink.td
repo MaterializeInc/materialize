@@ -7,10 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/8636 is fixed
-$ skip-if
-SELECT true
-
 $ set-arg-default single-replica-cluster=quickstart
 
 > CREATE CONNECTION kafka_conn
@@ -116,11 +112,6 @@ contains:canceling statement due to user request
 # There is a meaningful difference in having an object created after the sink
 # already exists, see incident-131:
 > CREATE TABLE created_post_alter (created_post_name string, created_post_value int);
-# This value should be ignored by the sink because the alter will happen after
-# this record has been inserted and we don't re-emit a snapshot of the new
-# collection when it changes.
-> INSERT INTO created_post_alter VALUES ('ignored', 0);
-> INSERT INTO created_post_alter VALUES ('ignored2', 1);
 
 > ALTER SINK sink SET FROM created_post_alter;
 

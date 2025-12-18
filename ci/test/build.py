@@ -10,6 +10,8 @@
 # by the Apache License, Version 2.0.
 
 import os
+import shutil
+import sys
 from pathlib import Path
 
 from materialize import mzbuild, spawn, ui
@@ -17,7 +19,7 @@ from materialize.ci_util.upload_debug_symbols_to_s3 import (
     DEBUGINFO_BINS,
     upload_debuginfo_to_s3,
 )
-from materialize.mzbuild import CargoBuild, Repository, ResolvedImage
+from materialize.mzbuild import CargoBuild, Repository, ResolvedImage, RustICE
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
@@ -42,6 +44,17 @@ def main() -> None:
         deps.ensure(pre_build=lambda images: upload_debuginfo(repo, images))
         set_build_status("success")
         annotate_buildkite_with_tags(repo.rd.arch, deps)
+    except RustICE:
+        # We retry twice automatically, see mkpipeline.py
+        if int(os.getenv("BUILDKITE_RETRY_COUNT", "0")) >= 2:
+            set_build_status("failed")
+        print(
+            "--- Detected Rust ICE (https://github.com/rust-lang/rust/issues/148581), clearing cargo target directories"
+        )
+        for dir in ["target", "target-xcompile"]:
+            if os.path.exists(dir):
+                shutil.rmtree(dir, ignore_errors=True)
+        sys.exit(199)
     except:
         set_build_status("failed")
         raise

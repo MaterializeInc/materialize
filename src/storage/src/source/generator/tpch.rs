@@ -22,10 +22,10 @@ use mz_repr::adt::numeric::{self, DecimalLike, Numeric};
 use mz_repr::{Datum, Diff, Row};
 use mz_storage_types::sources::MzOffset;
 use mz_storage_types::sources::load_generator::{Event, Generator, LoadGeneratorOutput, TpchView};
-use rand::distributions::{Alphanumeric, DistString};
-use rand::rngs::StdRng;
-use rand::seq::SliceRandom;
-use rand::{Rng, SeedableRng};
+use rand_8::distributions::{Alphanumeric, DistString};
+use rand_8::rngs::StdRng;
+use rand_8::seq::SliceRandom;
+use rand_8::{Rng, SeedableRng};
 
 #[derive(Clone, Debug)]
 pub struct Tpch {

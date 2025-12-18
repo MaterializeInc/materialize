@@ -45,6 +45,7 @@ use mz_frontegg_auth::{
 use mz_frontegg_mock::{
     FronteggMockServer, models::ApiToken, models::TenantApiTokenConfig, models::UserConfig,
 };
+use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -58,10 +59,10 @@ use postgres::error::SqlState;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::time::sleep;
-use tungstenite::Message;
 use tungstenite::client::ClientRequestBuilder;
 use tungstenite::protocol::CloseFrame;
 use tungstenite::protocol::frame::coding::CloseCode;
+use tungstenite::{Message, Utf8Bytes};
 use uuid::Uuid;
 
 // How long, in seconds, a claim is valid for. Increasing this value will decrease some test flakes
@@ -355,7 +356,7 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
                 let stream = make_ws_tls(&uri, configure);
                 let (mut ws, _resp) = tungstenite::client(uri, stream).unwrap();
 
-                ws.send(Message::Text(serde_json::to_string(&auth).unwrap()))
+                ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
                     .unwrap();
 
                 ws.send(Message::Text(
@@ -1159,7 +1160,10 @@ async fn test_auth_base_require_tls_frontegg() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
             TestCase::Http {
@@ -1192,7 +1196,10 @@ async fn test_auth_base_require_tls_frontegg() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
             TestCase::Http {
@@ -1226,7 +1233,10 @@ async fn test_auth_base_require_tls_frontegg() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'PUBLIC'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'PUBLIC'"
+                    );
                 })),
             },
             TestCase::Http {
@@ -1304,7 +1314,7 @@ async fn test_auth_base_disable_tls() {
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::Err(Box::new(|err| {
                     assert_eq!(
-                        err.to_string(),
+                        err.to_string_with_causes(),
                         "error performing TLS handshake: server does not support TLS",
                     )
                 })),
@@ -1331,7 +1341,10 @@ async fn test_auth_base_disable_tls() {
                 ssl_mode: SslMode::Disable,
                 configure: Box::new(|_| Ok(())),
                 assert: Assert::DbErr(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
         ],
@@ -1451,7 +1464,10 @@ async fn test_auth_base_require_tls() {
                 ssl_mode: SslMode::Prefer,
                 configure: Box::new(|b| Ok(b.set_verify(SslVerifyMode::NONE))),
                 assert: Assert::DbErr(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unauthorized login to user 'mz_system'");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unauthorized login to user 'mz_system'"
+                    );
                 })),
             },
         ],
@@ -1488,7 +1504,10 @@ async fn test_auth_intermediate_ca_no_intermediary() {
                 ssl_mode: SslMode::Require,
                 configure: Box::new(|b| b.set_ca_file(ca.ca_cert_path())),
                 assert: Assert::Err(Box::new(|err| {
-                    assert_contains!(err.to_string(), "unable to get local issuer certificate");
+                    assert_contains!(
+                        err.to_string_with_causes(),
+                        "unable to get local issuer certificate"
+                    );
                 })),
             },
             TestCase::Http {
@@ -3127,6 +3146,12 @@ async fn test_password_auth() {
         .password("mz_system_password")
         .await
         .unwrap();
+
+    mz_system_client
+        .execute("ALTER SYSTEM SET scram_iterations to 9999", &[])
+        .await
+        .unwrap();
+
     mz_system_client
         .execute("CREATE ROLE foo WITH LOGIN PASSWORD 'bar'", &[])
         .await
@@ -3157,6 +3182,35 @@ async fn test_password_auth() {
             .get::<_, bool>(0),
         false
     );
+
+    // Validate hash iterations.
+    // change the iteratoins, ensure that login works
+    // from the prior role and a new role
+    mz_system_client
+        .execute("ALTER SYSTEM SET scram_iterations to 9998", &[])
+        .await
+        .unwrap();
+
+    mz_system_client
+        .execute("CREATE ROLE foo_2 WITH LOGIN PASSWORD 'bar'", &[])
+        .await
+        .unwrap();
+
+    server
+        .connect()
+        .no_tls()
+        .user("foo")
+        .password("bar")
+        .await
+        .unwrap();
+
+    server
+        .connect()
+        .no_tls()
+        .user("foo_2")
+        .password("bar")
+        .await
+        .unwrap();
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
@@ -3482,7 +3536,7 @@ async fn test_password_auth_http() {
         .unwrap();
 
     let query = r#"{"query":"SELECT current_user"}"#;
-    let ws_options_msg = Message::Text(r#"{"options": {}}"#.to_owned());
+    let ws_options_msg = Message::Text(r#"{"options": {}}"#.to_owned().into());
 
     let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
         .pool_idle_timeout(Duration::from_secs(10))
@@ -3511,7 +3565,7 @@ async fn test_password_auth_http() {
         ws.read().unwrap(),
         Message::Close(Some(CloseFrame {
             code: CloseCode::Protocol,
-            reason: Cow::Borrowed("unauthorized"),
+            reason: Utf8Bytes::from_static("unauthorized")
         })),
     );
 
@@ -3577,7 +3631,7 @@ async fn test_password_auth_http() {
                 let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
                 match msg {
                     WebSocketResponse::ReadyForQuery(_) => {
-                        ws.send(Message::Text(query.to_owned())).unwrap();
+                        ws.send(Message::Text(query.to_owned().into())).unwrap();
                     }
                     WebSocketResponse::Row(rows) => {
                         assert_eq!(&rows, &[serde_json::Value::from("mz_system".to_owned())]);
@@ -3595,4 +3649,207 @@ async fn test_password_auth_http() {
             _ => panic!("unexpected response: {:?}", resp),
         }
     }
+}
+
+/// Tests that the superuser flag is correctly propagated through HTTP/WebSocket authentication.
+/// This is a regression test for a bug where WebSocket connections always had superuser=false
+/// because internal_user_metadata was hardcoded to None.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
+async fn test_password_auth_http_superuser() {
+    let metrics_registry = MetricsRegistry::new();
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "log_filter".to_string(),
+            "mz_frontegg_auth=debug,info".to_string(),
+        )
+        .with_system_parameter_default("enable_password_auth".to_string(), "true".to_string())
+        .with_password_auth(Password("mz_system_password".to_owned()))
+        .with_metrics_registry(metrics_registry)
+        .start()
+        .await;
+
+    let mz_system_client = server
+        .connect()
+        .no_tls()
+        .user("mz_system")
+        .password("mz_system_password")
+        .await
+        .unwrap();
+    mz_system_client
+        .execute(
+            "CREATE ROLE superuser_role WITH LOGIN SUPERUSER PASSWORD 'super_pass'",
+            &[],
+        )
+        .await
+        .unwrap();
+    mz_system_client
+        .execute(
+            "CREATE ROLE normal_role WITH LOGIN PASSWORD 'normal_pass'",
+            &[],
+        )
+        .await
+        .unwrap();
+
+    let ws_url: Uri = format!("ws://{}/api/experimental/sql", server.http_local_addr())
+        .parse()
+        .unwrap();
+    let login_url: Uri = format!("http://{}/api/login", server.http_local_addr())
+        .parse()
+        .unwrap();
+
+    let http_client = hyper_util::client::legacy::Client::builder(TokioExecutor::new())
+        .pool_idle_timeout(Duration::from_secs(10))
+        .build_http();
+
+    fn check_superuser_via_ws_basic(ws_url: &Uri, user: &str, password: &str) -> bool {
+        let ws_request = ClientRequestBuilder::new(ws_url.clone());
+        let (mut ws, _resp) = tungstenite::connect(ws_request).unwrap();
+
+        let auth = WebSocketAuth::Basic {
+            user: user.to_string(),
+            password: Password(password.to_string()),
+            options: BTreeMap::default(),
+        };
+        ws.send(Message::Text(serde_json::to_string(&auth).unwrap().into()))
+            .unwrap();
+
+        loop {
+            let resp = ws.read().unwrap();
+            if let Message::Text(msg) = resp {
+                let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                if matches!(msg, WebSocketResponse::ReadyForQuery(_)) {
+                    break;
+                }
+            }
+        }
+
+        ws.send(Message::Text(
+            r#"{"query": "SHOW is_superuser"}"#.to_owned().into(),
+        ))
+        .unwrap();
+
+        loop {
+            let resp = ws.read().unwrap();
+            if let Message::Text(msg) = resp {
+                let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                if let WebSocketResponse::Row(row) = msg {
+                    let value = row[0].as_str().unwrap();
+                    return value == "on";
+                }
+            }
+        }
+    }
+
+    async fn check_superuser_via_ws_session(
+        http_client: &hyper_util::client::legacy::Client<
+            hyper_util::client::legacy::connect::HttpConnector,
+            String,
+        >,
+        login_url: &Uri,
+        ws_url: &Uri,
+        user: &str,
+        password: &str,
+    ) -> bool {
+        let login_body = format!(r#"{{"username":"{}","password":"{}"}}"#, user, password);
+        let login_response = http_client
+            .request(
+                Request::post(login_url.clone())
+                    .header("Content-Type", "application/json")
+                    .body(login_body)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(login_response.status(), StatusCode::OK);
+
+        let session_cookie = login_response
+            .headers()
+            .get(SET_COOKIE)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .split("; ")
+            .find(|v| v.starts_with("mz_session="))
+            .unwrap();
+
+        let ws_request =
+            ClientRequestBuilder::new(ws_url.clone()).with_header("Cookie", session_cookie);
+        let (mut ws, _resp) = tungstenite::connect(ws_request).unwrap();
+
+        ws.send(Message::Text(r#"{"options": {}}"#.to_owned().into()))
+            .unwrap();
+
+        loop {
+            let resp = ws.read().unwrap();
+            if let Message::Text(msg) = resp {
+                let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                if matches!(msg, WebSocketResponse::ReadyForQuery(_)) {
+                    break;
+                }
+            }
+        }
+
+        ws.send(Message::Text(
+            r#"{"query": "SHOW is_superuser"}"#.to_owned().into(),
+        ))
+        .unwrap();
+
+        loop {
+            let resp = ws.read().unwrap();
+            if let Message::Text(msg) = resp {
+                let msg: WebSocketResponse = serde_json::from_str(&msg).unwrap();
+                if let WebSocketResponse::Row(row) = msg {
+                    let value = row[0].as_str().unwrap();
+                    return value == "on";
+                }
+            }
+        }
+    }
+
+    // Superuser via WebSocket with Basic auth should have is_superuser=on
+    assert!(
+        check_superuser_via_ws_basic(&ws_url, "superuser_role", "super_pass"),
+        "superuser_role should have is_superuser=on via WebSocket Basic auth"
+    );
+
+    // Non-superuser via WebSocket with Basic auth should have is_superuser=off
+    assert!(
+        !check_superuser_via_ws_basic(&ws_url, "normal_role", "normal_pass"),
+        "normal_role should have is_superuser=off via WebSocket Basic auth"
+    );
+
+    // Superuser via WebSocket with session cookie should have is_superuser=on
+    assert!(
+        check_superuser_via_ws_session(
+            &http_client,
+            &login_url,
+            &ws_url,
+            "superuser_role",
+            "super_pass"
+        )
+        .await,
+        "superuser_role should have is_superuser=on via WebSocket session auth"
+    );
+
+    // Non-superuser via WebSocket with session cookie should have is_superuser=off
+    assert!(
+        !check_superuser_via_ws_session(
+            &http_client,
+            &login_url,
+            &ws_url,
+            "normal_role",
+            "normal_pass"
+        )
+        .await,
+        "normal_role should have is_superuser=off via WebSocket session auth"
+    );
+
+    // mz_system (internal user) via Basic auth should have is_superuser=on
+    assert!(
+        check_superuser_via_ws_basic(&ws_url, "mz_system", "mz_system_password"),
+        "mz_system should have is_superuser=on via WebSocket Basic auth"
+    );
 }

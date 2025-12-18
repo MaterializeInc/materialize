@@ -10,10 +10,10 @@
 .content-wrapper {
     display: flex;
     justify-content: center;
-    padding-top: var(--nav-height);
+    padding-top: calc(var(--nav-height) + var(--small));
 
     @media(max-width: 800px) {
-        padding-top: calc(var(--nav-height) + var(--xx-small));
+        padding-top: calc(var(--nav-height) + var(--small));
     }
 
     @media(max-width: 380px) {
@@ -139,7 +139,7 @@ table.inline-headings {
         z-index: 100;
         top: var(--nav-height);
         left: 0;
-        height: calc(100vh - var(--nav-height));
+        height: calc(120vh - var(--nav-height));
         border-right: 1px solid var(--divider-light);
         transform: translateX(-100%);
         transition: all .2s ease-out;
@@ -193,6 +193,7 @@ table.inline-headings {
     @media(max-width: 850px) {
         padding-bottom: var(--large);
         height: calc(100vh - var(--nav-height));
+        margin-top: 80px;
     }
 
     a {
@@ -344,8 +345,8 @@ table.inline-headings {
     flex: 1;
     position: sticky;
     top: 90px;
-    height: 100vh;
     overflow-y: auto;
+    height: 100vh;
 
     @media(max-width: 1050px) {
         display: none;
@@ -362,10 +363,10 @@ table.inline-headings {
     padding: var(--x-small) rem(2);
     position: sticky;
     top: 0;
-    height: 100vh;
     overflow-y: auto;
     font-size: var(--sm);
     padding-bottom: 8.5rem;
+    height: 100vh;
 
     &-top {
         margin-top: var(--pico);

@@ -7,7 +7,7 @@ menu:
     parent: 'create-source'
     identifier: cs_sql-server
     name: SQL Server
-    weight: 20
+    weight: 23
 ---
 
 {{% create-source/intro %}}
@@ -70,11 +70,6 @@ When you define a source, Materialize will automatically:
 1. Incrementally update any materialized or indexed views that depend on the
    source as change events stream in, as a result of `INSERT`, `UPDATE` and
    `DELETE` operations in the upstream SQL Server database.
-
-It's important to note that the schema metadata is captured when the source is
-initially created, and is validated against the upstream schema upon restart.
-If you create new tables upstream after creating a SQL Server source and want to
-replicate them to Materialize, the source must be dropped and recreated.
 
 ##### SQL Server schemas
 

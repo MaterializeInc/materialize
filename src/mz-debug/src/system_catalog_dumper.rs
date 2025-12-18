@@ -901,7 +901,7 @@ impl SystemCatalogDumper {
                     let docs_link = if replica.is_none()
                         || replica.map_or(false, |r| r.cluster_name == "mz_catalog_server")
                     {
-                        "https://materialize.com/docs/self-managed/v25.1/installation/troubleshooting/#troubleshooting-console-unresponsiveness"
+                        "https://materialize.com/docs/installation/troubleshooting/#troubleshooting-console-unresponsiveness"
                     } else {
                         "https://materialize.com/docs/sql/alter-cluster/#resizing-1"
                     };

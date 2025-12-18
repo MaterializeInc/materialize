@@ -15,9 +15,10 @@ cluster configured in Materialize.
 ```sql
 SHOW CLUSTER REPLICAS
 [LIKE <pattern> | WHERE <condition(s)>]
+;
 ```
 
-Option                        | Description
+Syntax element                | Description
 ------------------------------|------------
 **LIKE** \<pattern\>          | If specified, only show clusters that match the pattern.
 **WHERE** <condition(s)>      | If specified, only show clusters that match the condition(s).

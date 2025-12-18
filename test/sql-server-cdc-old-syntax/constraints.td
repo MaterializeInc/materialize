@@ -7,10 +7,6 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# IMPORTANT: The Postgres server has a custom pg_hba.conf that only
-# accepts connections from specific users. You will have to update
-# pg_hba.conf if you modify the existing user names or add new ones.
-
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password};Database=test
 
@@ -40,29 +36,43 @@ CREATE TABLE unique_nullable (f1 INT, f2 INT, f3 INT, UNIQUE (f1, f2));
 INSERT INTO unique_nullable VALUES (1,1,null), (2,2,null), (null,null,null);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'unique_nullable', @role_name = 'SA', @supports_net_changes = 0;
 
+CREATE TABLE pk_unique_overlap (f1 INT, f2 INT NOT NULL UNIQUE, PRIMARY KEY (f1, f2));
+INSERT INTO pk_unique_overlap VALUES (1,1), (1,2), (2,3);
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'pk_unique_overlap', @role_name = 'SA', @supports_net_changes = 0;
+
 > CREATE SOURCE mz_source
   FROM SQL SERVER CONNECTION sql_server_test_connection
   FOR ALL TABLES;
 
+
 > CREATE DEFAULT INDEX ON pk;
 > CREATE DEFAULT INDEX ON unique_not_null;
 > CREATE DEFAULT INDEX ON unique_nullable;
+> CREATE DEFAULT INDEX ON pk_unique_overlap;
 
-# TODO: database-issues#9723
-#> SELECT key FROM (SHOW INDEXES ON pk);
-#{f1,f2}
+> SELECT key FROM (SHOW INDEXES ON pk);
+{f1,f2}
 
-# TODO: database-issues#9723
-#> SELECT key FROM (SHOW INDEXES ON unique_not_null);
-#{f1,f2}
+> SELECT key FROM (SHOW INDEXES ON unique_not_null);
+{f1,f2}
 
+# in SQL Server NULLS are not distinct
+# see https://learn.microsoft.com/en-us/sql/relational-databases/tables/unique-constraints-and-check-constraints?view=sql-server-ver17#unique-constraints
 > SELECT key FROM (SHOW INDEXES ON unique_nullable);
-{f1,f2,f3}
+{f1,f2}
+
+> SELECT key FROM (SHOW INDEXES ON pk_unique_overlap);
+{f1,f2}
 
 > SELECT * FROM unique_nullable
 1 1 <null>
 2 2 <null>
 <null> <null> <null>
+
+> SELECT * FROM pk_unique_overlap;
+1 1
+1 2
+2 3
 
 # Not null constraint optimizes like this:
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT * FROM pk WHERE f1 IS NULL OR f2 IS NULL;
@@ -90,13 +100,11 @@ Used Indexes:
 Target cluster: quickstart
 
 
-#
 # Unique converted to keys
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_not_null
-Explained Query:
-  Distinct project=[#0, #1]
-    Project (#0, #1)
-      ReadIndex on=unique_not_null unique_not_null_primary_idx=[*** full scan ***]
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.unique_not_null unique_not_null_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.unique_not_null_primary_idx (*** full scan ***)
@@ -106,12 +114,21 @@ Target cluster: quickstart
 
 # Unique NOT converted to keys because values are nullable
 ? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM unique_nullable
-Explained Query:
-  Distinct project=[#0, #1]
-    Project (#0, #1)
-      ReadIndex on=unique_nullable unique_nullable_primary_idx=[*** full scan ***]
+Explained Query (fast path):
+  Project (#0, #1)
+    ReadIndex on=materialize.public.unique_nullable unique_nullable_primary_idx=[*** full scan ***]
 
 Used Indexes:
   - materialize.public.unique_nullable_primary_idx (*** full scan ***)
+
+Target cluster: quickstart
+
+
+? EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR SELECT DISTINCT f1, f2 FROM pk_unique_overlap
+Explained Query (fast path):
+  ReadIndex on=materialize.public.pk_unique_overlap pk_unique_overlap_primary_idx=[*** full scan ***]
+
+Used Indexes:
+  - materialize.public.pk_unique_overlap_primary_idx (*** full scan ***)
 
 Target cluster: quickstart

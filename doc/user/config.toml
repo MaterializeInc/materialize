@@ -7,7 +7,7 @@ disableKinds = ['taxonomy']
 
 [params]
 repo = "//github.com/MaterializeInc/materialize"
-bannerMessage = ""
+bannerMessage = "**New: Self-Managed v26!** For details, see [Release Notes](/releases/).<br>**Note**: To upgrade from v25 to v26, you must [upgrade first to v25.2.16+](https://materialize.com/docs/self-managed/v25.2/release-notes/#v25216)."
 bannerLink = ""
 
 [frontmatter]
@@ -69,26 +69,14 @@ identifier = "reference"
 name = "Reference"
 weight = 80
 
-[[menu.main]]
-name = "SQL commands"
-identifier = "commands"
-parent = "reference"
-weight = 100
-
-
 #
 # Releases
 #
 
 [[menu.main]]
-identifier = "releases-previews"
-name = "Releases"
-weight = 80
-
-[[menu.main]]
 identifier = "changelogs"
 name = "Changelog ↗️"
-parent = "releases-previews"
+parent = "releases"
 weight = 20
 url = "https://materialize.com/changelog/"
 
@@ -105,13 +93,13 @@ weight = 90
 name = "Materialize Cloud Security and Compliance"
 parent = "about"
 url = "https://materialize.com/security-overview"
-weight = 25
+weight = 50
 
 [[menu.main]]
 name = "Responsible disclosure policy"
 parent = "about"
 url = "https://materialize.com/securitydisclosure"
-weight = 30
+weight = 55
 
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
@@ -141,4 +129,4 @@ include = "docs/**"
 # exclude = "**.{jpg, png}" # would exclude files with ".jpg" or ".png" suffix
 
 # Avoid deleting self-managed docs which are deployed from the self-managed-docs branches.
-exclude = "docs/{self-managed/v25.1,self-managed/v25.2}/**"
+exclude = "docs/{self-managed/v25.2}/**"

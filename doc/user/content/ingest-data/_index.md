@@ -7,6 +7,8 @@ menu:
     identifier: "ingest-data"
     name: "Ingest data"
     weight: 11
+aliases:
+  - /self-managed/v25.1/ingest-data/
 ---
 
 You can ingest data into Materialize from various external systems:
@@ -77,6 +79,11 @@ issued against (sub)sources undergoing snapshotting will hang until the
 operation completes. Once the initial snapshot has been ingested, you can start
 querying your (sub)sources and Materialize will continue ingesting any new data
 as it arrives, in real time.
+
+### Modifying an existing source
+
+{{< include-md file="shared-content/alter-source-snapshot-blocking-behavior.md"
+>}}
 
 ## Running/steady-state
 

@@ -98,6 +98,18 @@ also be necessary to support increased memory usage during the process. For more
 information, see [Use a larger cluster for upsert source
 snapshotting](/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
 
+## Adding a new subsource to an existing source blocks replication. Should I just create a new source instead?
+
+It depends. Materialize provides transactional guarantees for subsource of the
+same source, not across different sources. So, if you need transactional
+guarantees across the tables between the two sources, you cannot use a new
+source. In addition, creating a new source means that you are reading the
+replication stream twice.
+
+To use the same source, consider resizing the cluster to speed up the
+snapshotting process for the new subsource and once the process finishes, resize
+the cluster for steady-state.
+
 ## See also
 
 - [Monitoring data ingestion](/ingest-data/monitoring-data-ingestion/)

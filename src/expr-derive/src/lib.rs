@@ -36,9 +36,11 @@
 ///   `output_type`.
 /// * `could_error`: A boolean indicating whether the function could error.
 /// * `propagate_nulls`: A boolean indicating whether the function propagates nulls. Applies to
-///   binary functions only.
+///   binary functions only. If not specified, use the default implementation from the trait.
+///   The default is to return true if all input types are not-nullable.
 /// * `introduces_nulls`: A boolean indicating whether the function introduces nulls. Applies to
-///   all functions.
+///   all functions. If not specified, use the default implementation from the trait.
+///   The default is to return the `nullable` property of the output type.
 ///
 /// # Limitations
 /// * The input and output types can contain lifetime parameters, as long as they are `'a`.

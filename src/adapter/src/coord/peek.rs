@@ -28,6 +28,7 @@ use mz_compute_client::protocol::command::PeekTarget;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::{DataflowDescription, IndexImport};
+use mz_compute_types::sinks::ComputeSinkConnection;
 use mz_controller_types::ClusterId;
 use mz_expr::explain::{HumanizedExplain, HumanizerMode, fmt_text_constant_rows};
 use mz_expr::row::RowCollection;
@@ -37,6 +38,7 @@ use mz_expr::{
 };
 use mz_ore::cast::CastFrom;
 use mz_ore::str::{StrExt, separated};
+use mz_ore::task;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_client::Schemas;
 use mz_persist_types::codec_impls::UnitSchema;
@@ -49,8 +51,11 @@ use mz_repr::{
 use mz_storage_types::sources::SourceData;
 use serde::{Deserialize, Serialize};
 use timely::progress::{Antichain, Timestamp};
+use tokio::sync::oneshot;
+use tracing::{Instrument, Span};
 use uuid::Uuid;
 
+use crate::active_compute_sink::{ActiveComputeSink, ActiveCopyTo};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::optimize::OptimizerError;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
@@ -379,7 +384,7 @@ pub struct PlannedPeek {
     /// [MapFilterProject](mz_expr::MapFilterProject), but _before_ applying a
     /// [RowSetFinishing].
     ///
-    /// This is _the_ `result_type` as far as compute is concerned and futher
+    /// This is _the_ `result_type` as far as compute is concerned and further
     /// changes through projections happen purely in the adapter.
     pub intermediate_result_type: SqlRelationType,
     pub source_arity: usize,
@@ -441,11 +446,8 @@ pub fn create_fast_path_plan<T: Timestamp>(
         let mut mir = &*dataflow_plan.objects_to_build[0].plan.as_inner_mut();
         if let Some((rows, found_typ)) = mir.as_const() {
             // In the case of a constant, we can return the result now.
-            return Ok(Some(FastPathPlan::Constant(
-                rows.clone()
-                    .map(|rows| rows.into_iter().map(|(row, diff)| (row, diff)).collect()),
-                found_typ.clone(),
-            )));
+            let plan = FastPathPlan::Constant(rows.clone(), found_typ.clone());
+            return Ok(Some(plan));
         } else {
             // If there is a TopK that would be completely covered by the finishing, then jump
             // through the TopK.
@@ -634,7 +636,7 @@ impl crate::coord::Coordinator {
         target_replica: Option<ReplicaId>,
         max_result_size: u64,
         max_returned_query_size: Option<u64>,
-    ) -> Result<crate::ExecuteResponse, AdapterError> {
+    ) -> Result<ExecuteResponse, AdapterError> {
         let PlannedPeek {
             plan: fast_path,
             determination,
@@ -768,7 +770,9 @@ impl crate::coord::Coordinator {
                 self.controller
                     .compute
                     .create_dataflow(compute_instance, dataflow, None)
-                    .unwrap_or_terminate("cannot fail to create dataflows");
+                    .map_err(
+                        AdapterError::concurrent_dependency_drop_from_dataflow_creation_error,
+                    )?;
                 self.initialize_compute_read_policies(
                     output_ids,
                     compute_instance,
@@ -827,7 +831,7 @@ impl crate::coord::Coordinator {
         let (literal_constraints, timestamp, map_filter_project) = peek_command;
 
         // At this stage we don't know column names for the result because we
-        // only know the peek's result type as a bare ResultType.
+        // only know the peek's result type as a bare SqlRelationType.
         let peek_result_column_names =
             (0..intermediate_result_type.arity()).map(|i| format!("peek_{i}"));
         let peek_result_desc =
@@ -854,7 +858,7 @@ impl crate::coord::Coordinator {
         // If a dataflow was created, drop it once the peek command is sent.
         if let Some(index_id) = drop_dataflow {
             self.remove_compute_ids_from_timeline(vec![(compute_instance, index_id)]);
-            self.drop_indexes(vec![(compute_instance, index_id)]);
+            self.drop_compute_collections(vec![(compute_instance, index_id)]);
         }
 
         let persist_client = self.persist_client.clone();
@@ -885,7 +889,7 @@ impl crate::coord::Coordinator {
 
     /// Creates an async stream that processes peek responses and yields rows.
     #[mz_ore::instrument(level = "debug")]
-    fn create_peek_response_stream(
+    pub(crate) fn create_peek_response_stream(
         rows_rx: tokio::sync::oneshot::Receiver<PeekResponse>,
         finishing: RowSetFinishing,
         max_result_size: u64,
@@ -982,16 +986,14 @@ impl crate::coord::Coordinator {
                         // aesthetic reasons.
                         let result = tx.send(response.inline_rows).await;
                         if result.is_err() {
-                            tracing::error!("receiver went away");
+                            tracing::debug!("receiver went away");
                         }
 
                         let mut current_batch = Vec::new();
                         let mut current_batch_size: usize = 0;
 
                         'outer: while let Some(rows) = row_cursor.next().await {
-                            for ((key, _val), _ts, diff) in rows {
-                                let source_data = key.expect("decoding error");
-
+                            for ((source_data, _val), _ts, diff) in rows {
                                 let row = source_data
                                     .0
                                     .expect("we are not sending errors on this code path");
@@ -1020,7 +1022,7 @@ impl crate::coord::Coordinator {
                                         ))
                                         .await;
                                     if result.is_err() {
-                                        tracing::error!("receiver went away");
+                                        tracing::debug!("receiver went away");
                                         // Don't return but break so we fall out to the
                                         // batch delete logic below.
                                         break 'outer;
@@ -1034,7 +1036,7 @@ impl crate::coord::Coordinator {
                         if current_batch.len() > 0 {
                             let result = tx.send(RowCollection::new(current_batch, &[])).await;
                             if result.is_err() {
-                                tracing::error!("receiver went away");
+                                tracing::debug!("receiver went away");
                             }
                         }
 
@@ -1187,6 +1189,176 @@ impl crate::coord::Coordinator {
             }
         }
         pending_peek
+    }
+
+    /// Implements a slow-path peek by creating a transient dataflow.
+    /// This is called from the command handler for ExecuteSlowPathPeek.
+    ///
+    /// (For now, this method simply delegates to implement_peek_plan by constructing
+    /// the necessary PlannedPeek structure and a minimal ExecuteContext.)
+    pub(crate) async fn implement_slow_path_peek(
+        &mut self,
+        dataflow_plan: PeekDataflowPlan<mz_repr::Timestamp>,
+        determination: TimestampDetermination<mz_repr::Timestamp>,
+        finishing: RowSetFinishing,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        intermediate_result_type: SqlRelationType,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        max_result_size: u64,
+        max_query_result_size: Option<u64>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        let source_arity = intermediate_result_type.arity();
+
+        let planned_peek = PlannedPeek {
+            plan: PeekPlan::SlowPath(dataflow_plan),
+            determination,
+            conn_id,
+            intermediate_result_type,
+            source_arity,
+            source_ids,
+        };
+
+        // Create a minimal ExecuteContext
+        // TODO(peek-seq): Use the real context once we have statement logging.
+        let mut ctx_extra = ExecuteContextExtra::default();
+
+        // Call the old peek sequencing's implement_peek_plan for now.
+        // TODO(peek-seq): After the old peek sequencing is completely removed, we should merge the
+        // relevant parts of the old `implement_peek_plan` into this method, and remove the old
+        // `implement_peek_plan`.
+        self.implement_peek_plan(
+            &mut ctx_extra,
+            planned_peek,
+            finishing,
+            compute_instance,
+            target_replica,
+            max_result_size,
+            max_query_result_size,
+        )
+        .await
+    }
+
+    /// Implements a COPY TO command by validating S3 connection, shipping the dataflow,
+    /// and spawning a background task to wait for completion.
+    /// This is called from the command handler for ExecuteCopyTo.
+    ///
+    /// This method inlines the logic from peek_copy_to_preflight and peek_copy_to_dataflow
+    /// to avoid the complexity of the staging mechanism for the frontend peek sequencing path.
+    ///
+    /// This method does NOT block waiting for completion. Instead, it spawns a background task that
+    /// will send the response through the provided tx channel when the COPY TO completes.
+    /// All errors (setup or execution) are sent through tx.
+    pub(crate) async fn implement_copy_to(
+        &mut self,
+        df_desc: DataflowDescription<mz_compute_types::plan::Plan>,
+        compute_instance: ComputeInstanceId,
+        target_replica: Option<ReplicaId>,
+        source_ids: BTreeSet<GlobalId>,
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+    ) {
+        // Helper to send error and return early
+        let send_err = |tx: oneshot::Sender<Result<ExecuteResponse, AdapterError>>,
+                        e: AdapterError| {
+            let _ = tx.send(Err(e));
+        };
+
+        let sink_id = df_desc.sink_id();
+
+        // # Inlined from peek_copy_to_preflight
+
+        let connection_context = self.connection_context().clone();
+        let sinks = &df_desc.sink_exports;
+
+        if sinks.len() != 1 {
+            send_err(
+                tx,
+                AdapterError::Internal("expected exactly one copy to s3 sink".into()),
+            );
+            return;
+        }
+        let (sink_id_check, sink_desc) = sinks
+            .first_key_value()
+            .expect("known to be exactly one copy to s3 sink");
+        assert_eq!(sink_id, *sink_id_check);
+
+        match &sink_desc.connection {
+            ComputeSinkConnection::CopyToS3Oneshot(conn) => {
+                if let Err(e) = mz_storage_types::sinks::s3_oneshot_sink::preflight(
+                    connection_context,
+                    &conn.aws_connection,
+                    &conn.upload_info,
+                    conn.connection_id,
+                    sink_id,
+                )
+                .await
+                {
+                    send_err(tx, e.into());
+                    return;
+                }
+            }
+            _ => {
+                send_err(
+                    tx,
+                    AdapterError::Internal("expected copy to s3 oneshot sink".into()),
+                );
+                return;
+            }
+        }
+
+        // # Inlined from peek_copy_to_dataflow
+
+        // Create and register ActiveCopyTo.
+        // Note: sink_tx/sink_rx is the channel for the compute sink to notify completion
+        // This is different from the command's tx which sends the response to the client
+        let (sink_tx, sink_rx) = oneshot::channel();
+        let active_copy_to = ActiveCopyTo {
+            conn_id: conn_id.clone(),
+            tx: sink_tx,
+            cluster_id: compute_instance,
+            depends_on: source_ids,
+        };
+
+        // Add metadata for the new COPY TO. CopyTo returns a `ready` future, so it is safe to drop.
+        drop(
+            self.add_active_compute_sink(sink_id, ActiveComputeSink::CopyTo(active_copy_to))
+                .await,
+        );
+
+        // Try to ship the dataflow. We handle errors gracefully because dependencies might have
+        // disappeared during sequencing.
+        if let Err(e) = self
+            .try_ship_dataflow(df_desc, compute_instance, target_replica)
+            .await
+            .map_err(AdapterError::concurrent_dependency_drop_from_dataflow_creation_error)
+        {
+            // Clean up the active compute sink that was added above, since the dataflow was never
+            // created. If we don't do this, the sink_id remains in drop_sinks but no collection
+            // exists in the compute controller, causing a panic when the connection terminates.
+            self.remove_active_compute_sink(sink_id).await;
+            let _ = tx.send(Err(e));
+            return;
+        }
+
+        // Spawn background task to wait for completion
+        // We must NOT await sink_rx here directly, as that would block the coordinator's main task
+        // from processing the completion message. Instead, we spawn a background task that will
+        // send the result through tx when the COPY TO completes.
+        let span = Span::current();
+        task::spawn(
+            || "copy to completion",
+            async move {
+                let res = sink_rx.await;
+                let result = match res {
+                    Ok(res) => res,
+                    Err(_) => Err(AdapterError::Internal("copy to sender dropped".into())),
+                };
+                let _ = tx.send(result);
+            }
+            .instrument(span),
+        );
     }
 
     /// Constructs an [`ExecuteResponse`] that that will send some rows to the

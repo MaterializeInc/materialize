@@ -21,7 +21,7 @@ use mz_ore::collections::CollectionExt;
 use mz_ore::str::StrExt;
 use mz_pgrepr::oid;
 use mz_repr::role_id::RoleId;
-use mz_repr::{ColumnName, Datum, ScalarBaseType, SqlRelationType, SqlScalarType};
+use mz_repr::{ColumnName, Datum, SqlRelationType, SqlScalarBaseType, SqlScalarType};
 
 use crate::ast::{SelectStatement, Statement};
 use crate::catalog::{CatalogType, TypeCategory, TypeReference};
@@ -856,9 +856,9 @@ impl From<SqlScalarType> for ParamType {
     }
 }
 
-impl From<ScalarBaseType> for ParamType {
-    fn from(s: ScalarBaseType) -> ParamType {
-        use ScalarBaseType::*;
+impl From<SqlScalarBaseType> for ParamType {
+    fn from(s: SqlScalarBaseType) -> ParamType {
+        use SqlScalarBaseType::*;
         let s = match s {
             Array | List | Map | Record | Range => {
                 panic!("use polymorphic parameters rather than {:?}", s);
@@ -938,8 +938,8 @@ impl From<ParamType> for ReturnType {
     }
 }
 
-impl From<ScalarBaseType> for ReturnType {
-    fn from(s: ScalarBaseType) -> ReturnType {
+impl From<SqlScalarBaseType> for ReturnType {
+    fn from(s: SqlScalarBaseType) -> ReturnType {
         ParamType::from(s).into()
     }
 }
@@ -1802,7 +1802,7 @@ macro_rules! privilege_fn {
 /// Correlates a built-in function name to its implementations.
 pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     let mut builtins = builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
@@ -3353,7 +3353,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbArrayElements { stringify: false },
+                        func: TableFunc::JsonbArrayElements,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["value".into()],
@@ -3364,7 +3364,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbArrayElements { stringify: true },
+                        func: TableFunc::JsonbArrayElementsStringify,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["value".into()],
@@ -3375,7 +3375,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbEach { stringify: false },
+                        func: TableFunc::JsonbEach,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["key".into(), "value".into()],
@@ -3386,7 +3386,7 @@ pub static PG_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             params!(Jsonb) => Operation::unary(move |_ecx, jsonb| {
                 Ok(TableFuncPlan {
                     imp: TableFuncImpl::CallTable {
-                        func: TableFunc::JsonbEach { stringify: true },
+                        func: TableFunc::JsonbEachStringify,
                         exprs: vec![jsonb],
                     },
                     column_names: vec!["key".into(), "value".into()],
@@ -3537,7 +3537,7 @@ pub static INFORMATION_SCHEMA_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> =
 
 pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         "constant_time_eq" => Scalar {
             params!(Bytes, Bytes) => BinaryFunc::from(func::ConstantTimeEqBytes) => Bool, oid::FUNC_CONSTANT_TIME_EQ_BYTES_OID;
@@ -3753,7 +3753,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
             vec![ListAny, Plain(SqlScalarType::Int64)] => Operation::binary(|ecx, lhs, rhs| {
                 ecx.require_feature_flag(&crate::session::vars::ENABLE_LIST_LENGTH_MAX)?;
                 let max_layer = ecx.scalar_type(&lhs).unwrap_list_n_layers();
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListLengthMax { max_layer }))
+                Ok(lhs.call_binary(rhs, BinaryFunc::from(func::ListLengthMax { max_layer })))
             }) => Int32, oid::FUNC_LIST_LENGTH_MAX_OID;
         },
         "list_prepend" => Scalar {
@@ -3952,7 +3952,7 @@ pub static MZ_CATALOG_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLoc
 
 pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         "aclitem_grantor" => Scalar {
             params!(AclItem) => UnaryFunc::AclItemGrantor(func::AclItemGrantor) => Oid, oid::FUNC_ACL_ITEM_GRANTOR_OID;
@@ -4339,7 +4339,7 @@ pub static MZ_INTERNAL_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLo
 
 pub static MZ_UNSAFE_BUILTINS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         "mz_all" => Aggregate {
             params!(Any) => AggregateFunc::All => Bool, oid::FUNC_MZ_ALL_OID;
@@ -4459,7 +4459,7 @@ fn array_to_string(
 pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
     use BinaryFunc as BF;
     use ParamType::*;
-    use ScalarBaseType::*;
+    use SqlScalarBaseType::*;
     builtins! {
         // Literal OIDs collected from PG 13 using a version of this query
         // ```sql
@@ -4646,24 +4646,24 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // ILIKE
         "~~*" => Scalar {
-            params!(String, String) => BF::IsLikeMatch { case_insensitive: true } => Bool, 1627;
+            params!(String, String) => BF::from(func::IsLikeMatchCaseInsensitive) => Bool, 1627;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseInsensitive))
                 )
             }) => Bool, 1629;
         },
         "!~~*" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseInsensitive))
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1628;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: true })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseInsensitive))
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1630;
@@ -4672,24 +4672,24 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // LIKE
         "~~" => Scalar {
-            params!(String, String) => BF::IsLikeMatch { case_insensitive: false } => Bool, 1209;
+            params!(String, String) => BF::from(func::IsLikeMatchCaseSensitive) => Bool, 1209;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseSensitive))
                 )
             }) => Bool, 1211;
         },
         "!~~" => Scalar {
             params!(String, String) => Operation::binary(|_ecx, lhs, rhs| {
                 Ok(lhs
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseSensitive))
                     .call_unary(UnaryFunc::Not(func::Not)))
             }) => Bool, 1210;
             params!(Char, String) => Operation::binary(|ecx, lhs, rhs| {
                 let length = ecx.scalar_type(&lhs).unwrap_char_length();
                 Ok(lhs.call_unary(UnaryFunc::PadChar(func::PadChar { length }))
-                    .call_binary(rhs, BF::IsLikeMatch { case_insensitive: false })
+                    .call_binary(rhs, BF::from(func::IsLikeMatchCaseSensitive))
                     .call_unary(UnaryFunc::Not(func::Not))
                 )
             }) => Bool, 1212;
@@ -4781,19 +4781,19 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
 
         // JSON, MAP, RANGE, LIST, ARRAY
         "->" => Scalar {
-            params!(Jsonb, Int64) => BinaryFunc::JsonbGetInt64 => Jsonb, 3212;
-            params!(Jsonb, String) => BinaryFunc::JsonbGetString => Jsonb, 3211;
+            params!(Jsonb, Int64) => BF::from(func::JsonbGetInt64) => Jsonb, 3212;
+            params!(Jsonb, String) => BF::from(func::JsonbGetString) => Jsonb, 3211;
             params!(MapAny, String) => BF::from(func::MapGetValue) => Any, oid::OP_GET_VALUE_MAP_OID;
         },
         "->>" => Scalar {
-            params!(Jsonb, Int64) => BinaryFunc::JsonbGetInt64Stringify => String, 3481;
-            params!(Jsonb, String) => BinaryFunc::JsonbGetStringStringify => String, 3477;
+            params!(Jsonb, Int64) => BF::from(func::JsonbGetInt64Stringify) => String, 3481;
+            params!(Jsonb, String) => BF::from(func::JsonbGetStringStringify) => String, 3477;
         },
         "#>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BinaryFunc::JsonbGetPath => Jsonb, 3213;
+            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BF::from(func::JsonbGetPath) => Jsonb, 3213;
         },
         "#>>" => Scalar {
-            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BinaryFunc::JsonbGetPathStringify => String, 3206;
+            params!(Jsonb, SqlScalarType::Array(Box::new(SqlScalarType::String))) => BF::from(func::JsonbGetPathStringify) => String, 3206;
         },
         "@>" => Scalar {
             params!(Jsonb, Jsonb) => BF::from(func::JsonbContainsJsonb) => Bool, 3246;
@@ -4813,13 +4813,13 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsElem { elem_type, rev: false }))
             }) => Bool, 3889;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::RangeContainsRange { rev: false }))
+                Ok(lhs.call_binary(rhs, BF::from(func::RangeContainsRange)))
             }) => Bool, 3890;
             params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ArrayContainsArray { rev: false }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArray)))
             }) => Bool, 2751;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BinaryFunc::ListContainsList { rev: false }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ListContainsList)))
             }) => Bool, oid::OP_CONTAINS_LIST_LIST_OID;
         },
         "<@" => Scalar {
@@ -4847,13 +4847,13 @@ pub static OP_IMPLS: LazyLock<BTreeMap<&'static str, Func>> = LazyLock::new(|| {
                 Ok(rhs.call_binary(lhs, BF::RangeContainsElem { elem_type, rev: true }))
             }) => Bool, 3891;
             params!(RangeAny, RangeAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(rhs.call_binary(lhs, BF::RangeContainsRange { rev: true }))
+                Ok(rhs.call_binary(lhs, BF::from(func::RangeContainsRangeRev)))
             }) => Bool, 3892;
             params!(ArrayAny, ArrayAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BF::ArrayContainsArray { rev: true }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ArrayContainsArrayRev)))
             }) => Bool, 2752;
             params!(ListAny, ListAny) => Operation::binary(|_ecx, lhs, rhs| {
-                Ok(lhs.call_binary(rhs, BF::ListContainsList { rev: true }))
+                Ok(lhs.call_binary(rhs, BF::from(func::ListContainsListRev)))
             }) => Bool, oid::OP_IS_CONTAINED_LIST_LIST_OID;
         },
         "?" => Scalar {

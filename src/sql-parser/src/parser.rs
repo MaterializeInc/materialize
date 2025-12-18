@@ -597,7 +597,7 @@ impl<'a> Parser<'a> {
             }
             Token::Keyword(NORMALIZE) => self.parse_normalize_expr(),
             Token::Keyword(SUBSTRING) => self.parse_substring_expr(),
-            Token::Keyword(kw) if kw.is_reserved() => {
+            Token::Keyword(kw) if kw.is_always_reserved() => {
                 return Err(self.error(
                     self.peek_prev_pos(),
                     format!("expected expression, but found reserved keyword: {kw}"),
@@ -3862,6 +3862,10 @@ impl<'a> Parser<'a> {
 
         let name = self.parse_item_name()?;
         let columns = self.parse_parenthesized_column_list(Optional)?;
+        let replacing = self
+            .parse_keyword(REPLACING)
+            .then(|| self.parse_raw_name())
+            .transpose()?;
         let in_cluster = self.parse_optional_in_cluster()?;
 
         let with_options = if self.parse_keyword(WITH) {
@@ -3882,6 +3886,7 @@ impl<'a> Parser<'a> {
                 if_exists,
                 name,
                 columns,
+                replacing,
                 in_cluster,
                 query,
                 as_of,
@@ -6432,10 +6437,10 @@ impl<'a> Parser<'a> {
     ) -> Result<Statement<Raw>, ParserStatementError> {
         let if_exists = self.parse_if_exists().map_no_statement_parser_err()?;
         let name = self.parse_item_name().map_no_statement_parser_err()?;
-        let keywords = if object_type == ObjectType::Table {
-            [SET, RENAME, OWNER, RESET, ADD].as_slice()
-        } else {
-            [SET, RENAME, OWNER, RESET].as_slice()
+        let keywords: &[_] = match object_type {
+            ObjectType::Table => &[SET, RENAME, OWNER, RESET, ADD],
+            ObjectType::MaterializedView => &[SET, RENAME, OWNER, RESET, APPLY],
+            _ => &[SET, RENAME, OWNER, RESET],
         };
 
         let action = self
@@ -6523,6 +6528,28 @@ impl<'a> Parser<'a> {
                         if_col_not_exist,
                         column_name,
                         data_type,
+                    },
+                ))
+            }
+            APPLY => {
+                assert_eq!(
+                    object_type,
+                    ObjectType::MaterializedView,
+                    "checked object_type above",
+                );
+
+                self.expect_keyword(REPLACEMENT)
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                let replacement_name = self
+                    .parse_item_name()
+                    .map_parser_err(StatementKind::AlterMaterializedViewApplyReplacement)?;
+
+                Ok(Statement::AlterMaterializedViewApplyReplacement(
+                    AlterMaterializedViewApplyReplacementStatement {
+                        if_exists,
+                        name,
+                        replacement_name,
                     },
                 ))
             }
@@ -7024,6 +7051,16 @@ impl<'a> Parser<'a> {
                 BOOLEAN => other(ident!("bool")),
                 BYTES => other(ident!("bytea")),
                 JSON => other(ident!("jsonb")),
+
+                // We do not want any reserved keywords to be parsed as data type names,
+                // eg "CASE 'foo' WHEN ... END" should not parse as "CAST 'foo' AS CASE"
+                kw if kw.is_sometimes_reserved() => {
+                    return self.expected(
+                        self.peek_prev_pos(),
+                        "a data type name",
+                        Some(Token::Keyword(kw)),
+                    );
+                }
                 _ => {
                     self.prev_token();
                     RawDataType::Other {
@@ -7747,7 +7784,7 @@ impl<'a> Parser<'a> {
             // An empty target list is permissible to match PostgreSQL, which
             // permits these for symmetry with zero column tables. We need
             // to sniff out `AS` here specially to support `SELECT AS OF ...`.
-            Some(Token::Keyword(kw)) if kw.is_reserved() || kw == AS => vec![],
+            Some(Token::Keyword(kw)) if kw.is_always_reserved() || kw == AS => vec![],
             Some(Token::Semicolon) | Some(Token::RParen) | None => vec![],
             _ => {
                 let mut projection = vec![];
@@ -8845,7 +8882,7 @@ impl<'a> Parser<'a> {
                 .map_parser_err(StatementKind::ExplainPushdown)
         } else if self.parse_keyword(ANALYZE) || self.parse_keyword(ANALYSE) {
             self.parse_explain_analyze()
-                .map_parser_err(StatementKind::ExplainAnalyze)
+                .map_parser_err(StatementKind::ExplainAnalyzeObject)
         } else if self.peek_keyword(KEY) || self.peek_keyword(VALUE) {
             self.parse_explain_schema()
                 .map_parser_err(StatementKind::ExplainSinkSchema)
@@ -9044,27 +9081,23 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_explain_analyze(&mut self) -> Result<Statement<Raw>, ParserError> {
+        // EXPLAIN ANALYZE CLUSTER (MEMORY | CPU) [WITH SKEW] [AS SQL]
+        if self.parse_keyword(CLUSTER) {
+            let properties = self.parse_explain_analyze_computation_properties()?;
+            let as_sql = self.parse_keywords(&[AS, SQL]);
+            return Ok(Statement::ExplainAnalyzeCluster(
+                ExplainAnalyzeClusterStatement { properties, as_sql },
+            ));
+        }
+
         // EXPLAIN ANALYZE ((MEMORY | CPU) [WITH SKEW] | HINTS) FOR (INDEX ... | MATERIALIZED VIEW ...) [AS SQL]
 
         let properties = if self.parse_keyword(HINTS) {
             ExplainAnalyzeProperty::Hints
         } else {
-            let mut computation_properties = vec![CPU, MEMORY];
-            let (kw, property) =
-                self.parse_explain_analyze_computation_property(&computation_properties)?;
-            let mut properties = vec![property];
-            computation_properties.retain(|p| p != &kw);
-
-            while self.consume_token(&Token::Comma) {
-                let (kw, property) =
-                    self.parse_explain_analyze_computation_property(&computation_properties)?;
-                computation_properties.retain(|p| p != &kw);
-                properties.push(property);
-            }
-
-            let skew = self.parse_keywords(&[WITH, SKEW]);
-
-            ExplainAnalyzeProperty::Computation { properties, skew }
+            ExplainAnalyzeProperty::Computation(
+                self.parse_explain_analyze_computation_properties()?,
+            )
         };
 
         self.expect_keyword(FOR)?;
@@ -9080,11 +9113,34 @@ impl<'a> Parser<'a> {
 
         let as_sql = self.parse_keywords(&[AS, SQL]);
 
-        Ok(Statement::ExplainAnalyze(ExplainAnalyzeStatement {
-            properties,
-            explainee,
-            as_sql,
-        }))
+        Ok(Statement::ExplainAnalyzeObject(
+            ExplainAnalyzeObjectStatement {
+                properties,
+                explainee,
+                as_sql,
+            },
+        ))
+    }
+
+    fn parse_explain_analyze_computation_properties(
+        &mut self,
+    ) -> Result<ExplainAnalyzeComputationProperties, ParserError> {
+        let mut computation_properties = vec![CPU, MEMORY];
+        let (kw, property) =
+            self.parse_explain_analyze_computation_property(&computation_properties)?;
+        let mut properties = vec![property];
+        computation_properties.retain(|p| p != &kw);
+
+        while self.consume_token(&Token::Comma) {
+            let (kw, property) =
+                self.parse_explain_analyze_computation_property(&computation_properties)?;
+            computation_properties.retain(|p| p != &kw);
+            properties.push(property);
+        }
+
+        let skew = self.parse_keywords(&[WITH, SKEW]);
+
+        Ok(ExplainAnalyzeComputationProperties { properties, skew })
     }
 
     fn parse_explain_analyze_computation_property(

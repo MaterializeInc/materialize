@@ -140,7 +140,7 @@ steps:
         agents:
           queue: linux-aarch64-small
         coverage: skip
-        # Fortify against intermittent DockerHub issues
+        # Fortify against intermittent DockerHub/GHCR issues
         retry:
           automatic:
             - exit_status: 1
@@ -623,6 +623,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: dyncfg
+    label: "Dyncfg"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    inputs: [test/dyncfg]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dyncfg
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: secrets-logging
     label: "Secrets Logging"
     depends_on: build-aarch64
@@ -722,6 +733,18 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: doc-examples
+        label: Documentation Examples Code
+        inputs:
+          - doc/user/data/examples
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: doc-examples
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
   - id: deploy-website
     label: Deploy website
     depends_on: lint-docs
@@ -767,6 +790,23 @@ steps:
   - wait: ~
     continue_on_failure: true
 
+  - id: deploy
+    label: Deploy
+    trigger: deploy
+    async: true
+    branches: "main v*.*"
+    depends_on: ["build-x86_64", "build-aarch64"]
+    build:
+      commit: "$BUILDKITE_COMMIT"
+      branch: "$BUILDKITE_BRANCH"
+      env:
+        BUILDKITE_TAG: "$BUILDKITE_TAG"
+    coverage: skip
+    sanitizer: skip
+
+  - wait: ~
+    continue_on_failure: true
+
   - id: coverage-pr-analyze
     label: Analyze code coverage for PR
     timeout_in_minutes: 20
@@ -776,19 +816,3 @@ steps:
     agents:
       queue: hetzner-aarch64-8cpu-16gb
     coverage: only
-
-  - wait: ~
-    continue_on_failure: true
-
-  - id: deploy
-    label: Deploy
-    trigger: deploy
-    async: true
-    branches: "main v*.*"
-    build:
-      commit: "$BUILDKITE_COMMIT"
-      branch: "$BUILDKITE_BRANCH"
-      env:
-        BUILDKITE_TAG: "$BUILDKITE_TAG"
-    coverage: skip
-    sanitizer: skip

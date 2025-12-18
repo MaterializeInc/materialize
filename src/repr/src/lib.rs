@@ -54,8 +54,8 @@ pub use crate::global_id::GlobalId;
 pub use crate::relation::{
     ColumnIndex, ColumnName, NotNullViolation, PropRelationDescDiff, ProtoColumnName,
     ProtoColumnType, ProtoRelationDesc, ProtoRelationType, RelationDesc, RelationDescBuilder,
-    RelationVersion, RelationVersionSelector, ReprColumnType, SqlColumnType, SqlRelationType,
-    UNKNOWN_COLUMN_NAME, VersionedRelationDesc, arb_relation_desc_diff,
+    RelationVersion, RelationVersionSelector, ReprColumnType, ReprRelationType, SqlColumnType,
+    SqlRelationType, UNKNOWN_COLUMN_NAME, VersionedRelationDesc, arb_relation_desc_diff,
     arb_relation_desc_projection, arb_row_for_relation,
 };
 pub use crate::row::encode::{RowColumnarDecoder, RowColumnarEncoder, preserves_order};
@@ -65,8 +65,8 @@ pub use crate::row::{
     datum_list_size, datum_size, datums_size, read_datum, row_size,
 };
 pub use crate::scalar::{
-    ArrayRustType, AsColumnType, Datum, DatumType, PropArray, PropDatum, PropDict, PropList,
-    ProtoScalarType, ReprScalarType, ScalarBaseType, SqlScalarType, arb_datum,
-    arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
+    ArrayRustType, AsColumnType, Datum, DatumType, ExcludeNull, PropArray, PropDatum, PropDict,
+    PropList, ProtoScalarType, ReprScalarBaseType, ReprScalarType, SqlScalarBaseType,
+    SqlScalarType, arb_datum, arb_datum_for_column, arb_datum_for_scalar, arb_range_type,
 };
 pub use crate::timestamp::{Timestamp, TimestampManipulation};

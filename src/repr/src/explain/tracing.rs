@@ -442,19 +442,19 @@ mod test {
     #[instrument(level = "info", name = "logical")]
     fn logical_optimizer(plan: &mut String) {
         some_optimization(plan);
-        let _ = plan.replace("RawPlan", "LogicalPlan");
+        *plan = plan.replace("RawPlan", "LogicalPlan");
         trace_plan(plan);
     }
 
     #[instrument(level = "info", name = "physical")]
     fn physical_optimizer(plan: &mut String) {
-        let _ = plan.replace("LogicalPlan", "PhysicalPlan");
+        *plan = plan.replace("LogicalPlan", "PhysicalPlan");
         trace_plan(plan);
     }
 
     #[mz_ore::instrument(level = "debug", fields(path.segment ="my_optimization"))]
     fn some_optimization(plan: &mut String) {
-        let _ = plan.replace("42", "47");
+        *plan = plan.replace("42", "47");
         trace_plan(plan);
     }
 

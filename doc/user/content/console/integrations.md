@@ -5,7 +5,7 @@ disable_toc: true
 menu:
   main:
     parent: console
-    weight: 30
+    weight: 24
     identifier: console-integrations
 ---
 

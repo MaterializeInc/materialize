@@ -57,7 +57,10 @@ use mz_repr::namespaces::{
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector};
+use mz_repr::{
+    CatalogItemId, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    VersionedRelationDesc,
+};
 use mz_secrets::InMemorySecretsController;
 use mz_sql::ast::Ident;
 use mz_sql::catalog::{BuiltinsConfig, CatalogConfig, EnvironmentId};
@@ -695,15 +698,20 @@ impl CatalogState {
                 RawDatabaseSpecifier::Name(self.get_database(id).name().to_string())
             }
         };
-        let schema = self
-            .get_schema(
-                &name.qualifiers.database_spec,
-                &name.qualifiers.schema_spec,
-                conn_id,
-            )
-            .name()
-            .schema
-            .clone();
+        // For temporary schemas, we know the name is always MZ_TEMP_SCHEMA,
+        // and the schema may not exist yet if no temporary items have been created.
+        let schema = match &name.qualifiers.schema_spec {
+            SchemaSpecifier::Temporary => MZ_TEMP_SCHEMA.to_string(),
+            _ => self
+                .get_schema(
+                    &name.qualifiers.database_spec,
+                    &name.qualifiers.schema_spec,
+                    conn_id,
+                )
+                .name()
+                .schema
+                .clone(),
+        };
         FullItemName {
             database,
             schema,
@@ -756,11 +764,20 @@ impl CatalogState {
     }
 
     pub fn get_temp_items(&self, conn: &ConnectionId) -> impl Iterator<Item = ObjectId> + '_ {
-        let schema = self
-            .temporary_schemas
+        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        self.temporary_schemas
             .get(conn)
-            .unwrap_or_else(|| panic!("catalog out of sync, missing temporary schema for {conn}"));
-        schema.items.values().copied().map(ObjectId::from)
+            .into_iter()
+            .flat_map(|schema| schema.items.values().copied().map(ObjectId::from))
+    }
+
+    /// Returns true if a temporary schema exists for the given connection.
+    ///
+    /// Temporary schemas are created lazily when the first temporary object is created
+    /// for a connection, so this may return false for connections that haven't created
+    /// any temporary objects.
+    pub fn has_temporary_schema(&self, conn: &ConnectionId) -> bool {
+        self.temporary_schemas.contains_key(conn)
     }
 
     /// Gets a type named `name` from exactly one of the system schemas.
@@ -845,7 +862,7 @@ impl CatalogState {
         let desc = match entry.item() {
             CatalogItem::Table(table) => Cow::Owned(table.desc_for(id)),
             // TODO(alter_table): Support schema evolution on sources.
-            other => other.desc_opt(RelationVersionSelector::Latest)?,
+            other => other.relation_desc(RelationVersionSelector::Latest)?,
         };
         Some(desc)
     }
@@ -991,7 +1008,7 @@ impl CatalogState {
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, stmt)?;
         let plan = mz_sql::plan::plan(pcx, catalog, stmt, &Params::empty(), &resolved_ids)?;
 
-        return Ok((plan, resolved_ids));
+        Ok((plan, resolved_ids))
     }
 
     /// Parses the given SQL string into a pair of [`CatalogItem`].
@@ -1300,6 +1317,12 @@ impl CatalogState {
             Plan::CreateMaterializedView(CreateMaterializedViewPlan {
                 materialized_view, ..
             }) => {
+                let collections = extra_versions
+                    .iter()
+                    .map(|(version, gid)| (*version, *gid))
+                    .chain([(RelationVersion::root(), global_id)].into_iter())
+                    .collect();
+
                 // Collect optimizer parameters.
                 let optimizer_config =
                     optimize::OptimizerConfig::from(session_catalog.system_vars());
@@ -1347,6 +1370,7 @@ impl CatalogState {
                     typ.column_types[i].nullable = false;
                 }
                 let desc = RelationDesc::new(typ, materialized_view.column_names);
+                let desc = VersionedRelationDesc::new(desc);
 
                 let initial_as_of = materialized_view.as_of.map(Antichain::from_elem);
 
@@ -1359,12 +1383,13 @@ impl CatalogState {
 
                 CatalogItem::MaterializedView(MaterializedView {
                     create_sql: materialized_view.create_sql,
-                    global_id,
+                    collections,
                     raw_expr,
                     optimized_expr,
                     desc,
                     resolved_ids,
                     dependencies,
+                    replacement_target: materialized_view.replacement_target,
                     cluster_id: materialized_view.cluster_id,
                     non_null_assertions: materialized_view.non_null_assertions,
                     custom_logical_compaction_window: materialized_view.compaction_window,
@@ -1407,16 +1432,18 @@ impl CatalogState {
                 with_snapshot,
                 resolved_ids,
                 cluster_id: in_cluster,
+                commit_interval: sink.commit_interval,
             }),
             Plan::CreateType(CreateTypePlan { typ, .. }) => {
-                let desc = match typ.inner.desc(&session_catalog) {
-                    Ok(desc) => desc,
-                    Err(err) => return Err((err.into(), cached_expr)),
-                };
+                // Even if we don't need the `RelationDesc` here, error out
+                // early and eagerly, as a kind of soft assertion that we _can_
+                // build the `RelationDesc` when needed.
+                if let Err(err) = typ.inner.desc(&session_catalog) {
+                    return Err((err.into(), cached_expr));
+                }
                 CatalogItem::Type(Type {
                     create_sql: Some(typ.create_sql),
                     global_id,
-                    desc,
                     details: CatalogTypeDetails {
                         array_id: None,
                         typ: typ.inner,
@@ -1522,7 +1549,7 @@ impl CatalogState {
     /// Gets a reference to the specified replica of the specified cluster.
     ///
     /// Panics if either the cluster or the replica does not exist.
-    pub(super) fn get_cluster_replica(
+    pub(crate) fn get_cluster_replica(
         &self,
         cluster_id: ClusterId,
         replica_id: ReplicaId,
@@ -1585,28 +1612,43 @@ impl CatalogState {
         schema.ok_or_else(|| SqlCatalogError::UnknownSchema(schema_name.into()))
     }
 
+    /// Try to get a schema, returning `None` if it doesn't exist.
+    ///
+    /// For temporary schemas, returns `None` if the schema hasn't been created yet
+    /// (temporary schemas are created lazily when the first temporary object is created).
+    pub fn try_get_schema(
+        &self,
+        database_spec: &ResolvedDatabaseSpecifier,
+        schema_spec: &SchemaSpecifier,
+        conn_id: &ConnectionId,
+    ) -> Option<&Schema> {
+        // Keep in sync with `get_schema` and `get_schemas_mut`
+        match (database_spec, schema_spec) {
+            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => {
+                self.temporary_schemas.get(conn_id)
+            }
+            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => {
+                self.ambient_schemas_by_id.get(id)
+            }
+            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => self
+                .database_by_id
+                .get(database_id)
+                .and_then(|db| db.schemas_by_id.get(schema_id)),
+            (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
+                unreachable!("temporary schemas are in the ambient database")
+            }
+        }
+    }
+
     pub fn get_schema(
         &self,
         database_spec: &ResolvedDatabaseSpecifier,
         schema_spec: &SchemaSpecifier,
         conn_id: &ConnectionId,
     ) -> &Schema {
-        // Keep in sync with `get_schemas_mut`
-        match (database_spec, schema_spec) {
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => {
-                &self.temporary_schemas[conn_id]
-            }
-            (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => {
-                &self.ambient_schemas_by_id[id]
-            }
-
-            (ResolvedDatabaseSpecifier::Id(database_id), SchemaSpecifier::Id(schema_id)) => {
-                &self.database_by_id[database_id].schemas_by_id[schema_id]
-            }
-            (ResolvedDatabaseSpecifier::Id(_), SchemaSpecifier::Temporary) => {
-                unreachable!("temporary schemas are in the ambient database")
-            }
-        }
+        // Keep in sync with `try_get_schema` and `get_schemas_mut`
+        self.try_get_schema(database_spec, schema_spec, conn_id)
+            .expect("schema must exist")
     }
 
     pub(super) fn find_non_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
@@ -1614,6 +1656,13 @@ impl CatalogState {
             .values()
             .filter_map(|database| database.schemas_by_id.get(schema_id))
             .chain(self.ambient_schemas_by_id.values())
+            .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
+            .into_first()
+    }
+
+    pub(super) fn find_temp_schema(&self, schema_id: &SchemaId) -> &Schema {
+        self.temporary_schemas
+            .values()
             .filter(|schema| schema.id() == &SchemaSpecifier::from(*schema_id))
             .into_first()
     }
@@ -2038,13 +2087,12 @@ impl CatalogState {
                 }
             }
             None => match self
-                .get_schema(
+                .try_get_schema(
                     &ResolvedDatabaseSpecifier::Ambient,
                     &SchemaSpecifier::Temporary,
                     conn_id,
                 )
-                .items
-                .get(&name.item)
+                .and_then(|schema| schema.items.get(&name.item))
             {
                 Some(id) => return Ok(self.get_entry(id)),
                 None => search_path.to_vec(),
@@ -2052,7 +2100,11 @@ impl CatalogState {
         };
 
         for (database_spec, schema_spec) in &schemas {
-            let schema = self.get_schema(database_spec, schema_spec, conn_id);
+            // Use try_get_schema because the temp schema might not exist yet
+            // (it's created lazily when the first temp object is created).
+            let Some(schema) = self.try_get_schema(database_spec, schema_spec, conn_id) else {
+                continue;
+            };
 
             if let Some(id) = get_schema_entries(schema).get(&name.item) {
                 return Ok(&self.entry_by_id[id]);

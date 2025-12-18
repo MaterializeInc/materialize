@@ -8,7 +8,7 @@
 # by the Apache License, Version 2.0.
 from psycopg import Connection
 
-from materialize.scalability.endpoint.endpoint import Endpoint
+from materialize.scalability.endpoint.endpoint import ConnectionKind, Endpoint
 from materialize.scalability.operation.operation_data import OperationData
 from materialize.scalability.operation.scalability_operation import (
     Operation,
@@ -201,7 +201,55 @@ class Connect(Operation):
         endpoint: Endpoint = data.get("endpoint")
         schema: Schema = data.get("schema")
 
-        connection = endpoint.sql_connection(quiet=True)
+        connection = endpoint.sql_connection(quiet=True, kind=ConnectionKind.Plain)
+        connection.autocommit = True
+        cursor = connection.cursor()
+
+        # this sets the database schema
+        for connect_sql in schema.connect_sqls():
+            cursor.execute(connect_sql.encode("utf8"))
+
+        data.push("connection", connection)
+        data.push("cursor", cursor)
+        return data
+
+
+class ConnectPassword(Operation):
+    def required_keys(self) -> set[str]:
+        return {"endpoint", "schema"}
+
+    def produced_keys(self) -> set[str]:
+        return {"connection", "cursor"}
+
+    def _execute(self, data: OperationData) -> OperationData:
+        endpoint: Endpoint = data.get("endpoint")
+        schema: Schema = data.get("schema")
+
+        connection = endpoint.sql_connection(quiet=True, kind=ConnectionKind.Password)
+        connection.autocommit = True
+        cursor = connection.cursor()
+
+        # this sets the database schema
+        for connect_sql in schema.connect_sqls():
+            cursor.execute(connect_sql.encode("utf8"))
+
+        data.push("connection", connection)
+        data.push("cursor", cursor)
+        return data
+
+
+class ConnectSasl(Operation):
+    def required_keys(self) -> set[str]:
+        return {"endpoint", "schema"}
+
+    def produced_keys(self) -> set[str]:
+        return {"connection", "cursor"}
+
+    def _execute(self, data: OperationData) -> OperationData:
+        endpoint: Endpoint = data.get("endpoint")
+        schema: Schema = data.get("schema")
+
+        connection = endpoint.sql_connection(quiet=True, kind=ConnectionKind.Sasl)
         connection.autocommit = True
         cursor = connection.cursor()
 

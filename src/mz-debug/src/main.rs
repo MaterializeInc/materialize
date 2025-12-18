@@ -70,9 +70,6 @@ pub struct SelfManagedDebugModeArgs {
     /// The kubernetes context to use.
     #[clap(long, env = "KUBERNETES_CONTEXT")]
     k8s_context: Option<String>,
-    /// If true, the tool will dump the values of secrets in the Kubernetes cluster.
-    #[clap(long, default_value = "false", action = clap::ArgAction::Set)]
-    k8s_dump_secret_values: bool,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -160,7 +157,6 @@ struct SelfManagedContext {
     k8s_namespace: String,
     mz_instance_name: String,
     k8s_additional_namespaces: Option<Vec<String>>,
-    k8s_dump_secret_values: bool,
     mz_connection_info: SelfManagedMzConnectionInfo,
     http_connection_auth_mode: AuthMode,
 }
@@ -337,7 +333,6 @@ async fn initialize_context(
                 k8s_namespace: args.k8s_namespace.clone(),
                 mz_instance_name: args.mz_instance_name.clone(),
                 k8s_additional_namespaces: args.additional_k8s_namespaces.clone(),
-                k8s_dump_secret_values: args.k8s_dump_secret_values,
                 mz_connection_info,
                 http_connection_auth_mode: auth_mode,
             })
@@ -406,7 +401,6 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
             k8s_context,
             k8s_namespace,
             k8s_additional_namespaces,
-            k8s_dump_secret_values,
             ..
         }) => {
             if *dump_k8s {
@@ -416,7 +410,6 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
                     k8s_namespace.clone(),
                     k8s_additional_namespaces.clone(),
                     k8s_context.clone(),
-                    *k8s_dump_secret_values,
                 );
                 dumper.dump_container_resources().await;
             }

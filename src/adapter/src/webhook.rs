@@ -223,7 +223,7 @@ impl AppendWebhookValidator {
         .map_err(|e| {
             tracing::error!("Failed to run validation for webhook, {e}");
             AppendWebhookError::ValidationError
-        })??;
+        })?;
 
         valid
     }

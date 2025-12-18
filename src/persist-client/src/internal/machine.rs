@@ -10,21 +10,21 @@
 //! Implementation of the persist state machine.
 
 use std::fmt::Debug;
-use std::ops::ControlFlow::{self, Continue};
+use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use futures::future::{self, BoxFuture};
 use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::assert_none;
 use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
 use mz_ore::task::JoinHandle;
+use mz_ore::{assert_none, soft_assert_no_log};
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
 use mz_persist_types::schema::SchemaId;
@@ -102,7 +102,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64,
+    D: Monoid + Codec64,
 {
     pub async fn new(
         cfg: PersistConfig,
@@ -187,6 +187,35 @@ where
             })
             .await;
         (removed_rollup_seqnos, maintenance)
+    }
+
+    /// Attempt to upgrade the state to the latest version. If that's not possible, return the
+    /// actual data version of the shard.
+    pub async fn upgrade_version(&self) -> Result<RoutineMaintenance, Version> {
+        let metrics = Arc::clone(&self.applier.metrics);
+        let (_seqno, upgrade_result, maintenance) = self
+            .apply_unbatched_idempotent_cmd(&metrics.cmds.remove_rollups, |_, cfg, state| {
+                if state.version <= cfg.build_version {
+                    // This would be the place to remove any deprecated items from state, now
+                    // that we're dropping compatibility with any previous versions.
+                    state.version = cfg.build_version.clone();
+                    Continue(Ok(()))
+                } else {
+                    Break(NoOpStateTransition(Err(state.version.clone())))
+                }
+            })
+            .await;
+
+        match upgrade_result {
+            Ok(()) => Ok(maintenance),
+            Err(version) => {
+                soft_assert_no_log!(
+                    maintenance.is_empty(),
+                    "should not generate maintenance on failed upgrade"
+                );
+                Err(version)
+            }
+        }
     }
 
     pub async fn register_leased_reader(
@@ -1074,7 +1103,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + PartialEq,
+    D: Monoid + Codec64 + PartialEq,
 {
     pub async fn merge_res(
         &self,
@@ -1171,7 +1200,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + Codec64 + Sync,
-    D: Semigroup + Codec64 + Send + Sync,
+    D: Monoid + Codec64 + Send + Sync,
 {
     #[allow(clippy::unused_async)]
     pub async fn start_reader_heartbeat_tasks(
@@ -1509,6 +1538,10 @@ pub mod datadriven {
                 Arc::clone(&self.client.blob),
                 self.client.metrics.shards.shard(&self.shard_id, "test"),
                 self.client.cfg.build_version.clone(),
+                (
+                    <String>::encode_schema(&*SCHEMAS.key),
+                    <()>::encode_schema(&*SCHEMAS.val),
+                ),
                 hollow,
             )
         }
@@ -2265,7 +2298,7 @@ pub mod datadriven {
                 match event {
                     ListenEvent::Updates(x) => {
                         for ((k, _v), t, d) in x.iter() {
-                            write!(s, "{} {} {}\n", k.as_ref().unwrap(), t, d);
+                            write!(s, "{} {} {}\n", k, t, d);
                         }
                     }
                     ListenEvent::Progress(x) => {
@@ -2567,14 +2600,16 @@ pub mod tests {
     use mz_ore::task::spawn;
     use mz_persist::intercept::{InterceptBlob, InterceptHandle};
     use mz_persist::location::SeqNo;
+    use mz_persist_types::PersistLocation;
+    use semver::Version;
     use timely::progress::Antichain;
 
-    use crate::ShardId;
     use crate::batch::BatchBuilderConfig;
     use crate::cache::StateCache;
     use crate::internal::gc::{GarbageCollector, GcReq};
     use crate::internal::state::{HandleDebugState, ROLLUP_THRESHOLD};
-    use crate::tests::new_test_client;
+    use crate::tests::{new_test_client, new_test_client_cache};
+    use crate::{Diagnostics, PersistClient, ShardId};
 
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
@@ -2721,5 +2756,60 @@ pub mod tests {
         // this handle's upper now lags behind. if compare_and_append fails to update
         // state after an upper mismatch then this call would (incorrectly) fail
         write2.expect_compare_and_append(&data[1..2], 2, 3).await;
+    }
+
+    #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)]
+    async fn version_upgrade(dyncfgs: ConfigUpdates) {
+        let mut cache = new_test_client_cache(&dyncfgs);
+        cache.cfg.build_version = Version::new(26, 1, 0);
+        let shard_id = ShardId::new();
+
+        async fn fetch_catalog_upgrade_shard_version(
+            persist_client: &PersistClient,
+            upgrade_shard_id: ShardId,
+        ) -> Option<semver::Version> {
+            let shard_state = persist_client
+                .inspect_shard::<u64>(&upgrade_shard_id)
+                .await
+                .ok()?;
+            let json_state = serde_json::to_value(shard_state).expect("state serialization error");
+            let upgrade_version = json_state
+                .get("applier_version")
+                .cloned()
+                .expect("missing applier_version");
+            let upgrade_version =
+                serde_json::from_value(upgrade_version).expect("version deserialization error");
+            Some(upgrade_version)
+        }
+
+        cache.cfg.build_version = Version::new(26, 1, 0);
+        let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let (_, mut reader) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        reader.downgrade_since(&Antichain::from_elem(1)).await;
+        assert_eq!(
+            fetch_catalog_upgrade_shard_version(&client, shard_id).await,
+            Some(Version::new(26, 1, 0)),
+        );
+
+        // Merely opening and operating on the shard at a new version doesn't bump version...
+        cache.cfg.build_version = Version::new(27, 1, 0);
+        let client = cache.open(PersistLocation::new_in_mem()).await.unwrap();
+        let (_, mut reader) = client.expect_open::<String, (), u64, i64>(shard_id).await;
+        reader.downgrade_since(&Antichain::from_elem(2)).await;
+        assert_eq!(
+            fetch_catalog_upgrade_shard_version(&client, shard_id).await,
+            Some(Version::new(26, 1, 0)),
+        );
+
+        // ...but an explicit call will.
+        client
+            .upgrade_version::<String, (), u64, i64>(shard_id, Diagnostics::for_tests())
+            .await
+            .unwrap();
+        assert_eq!(
+            fetch_catalog_upgrade_shard_version(&client, shard_id).await,
+            Some(Version::new(27, 1, 0)),
+        );
     }
 }

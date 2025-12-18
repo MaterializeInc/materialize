@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use differential_dataflow::hashable::Hashable;
-use differential_dataflow::{AsCollection, Collection};
+use differential_dataflow::{AsCollection, VecCollection};
 use futures::StreamExt;
 use futures::future::FutureExt;
 use indexmap::map::Entry;
@@ -36,7 +36,6 @@ use mz_timely_util::builder_async::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use timely::dataflow::channels::pact::Exchange;
-use timely::dataflow::channels::pushers::Tee;
 use timely::dataflow::operators::{Capability, InputCapability, Operator};
 use timely::dataflow::{Scope, ScopeParent, Stream};
 use timely::order::{PartialOrder, TotalOrder};
@@ -212,10 +211,10 @@ pub fn rehydration_finished<G, T>(
 /// - A collection of the computed upsert operator and,
 /// - A health update stream to propagate errors
 pub(crate) fn upsert<G: Scope, FromTime>(
-    input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     upsert_envelope: UpsertEnvelope,
     resume_upper: Antichain<G::Timestamp>,
-    previous: Collection<G, Result<Row, DataflowError>, Diff>,
+    previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     instance_context: &StorageInstanceContext,
@@ -223,7 +222,7 @@ pub(crate) fn upsert<G: Scope, FromTime>(
     dataflow_paramters: &crate::internal_control::DataflowParameters,
     backpressure_metrics: Option<BackpressureMetrics>,
 ) -> (
-    Collection<G, Result<Row, DataflowError>, Diff>,
+    VecCollection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,
@@ -342,10 +341,10 @@ where
 // A shim so we can dispatch based on the dyncfg that tells us which upsert
 // operator to use.
 fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
-    input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
-    persist_input: Collection<G, Result<Row, DataflowError>, Diff>,
+    persist_input: VecCollection<G, Result<Row, DataflowError>, Diff>,
     persist_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -355,7 +354,7 @@ fn upsert_operator<G: Scope, FromTime, F, Fut, US>(
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
-    Collection<G, Result<Row, DataflowError>, Diff>,
+    VecCollection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,
@@ -411,8 +410,8 @@ where
 /// highest from_time. Its purpose is to thin out data as much as possible before exchanging them
 /// across workers.
 fn upsert_thinning<G, K, V, FromTime>(
-    input: &Collection<G, (K, V, FromTime), Diff>,
-) -> Collection<G, (K, V, FromTime), Diff>
+    input: &VecCollection<G, (K, V, FromTime), Diff>,
+) -> VecCollection<G, (K, V, FromTime), Diff>
 where
     G: Scope,
     G::Timestamp: TotalOrder,
@@ -428,7 +427,7 @@ where
             // A batch of received updates
             let mut updates = Vec::new();
             move |input, output| {
-                while let Some((cap, data)) = input.next() {
+                input.for_each(|cap, data| {
                     assert!(
                         data.iter().all(|(_, _, diff)| diff.is_positive()),
                         "invalid upsert input"
@@ -442,7 +441,7 @@ where
                         }
                         None => capability = Some(cap),
                     }
-                }
+                });
                 if let Some(capability) = capability.take() {
                     // Sort by (key, time, Reverse(from_time)) so that deduping by (key, time) gives
                     // the latest change for that key.
@@ -660,10 +659,10 @@ pub(crate) struct UpsertConfig {
 }
 
 fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
-    input: &Collection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
+    input: &VecCollection<G, (UpsertKey, Option<UpsertValue>, FromTime), Diff>,
     key_indices: Vec<usize>,
     resume_upper: Antichain<G::Timestamp>,
-    previous: Collection<G, Result<Row, DataflowError>, Diff>,
+    previous: VecCollection<G, Result<Row, DataflowError>, Diff>,
     previous_token: Option<Vec<PressOnDropButton>>,
     upsert_metrics: UpsertMetrics,
     source_config: crate::source::SourceExportCreationConfig,
@@ -672,7 +671,7 @@ fn upsert_classic<G: Scope, FromTime, F, Fut, US>(
     prevent_snapshot_buffering: bool,
     snapshot_buffering_max: Option<usize>,
 ) -> (
-    Collection<G, Result<Row, DataflowError>, Diff>,
+    VecCollection<G, Result<Row, DataflowError>, Diff>,
     Stream<G, (Option<GlobalId>, HealthStatusUpdate)>,
     Stream<G, Infallible>,
     PressOnDropButton,
@@ -954,7 +953,6 @@ impl<G: Scope> UpsertErrorEmitter<G>
         &mut AsyncOutputHandle<
             <G as ScopeParent>::Timestamp,
             CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-            Tee<<G as ScopeParent>::Timestamp, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
         >,
         &Capability<<G as ScopeParent>::Timestamp>,
     )
@@ -971,7 +969,6 @@ async fn process_upsert_state_error<G: Scope>(
     health_output: &AsyncOutputHandle<
         <G as ScopeParent>::Timestamp,
         CapacityContainerBuilder<Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
-        Tee<<G as ScopeParent>::Timestamp, Vec<(Option<GlobalId>, HealthStatusUpdate)>>,
     >,
     health_cap: &Capability<<G as ScopeParent>::Timestamp>,
 ) {

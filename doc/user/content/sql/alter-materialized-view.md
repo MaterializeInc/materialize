@@ -6,17 +6,47 @@ menu:
     parent: 'commands'
 ---
 
-`ALTER  MATERIALIZED VIEW` changes the parameters of a materialized view.
+Use `ALTER  MATERIALIZED VIEW` to:
+
+- Rename a materialized view.
+- Change owner of a materialized view.
+- Change retain history configuration for the materialized view.
 
 ## Syntax
 
-{{< diagram "alter-materialized-view-set.svg" >}}
-{{< diagram "alter-materialized-view-reset.svg" >}}
+{{< tabs >}}
+{{< tab "Rename" >}}
 
-Field | Use
-------|-----
-_name_ | The identifier of the materialized view you want to alter.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`.
+### Rename
+
+To rename a materialized view:
+
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-rename" %}}
+
+{{< /tab >}}
+{{< tab "Change owner" >}}
+
+### Change owner
+
+To change the owner of a materialized view:
+
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-change-owner" %}}
+
+{{< /tab >}}
+{{< tab "(Re)Set retain history config" >}}
+
+### (Re)Set retain history config
+
+To set the retention history for a materialized view:
+
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-set-retain-history" %}}
+
+To reset the retention history to the default for a materialized view:
+
+{{% include-syntax file="examples/alter_materialized_view" example="syntax-reset-retain-history" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
 

@@ -7,6 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug};
 use std::hash::Hash;
@@ -1555,12 +1556,12 @@ impl fmt::Display for Datum<'_> {
                     f.write_str("=")?;
                 }
                 f.write_str("{")?;
-                write_delimited(f, ", ", &array.elements, |f, e| write!(f, "{}", e))?;
+                write_delimited(f, ", ", array.elements, |f, e| write!(f, "{}", e))?;
                 f.write_str("}")
             }
             Datum::List(list) => {
                 f.write_str("[")?;
-                write_delimited(f, ", ", list, |f, e| write!(f, "{}", e))?;
+                write_delimited(f, ", ", *list, |f, e| write!(f, "{}", e))?;
                 f.write_str("]")
             }
             Datum::Map(dict) => {
@@ -1591,7 +1592,7 @@ impl fmt::Display for Datum<'_> {
 #[derive(
     Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, EnumKind, MzReflect,
 )]
-#[enum_kind(ScalarBaseType, derive(PartialOrd, Ord, Hash))]
+#[enum_kind(SqlScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum SqlScalarType {
     /// The type of [`Datum::True`] and [`Datum::False`].
     Bool,
@@ -1940,6 +1941,40 @@ pub trait DatumType<'a, E>: Sized {
 #[derive(Debug)]
 pub struct ArrayRustType<T>(pub Vec<T>);
 
+impl<T> From<Vec<T>> for ArrayRustType<T> {
+    fn from(v: Vec<T>) -> Self {
+        Self(v)
+    }
+}
+
+impl<B: ToOwned<Owned: AsColumnType>> AsColumnType for Cow<'_, B> {
+    fn as_column_type() -> SqlColumnType {
+        <B::Owned>::as_column_type()
+    }
+}
+
+impl<'a, E, B: ToOwned> DatumType<'a, E> for Cow<'a, B>
+where
+    B::Owned: DatumType<'a, E>,
+    for<'b> &'b B: DatumType<'a, E>,
+{
+    fn nullable() -> bool {
+        B::Owned::nullable()
+    }
+    fn fallible() -> bool {
+        B::Owned::fallible()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        <&B>::try_from_result(res).map(|b| Cow::Borrowed(b))
+    }
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        match self {
+            Cow::Owned(b) => b.into_result(temp_storage),
+            Cow::Borrowed(b) => b.into_result(temp_storage),
+        }
+    }
+}
+
 impl<B: AsColumnType> AsColumnType for Option<B> {
     fn as_column_type() -> SqlColumnType {
         B::as_column_type().nullable(true)
@@ -1986,6 +2021,47 @@ impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for Result<B, E> {
     }
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
         self.and_then(|inner| inner.into_result(temp_storage))
+    }
+}
+
+/// A wrapper type that excludes `NULL` values, even if `B` allows them.
+///
+/// The wrapper allows for using types that can represent `NULL` values in contexts where
+/// `NULL` values are not allowed, enforcing the non-null constraint at the type level.
+/// For example, functions that propagate `NULL` values can use this type to ensure that
+/// their inputs are non-null, even if the type could represent `NULL` values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ExcludeNull<B>(B);
+
+impl<B: AsColumnType> AsColumnType for ExcludeNull<B> {
+    fn as_column_type() -> SqlColumnType {
+        B::as_column_type().nullable(false)
+    }
+}
+
+impl<'a, E, B: DatumType<'a, E>> DatumType<'a, E> for ExcludeNull<B> {
+    fn nullable() -> bool {
+        false
+    }
+    fn fallible() -> bool {
+        B::fallible()
+    }
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Null) => Err(Ok(Datum::Null)),
+            _ => B::try_from_result(res).map(ExcludeNull),
+        }
+    }
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        self.0.into_result(temp_storage)
+    }
+}
+
+impl<B> std::ops::Deref for ExcludeNull<B> {
+    type Target = B;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -2263,6 +2339,48 @@ impl<'a, E> DatumType<'a, E> for ArrayRustType<String> {
                         length: self.0.len(),
                     }],
                     self.0.iter().map(|elem| Datum::String(elem.as_str())),
+                )
+                .expect("self is 1 dimensional, and its length is used for the array length");
+        }))
+    }
+}
+
+impl AsColumnType for ArrayRustType<Cow<'_, str>> {
+    fn as_column_type() -> SqlColumnType {
+        SqlScalarType::Array(Box::new(SqlScalarType::String)).nullable(false)
+    }
+}
+
+impl<'a, E> DatumType<'a, E> for ArrayRustType<Cow<'a, str>> {
+    fn nullable() -> bool {
+        false
+    }
+
+    fn fallible() -> bool {
+        false
+    }
+
+    fn try_from_result(res: Result<Datum<'a>, E>) -> Result<Self, Result<Datum<'a>, E>> {
+        match res {
+            Ok(Datum::Array(arr)) => Ok(ArrayRustType(
+                arr.elements()
+                    .into_iter()
+                    .map(|d| Cow::Borrowed(d.unwrap_str()))
+                    .collect(),
+            )),
+            _ => Err(res),
+        }
+    }
+
+    fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
+        Ok(temp_storage.make_datum(|packer| {
+            packer
+                .try_push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: self.0.len(),
+                    }],
+                    self.0.iter().map(|elem| Datum::String(elem.as_ref())),
                 )
                 .expect("self is 1 dimensional, and its length is used for the array length");
         }))
@@ -3212,7 +3330,7 @@ impl SqlScalarType {
                                 && a.1.scalar_type.eq_inner(&b.1.scalar_type, structure_only)
                         })
             }
-            (s, o) => ScalarBaseType::from(s) == ScalarBaseType::from(o),
+            (s, o) => SqlScalarBaseType::from(s) == SqlScalarBaseType::from(o),
         }
     }
 
@@ -3968,12 +4086,8 @@ impl Arbitrary for ReprScalarType {
             Just(ReprScalarType::Numeric).boxed(),
             Just(ReprScalarType::Date).boxed(),
             Just(ReprScalarType::Time).boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::Timestamp { precision })
-                .boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
-                .boxed(),
+            Just(ReprScalarType::Timestamp).boxed(),
+            Just(ReprScalarType::TimestampTz).boxed(),
             Just(ReprScalarType::MzTimestamp).boxed(),
             Just(ReprScalarType::Interval).boxed(),
             Just(ReprScalarType::Bytes).boxed(),
@@ -3995,12 +4109,8 @@ impl Arbitrary for ReprScalarType {
             Just(ReprScalarType::Int64).boxed(),
             Just(ReprScalarType::Date).boxed(),
             Just(ReprScalarType::Numeric).boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::Timestamp { precision })
-                .boxed(),
-            any::<Option<TimestampPrecision>>()
-                .prop_map(|precision| ReprScalarType::TimestampTz { precision })
-                .boxed(),
+            Just(ReprScalarType::Timestamp).boxed(),
+            Just(ReprScalarType::TimestampTz).boxed(),
         ]);
         let range = range_leaf
             .prop_map(|inner_type| ReprScalarType::Range {
@@ -4068,7 +4178,10 @@ impl Arbitrary for ReprScalarType {
 /// There is a direct correspondence between `Datum` variants and `ReprScalarType`
 /// variants: every `Datum` variant corresponds to exactly one `ReprScalarType` variant
 /// (with an exception for `Datum::Array`, which could be both an `Int2Vector` and an `Array`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect)]
+#[derive(
+    Clone, Debug, EnumKind, PartialEq, Eq, Serialize, Deserialize, Ord, PartialOrd, Hash, MzReflect,
+)]
+#[enum_kind(ReprScalarBaseType, derive(PartialOrd, Ord, Hash))]
 pub enum ReprScalarType {
     Bool,
     Int16,
@@ -4083,12 +4196,8 @@ pub enum ReprScalarType {
     Numeric,
     Date,
     Time,
-    Timestamp {
-        precision: Option<TimestampPrecision>,
-    },
-    TimestampTz {
-        precision: Option<TimestampPrecision>,
-    },
+    Timestamp,
+    TimestampTz,
     MzTimestamp,
     Interval,
     Bytes,
@@ -4097,18 +4206,10 @@ pub enum ReprScalarType {
     Uuid,
     Array(Box<ReprScalarType>),
     Int2Vector, // differs from Array enough to stick around
-    List {
-        element_type: Box<ReprScalarType>,
-    },
-    Record {
-        fields: Box<[ReprColumnType]>,
-    },
-    Map {
-        value_type: Box<ReprScalarType>,
-    },
-    Range {
-        element_type: Box<ReprScalarType>,
-    },
+    List { element_type: Box<ReprScalarType> },
+    Record { fields: Box<[ReprColumnType]> },
+    Map { value_type: Box<ReprScalarType> },
+    Range { element_type: Box<ReprScalarType> },
     MzAclItem,
     AclItem,
 }
@@ -4128,12 +4229,8 @@ impl From<&SqlScalarType> for ReprScalarType {
             SqlScalarType::Numeric { max_scale: _ } => ReprScalarType::Numeric,
             SqlScalarType::Date => ReprScalarType::Date,
             SqlScalarType::Time => ReprScalarType::Time,
-            SqlScalarType::Timestamp { precision } => ReprScalarType::Timestamp {
-                precision: *precision,
-            },
-            SqlScalarType::TimestampTz { precision } => ReprScalarType::TimestampTz {
-                precision: *precision,
-            },
+            SqlScalarType::Timestamp { precision: _ } => ReprScalarType::Timestamp,
+            SqlScalarType::TimestampTz { precision: _ } => ReprScalarType::TimestampTz,
             SqlScalarType::Interval => ReprScalarType::Interval,
             SqlScalarType::PgLegacyChar => ReprScalarType::UInt8,
             SqlScalarType::PgLegacyName => ReprScalarType::String,
@@ -4214,12 +4311,8 @@ impl SqlScalarType {
             ReprScalarType::Numeric => SqlScalarType::Numeric { max_scale: None },
             ReprScalarType::Date => SqlScalarType::Date,
             ReprScalarType::Time => SqlScalarType::Time,
-            ReprScalarType::Timestamp { precision } => SqlScalarType::Timestamp {
-                precision: *precision,
-            },
-            ReprScalarType::TimestampTz { precision } => SqlScalarType::TimestampTz {
-                precision: *precision,
-            },
+            ReprScalarType::Timestamp => SqlScalarType::Timestamp { precision: None },
+            ReprScalarType::TimestampTz => SqlScalarType::TimestampTz { precision: None },
             ReprScalarType::MzTimestamp => SqlScalarType::MzTimestamp,
             ReprScalarType::Interval => SqlScalarType::Interval,
             ReprScalarType::Bytes => SqlScalarType::Bytes,
@@ -5003,6 +5096,19 @@ mod tests {
             // For example, many SqlScalarType variants map to ReprScalarType::String.
             let sql_type = SqlScalarType::from_repr(&repr_type);
             assert_eq!(repr_type, ReprScalarType::from(&sql_type));
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(10000))]
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn sql_type_base_eq_implies_repr_type_eq(sql_type1 in any::<SqlScalarType>(), sql_type2 in any::<SqlScalarType>()) {
+            let repr_type1 = ReprScalarType::from(&sql_type1);
+            let repr_type2 = ReprScalarType::from(&sql_type2);
+            if sql_type1.base_eq(&sql_type2) {
+                assert_eq!(repr_type1, repr_type2);
+            }
         }
     }
 

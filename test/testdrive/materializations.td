@@ -198,7 +198,7 @@ b  c
 > CREATE INDEX idx1 ON test5(c)
 
 ! SELECT * FROM idx1
-contains:catalog item 'materialize.public.idx1' is an index and so cannot be depended upon
+contains:materialize.public.idx1 is an index, which cannot be depended upon
 
 # If there exists a second primary index, dropping one primary index will not
 # unmaterialize the view.

@@ -11,15 +11,15 @@
 
 use std::any::Any;
 use std::collections::{BTreeMap, BTreeSet};
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 
-use differential_dataflow::Collection;
+use differential_dataflow::VecCollection;
 use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc};
 use mz_expr::{EvalError, MapFilterProject, permutation_for_arrangement};
 use mz_ore::soft_assert_or_log;
 use mz_ore::str::StrExt;
 use mz_ore::vec::PartialOrdVecExt;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_storage_types::errors::DataflowError;
 use mz_timely_util::operator::CollectionExt;
@@ -43,13 +43,13 @@ where
     pub(crate) fn export_sink(
         &self,
         compute_state: &mut crate::compute_state::ComputeState,
-        tokens: &BTreeMap<GlobalId, Rc<dyn std::any::Any>>,
+        tokens: &BTreeMap<GlobalId, Rc<dyn Any>>,
         dependency_ids: BTreeSet<GlobalId>,
         sink_id: GlobalId,
         sink: &ComputeSinkDesc<CollectionMetadata>,
         start_signal: StartSignal,
-        ct_times: Option<Collection<G, (), Diff>>,
-        output_probe: &Handle<Timestamp>,
+        ct_times: Option<VecCollection<G, (), Diff>>,
+        output_probe: &Handle<mz_repr::Timestamp>,
     ) {
         soft_assert_or_log!(
             sink.non_null_assertions.is_strictly_sorted(),
@@ -102,19 +102,10 @@ where
         // Ensure that the frontier does not advance past the expiration time, if set. Otherwise,
         // we might write down incorrect data.
         if let Some(&expiration) = self.dataflow_expiration.as_option() {
-            let token = Rc::new(());
-            let shutdown_token = Rc::downgrade(&token);
-            ok_collection = ok_collection.expire_collection_at(
-                &format!("{}_export_sink_oks", self.debug_name),
-                expiration,
-                Weak::clone(&shutdown_token),
-            );
-            err_collection = err_collection.expire_collection_at(
-                &format!("{}_export_sink_errs", self.debug_name),
-                expiration,
-                shutdown_token,
-            );
-            needed_tokens.push(token);
+            ok_collection = ok_collection
+                .expire_collection_at(&format!("{}_export_sink_oks", self.debug_name), expiration);
+            err_collection = err_collection
+                .expire_collection_at(&format!("{}_export_sink_errs", self.debug_name), expiration);
         }
 
         let non_null_assertions = sink.non_null_assertions.clone();
@@ -196,12 +187,12 @@ where
         sink_id: GlobalId,
         as_of: Antichain<mz_repr::Timestamp>,
         start_signal: StartSignal,
-        sinked_collection: Collection<G, Row, Diff>,
-        err_collection: Collection<G, DataflowError, Diff>,
+        sinked_collection: VecCollection<G, Row, Diff>,
+        err_collection: VecCollection<G, DataflowError, Diff>,
         // TODO(ct2): Figure out a better way to smuggle this in, potentially by
         // removing the `SinkRender` trait entirely.
-        ct_times: Option<Collection<G, (), Diff>>,
-        output_probe: &Handle<Timestamp>,
+        ct_times: Option<VecCollection<G, (), Diff>>,
+        output_probe: &Handle<mz_repr::Timestamp>,
     ) -> Option<Rc<dyn Any>>;
 }
 

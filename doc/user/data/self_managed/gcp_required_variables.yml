@@ -1,0 +1,37 @@
+columns:
+  - column: "Variable"
+
+rows:
+- "Variable": |
+
+    ```hcl
+    project_id = <string>
+    ```
+
+- "Variable": |
+
+    ```hcl
+    prefix = <string>
+    ```
+
+- "Variable": |
+
+    ```hcl
+    database_config = {
+      password = <string>  # required
+      # tier     = <string>  # optional
+      # version  = <string>  # optional
+      # username = <string>  # optional
+      # db_name  = <string>  # optional
+    }
+    ```
+
+- "Variable": |
+
+    ```hcl
+    network_config = {     # required starting in v0.3.0
+      subnet_cidr   = <string>
+      pods_cidr     = <string>
+      services_cidr = <string>
+    }
+    ```

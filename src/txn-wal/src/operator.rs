@@ -17,12 +17,11 @@ use std::sync::{Arc, mpsc};
 use std::time::Duration;
 
 use differential_dataflow::Hashable;
-use differential_dataflow::difference::Semigroup;
+use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::cast::CastFrom;
-use mz_ore::task::JoinHandleExt;
 use mz_persist_client::cfg::RetryParameters;
 use mz_persist_client::operators::shard_source::{
     ErrorHandler, FilterResult, SnapshotMode, shard_source,
@@ -108,7 +107,7 @@ where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Data + Monoid + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
     F: Future<Output = PersistClient> + Send + 'static,
@@ -170,7 +169,7 @@ where
     K: Debug + Codec + Send + Sync,
     V: Debug + Codec + Send + Sync,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-    D: Debug + Data + Semigroup + Ord + Codec64 + Send + Sync,
+    D: Debug + Data + Monoid + Ord + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec + 'static,
     G: Scope<Timestamp = T>,
@@ -180,7 +179,7 @@ where
     let name = format!("txns_progress_source({})", name);
     let mut builder = AsyncOperatorBuilder::new(name.clone(), scope);
     let name = format!("{} [{}] {:.9}", name, unique_id, data_id.to_string());
-    let (remap_output, remap_stream) = builder.new_output();
+    let (remap_output, remap_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
 
     let shutdown_button = builder.build(move |capabilities| async move {
         if worker_idx != chosen_worker {
@@ -242,7 +241,7 @@ where
     K: Debug + Codec,
     V: Debug + Codec,
     T: Timestamp + Lattice + TotalOrder + StepForward + Codec64,
-    D: Data + Semigroup + Codec64 + Send + Sync,
+    D: Data + Monoid + Codec64 + Send + Sync,
     P: Debug + Data,
     C: TxnsCodec,
     G: Scope<Timestamp = T>,
@@ -549,10 +548,7 @@ impl DataSubscribe {
             let (data, txns) = (ProbeHandle::new(), ProbeHandle::new());
             let data_stream = data_stream.flat_map(|part| {
                 let part = part.parse();
-                part.part.map(|((k, v), t, d)| {
-                    let (k, ()) = (k.unwrap(), v.unwrap());
-                    (k, t, d)
-                })
+                part.part.map(|((k, ()), t, d)| (k, t, d))
             });
             let data_stream = data_stream.probe_with(&data);
             let (data_stream, mut txns_progress_token) =
@@ -696,7 +692,7 @@ impl DataSubscribeTask {
     pub async fn finish(self) -> Vec<(String, u64, i64)> {
         // Closing the channel signals the task to exit.
         drop(self.tx);
-        self.task.wait_and_assert_finished().await
+        self.task.await
     }
 
     fn task(
@@ -761,7 +757,7 @@ mod tests {
         K: Debug + Codec,
         V: Debug + Codec,
         T: Timestamp + Lattice + TotalOrder + StepForward + Codec64 + Sync,
-        D: Debug + Semigroup + Ord + Codec64 + Send + Sync,
+        D: Debug + Monoid + Ord + Codec64 + Send + Sync,
         O: Opaque + Debug + Codec64,
         C: TxnsCodec,
     {

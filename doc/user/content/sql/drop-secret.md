@@ -13,14 +13,16 @@ first, or use the `CASCADE` option.
 
 ## Syntax
 
-{{< diagram "drop-secret.svg" >}}
+```mzsql
+DROP SECRET [IF EXISTS] <secret_name> [CASCADE|RESTRICT];
+```
 
-Field | Use
-------|-----
-**IF EXISTS** | Do not return an error if the specified secret does not exist.
+Syntax element | Description
+---------------|------------
+**IF EXISTS** | Optional. If specified, do not return an error if the specified secret does not exist.
 _secret&lowbar;name_ | The secret you want to drop. For available secrets, see [`SHOW SECRETS`](../show-secrets).
-**CASCADE** | Remove the secret and its dependent objects.
-**RESTRICT** | Do not drop the secret if it has dependencies. _(Default)_
+**CASCADE** | Optional. If specified, remove the secret and its dependent objects.
+**RESTRICT** | Optional. Do not drop the secret if it has dependencies. _(Default)_
 
 ## Examples
 

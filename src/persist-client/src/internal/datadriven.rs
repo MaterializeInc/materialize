@@ -104,6 +104,7 @@ impl<'a> DirectiveArgs<'a> {
                 .map(|x| {
                     RunPart::Single(BatchPart::Hollow(HollowBatchPart {
                         key: PartialBatchKey((*x).to_owned()),
+                        meta: Default::default(),
                         encoded_size_bytes: 0,
                         key_lower: vec![],
                         structured_key_lower: None,

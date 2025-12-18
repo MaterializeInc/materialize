@@ -192,7 +192,7 @@ async fn bench_write_to_listen_one_iter(
 
     // Now wait for the listener task to clean up so it doesn't leak into other
     // benchmarks.
-    listen.await.expect("listener task failed");
+    listen.await;
 
     Ok(batch_count)
 }

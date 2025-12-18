@@ -28,6 +28,24 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "SwapSchema":
+        # PR#29673 (adapter: derive implications from catalog changes) increases latency
+        min_ancestor_mz_version_per_commit[
+            "9a4ee6174553d4f14402e90927a05aa8cba37112"
+        ] = MzVersion.parse_mz("v26.2.0")
+
+    if scenario_class_name in ("DifferentialJoin", "Retraction", "FinishOrderByLimit"):
+        # PR#33979 (Enable active dataflow cancellation) increases latency
+        min_ancestor_mz_version_per_commit[
+            "e1944c939203eb29b84a18ce5153e2d99d157c1d"
+        ] = MzVersion.parse_mz("v0.164.0")
+
+    if scenario_class_name == "CreateIndex":
+        # PR#33938 (Update columnar, timely, differential) increases latency
+        min_ancestor_mz_version_per_commit[
+            "c28d0061a6c9e63ee50a5f555c5d90373d006686"
+        ] = MzVersion.parse_mz("v0.164.0")
+
     if scenario_class_name in ("CrossJoin", "AccumulateReductions"):
         # PR#31501 (Remove ChunkedStack and related) increases latency for inserts
         min_ancestor_mz_version_per_commit[

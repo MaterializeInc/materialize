@@ -104,7 +104,7 @@ use mz_catalog::memory::objects::{
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
-use mz_compute_client::controller::error::InstanceMissing;
+use mz_compute_client::controller::error::{DataflowCreationError, InstanceMissing};
 use mz_compute_types::ComputeInstanceId;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::plan::Plan;
@@ -208,26 +208,27 @@ use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{WebhookAppenderInvalidator, WebhookConcurrencyLimiter};
 use crate::{AdapterNotice, ReadHolds, flags};
 
+pub(crate) mod appends;
+pub(crate) mod catalog_serving;
+pub(crate) mod cluster_scheduling;
+pub(crate) mod consistency;
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
 pub(crate) mod peek;
+pub(crate) mod read_policy;
+pub(crate) mod sequencer;
 pub(crate) mod statement_logging;
 pub(crate) mod timeline;
 pub(crate) mod timestamp_selection;
 
-pub mod appends;
-mod catalog_serving;
+pub mod catalog_implications;
 mod caught_up;
-pub mod cluster_scheduling;
 mod command_handler;
-pub mod consistency;
 mod ddl;
 mod indexes;
 mod introspection;
 mod message_handler;
 mod privatelink_status;
-pub mod read_policy;
-mod sequencer;
 mod sql;
 mod validity;
 
@@ -361,6 +362,18 @@ impl Message {
                 Command::AuthenticatePassword { .. } => "command-auth_check",
                 Command::AuthenticateGetSASLChallenge { .. } => "command-auth_get_sasl_challenge",
                 Command::AuthenticateVerifySASLProof { .. } => "command-auth_verify_sasl_proof",
+                Command::GetComputeInstanceClient { .. } => "get-compute-instance-client",
+                Command::GetOracle { .. } => "get-oracle",
+                Command::DetermineRealTimeRecentTimestamp { .. } => {
+                    "determine-real-time-recent-timestamp"
+                }
+                Command::GetTransactionReadHoldsBundle { .. } => {
+                    "get-transaction-read-holds-bundle"
+                }
+                Command::StoreTransactionReadHolds { .. } => "store-transaction-read-holds",
+                Command::ExecuteSlowPathPeek { .. } => "execute-slow-path-peek",
+                Command::ExecuteCopyTo { .. } => "execute-copy-to",
+                Command::ExecuteSideEffectingFunc { .. } => "execute-side-effecting-func",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -755,7 +768,7 @@ impl ExplainContext {
     /// If available for this context, wrap the [`OptimizerTrace`] into a
     /// [`tracing::Dispatch`] and set it as default, returning the resulting
     /// guard in a `Some(guard)` option.
-    fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
+    pub(crate) fn dispatch_guard(&self) -> Option<DispatchGuard<'_>> {
         let optimizer_trace = match self {
             ExplainContext::Plan(explain_ctx) => Some(&explain_ctx.optimizer_trace),
             ExplainContext::PlanInsightsNotice(optimizer_trace) => Some(optimizer_trace),
@@ -764,7 +777,7 @@ impl ExplainContext {
         optimizer_trace.map(|optimizer_trace| optimizer_trace.as_guard())
     }
 
-    fn needs_cluster(&self) -> bool {
+    pub(crate) fn needs_cluster(&self) -> bool {
         match self {
             ExplainContext::None => true,
             ExplainContext::Plan(..) => false,
@@ -773,7 +786,7 @@ impl ExplainContext {
         }
     }
 
-    fn needs_plan_insights(&self) -> bool {
+    pub(crate) fn needs_plan_insights(&self) -> bool {
         matches!(
             self,
             ExplainContext::Plan(ExplainPlanContext {
@@ -786,6 +799,10 @@ impl ExplainContext {
 
 #[derive(Debug)]
 pub struct ExplainPlanContext {
+    /// EXPLAIN BROKEN is internal syntax for showing EXPLAIN output despite an internal error in
+    /// the optimizer: we don't immediately bail out from peek sequencing when an internal optimizer
+    /// error happens, but go on with trying to show the requested EXPLAIN stage. This can still
+    /// succeed if the requested EXPLAIN stage is before the point where the error happened.
     pub broken: bool,
     pub config: ExplainConfig,
     pub format: ExplainFormat,
@@ -1066,6 +1083,7 @@ pub struct Config {
     pub helm_chart_version: Option<String>,
     pub license_key: ValidatedLicenseKey,
     pub external_login_password_mz_system: Option<Password>,
+    pub force_builtin_schema_migration: Option<String>,
 }
 
 /// Metadata about an active connection.
@@ -2063,11 +2081,11 @@ impl Coordinator {
                         .entry(policy.expect("materialized views have a compaction window"))
                         .or_insert_with(Default::default)
                         .storage_ids
-                        .insert(mview.global_id());
+                        .insert(mview.global_id_writes());
 
                     let mut df_desc = self
                         .catalog()
-                        .try_get_physical_plan(&mview.global_id())
+                        .try_get_physical_plan(&mview.global_id_writes())
                         .expect("added in `bootstrap_dataflow_plans`")
                         .clone();
 
@@ -2087,7 +2105,7 @@ impl Coordinator {
 
                     let df_meta = self
                         .catalog()
-                        .try_get_dataflow_metainfo(&mview.global_id())
+                        .try_get_dataflow_metainfo(&mview.global_id_writes())
                         .expect("added in `bootstrap_dataflow_plans`");
 
                     if self.catalog().state().system_config().enable_mz_notices() {
@@ -2100,6 +2118,12 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, mview.cluster_id, None).await;
+
+                    // If this is a replacement MV, it must remain read-only until the replacement
+                    // gets applied.
+                    if mview.replacement_target.is_none() {
+                        self.allow_writes(mview.cluster_id, mview.global_id_writes());
+                    }
                 }
                 CatalogItem::Sink(sink) => {
                     policies_to_set
@@ -2151,6 +2175,7 @@ impl Coordinator {
                     }
 
                     self.ship_dataflow(df_desc, ct.cluster_id, None).await;
+                    self.allow_writes(ct.cluster_id, ct.global_id());
                 }
                 // Nothing to do for these cases
                 CatalogItem::Log(_)
@@ -2534,8 +2559,7 @@ impl Coordinator {
 
                 // Retract the current contents, spilling into our builder.
                 while let Some(values) = snapshot_cursor.next().await {
-                    for ((key, _val), _t, d) in values {
-                        let key = key.expect("builtin table had errors");
+                    for (key, _t, d) in values {
                         let d_invert = d.neg();
                         batch.add(&key, &(), &d_invert).await;
                     }
@@ -2550,15 +2574,12 @@ impl Coordinator {
 
         let retractions_res = futures::future::join_all(retraction_tasks).await;
         for retractions in retractions_res {
-            let retractions = retractions.expect("cannot fail to fetch snapshot");
             builtin_table_updates.push(retractions);
         }
 
         let audit_join_start = Instant::now();
         info!("startup: coordinator init: bootstrap: join audit log deserialization beginning");
-        let audit_log_updates = audit_log_task
-            .await
-            .expect("cannot fail to fetch audit log updates");
+        let audit_log_updates = audit_log_task.await;
         let audit_log_builtin_table_updates = self
             .catalog()
             .state()
@@ -2591,7 +2612,7 @@ impl Coordinator {
     /// table.
     #[instrument]
     fn bootstrap_audit_log_table<'a>(
-        &mut self,
+        &self,
         table_id: CatalogItemId,
         name: &'a QualifiedItemName,
         table: &'a Table,
@@ -2733,6 +2754,7 @@ impl Coordinator {
                 since: None,
                 status_collection_id,
                 timeline: Some(timeline.clone()),
+                primary: None,
             }
         };
 
@@ -2763,10 +2785,9 @@ impl Coordinator {
                                 let next_version = version.bump();
                                 let primary_collection =
                                     versions.get(&next_version).map(|(gid, _desc)| gid).copied();
-                                let collection_desc = CollectionDescription::for_table(
-                                    desc.clone(),
-                                    primary_collection,
-                                );
+                                let mut collection_desc =
+                                    CollectionDescription::for_table(desc.clone());
+                                collection_desc.primary = primary_collection;
 
                                 (*gid, collection_desc)
                             });
@@ -2795,24 +2816,18 @@ impl Coordinator {
                     };
                 }
                 CatalogItem::MaterializedView(mv) => {
-                    let collection_desc = CollectionDescription {
-                        desc: mv.desc.clone(),
-                        data_source: DataSource::Other,
-                        since: mv.initial_as_of.clone(),
-                        status_collection_id: None,
-                        timeline: None,
-                    };
-                    compute_collections.push((mv.global_id(), mv.desc.clone()));
-                    collections.push((mv.global_id(), collection_desc));
+                    let collection_descs = mv.collection_descs().map(|(gid, _version, desc)| {
+                        let collection_desc =
+                            CollectionDescription::for_other(desc, mv.initial_as_of.clone());
+                        (gid, collection_desc)
+                    });
+
+                    collections.extend(collection_descs);
+                    compute_collections.push((mv.global_id_writes(), mv.desc.latest()));
                 }
                 CatalogItem::ContinualTask(ct) => {
-                    let collection_desc = CollectionDescription {
-                        desc: ct.desc.clone(),
-                        data_source: DataSource::Other,
-                        since: ct.initial_as_of.clone(),
-                        status_collection_id: None,
-                        timeline: None,
-                    };
+                    let collection_desc =
+                        CollectionDescription::for_other(ct.desc.clone(), ct.initial_as_of.clone());
                     if ct.global_id().is_system() && collection_desc.since.is_none() {
                         // We need a non-0 since to make as_of selection work. Fill it in below with
                         // the `bootstrap_builtin_continual_tasks` call, which can only be run after
@@ -2826,10 +2841,7 @@ impl Coordinator {
                 CatalogItem::Sink(sink) => {
                     let storage_sink_from_entry = self.catalog().get_entry_by_global_id(&sink.from);
                     let from_desc = storage_sink_from_entry
-                        .desc(&self.catalog().resolve_full_name(
-                            storage_sink_from_entry.name(),
-                            storage_sink_from_entry.conn_id(),
-                        ))
+                        .relation_desc()
                         .expect("sinks can only be built on items with descs")
                         .into_owned();
                     let collection_desc = CollectionDescription {
@@ -2850,6 +2862,7 @@ impl Coordinator {
                                     version: sink.version,
                                     from_storage_metadata: (),
                                     to_storage_metadata: (),
+                                    commit_interval: sink.commit_interval,
                                 },
                                 instance_id: sink.cluster_id,
                             },
@@ -2857,6 +2870,7 @@ impl Coordinator {
                         since: None,
                         status_collection_id: None,
                         timeline: None,
+                        primary: None,
                     };
                     collections.push((sink.global_id, collection_desc));
                 }
@@ -3074,7 +3088,7 @@ impl Coordinator {
                             self.instance_snapshot(mv.cluster_id)
                                 .expect("compute instance exists")
                         });
-                    let global_id = mv.global_id();
+                    let global_id = mv.global_id_writes();
 
                     let (optimized_plan, physical_plan, metainfo) =
                         match cached_global_exprs.remove(&global_id) {
@@ -3104,7 +3118,7 @@ impl Coordinator {
                                         compute_instance.clone(),
                                         global_id,
                                         internal_view_id,
-                                        mv.desc.iter_names().cloned().collect(),
+                                        mv.desc.latest().iter_names().cloned().collect(),
                                         mv.non_null_assertions.clone(),
                                         mv.refresh_schedule.clone(),
                                         debug_name,
@@ -3136,7 +3150,7 @@ impl Coordinator {
                                     self.catalog().render_notices(
                                         metainfo,
                                         notice_ids,
-                                        Some(mv.global_id()),
+                                        Some(mv.global_id_writes()),
                                     )
                                 };
                                 uncached_expressions.insert(
@@ -3155,11 +3169,11 @@ impl Coordinator {
                         };
 
                     let catalog = self.catalog_mut();
-                    catalog.set_optimized_plan(mv.global_id(), optimized_plan);
-                    catalog.set_physical_plan(mv.global_id(), physical_plan);
-                    catalog.set_dataflow_metainfo(mv.global_id(), metainfo);
+                    catalog.set_optimized_plan(mv.global_id_writes(), optimized_plan);
+                    catalog.set_physical_plan(mv.global_id_writes(), physical_plan);
+                    catalog.set_dataflow_metainfo(mv.global_id_writes(), metainfo);
 
-                    compute_instance.insert_collection(mv.global_id());
+                    compute_instance.insert_collection(mv.global_id_writes());
                 }
                 CatalogItem::ContinualTask(ct) => {
                     let compute_instance =
@@ -3239,7 +3253,7 @@ impl Coordinator {
         for entry in self.catalog.entries() {
             let gid = match entry.item() {
                 CatalogItem::Index(idx) => idx.global_id(),
-                CatalogItem::MaterializedView(mv) => mv.global_id(),
+                CatalogItem::MaterializedView(mv) => mv.global_id_writes(),
                 CatalogItem::ContinualTask(ct) => ct.global_id(),
                 CatalogItem::Table(_)
                 | CatalogItem::Source(_)
@@ -3676,23 +3690,51 @@ impl Coordinator {
 
     /// Call into the compute controller to install a finalized dataflow, and
     /// initialize the read policies for its exported readable objects.
+    ///
+    /// # Panics
+    ///
+    /// Panics if dataflow creation fails.
     pub(crate) async fn ship_dataflow(
         &mut self,
         dataflow: DataflowDescription<Plan>,
         instance: ComputeInstanceId,
         subscribe_target_replica: Option<ReplicaId>,
     ) {
+        self.try_ship_dataflow(dataflow, instance, subscribe_target_replica)
+            .await
+            .unwrap_or_terminate("dataflow creation cannot fail");
+    }
+
+    /// Call into the compute controller to install a finalized dataflow, and
+    /// initialize the read policies for its exported readable objects.
+    pub(crate) async fn try_ship_dataflow(
+        &mut self,
+        dataflow: DataflowDescription<Plan>,
+        instance: ComputeInstanceId,
+        subscribe_target_replica: Option<ReplicaId>,
+    ) -> Result<(), DataflowCreationError> {
         // We must only install read policies for indexes, not for sinks.
         // Sinks are write-only compute collections that don't have read policies.
         let export_ids = dataflow.exported_index_ids().collect();
 
         self.controller
             .compute
-            .create_dataflow(instance, dataflow, subscribe_target_replica)
-            .unwrap_or_terminate("dataflow creation cannot fail");
+            .create_dataflow(instance, dataflow, subscribe_target_replica)?;
 
         self.initialize_compute_read_policies(export_ids, instance, CompactionWindow::Default)
             .await;
+
+        Ok(())
+    }
+
+    /// Call into the compute controller to allow writes to the specified IDs
+    /// from the specified instance. Calling this function multiple times and
+    /// calling it on a read-only instance has no effect.
+    pub(crate) fn allow_writes(&mut self, instance: ComputeInstanceId, id: GlobalId) {
+        self.controller
+            .compute
+            .allow_writes(instance, id)
+            .unwrap_or_terminate("allow_writes cannot fail");
     }
 
     /// Like `ship_dataflow`, but also await on builtin table updates.
@@ -3802,34 +3844,15 @@ impl Coordinator {
             .map(|(id, read_txn)| (id.unhandled().to_string(), format!("{read_txn:?}")))
             .collect();
 
-        let map = serde_json::Map::from_iter([
-            (
-                "global_timelines".to_string(),
-                serde_json::to_value(global_timelines)?,
-            ),
-            (
-                "active_conns".to_string(),
-                serde_json::to_value(active_conns)?,
-            ),
-            (
-                "txn_read_holds".to_string(),
-                serde_json::to_value(txn_read_holds)?,
-            ),
-            (
-                "pending_peeks".to_string(),
-                serde_json::to_value(pending_peeks)?,
-            ),
-            (
-                "client_pending_peeks".to_string(),
-                serde_json::to_value(client_pending_peeks)?,
-            ),
-            (
-                "pending_linearize_read_txns".to_string(),
-                serde_json::to_value(pending_linearize_read_txns)?,
-            ),
-            ("controller".to_string(), self.controller.dump().await?),
-        ]);
-        Ok(serde_json::Value::Object(map))
+        Ok(serde_json::json!({
+            "global_timelines": global_timelines,
+            "active_conns": active_conns,
+            "txn_read_holds": txn_read_holds,
+            "pending_peeks": pending_peeks,
+            "client_pending_peeks": client_pending_peeks,
+            "pending_linearize_read_txns": pending_linearize_read_txns,
+            "controller": self.controller.dump().await?,
+        }))
     }
 
     /// Prune all storage usage events from the [`MZ_STORAGE_USAGE_BY_SHARD`] table that are older
@@ -4014,6 +4037,7 @@ pub fn serve(
         helm_chart_version,
         license_key,
         external_login_password_mz_system,
+        force_builtin_schema_migration,
     }: Config,
 ) -> BoxFuture<'static, Result<(Handle, Client), AdapterError>> {
     async move {
@@ -4121,6 +4145,7 @@ pub fn serve(
             BuiltinItemMigrationConfig {
                 persist_client: persist_client.clone(),
                 read_only: read_only_controllers,
+                force_migration: force_builtin_schema_migration,
             }
         ;
         let OpenCatalogResult {
@@ -4137,6 +4162,7 @@ pub fn serve(
                 unsafe_mode,
                 all_features,
                 build_info,
+                deploy_generation: controller_config.deploy_generation,
                 environment_id: environment_id.clone(),
                 read_only: read_only_controllers,
                 now: now.clone(),

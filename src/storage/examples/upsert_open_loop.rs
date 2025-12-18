@@ -277,7 +277,7 @@ fn main() {
         .build()
         .expect("Failed building the Runtime");
 
-    let _ = runtime
+    runtime
         .block_on(args.tracing.configure_tracing(
             StaticTracingConfig {
                 service_name: "upsert-open-loop",
@@ -449,8 +449,7 @@ async fn run_benchmark(
                                         .in_scope(|| data_generator_cloned.gen_batch(usize::cast_from(batch_idx)))
                                 },
                             )
-                            .await
-                            .expect("task failed");
+                            .await;
                             trace!("data generator {} made a batch", source_id);
                             let batch = match batch {
                                 Some(x) => x,
@@ -595,7 +594,7 @@ async fn run_benchmark(
                 upsert_stream.sink(
                     Exchange::new(move |_| u64::cast_from(chosen_worker)),
                     &format!("source-{source_id}-counter"),
-                    move |input| {
+                    move |(input, input_frontier)| {
                         if !active_worker {
                             return;
                         }
@@ -611,7 +610,7 @@ async fn run_benchmark(
                             }
                         });
 
-                        if input.frontier().is_empty() {
+                        if input_frontier.is_empty() {
                             assert_eq!(num_records_total, num_additions);
                             info!(
                                 "Processing source {source_id} finished \
@@ -621,9 +620,9 @@ async fn run_benchmark(
                             );
                         } else if PartialOrder::less_than(
                             &frontier.borrow(),
-                            &input.frontier().frontier(),
+                            &input_frontier.frontier(),
                         ) {
-                            frontier = input.frontier().frontier().to_owned();
+                            frontier = input_frontier.frontier().to_owned();
                             let data_timestamp = frontier.clone().into_option().unwrap();
                             let elapsed = start.elapsed();
 
@@ -752,7 +751,7 @@ async fn run_benchmark(
     }
 
     for handle in generator_handles {
-        match handle.await? {
+        match handle.await {
             Ok(finished) => info!("{}", finished),
             Err(e) => error!("error: {:?}", e),
         }
@@ -916,7 +915,8 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<_>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),
@@ -1014,7 +1014,8 @@ where
     let mut upsert_op =
         AsyncOperatorBuilder::new(format!("source-{source_id}-upsert"), scope.clone());
 
-    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) = upsert_op.new_output();
+    let (output, output_stream): (_, Stream<_, (Vec<u8>, Vec<u8>, i32)>) =
+        upsert_op.new_output::<CapacityContainerBuilder<_>>();
     let mut input = upsert_op.new_input_for(
         source_stream,
         Exchange::new(|d: &(Vec<u8>, Vec<u8>)| d.0.hashed()),

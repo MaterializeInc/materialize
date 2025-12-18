@@ -14,10 +14,9 @@ use std::{
     time::Duration,
 };
 
-use anyhow::bail;
 use k8s_openapi::{
     api::{
-        apps::v1::{StatefulSet, StatefulSetSpec, StatefulSetUpdateStrategy},
+        apps::v1::{StatefulSet, StatefulSetSpec},
         core::v1::{
             Capabilities, ConfigMap, ConfigMapVolumeSource, Container, ContainerPort, EnvVar,
             EnvVarSource, KeyToPath, PodSecurityContext, PodSpec, PodTemplateSpec, Probe,
@@ -39,22 +38,22 @@ use mz_server_core::listeners::{
     AllowedRoles, AuthenticatorKind, BaseListenerConfig, HttpListenerConfig, HttpRoutesEnabled,
     ListenersConfig, SqlListenerConfig,
 };
-use rand::{Rng, thread_rng};
-use reqwest::StatusCode;
+use reqwest::{Client as HttpClient, StatusCode};
 use semver::{BuildMetadata, Prerelease, Version};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{trace, warn};
+use tracing::{error, trace, warn};
 
+use super::Error;
 use super::matching_image_from_environmentd_image_ref;
-use crate::controller::materialize::tls::{create_certificate, issuer_ref_defined};
 use crate::k8s::{apply_resource, delete_resource, get_resource};
+use crate::tls::{create_certificate, issuer_ref_defined};
 use mz_cloud_provider::CloudProvider;
-use mz_cloud_resources::crd::generated::cert_manager::certificates::{
-    Certificate, CertificatePrivateKeyAlgorithm,
-};
 use mz_cloud_resources::crd::materialize::v1alpha1::Materialize;
-use mz_orchestrator_tracing::TracingCliArgs;
+use mz_cloud_resources::crd::{
+    ManagedResource,
+    generated::cert_manager::certificates::{Certificate, CertificatePrivateKeyAlgorithm},
+};
 use mz_ore::instrument;
 
 static V140_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
@@ -78,10 +77,18 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 0,
     minor: 154,
     patch: 0,
-    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    pre: Prerelease::new("").expect("dev.0 is valid prerelease"),
     build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
 });
 pub const V161: Version = Version::new(0, 161, 0);
+
+static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 1,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
 
 /// Describes the status of a deployment.
 ///
@@ -98,6 +105,11 @@ pub enum DeploymentStatus {
     Promoting,
     /// This deployment is the leader.
     IsLeader,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GetLeaderStatusResponse {
+    status: DeploymentStatus,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -130,15 +142,8 @@ pub struct Resources {
 }
 
 impl Resources {
-    pub fn new(
-        config: &super::MaterializeControllerArgs,
-        tracing: &TracingCliArgs,
-        orchestratord_namespace: &str,
-        mz: &Materialize,
-        generation: u64,
-    ) -> Self {
-        let environmentd_network_policies =
-            create_environmentd_network_policies(config, mz, orchestratord_namespace);
+    pub fn new(config: &super::Config, mz: &Materialize, generation: u64) -> Self {
+        let environmentd_network_policies = create_environmentd_network_policies(config, mz);
 
         let service_account = Box::new(create_service_account_object(config, mz));
         let role = Box::new(create_role_object(mz));
@@ -149,7 +154,7 @@ impl Resources {
             Box::new(create_persist_pubsub_service(config, mz, generation));
         let environmentd_certificate = Box::new(create_environmentd_certificate(config, mz));
         let environmentd_statefulset = Box::new(create_environmentd_statefulset_object(
-            config, tracing, mz, generation,
+            config, mz, generation,
         ));
         let connection_info = Box::new(create_connection_info(config, mz, generation));
 
@@ -174,10 +179,9 @@ impl Resources {
         client: &Client,
         force_promote: bool,
         namespace: &str,
-    ) -> Result<Option<Action>, anyhow::Error> {
+    ) -> Result<Option<Action>, Error> {
         let environmentd_network_policy_api: Api<NetworkPolicy> =
             Api::namespaced(client.clone(), namespace);
-        let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
         let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
         let service_account_api: Api<ServiceAccount> = Api::namespaced(client.clone(), namespace);
         let role_api: Api<Role> = Api::namespaced(client.clone(), namespace);
@@ -219,7 +223,7 @@ impl Resources {
         trace!("creating new environmentd statefulset");
         apply_resource(&statefulset_api, &*self.environmentd_statefulset).await?;
 
-        let retry_action = Action::requeue(Duration::from_secs(thread_rng().gen_range(5..10)));
+        let retry_action = Action::requeue(Duration::from_secs(rand::random_range(5..10)));
 
         let statefulset = get_resource(
             &statefulset_api,
@@ -236,52 +240,8 @@ impl Resources {
             return Ok(Some(retry_action));
         }
 
-        let http_client = match &self.connection_info.mz_system_secret_name {
-            Some(mz_system_secret_name) => {
-                let http_client = reqwest::Client::builder()
-                    .timeout(std::time::Duration::from_secs(10))
-                    .cookie_store(true)
-                    // TODO add_root_certificate instead
-                    .danger_accept_invalid_certs(true)
-                    .build()
-                    .unwrap();
-                if let Some(data) = secret_api.get(mz_system_secret_name).await?.data {
-                    if let Some(password) = data.get("external_login_password_mz_system").cloned() {
-                        let password = String::from_utf8_lossy(&password.0).to_string();
-                        let login_url = reqwest::Url::parse(&format!(
-                            "{}/api/login",
-                            self.connection_info.environmentd_url,
-                        ))
-                        .unwrap();
-                        match http_client
-                            .post(login_url)
-                            .body(serde_json::to_string(&LoginCredentials {
-                                username: "mz_system".to_owned(),
-                                password,
-                            })?)
-                            .header("Content-Type", "application/json")
-                            .send()
-                            .await
-                        {
-                            Ok(response) => {
-                                if let Err(e) = response.error_for_status() {
-                                    trace!("failed to login to environmentd, retrying... ({e})");
-                                    return Ok(Some(retry_action));
-                                }
-                            }
-                            Err(e) => {
-                                trace!("failed to connect to environmentd, retrying... ({e})");
-                                return Ok(Some(retry_action));
-                            }
-                        };
-                    }
-                };
-                http_client
-            }
-            None => reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(10))
-                .build()
-                .unwrap(),
+        let Some(http_client) = self.get_http_client(client.clone(), namespace).await else {
+            return Ok(Some(retry_action));
         };
         let status_url = reqwest::Url::parse(&format!(
             "{}/api/leader/status",
@@ -291,8 +251,7 @@ impl Resources {
 
         match http_client.get(status_url.clone()).send().await {
             Ok(response) => {
-                let response: BTreeMap<String, DeploymentStatus> = match response.error_for_status()
-                {
+                let response: GetLeaderStatusResponse = match response.error_for_status() {
                     Ok(response) => response.json().await?,
                     Err(e) => {
                         trace!("failed to get status of environmentd, retrying... ({e})");
@@ -309,13 +268,20 @@ impl Resources {
                     let response = http_client.post(skip_catchup_url).send().await?;
                     if response.status() == StatusCode::BAD_REQUEST {
                         let err: SkipCatchupError = response.json().await?;
-                        bail!("failed to skip catchup: {}", err.message);
+                        return Err(
+                            anyhow::anyhow!("failed to skip catchup: {}", err.message).into()
+                        );
                     }
-                } else if response["status"] == DeploymentStatus::Initializing {
-                    trace!("environmentd is still initializing, retrying...");
-                    return Ok(Some(retry_action));
                 } else {
-                    trace!("environmentd is ready");
+                    match response.status {
+                        DeploymentStatus::Initializing => {
+                            trace!("environmentd is still initializing, retrying...");
+                            return Ok(Some(retry_action));
+                        }
+                        DeploymentStatus::ReadyToPromote
+                        | DeploymentStatus::Promoting
+                        | DeploymentStatus::IsLeader => trace!("environmentd is ready"),
+                    }
                 }
             }
             Err(e) => {
@@ -324,31 +290,101 @@ impl Resources {
             }
         }
 
+        Ok(None)
+    }
+
+    #[instrument]
+    async fn get_http_client(&self, client: Client, namespace: &str) -> Option<HttpClient> {
+        let secret_api: Api<Secret> = Api::namespaced(client.clone(), namespace);
+        Some(match &self.connection_info.mz_system_secret_name {
+            Some(mz_system_secret_name) => {
+                let http_client = reqwest::Client::builder()
+                    .timeout(std::time::Duration::from_secs(10))
+                    .cookie_store(true)
+                    // TODO add_root_certificate instead
+                    .danger_accept_invalid_certs(true)
+                    .build()
+                    .unwrap();
+
+                let secret = secret_api
+                    .get(mz_system_secret_name)
+                    .await
+                    .map_err(|e| {
+                        error!("Failed to get backend secret: {:?}", e);
+                        e
+                    })
+                    .ok()?;
+                if let Some(data) = secret.data {
+                    if let Some(password) = data.get("external_login_password_mz_system").cloned() {
+                        let password = String::from_utf8_lossy(&password.0).to_string();
+                        let login_url = reqwest::Url::parse(&format!(
+                            "{}/api/login",
+                            self.connection_info.environmentd_url,
+                        ))
+                        .unwrap();
+                        match http_client
+                            .post(login_url)
+                            .body(
+                                serde_json::to_string(&LoginCredentials {
+                                    username: "mz_system".to_owned(),
+                                    password,
+                                })
+                                .expect(
+                                    "Serializing a simple struct with utf8 strings doesn't fail.",
+                                ),
+                            )
+                            .header("Content-Type", "application/json")
+                            .send()
+                            .await
+                        {
+                            Ok(response) => {
+                                if let Err(e) = response.error_for_status() {
+                                    trace!("failed to login to environmentd, retrying... ({e})");
+                                    return None;
+                                }
+                            }
+                            Err(e) => {
+                                trace!("failed to connect to environmentd, retrying... ({e})");
+                                return None;
+                            }
+                        };
+                    }
+                };
+                http_client
+            }
+            None => reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(10))
+                .build()
+                .unwrap(),
+        })
+    }
+
+    #[instrument]
+    pub async fn promote_services(
+        &self,
+        client: &Client,
+        namespace: &str,
+    ) -> Result<Option<Action>, Error> {
+        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
+        let retry_action = Action::requeue(Duration::from_secs(rand::random_range(5..10)));
+
         let promote_url = reqwest::Url::parse(&format!(
             "{}/api/leader/promote",
             self.connection_info.environmentd_url,
         ))
         .unwrap();
 
-        // !!!!!!!!!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        // It is absolutely critical that this promotion is done last!
-        //
-        // If there are any failures in this method, the error handler in
-        // the caller will attempt to revert and delete the new environmentd.
-        // After promotion, the new environmentd is active, so that would
-        // cause an outage!
-        // !!!!!!!!!!!!!!!!!!!!!!!!!!! WARNING !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        let Some(http_client) = self.get_http_client(client.clone(), namespace).await else {
+            return Ok(Some(retry_action));
+        };
+
         trace!("promoting new environmentd to leader");
         let response = http_client.post(promote_url).send().await?;
-        let response: BecomeLeaderResponse = match response.error_for_status() {
-            Ok(response) => response.json().await?,
-            Err(e) => {
-                trace!("failed to promote environmentd, retrying... ({e})");
-                return Ok(Some(retry_action));
-            }
-        };
+        let response: BecomeLeaderResponse = response.error_for_status()?.json().await?;
         if let BecomeLeaderResult::Failure { message } = response.result {
-            bail!("failed to promote new environmentd: {message}");
+            return Err(Error::Anyhow(anyhow::anyhow!(
+                "failed to promote new environmentd: {message}"
+            )));
         }
 
         // A successful POST to the promotion endpoint only indicates
@@ -362,13 +398,18 @@ impl Resources {
         // we must wait to see at least one `IsLeader` status returned
         // from the environment.
 
+        let status_url = reqwest::Url::parse(&format!(
+            "{}/api/leader/status",
+            self.connection_info.environmentd_url,
+        ))
+        .unwrap();
         match http_client.get(status_url.clone()).send().await {
             Ok(response) => {
-                let response: BTreeMap<String, DeploymentStatus> = response.json().await?;
-                if response["status"] != DeploymentStatus::IsLeader {
+                let response: GetLeaderStatusResponse = response.json().await?;
+                if response.status != DeploymentStatus::IsLeader {
                     trace!(
                         "environmentd is still promoting (status: {:?}), retrying...",
-                        response["status"]
+                        response.status
                     );
                     return Ok(Some(retry_action));
                 } else {
@@ -381,21 +422,10 @@ impl Resources {
             }
         }
 
-        Ok(None)
-    }
-
-    #[instrument]
-    pub async fn promote_services(
-        &self,
-        client: &Client,
-        namespace: &str,
-    ) -> Result<(), anyhow::Error> {
-        let service_api: Api<Service> = Api::namespaced(client.clone(), namespace);
-
         trace!("applying environmentd public service");
         apply_resource(&service_api, &*self.public_service).await?;
 
-        Ok(())
+        Ok(None)
     }
 
     #[instrument]
@@ -442,12 +472,11 @@ impl Resources {
 }
 
 fn create_environmentd_network_policies(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
-    orchestratord_namespace: &str,
 ) -> Vec<NetworkPolicy> {
     let mut network_policies = Vec::new();
-    if config.network_policies.internal_enabled {
+    if config.network_policies_internal_enabled {
         let environmentd_label_selector = LabelSelector {
             match_labels: Some(
                 mz.default_labels()
@@ -474,7 +503,18 @@ fn create_environmentd_network_policies(
         // TODO (Alex) filter to just clusterd and environmentd,
         // once we get a consistent set of labels for both.
         let all_pods_label_selector = LabelSelector {
-            match_labels: Some(mz.default_labels()),
+            // TODO: can't use default_labels() here because it needs to be
+            // consistent between balancer and materialize resources, and
+            // materialize resources have additional labels - we should
+            // figure out something better here (probably balancers should
+            // install their own network policies)
+            match_labels: Some(
+                [(
+                    "materialize.cloud/mz-resource-id".to_owned(),
+                    mz.resource_id().to_owned(),
+                )]
+                .into(),
+            ),
             ..Default::default()
         };
         network_policies.extend([
@@ -513,7 +553,7 @@ fn create_environmentd_network_policies(
                             namespace_selector: Some(LabelSelector {
                                 match_labels: Some(btreemap! {
                                     "kubernetes.io/metadata.name".into()
-                                        => orchestratord_namespace.into(),
+                                        => config.orchestratord_namespace.clone(),
                                 }),
                                 ..Default::default()
                             }),
@@ -543,7 +583,7 @@ fn create_environmentd_network_policies(
             },
         ]);
     }
-    if config.network_policies.ingress_enabled {
+    if config.network_policies_ingress_enabled {
         let mut ingress_label_selector = mz.default_labels();
         ingress_label_selector.insert("materialize.cloud/app".to_owned(), mz.balancerd_app_name());
         network_policies.extend([NetworkPolicy {
@@ -552,8 +592,7 @@ fn create_environmentd_network_policies(
                 ingress: Some(vec![NetworkPolicyIngressRule {
                     from: Some(
                         config
-                            .network_policies
-                            .ingress_cidrs
+                            .network_policies_ingress_cidrs
                             .iter()
                             .map(|cidr| NetworkPolicyPeer {
                                 ip_block: Some(IPBlock {
@@ -587,15 +626,14 @@ fn create_environmentd_network_policies(
             }),
         }]);
     }
-    if config.network_policies.egress_enabled {
+    if config.network_policies_egress_enabled {
         network_policies.extend([NetworkPolicy {
             metadata: mz.managed_resource_meta(mz.name_prefixed("sources-and-sinks-egress")),
             spec: Some(NetworkPolicySpec {
                 egress: Some(vec![NetworkPolicyEgressRule {
                     to: Some(
                         config
-                            .network_policies
-                            .egress_cidrs
+                            .network_policies_egress_cidrs
                             .iter()
                             .map(|cidr| NetworkPolicyPeer {
                                 ip_block: Some(IPBlock {
@@ -621,7 +659,7 @@ fn create_environmentd_network_policies(
 }
 
 fn create_service_account_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
 ) -> Option<ServiceAccount> {
     if mz.create_service_account() {
@@ -635,7 +673,7 @@ fn create_service_account_object(
             mz.spec
                 .environmentd_iam_role_arn
                 .as_deref()
-                .or(config.aws_info.environmentd_iam_role_arn.as_deref()),
+                .or(config.environmentd_iam_role_arn.as_deref()),
         ) {
             warn!(
                 "Use of Materialize.spec.environmentd_iam_role_arn is deprecated. Please set \"eks.amazonaws.com/role-arn\" in Materialize.spec.service_account_annotations instead."
@@ -756,7 +794,7 @@ fn create_role_binding_object(mz: &Materialize) -> RoleBinding {
 }
 
 fn create_public_service_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -764,7 +802,7 @@ fn create_public_service_object(
 }
 
 fn create_generation_service_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -777,7 +815,7 @@ fn create_generation_service_object(
 }
 
 fn create_base_service_object(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
     service_name: &str,
@@ -827,7 +865,7 @@ fn create_base_service_object(
 }
 
 fn create_persist_pubsub_service(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> Service {
@@ -852,7 +890,7 @@ fn create_persist_pubsub_service(
 }
 
 fn create_environmentd_certificate(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
 ) -> Option<Certificate> {
     create_certificate(
@@ -871,8 +909,7 @@ fn create_environmentd_certificate(
 }
 
 fn create_environmentd_statefulset_object(
-    config: &super::MaterializeControllerArgs,
-    tracing: &TracingCliArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> StatefulSet {
@@ -1043,7 +1080,7 @@ fn create_environmentd_statefulset_object(
 
     // Add AWS arguments.
     if config.cloud_provider == CloudProvider::Aws {
-        if let Some(azs) = config.aws_info.environmentd_availability_zones.as_ref() {
+        if let Some(azs) = config.environmentd_availability_zones.as_ref() {
             for az in azs {
                 args.push(format!("--availability-zone={az}"));
             }
@@ -1053,14 +1090,14 @@ fn create_environmentd_statefulset_object(
             .spec
             .environmentd_connection_role_arn
             .as_deref()
-            .or(config.aws_info.environmentd_connection_role_arn.as_deref())
+            .or(config.environmentd_connection_role_arn.as_deref())
         {
             args.push(format!(
                 "--aws-connection-role-arn={}",
                 environmentd_connection_role_arn
             ));
         }
-        if let Some(account_id) = &config.aws_info.aws_account_id {
+        if let Some(account_id) = &config.aws_account_id {
             args.push(format!("--aws-account-id={account_id}"));
         }
 
@@ -1068,7 +1105,7 @@ fn create_environmentd_statefulset_object(
             "--aws-secrets-controller-tags=Environment={}",
             mz.name_unchecked()
         )]);
-        args.extend_from_slice(&config.aws_info.aws_secrets_controller_tags);
+        args.extend_from_slice(&config.aws_secrets_controller_tags);
     }
 
     // Add Kubernetes arguments.
@@ -1142,7 +1179,7 @@ fn create_environmentd_statefulset_object(
 
     // Add logging and tracing arguments.
     args.extend(["--log-format=json".into()]);
-    if let Some(endpoint) = &tracing.opentelemetry_endpoint {
+    if let Some(endpoint) = &config.tracing.opentelemetry_endpoint {
         args.push(format!("--opentelemetry-endpoint={}", endpoint));
     }
     // --opentelemetry-resource also configures sentry tags
@@ -1203,10 +1240,37 @@ fn create_environmentd_statefulset_object(
     // The `materialize` user used by clusterd always has gid 999.
     args.push("--orchestrator-kubernetes-service-fs-group=999".to_string());
 
+    // Add system_param configmap
+    // This feature was enabled in 0.163 but did not have testing until after 0.164.
+    // 0.165 should work with anything greater than 0.164 including v26 and v25.
+    if mz.meets_minimum_version(&V26_1_0) {
+        if let Some(ref name) = mz.spec.system_parameter_configmap_name {
+            volumes.push(Volume {
+                name: "system-params".to_string(),
+                config_map: Some(ConfigMapVolumeSource {
+                    default_mode: Some(0o400),
+                    name: name.to_owned(),
+                    items: None,
+                    optional: Some(true),
+                }),
+                ..Default::default()
+            });
+            volume_mounts.push(VolumeMount {
+                name: "system-params".to_string(),
+                // The user must write to the `system-params.json` entry in the config map
+                mount_path: "/system-params".to_owned(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+            args.push("--config-sync-file-path=/system-params/system-params.json".to_string());
+            args.push("--config-sync-loop-interval=1s".to_string());
+        }
+    }
+
     // Add Sentry arguments.
-    if let Some(sentry_dsn) = &tracing.sentry_dsn {
+    if let Some(sentry_dsn) = &config.tracing.sentry_dsn {
         args.push(format!("--sentry-dsn={}", sentry_dsn));
-        if let Some(sentry_environment) = &tracing.sentry_environment {
+        if let Some(sentry_environment) = &config.tracing.sentry_environment {
             args.push(format!("--sentry-environment={}", sentry_environment));
         }
         args.push(format!("--sentry-tag=region={}", config.region));
@@ -1364,7 +1428,10 @@ fn create_environmentd_statefulset_object(
             ..Default::default()
         });
         args.push("--listeners-config-path=/listeners/listeners.json".to_owned());
-        if mz.spec.authenticator_kind == AuthenticatorKind::Password {
+        if matches!(
+            mz.spec.authenticator_kind,
+            AuthenticatorKind::Password | AuthenticatorKind::Sasl
+        ) {
             args.push("--system-parameter-default=enable_password_auth=true".into());
             env.push(EnvVar {
                 name: "MZ_EXTERNAL_LOGIN_PASSWORD_MZ_SYSTEM".to_string(),
@@ -1564,10 +1631,6 @@ fn create_environmentd_statefulset_object(
     let statefulset_spec = StatefulSetSpec {
         replicas: Some(1),
         template: pod_template_spec,
-        update_strategy: Some(StatefulSetUpdateStrategy {
-            rolling_update: None,
-            type_: Some("OnDelete".to_owned()),
-        }),
         service_name: Some(mz.environmentd_service_name()),
         selector: LabelSelector {
             match_expressions: None,
@@ -1590,7 +1653,7 @@ fn create_environmentd_statefulset_object(
 }
 
 fn create_connection_info(
-    config: &super::MaterializeControllerArgs,
+    config: &super::Config,
     mz: &Materialize,
     generation: u64,
 ) -> ConnectionInfo {
@@ -1599,6 +1662,7 @@ fn create_connection_info(
         &mz.spec.internal_certificate_spec,
     );
     let authenticator_kind = mz.spec.authenticator_kind;
+
     let mut listeners_config = ListenersConfig {
         sql: btreemap! {
             "external".to_owned() => SqlListenerConfig{
@@ -1619,7 +1683,14 @@ fn create_connection_info(
             "external".to_owned() => HttpListenerConfig{
                 base: BaseListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0,0,0,0)), config.environmentd_http_port),
-                    authenticator_kind,
+                    // SASL authentication is only supported for SQL (PostgreSQL wire protocol).
+                    // HTTP listeners must use Password authentication when SASL is enabled.
+                    // This is validated at environmentd startup via ListenerConfig::validate().
+                    authenticator_kind: if authenticator_kind == AuthenticatorKind::Sasl {
+                        AuthenticatorKind::Password
+                    } else {
+                        authenticator_kind
+                    },
                     allowed_roles: AllowedRoles::Normal,
                     enable_tls: external_enable_tls,
                 },
@@ -1649,7 +1720,11 @@ fn create_connection_info(
             },
         },
     };
-    if authenticator_kind == AuthenticatorKind::Password {
+
+    if matches!(
+        authenticator_kind,
+        AuthenticatorKind::Password | AuthenticatorKind::Sasl
+    ) {
         listeners_config.sql.remove("internal");
         listeners_config.http.remove("internal");
 
@@ -1702,8 +1777,8 @@ fn create_connection_info(
         },
     };
 
-    let (scheme, leader_api_port, mz_system_secret_name) = match mz.spec.authenticator_kind {
-        AuthenticatorKind::Password => {
+    let (scheme, leader_api_port, mz_system_secret_name) = match authenticator_kind {
+        AuthenticatorKind::Password | AuthenticatorKind::Sasl => {
             let scheme = if external_enable_tls { "https" } else { "http" };
             (
                 scheme,

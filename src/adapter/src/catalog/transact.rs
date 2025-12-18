@@ -46,7 +46,7 @@ use mz_repr::{CatalogItemId, ColumnName, Diff, GlobalId, SqlColumnType, strconv}
 use mz_sql::ast::RawDataType;
 use mz_sql::catalog::{
     CatalogDatabase, CatalogError as SqlCatalogError, CatalogItem as SqlCatalogItem, CatalogRole,
-    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, PasswordAction,
+    CatalogSchema, DefaultPrivilegeAclItem, DefaultPrivilegeObject, PasswordAction, PasswordConfig,
     RoleAttributesRaw, RoleMembership, RoleVars,
 };
 use mz_sql::names::{
@@ -63,6 +63,7 @@ use mz_storage_client::storage_collections::StorageCollections;
 use tracing::{info, trace};
 
 use crate::AdapterError;
+use crate::catalog::state::LocalExpressionCache;
 use crate::catalog::{
     BuiltinTableUpdate, Catalog, CatalogState, UpdatePrivilegeVariant,
     catalog_type_to_audit_object_type, comment_id_to_audit_object_type, is_reserved_name,
@@ -70,6 +71,7 @@ use crate::catalog::{
     system_object_type_to_audit_object_type,
 };
 use crate::coord::ConnMeta;
+use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
 use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
 
@@ -99,6 +101,10 @@ pub enum Op {
         name: ColumnName,
         typ: SqlColumnType,
         sql: RawDataType,
+    },
+    AlterMaterializedViewApplyReplacement {
+        id: CatalogItemId,
+        replacement_id: CatalogItemId,
     },
     CreateDatabase {
         name: String,
@@ -327,6 +333,8 @@ impl ReplicaCreateDropReason {
 
 pub struct TransactionResult {
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
+    /// Parsed catalog updates from which we will derive catalog implications.
+    pub catalog_updates: Vec<ParsedStateUpdate>,
     pub audit_events: Vec<VersionedEvent>,
 }
 
@@ -421,6 +429,7 @@ impl Catalog {
 
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
         let mut builtin_table_updates = vec![];
+        let mut catalog_updates = vec![];
         let mut audit_events = vec![];
         let mut storage = self.storage().await;
         let mut tx = storage
@@ -435,6 +444,7 @@ impl Catalog {
             ops,
             temporary_ids,
             &mut builtin_table_updates,
+            &mut catalog_updates,
             &mut audit_events,
             &mut tx,
             &self.state,
@@ -470,6 +480,7 @@ impl Catalog {
 
         Ok(TransactionResult {
             builtin_table_updates,
+            catalog_updates,
             audit_events,
         })
     }
@@ -491,10 +502,40 @@ impl Catalog {
         mut ops: Vec<Op>,
         temporary_ids: BTreeSet<CatalogItemId>,
         builtin_table_updates: &mut Vec<BuiltinTableUpdate>,
+        parsed_catalog_updates: &mut Vec<ParsedStateUpdate>,
         audit_events: &mut Vec<VersionedEvent>,
         tx: &mut Transaction<'_>,
         state: &CatalogState,
     ) -> Result<Option<CatalogState>, AdapterError> {
+        // We come up with new catalog state, builtin state updates, and parsed
+        // catalog updates (for deriving catalog implications) in two phases:
+        //
+        // 1. We (cow)-clone catalog state as `preliminary_state` and apply ops
+        //    one-by-one. This will give us the full list of updates to apply to
+        //    the catalog, which will allow us to apply it in one batch, which
+        //    in turn will allow the apply machinery to consolidate the updates.
+        // 2. We do one final apply call with all updates, which gives us the
+        //    final builtin table updates and parsed catalog updates.
+        //
+        // The reason is that the loop that is working off ops first does a
+        // transact_op to derive the state updates for that op, and then calls
+        // apply_updates on the catalog state. And successive ops might expect
+        // the catalog state to reflect the modified state _after_ applying
+        // previous ops.
+        //
+        // We want to, however, have one final apply_state that takes all the
+        // accumulated updates to derive the required controller updates and the
+        // builtin table updates.
+        //
+        // We won't win any DDL throughput benchmarks, but so far that's not
+        // what we're optimizing for and there would probably be other
+        // bottlenecks before we hit this one as a bottleneck.
+        //
+        // We could work around this by refactoring how the interplay of
+        // transact_op and apply_updates works, but that's a larger undertaking.
+        let mut preliminary_state = Cow::Borrowed(state);
+
+        // The final state that we will return, if modified.
         let mut state = Cow::Borrowed(state);
 
         let dry_run_ops = match ops.last() {
@@ -512,6 +553,8 @@ impl Catalog {
         let mut storage_collections_to_drop = BTreeSet::new();
         let mut storage_collections_to_register = BTreeMap::new();
 
+        let mut updates = Vec::new();
+
         for op in ops {
             let (weird_builtin_table_update, temporary_item_updates) = Self::transact_op(
                 oracle_write_ts,
@@ -520,7 +563,7 @@ impl Catalog {
                 &temporary_ids,
                 audit_events,
                 tx,
-                &*state,
+                &*preliminary_state,
                 &mut storage_collections_to_create,
                 &mut storage_collections_to_drop,
                 &mut storage_collections_to_register,
@@ -543,25 +586,37 @@ impl Catalog {
             // separately for updating state and builtin tables.
             // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
             // in a multi-subscriber catalog world.
-            let op_id = tx.op_id().into();
+            let upper = tx.upper();
             let temporary_item_updates =
                 temporary_item_updates
                     .into_iter()
                     .map(|(item, diff)| StateUpdate {
                         kind: StateUpdateKind::TemporaryItem(item),
-                        ts: op_id,
+                        ts: upper,
                         diff,
                     });
 
-            let mut updates: Vec<_> = tx.get_and_commit_op_updates();
-            updates.extend(temporary_item_updates);
-            if !updates.is_empty() {
-                let op_builtin_table_updates = state.to_mut().apply_updates(updates)?;
-                let op_builtin_table_updates = state
+            let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
+            op_updates.extend(temporary_item_updates);
+            if !op_updates.is_empty() {
+                let (_op_builtin_table_updates, _op_catalog_updates) = preliminary_state
                     .to_mut()
-                    .resolve_builtin_table_updates(op_builtin_table_updates);
-                builtin_table_updates.extend(op_builtin_table_updates);
+                    .apply_updates(op_updates.clone(), &mut LocalExpressionCache::Closed)
+                    .await;
             }
+            updates.append(&mut op_updates);
+        }
+
+        if !updates.is_empty() {
+            let (op_builtin_table_updates, op_catalog_updates) = state
+                .to_mut()
+                .apply_updates(updates.clone(), &mut LocalExpressionCache::Closed)
+                .await;
+            let op_builtin_table_updates = state
+                .to_mut()
+                .resolve_builtin_table_updates(op_builtin_table_updates);
+            builtin_table_updates.extend(op_builtin_table_updates);
+            parsed_catalog_updates.extend(op_catalog_updates);
         }
 
         if dry_run_ops.is_empty() {
@@ -578,11 +633,15 @@ impl Catalog {
 
             let updates = tx.get_and_commit_op_updates();
             if !updates.is_empty() {
-                let op_builtin_table_updates = state.to_mut().apply_updates(updates)?;
+                let (op_builtin_table_updates, op_catalog_updates) = state
+                    .to_mut()
+                    .apply_updates(updates.clone(), &mut LocalExpressionCache::Closed)
+                    .await;
                 let op_builtin_table_updates = state
                     .to_mut()
                     .resolve_builtin_table_updates(op_builtin_table_updates);
                 builtin_table_updates.extend(op_builtin_table_updates);
+                parsed_catalog_updates.extend(op_catalog_updates);
             }
 
             match state {
@@ -680,12 +739,18 @@ impl Catalog {
 
                 let mut existing_role = state.get_role(&id).clone();
                 let password = attributes.password.clone();
+                let scram_iterations = attributes
+                    .scram_iterations
+                    .unwrap_or_else(|| state.system_config().scram_iterations());
                 existing_role.attributes = attributes.into();
                 existing_role.vars = vars;
                 let password_action = if nopassword {
                     PasswordAction::Clear
                 } else if let Some(password) = password {
-                    PasswordAction::Set(password)
+                    PasswordAction::Set(PasswordConfig {
+                        password,
+                        scram_iterations,
+                    })
                 } else {
                     PasswordAction::NoChange
                 };
@@ -762,6 +827,30 @@ impl Catalog {
 
                 tx.update_item(id, new_entry.into())?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
+            }
+            Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
+                let mut new_entry = state.get_entry(&id).clone();
+                let replacement = state.get_entry(&replacement_id);
+
+                let CatalogItem::MaterializedView(mv) = &mut new_entry.item else {
+                    return Err(AdapterError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "id must refer to a materialized view",
+                    ));
+                };
+                let CatalogItem::MaterializedView(replacement_mv) = &replacement.item else {
+                    return Err(AdapterError::internal(
+                        "ALTER MATERIALIZED VIEW ... APPLY REPLACEMENT",
+                        "replacement_id must refer to a materialized view",
+                    ));
+                };
+
+                mv.apply_replacement(replacement_mv.clone());
+
+                tx.remove_item(replacement_id)?;
+                tx.update_item(id, new_entry.into())?;
+
+                // TODO(alter-mv): audit logging
             }
             Op::CreateDatabase { name, owner_id } => {
                 let database_owner_privileges = vec![rbac::owner_privilege(
@@ -1074,7 +1163,15 @@ impl Catalog {
                         storage_collections_to_create.insert(source.global_id());
                     }
                     CatalogItem::MaterializedView(mv) => {
-                        storage_collections_to_create.insert(mv.global_id());
+                        let mv_gid = mv.global_id_writes();
+                        if let Some(target_id) = mv.replacement_target {
+                            let target_gid = state.get_entry(&target_id).latest_global_id();
+                            let shard_id =
+                                state.storage_metadata().get_collection_shard(target_gid)?;
+                            storage_collections_to_register.insert(mv_gid, shard_id);
+                        } else {
+                            storage_collections_to_create.insert(mv_gid);
+                        }
                     }
                     CatalogItem::ContinualTask(ct) => {
                         storage_collections_to_create.insert(ct.global_id());
@@ -1140,15 +1237,31 @@ impl Catalog {
                         )));
                     }
                     let oid = tx.allocate_oid(&temporary_oids)?;
+
+                    let schema_id = name.qualifiers.schema_spec.clone().into();
+                    let item_type = item.typ();
+                    let (create_sql, global_id, versions) = item.to_serialized();
+
                     let item = TemporaryItem {
                         id,
                         oid,
-                        name: name.clone(),
-                        item: item.clone(),
+                        global_id,
+                        schema_id,
+                        name: name.item.clone(),
+                        create_sql,
+                        conn_id: item.conn_id().cloned(),
                         owner_id,
-                        privileges: PrivilegeMap::from_mz_acl_items(privileges),
+                        privileges: privileges.clone(),
+                        extra_versions: versions,
                     };
                     temporary_item_updates.push((item, StateDiff::Addition));
+
+                    info!(
+                        "create temporary {} {} ({})",
+                        item_type,
+                        state.resolve_full_name(&name, None),
+                        id
+                    );
                 } else {
                     if let Some(temp_id) =
                         item.uses()
