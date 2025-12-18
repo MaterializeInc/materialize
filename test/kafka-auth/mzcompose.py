@@ -88,6 +88,22 @@ SERVICES = [
         ],
     ),
     SchemaRegistry(
+        name="schema-registry-default-port",
+        aliases=["default-port.schema-registry.local"],
+        environment_extra=[
+            "SCHEMA_REGISTRY_LEADER_ELIGIBILITY=false",
+            "SCHEMA_REGISTRY_LISTENERS=http://0.0.0.0:8081,http://0.0.0.0:80",
+            "SCHEMA_REGISTRY_AUTHENTICATION_METHOD=BASIC",
+            "SCHEMA_REGISTRY_AUTHENTICATION_ROLES=user",
+            "SCHEMA_REGISTRY_AUTHENTICATION_REALM=SchemaRegistry",
+            "SCHEMA_REGISTRY_OPTS=-Djava.security.auth.login.config=/etc/schema-registry/jaas.config",
+        ],
+        volumes=[
+            "./schema-registry.jaas.config:/etc/schema-registry/jaas.config",
+            "./schema-registry.user.properties:/etc/schema-registry/user.properties",
+        ],
+    ),
+    SchemaRegistry(
         name="schema-registry-ssl",
         aliases=["ssl.schema-registry.local"],
         environment_extra=[
@@ -222,6 +238,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # the other schema registries in parallel.
     c.up(
         "schema-registry-basic",
+        "schema-registry-default-port",
         "schema-registry-ssl",
         "schema-registry-mssl",
         "schema-registry-ssl-basic",
