@@ -1,4 +1,4 @@
-# JWT Authentication
+# OIDC Authentication
 
 - Associated: (Insert list of associated epics, issues, or PRs)
 
@@ -18,7 +18,7 @@ Our goal is to enable single sign on (SSO) for our self managed product
 
 ## Configuration
 
-JWT authentication can be enabled by specifying the following Materialize CRD:
+OIDC authentication can be enabled by specifying the following Materialize CRD:
 
 ```yaml
 apiVersion: materialize.cloud/v1alpha1
@@ -27,8 +27,8 @@ metadata:
   ...
 spec:
   ...
-  authenticatorKind: Jwt
-  jwtAuthenticationSettings:
+  authenticatorKind: Oidc
+  oidcAuthenticationSettings:
   # Must match the OIDC client ID. Required.
     audience: 060a4f3d-1cac-46e4-b5a5-6b9c66cd9431
     # The claim that represents the user's name in Materialize.
@@ -60,8 +60,8 @@ Where in environmentd, it’ll look like so:
 
 ```bash
 bin/environmentd -- \
---listeners-config-path='/listeners/jwt.json' \
---jwt-authentication-setting="{\"audience\":\"060a4f3d-1cac-46e4-b5a5-6b9c66cd9431\",\"authentication_claim\":\"email\",\"group_claim\":\"groups\",\"issuer\":\"https://dev-123456.okta.com/oauth2/default\",\"jwks\":{\"keys\":[...]},\"jwks_fetch_from_issuer\":true,\"token_endpoint\":\"https://dev-123456.okta.com/oauth2/default/v1/token\"}"
+--listeners-config-path='/listeners/oidc.json' \
+--oidc-authentication-setting="{\"audience\":\"060a4f3d-1cac-46e4-b5a5-6b9c66cd9431\",\"authentication_claim\":\"email\",\"group_claim\":\"groups\",\"issuer\":\"https://dev-123456.okta.com/oauth2/default\",\"jwks\":{\"keys\":[...]},\"jwks_fetch_from_issuer\":true,\"token_endpoint\":\"https://dev-123456.okta.com/oauth2/default/v1/token\"}"
 ```
 
 ## Testing Frameworks
@@ -69,7 +69,7 @@ bin/environmentd -- \
 - For unit testing, use cargo nextest. Similar to frontegg-mock, create a mock oidc server that exposes the correct endpoints, provides a correct JWKS, and generates a JWT with desired claims and fields.
 - For end to end testing, use mzcompose and integrate an Ory hydra server docker image as the IDP. Then we can assert against an instance of Materialize created by orchestratord.
 
-## Phase 1: Create a JWT authenticator kind
+## Phase 1: Create a OIDC authenticator kind
 
 ### Solution proposal: Creating a user & adding roles: An admin gives a user access to Materialize
 
@@ -77,7 +77,7 @@ By specifying an audience, we ensure an admin must explicitly give a user in the
 
 ### Solution proposal: The user should be disabled from logging in when a user is de-provisioned. However, the database level role should still exist.
 
-When doing pgwire jwt authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The JWT authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. The implementation will be very similar to how we refresh tokens for the Frontegg authenticator. This would require users to have their IDP client generate `refresh` tokens.
+When doing pgwire Oidc authentication, we can accept a cleartext password of the form `access=<ACCESS_TOKEN>&refresh=<REFRESH_TOKEN>` where `&` is a delimiter and `refresh=<REFRESH_TOKEN>` is optional. The OIDC authenticator will then try to authenticate again and fetch a new access token using the refresh token when close to expiration (using the token API URL in the spec above). If the refresh token doesn’t exist, the session will invalidate. The implementation will be very similar to how we refresh tokens for the Frontegg authenticator. This would require users to have their IDP client generate `refresh` tokens.
 
 By suggesting a short time to live for access tokens, this accomplishes invalidating sessions on deprovisioning of a user. When admins deprovision a user, the next time the user tries to authenticate or refresh their access token, the token API will not allow the user to login but will keep the role in the database.
 
@@ -95,7 +95,7 @@ Unfortunately, to provide a nice flow to generate the necessary access token and
 
 We have an `mz` CLI that’s catered to Cloud and no longer supported. We can potentially bring this back.
 
-**Open question:** Is there anything we can do on our side to easily provide access tokens / refresh tokens to the user without controlling the client? This feels like the missing piece between JWT authentication and something like `aws sso login` in the AWS CLI
+**Open question:** Is there anything we can do on our side to easily provide access tokens / refresh tokens to the user without controlling the client? This feels like the missing piece between OIDC authentication and something like `aws sso login` in the AWS CLI
 
 ### Solution proposal: The end user is able to visit the Materialize console, and sign in with their IdP
 
@@ -103,10 +103,10 @@ A generic Frontend SSO redirect flow would need to be implemented to retrieve an
 
 ### Work items:
 
-- Create a JWT Authenticator
-    - Create environmentd CLI arguments to accept the JWT authentication configuration above
+- Create a OIDC Authenticator
+    - Create environmentd CLI arguments to accept the OIDC authentication configuration above
     - Wire up the HTTP endpoints, WS endpoints, and pgwire for this authenticator kind
-- Add a `jwt` authenticator kind to orchestratord and create a `jwt` listener config
+- Add a `Oidc` authenticator kind to orchestratord and create a `Oidc` listener config
     - Still leave a port open for password auth for `mz_system` logins given admins can’t map a user in their IDP to `mz_system`
 
 An MVP of what this might look like exists here: [https://github.com/MaterializeInc/materialize/pull/34516](https://github.com/MaterializeInc/materialize/pull/34516). Some differences from the proposed design:
