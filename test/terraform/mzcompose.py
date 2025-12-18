@@ -590,44 +590,38 @@ class State:
                 c.up(Service("testdrive", idle=True))
                 c.run_testdrive_files(*TD_CMD, *files)
 
-    def connect(self, c: Composition) -> None:
-        environmentd_name = spawn.capture(
+    def _find_service(self, pattern: str) -> str:
+        """Find a service in materialize-environment namespace by name pattern."""
+        all_svcs = spawn.capture(
             [
                 "kubectl",
                 "get",
-                "pods",
-                "-l",
-                "app=environmentd",
+                "svc",
                 "-n",
                 "materialize-environment",
                 "-o",
                 "jsonpath={.items[*].metadata.name}",
             ],
             cwd=self.path,
-        )
-
-        balancerd_name = spawn.capture(
-            [
-                "kubectl",
-                "get",
-                "pods",
-                "-l",
-                "app=balancerd",
-                "-n",
-                "materialize-environment",
-                "-o",
-                "jsonpath={.items[0].metadata.name}",
-            ],
-            cwd=self.path,
         ).strip()
-        # error: arguments in resource/name form must have a single resource and name
-        print(f"Got balancerd name: {balancerd_name}")
+        for svc in all_svcs.split():
+            if pattern in svc:
+                return svc
+        raise ValueError(f"No service matching '{pattern}' found in namespace")
+
+    def connect(self, c: Composition) -> None:
+        # Find services by name pattern (they're named like mz<id>-environmentd)
+        environmentd_svc = self._find_service("environmentd")
+        print(f"Got environmentd service: {environmentd_svc}")
+
+        balancerd_svc = self._find_service("balancerd")
+        print(f"Got balancerd service: {balancerd_svc}")
 
         self.environmentd_port_forward_process = subprocess.Popen(
             [
                 "kubectl",
                 "port-forward",
-                f"pod/{environmentd_name}",
+                f"svc/{environmentd_svc}",
                 "-n",
                 "materialize-environment",
                 "6877:6877",
@@ -639,7 +633,7 @@ class State:
             [
                 "kubectl",
                 "port-forward",
-                f"pod/{balancerd_name}",
+                f"svc/{balancerd_svc}",
                 "-n",
                 "materialize-environment",
                 "6875:6875",
@@ -1262,8 +1256,32 @@ def workflow_gcp_temporary(c: Composition, parser: WorkflowArgumentParser) -> No
                 connection_strings["persist_backend_url"],
                 skip_materialize_cr=True,
             )
-            print("--- Waiting for Materialize to fully initialize...")
-            time.sleep(90)
+            # Wait for environmentd pod to be ready (not just Running)
+            print("--- Waiting for environmentd pod to be ready...")
+            for i in range(60):
+                try:
+                    ready = spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-l",
+                            "app=environmentd",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "jsonpath={.items[0].status.conditions[?(@.type=='Ready')].status}",
+                        ],
+                        cwd=path,
+                    ).strip()
+                    if ready == "True":
+                        print("environmentd pod is ready!")
+                        break
+                except subprocess.CalledProcessError:
+                    pass
+                time.sleep(5)
+            else:
+                print("Warning: Timed out waiting for environmentd to be ready")
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
