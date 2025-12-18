@@ -1,0 +1,53 @@
+- name: "syntax"
+  code: |
+    CREATE CLUSTER <cluster_name> (
+        SIZE = <text>
+        [, REPLICATION FACTOR = <int>]
+        [, MANAGED = <bool>]
+        [, SCHEDULE = MANUAL|ON REFRESH(...)]
+    );
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        A name for the cluster.
+    - name: "`SIZE`"
+      description: |
+        The size of the resource allocations for the cluster.
+
+        {{< yaml-list column="Cluster size" data="m1_cluster_sizing" numColumns="3" >}}
+
+        See [Size](#size) for details as well as legacy sizes
+        available.
+    - name: "`REPLICATION FACTOR`"
+      description: |
+        Optional. The number of replicas to provision for the cluster. See
+        [Replication factor](#replication-factor) for details.
+
+        Default: `1`
+    - name: "`MANAGED`"
+      description: |
+        Optional. Whether to automatically manage the cluster's replicas based on the
+        configured size and replication factor.
+
+        <a name="unmanaged-clusters"></a>
+
+        Specify `FALSE` to create an **unmanaged** cluster. With unmanaged
+        clusters, you need to manually manage the cluster's replicas using the
+        the [`CREATE CLUSTER REPLICA`](/sql/create-cluster-replica) and [`DROP
+        CLUSTER REPLICA`](/sql/drop-cluster-replica) commands. When creating an
+        unmanaged cluster, you must specify the `REPLICAS` option as well.
+
+        {{< tip >}}
+        When getting started with Materialize, we recommend starting with managed
+        clusters.
+        {{</ tip >}}
+
+        Default: `TRUE`
+    - name: "`SCHEDULE`"
+      description: |
+        Optional. The [scheduling type](#scheduling) for the cluster.
+        Valid values are:
+        - `MANUAL`
+        - `ON REFRESH`
+
+        Default: `MANUAL`

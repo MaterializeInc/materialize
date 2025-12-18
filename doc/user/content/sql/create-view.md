@@ -8,31 +8,34 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE VIEW` defines a view, which simply provides an alias
-for the embedded `SELECT` statement.
-
-The results of a view can be incrementally maintained **in memory** within a
-[cluster](/concepts/clusters/) by creating an [index](../create-index).
-This allows you to serve queries without the overhead of
-materializing the view.
-
-### Usage patterns
-
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
+Use `CREATE VIEW` to define a view, which simply provides an alias for the
+embedded `SELECT` statement. The results of a view can be incrementally
+maintained **in memory** within a [cluster](/concepts/clusters/) by creating an
+[index](../create-index). This allows you to serve queries without the overhead
+of materializing the view.
 
 ## Syntax
 
-{{< diagram "create-view.svg" >}}
+{{< tabs >}}
+{{< tab "CREATE VIEW" >}}
+### Create view
+To create a view:
 
-Field | Use
-------|-----
-**TEMP** / **TEMPORARY** | Mark the view as [temporary](#temporary-views).
-**OR REPLACE** | If a view exists with the same name, replace it with the view defined in this statement. You cannot replace views that other views depend on, nor can you replace a non-view object with a view.
-**IF NOT EXISTS** | If specified, _do not_ generate an error if a view of the same name already exists. <br/><br/>If _not_ specified, throw an error if a view of the same name already exists. _(Default)_
-_view&lowbar;name_ | A name for the view.
-**(** _col_ident_... **)** | Rename the `SELECT` statement's columns to the list of identifiers, both of which must be the same length. Note that this is required for statements that return multiple columns with the same identifier.
-_select&lowbar;stmt_ | The [`SELECT` statement](../select) to embed in the view.
+{{% include-syntax file="examples/create_view" example="syntax" %}}
+{{< /tab >}}
+{{< tab "CREATE OR REPLACE VIEW" >}}
+### Create or replace view
+To create, or if a view exists with the same name, replace it with the view
+defined in this statement:
+
+{{< note >}}
+You cannot replace views that other views depend on,
+nor can you replace a non-view object with a view.
+{{< /note >}}
+
+{{% include-syntax file="examples/create_view" example="syntax-replace" %}}
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
 

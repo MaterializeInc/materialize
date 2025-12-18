@@ -2,31 +2,97 @@
   code: |
     ALTER CLUSTER <cluster_name>
     SET (
-        SIZE = <text>,
-        REPLICATION FACTOR = <int>,
-        MANAGED = <bool>,
-        SCHEDULE = { MANUAL | ON REFRESH (...) }
+        SIZE = <text>
+        [, REPLICATION FACTOR = <int>]
+        [, MANAGED = <bool>]
+        [, SCHEDULE = MANUAL|ON REFRESH(...)]
     )
-    [WITH ({ WAIT UNTIL READY({TIMEOUT | ON TIMEOUT {COMMIT|ROLLBACK}}) | WAIT FOR <duration> })]
+    [WITH ( <with_option>[,...])]
+    ;
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The name of the cluster you want to alter.
+    - name: "`SIZE`"
+      description:
+        <a name="alter-cluster-size"></a>
+        The size of the resource allocations for the cluster.
+
+        {{< yaml-list column="Cluster size" data="m1_cluster_sizing" numColumns="3" >}}
+
+        See [Size](#available-sizes) for details as well as legacy sizes
+        available.
+
+        {{< warning >}}
+        Changing the size of a cluster may incur downtime. For more information,
+        see [Resizing considerations](#resizing).
+        {{< /warning >}}
+
+        Not available for `ALTER CLUSTER ... RESET` since there is no default
+        `SIZE` value.
+    - name: "`REPLICATION FACTOR`"
+      description: |
+        Optional.The number of replicas to provision for the cluster. Each
+        replica of the cluster provisions a new pool of compute resources to
+        perform exactly the same computations on exactly the same data. For more
+        information, see [Replication factor
+        considerations](#replication-factor).
+
+        Default: `1`
+    - name: "`MANAGED`"
+      description: |
+        Optional. Whether to automatically manage the cluster's replicas based on the configured size and replication factor.
+
+        If `FALSE`, enables the use of the <em>deprecated</em> [`CREATE CLUSTER
+        REPLICA`](/sql/create-cluster-replica) command.
+
+        Default: `TRUE`
+    - name: "`SCHEDULE`"
+      description: |
+        Optional. The [scheduling type](/sql/create-cluster/#scheduling) for the
+        cluster. Valid values are `MANUAL` and `ON REFRESH`.
+
+        Default: `MANUAL`
+
+    - name: "`WITH (<with_option>[,...])`"
+      description: |
+
+        The following `<with_option>`s are supported:
+        | Option  | Description |
+        |--------|-------------|
+        | `WAIT UNTIL READY(...)`    | ***Private preview.** This option has known performance or stability issues and is under active development.* {{< alter-cluster/alter-clusters-cmd-options >}} |
+        | `WAIT FOR` |  ***Private preview.** This option has known performance or stability issues and is under active development.* A fixed duration to wait for the new replicas to be ready. This option can lead to downtime. As such, we recommend using the `WAIT UNTIL READY` option instead.|
+
+- name: "syntax-reset-to-default"
+  code: |
+    ALTER CLUSTER <cluster_name>
+    RESET (
+        REPLICATION FACTOR | MANAGED | SCHEDULE,
+        ...
+    )
     ;
   syntax_elements:
     - name: "`<cluster_name>`"
       description: |
         The name of the cluster you want to alter.
 
-- name: "syntax-reset-to-default"
-  code: |
-    ALTER CLUSTER <cluster_name>
-    RESET (
-        REPLICATION FACTOR,
-        MANAGED,
-        SCHEDULE
-    )
-    ;
-  syntax_elements:
-    - name: "`<cluster_name>`"
+    - name: "`REPLICATION FACTOR`"
       description: |
-        The name of the cluster you want to alter.
+        Optional. The number of replicas to provision for the cluster.
+
+        Default: `1`
+    - name: "`MANAGED`"
+      description: |
+        Optional. Whether to automatically manage the cluster's replicas based
+        on the configured size and replication factor.
+
+        Default: `TRUE`
+    - name: "`SCHEDULE`"
+      description: |
+        Optional. The [scheduling type](/sql/create-cluster/#scheduling) for the
+        cluster.
+
+        Default: `MANUAL`
 
 - name: "syntax-rename"
   code: |

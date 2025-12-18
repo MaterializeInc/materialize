@@ -1,0 +1,611 @@
+- name: "syntax-aws"
+  code: |
+    CREATE CONNECTION <connection_name> TO AWS (
+        ENDPOINT = '<endpoint>',
+        REGION = '<region>',
+        ACCESS KEY ID = { '<access_key_id>' | SECRET <secret_name> },
+        SECRET ACCESS KEY = SECRET <secret_name>,
+        SESSION TOKEN = { '<session_token>' | SECRET <secret_name> },
+        ASSUME ROLE ARN = '<role_arn>',
+        ASSUME ROLE SESSION NAME = '<session_name>'
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`ENDPOINT`"
+      description: |
+        *Value:* `text`
+
+        *Advanced.* Override the default AWS endpoint URL. Allows targeting
+        S3-compatible services like MinIO.
+    - name: "`REGION`"
+      description: |
+        *Value:* `text`
+
+        *For Materialize Cloud only* The AWS region to connect to. Defaults to
+        the current Materialize region.
+    - name: "`ACCESS KEY ID`"
+      description: |
+        *Value:* secret or `text`
+
+        The access key ID to connect with. Triggers credentials-based authentication.
+
+        **Warning!** Use of credentials-based authentication is deprecated. AWS
+        strongly encourages the use of role assumption-based authentication instead.
+    - name: "`SECRET ACCESS KEY`"
+      description: |
+        *Value:* secret
+
+        The secret access key corresponding to the specified access key ID.
+
+        Required and only valid when `ACCESS KEY ID` is specified.
+    - name: "`SESSION TOKEN`"
+      description: |
+        *Value:* secret or `text`
+
+        The session token corresponding to the specified access key ID.
+
+        Only valid when `ACCESS KEY ID` is specified.
+    - name: "`ASSUME ROLE ARN`"
+      description: |
+        *Value:* `text`
+
+        The Amazon Resource Name (ARN) of the IAM role to assume. Triggers
+        role assumption-based authentication.
+    - name: "`ASSUME ROLE SESSION NAME`"
+      description: |
+        *Value:* `text`
+
+        The session name to use when assuming the role.
+
+        Only valid when `ASSUME ROLE ARN` is specified.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `false`. |
+
+- name: "syntax-kafka"
+  code: |
+    CREATE CONNECTION <connection_name> TO KAFKA (
+        BROKER '<broker>' | BROKERS ('<broker1>', '<broker2>', ...),
+        SECURITY PROTOCOL = { 'PLAINTEXT' | 'SSL' | 'SASL_PLAINTEXT' | 'SASL_SSL' },
+        SASL MECHANISMS = { 'PLAIN' | 'SCRAM-SHA-256' | 'SCRAM-SHA-512' },
+        SASL USERNAME = { '<username>' | SECRET <secret_name> },
+        SASL PASSWORD = SECRET <secret_name>,
+        SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> },
+        SSL CERTIFICATE = { '<pem>' | SECRET <secret_name> },
+        SSL KEY = SECRET <secret_name>,
+        SSH TUNNEL = <ssh_connection_name>,
+        AWS CONNECTION = <aws_connection_name>,
+        AWS PRIVATELINK <privatelink_connection_name> (PORT <port>),
+        PROGRESS TOPIC = '<topic_name>',
+        PROGRESS TOPIC REPLICATION FACTOR = <int>
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`BROKER` / `BROKERS`"
+      description: |
+        *Value:* `text` / `text[]`
+
+        The Kafka bootstrap server(s). Exactly one of `BROKER`, `BROKERS`, or
+        `AWS PRIVATELINK` must be specified.
+    - name: "`SECURITY PROTOCOL`"
+      description: |
+        *Value:* `text`
+
+        The security protocol to use: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or
+        `SASL_SSL`.
+
+        Defaults to `SASL_SSL` if any `SASL ...` options are specified or if the
+        `AWS CONNECTION` option is specified, otherwise defaults to `SSL`.
+    - name: "`SASL MECHANISMS`"
+      description: |
+        *Value:* `text`
+
+        The SASL mechanism to use for authentication: `PLAIN`, `SCRAM-SHA-256`,
+        or `SCRAM-SHA-512`. Despite the name, this option only allows a single
+        mechanism to be specified.
+
+        Required if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
+        Cannot be specified if `AWS CONNECTION` is specified.
+    - name: "`SASL USERNAME` / `SASL PASSWORD`"
+      description: |
+        *Value:* secret or `text` / secret
+
+        Your SASL credentials.
+
+        Required and only valid when the security protocol is `SASL_PLAINTEXT`
+        or `SASL_SSL`.
+    - name: "`SSL CERTIFICATE AUTHORITY`"
+      description: |
+        *Value:* secret or `text`
+
+        The certificate authority (CA) certificate in PEM format. Used to validate
+        the brokers' TLS certificates. If unspecified, uses the system's default
+        CA certificates.
+
+        Only valid when the security protocol is `SSL` or `SASL_SSL`.
+    - name: "`SSL CERTIFICATE` / `SSL KEY`"
+      description: |
+        *Value:* secret or `text` / secret
+
+        Your TLS certificate and key in PEM format for SSL client authentication.
+        If unspecified, no client authentication is performed.
+
+        Only valid when the security protocol is `SSL` or `SASL_SSL`.
+    - name: "`SSH TUNNEL`"
+      description: |
+        *Value:* object name
+
+        The name of an [SSH tunnel connection](#ssh-tunnel) to route network
+        traffic through by default.
+    - name: "`AWS CONNECTION`"
+      description: |
+        <a name="kafka-aws-connection"></a>
+        *Value:* object name
+
+        The name of an [AWS connection](#aws) to use when performing IAM
+        authentication with an Amazon MSK cluster.
+
+        Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
+    - name: "`AWS PRIVATELINK`"
+      description: |
+        *Value:* object name
+
+        The name of an [AWS PrivateLink connection](#aws-privatelink) to route
+        network traffic through.
+
+        Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
+    - name: "`PROGRESS TOPIC`"
+      description: |
+        *Value:* `text`
+
+        The name of a topic that Kafka sinks can use to track internal consistency
+        metadata.
+
+        Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
+    - name: "`PROGRESS TOPIC REPLICATION FACTOR`"
+      description: |
+        *Value:* `int`
+
+        The partition count to use when creating the progress topic (if the Kafka
+        topic does not already exist).
+
+        Default: Broker's default.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `true`. |
+
+- name: "syntax-kafka-brokers"
+  code: |
+    CREATE CONNECTION <connection_name> TO KAFKA (
+        BROKERS (
+            '<broker1>:<port1>' USING <tunnel_option>,
+            '<broker2>:<port2>' USING <tunnel_option>
+        ),
+        ...
+    );
+  syntax_elements:
+    - name: "`<broker>:<port>`"
+      description: |
+        The hostname and port of each Kafka broker.
+    - name: "`USING <tunnel_option>`"
+      description: |
+        Specifies how to connect to each broker (e.g., via AWS PrivateLink or SSH tunnel).
+
+- name: "syntax-kafka-broker-aws-privatelink"
+  code: |
+    '<broker>:<port>' USING AWS PRIVATELINK <connection_name> (
+        AVAILABILITY ZONE = '<az_id>',
+        PORT = <port>
+    )
+  syntax_elements:
+    - name: "`AWS PRIVATELINK <connection_name>`"
+      description: |
+        The name of an AWS PrivateLink connection through which network traffic
+        for this broker should be routed.
+    - name: "`AVAILABILITY ZONE`"
+      description: |
+        The ID of the availability zone of the AWS PrivateLink service in which
+        the broker is accessible.
+    - name: "`PORT`"
+      description: |
+        The port of the AWS PrivateLink service to connect to.
+
+- name: "syntax-kafka-broker-ssh-tunnel"
+  code: |
+    '<broker>:<port>' USING SSH TUNNEL <connection_name>
+  syntax_elements:
+    - name: "`SSH TUNNEL <connection_name>`"
+      description: |
+        The name of an SSH tunnel connection through which network traffic for
+        this broker should be routed.
+
+- name: "syntax-kafka-default-aws-privatelink"
+  code: |
+    CREATE CONNECTION <connection_name> TO KAFKA (
+        AWS PRIVATELINK <privatelink_connection_name> (PORT <port>),
+        ...
+    );
+  syntax_elements:
+    - name: "`AWS PRIVATELINK <privatelink_connection_name>`"
+      description: |
+        The name of an AWS PrivateLink connection through which network traffic
+        should be routed.
+    - name: "`PORT`"
+      description: |
+        The port of the AWS PrivateLink service to connect to.
+
+- name: "syntax-csr"
+  code: |
+    CREATE CONNECTION <connection_name> TO CONFLUENT SCHEMA REGISTRY (
+        URL '<url>',
+        USERNAME = { '<username>' | SECRET <secret_name> },
+        PASSWORD = SECRET <secret_name>,
+        SSL CERTIFICATE = { '<pem>' | SECRET <secret_name> },
+        SSL KEY = SECRET <secret_name>,
+        SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> },
+        AWS PRIVATELINK <privatelink_connection_name>,
+        SSH TUNNEL <ssh_connection_name>
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`URL`"
+      description: |
+        *Value:* `text`. Required.
+
+        The schema registry URL.
+    - name: "`USERNAME` / `PASSWORD`"
+      description: |
+        *Value:* secret or `text` / secret
+
+        Credentials for basic HTTP authentication. `PASSWORD` is required and
+        only valid if `USERNAME` is specified.
+    - name: "`SSL CERTIFICATE` / `SSL KEY`"
+      description: |
+        *Value:* secret or `text` / secret
+
+        Your TLS certificate and key in PEM format for TLS client authentication.
+        If unspecified, no TLS client authentication is performed.
+
+        Only respected if the URL uses the `https` protocol.
+    - name: "`SSL CERTIFICATE AUTHORITY`"
+      description: |
+        *Value:* secret or `text`
+
+        The certificate authority (CA) certificate in PEM format. Used to validate
+        the server's TLS certificate. If unspecified, uses the system's default
+        CA certificates.
+
+        Only respected if the URL uses the `https` protocol.
+    - name: "`AWS PRIVATELINK`"
+      description: |
+        *Value:* object name
+
+        The name of an [AWS PrivateLink connection](#aws-privatelink) to route
+        network traffic through.
+    - name: "`SSH TUNNEL`"
+      description: |
+        *Value:* object name
+
+        The name of an [SSH tunnel connection](#ssh-tunnel) to route network
+        traffic through.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `true`. |
+
+- name: "syntax-mysql"
+  code: |
+    CREATE CONNECTION <connection_name> TO MYSQL (
+        HOST '<hostname>',
+        PORT <port>,
+        USER '<username>',
+        PASSWORD SECRET <secret_name>,
+        SSL MODE = { 'disabled' | 'required' | 'verify_ca' | 'verify_identity' },
+        SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> },
+        SSL CERTIFICATE = { '<pem>' | SECRET <secret_name> },
+        SSL KEY = SECRET <secret_name>,
+        AWS CONNECTION <aws_connection_name>,
+        AWS PRIVATELINK <privatelink_connection_name>,
+        SSH TUNNEL <ssh_connection_name>
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`HOST`"
+      description: |
+        *Value:* `text`. Required.
+
+        Database hostname.
+    - name: "`PORT`"
+      description: |
+        *Value:* `integer`
+
+        Port number to connect to at the server host.
+
+        Default: `3306`.
+    - name: "`USER`"
+      description: |
+        *Value:* `text`. Required.
+
+        Database username.
+    - name: "`PASSWORD`"
+      description: |
+        *Value:* secret
+
+        Password for the connection.
+    - name: "`SSL MODE`"
+      description: |
+        *Value:* `text`
+
+        Enables SSL connections if set to `required`, `verify_ca`, or `verify_identity`.
+        See the [MySQL documentation](https://dev.mysql.com/doc/refman/8.0/en/using-encrypted-connections.html)
+        for more details.
+
+        Default: `disabled`.
+    - name: "`SSL CERTIFICATE AUTHORITY`"
+      description: |
+        *Value:* secret or `text`
+
+        The certificate authority (CA) certificate in PEM format. Used for both
+        SSL client and server authentication. If unspecified, uses the system's
+        default CA certificates.
+    - name: "`SSL CERTIFICATE` / `SSL KEY`"
+      description: |
+        *Value:* secret or `text` / secret
+
+        Client SSL certificate and key in PEM format.
+    - name: "`AWS CONNECTION`"
+      description: |
+        <a name="mysql-aws-connection"></a>
+        *Value:* object name
+
+        The name of an [AWS connection](#aws) to use when performing IAM
+        authentication with an Amazon RDS MySQL cluster.
+
+        Only valid if `SSL MODE` is set to `required`, `verify_ca`, or `verify_identity`.
+        Incompatible with `PASSWORD` being set.
+    - name: "`AWS PRIVATELINK`"
+      description: |
+        *Value:* object name
+
+        The name of an [AWS PrivateLink connection](#aws-privatelink) to route
+        network traffic through.
+    - name: "`SSH TUNNEL`"
+      description: |
+        *Value:* object name
+
+        The name of an [SSH tunnel connection](#ssh-tunnel) to route network
+        traffic through.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `true`. |
+
+- name: "syntax-postgres"
+  code: |
+    CREATE CONNECTION <connection_name> TO POSTGRES (
+        HOST '<hostname>',
+        PORT <port>,
+        DATABASE '<database>',
+        USER '<username>',
+        PASSWORD SECRET <secret_name>,
+        SSL MODE = { 'disable' | 'require' | 'verify_ca' | 'verify_full' },
+        SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> },
+        SSL CERTIFICATE = { '<pem>' | SECRET <secret_name> },
+        SSL KEY = SECRET <secret_name>,
+        AWS PRIVATELINK <privatelink_connection_name>,
+        SSH TUNNEL <ssh_connection_name>
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`HOST`"
+      description: |
+        *Value:* `text`. Required.
+
+        Database hostname.
+    - name: "`PORT`"
+      description: |
+        *Value:* `integer`
+
+        Port number to connect to at the server host.
+
+        Default: `5432`.
+    - name: "`DATABASE`"
+      description: |
+        *Value:* `text`. Required.
+
+        Target database.
+    - name: "`USER`"
+      description: |
+        *Value:* `text`. Required.
+
+        Database username.
+    - name: "`PASSWORD`"
+      description: |
+        *Value:* secret
+
+        Password for the connection.
+    - name: "`SSL MODE`"
+      description: |
+        *Value:* `text`
+
+        Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
+
+        Default: `disable`.
+    - name: "`SSL CERTIFICATE AUTHORITY`"
+      description: |
+        *Value:* secret or `text`
+
+        The certificate authority (CA) certificate in PEM format. Used for both
+        SSL client and server authentication. If unspecified, uses the system's
+        default CA certificates.
+    - name: "`SSL CERTIFICATE` / `SSL KEY`"
+      description: |
+        *Value:* secret or `text` / secret
+
+        Client SSL certificate and key in PEM format.
+    - name: "`AWS PRIVATELINK`"
+      description: |
+        *Value:* object name
+
+        The name of an [AWS PrivateLink connection](#aws-privatelink) to route
+        network traffic through.
+    - name: "`SSH TUNNEL`"
+      description: |
+        *Value:* object name
+
+        The name of an [SSH tunnel connection](#ssh-tunnel) to route network
+        traffic through.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `true`. |
+
+- name: "syntax-sql-server"
+  code: |
+    CREATE CONNECTION <connection_name> TO SQL SERVER (
+        HOST '<hostname>',
+        PORT <port>,
+        DATABASE '<database>',
+        USER '<username>',
+        PASSWORD SECRET <secret_name>,
+        SSL MODE = { 'disabled' | 'required' | 'verify_ca' | 'verify' },
+        SSL CERTIFICATE AUTHORITY = { '<pem>' | SECRET <secret_name> }
+    )
+    [WITH (<with_options>)];
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`HOST`"
+      description: |
+        *Value:* `text`. Required.
+
+        Database hostname.
+    - name: "`PORT`"
+      description: |
+        *Value:* `integer`
+
+        Port number to connect to at the server host.
+
+        Default: `1433`.
+    - name: "`DATABASE`"
+      description: |
+        *Value:* `text`. Required.
+
+        Target database.
+    - name: "`USER`"
+      description: |
+        *Value:* `text`. Required.
+
+        Database username.
+    - name: "`PASSWORD`"
+      description: |
+        *Value:* secret. Required.
+
+        Password for the connection.
+    - name: "`SSL MODE`"
+      description: |
+        *Value:* `text`
+
+        Enables SSL connections if set to `required`, `verify_ca`, or `verify`.
+        See the [SQL Server documentation](https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/configure-sql-server-encryption)
+        for more details.
+
+        - `disabled` - no encryption.
+        - `required` - encryption required, no certificate validation.
+        - `verify` - encryption required, validate server certificate using OS configured CA.
+        - `verify_ca` - encryption required, validate server certificate using provided CA certificates (requires `SSL CERTIFICATE AUTHORITY`).
+
+        Default: `disabled`.
+    - name: "`SSL CERTIFICATE AUTHORITY`"
+      description: |
+        *Value:* secret or `text`
+
+        One or more client SSL certificates in PEM format.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `VALIDATE` | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation. Default: `true`. |
+
+- name: "syntax-aws-privatelink"
+  code: |
+    CREATE CONNECTION <connection_name> TO AWS PRIVATELINK (
+        SERVICE NAME '<service_name>',
+        AVAILABILITY ZONES ('<az_id1>', '<az_id2>', ...)
+    );
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`SERVICE NAME`"
+      description: |
+        *Value:* `text`. Required.
+
+        The name of the AWS PrivateLink service.
+    - name: "`AVAILABILITY ZONES`"
+      description: |
+        *Value:* `text[]`. Required.
+
+        The IDs of the AWS availability zones in which the service is accessible.
+
+- name: "syntax-ssh-tunnel"
+  code: |
+    CREATE CONNECTION <connection_name> TO SSH TUNNEL (
+        HOST '<hostname>',
+        PORT <port>,
+        USER '<username>'
+    );
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`HOST`"
+      description: |
+        *Value:* `text`. Required.
+
+        The hostname of the SSH bastion server.
+    - name: "`PORT`"
+      description: |
+        *Value:* `integer`. Required.
+
+        The port to connect to.
+    - name: "`USER`"
+      description: |
+        *Value:* `text`. Required.
+
+        The name of the user to connect as.

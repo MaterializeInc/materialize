@@ -6,48 +6,30 @@ menu:
     parent: 'commands'
 ---
 
-`CREATE TYPE` defines a new data type.
-
-## Conceptual framework
-
-`CREATE TYPE` creates custom types, which let you create named versions of
-anonymous types. For more information, see [SQL Data Types: Custom
-types](../types/#custom-types).
-
-### Use
-
-Currently, custom types provide a shorthand for referring to
-otherwise-annoying-to-type names.
+`CREATE TYPE` defines a custom data type, which let you create named versions of
+anonymous types or provide a shorthand for other types. For more information,
+see [SQL Data Types: Custom types](../types/#custom-types).
 
 ## Syntax
 
-{{< diagram "create-type.svg" >}}
+{{< tabs >}}
+{{< tab "Row type" >}}
 
- Field               | Use
----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------
- _type&lowbar;name_  | A name for the type.
- **MAP / LIST**      | The data type. If not specified, a row type is assumed.
- _property_ **=** _val_ | A property of the new type. This is required when specifying a `LIST` or `MAP` type. Note that type properties can only refer to data types within the catalog, i.e. they cannot refer to anonymous `list` or `map` types.
+{{% include-syntax file="examples/create_type" example="syntax-row" %}}
 
-### `row` properties
+{{< /tab >}}
+{{< tab "List type" >}}
 
-Field               | Use
---------------------|----------------------------------------------------
-_field_name_        | The name of a field in a row type.
-_field_type_        | The data type of a field indicated by _field_name_.
+{{% include-syntax file="examples/create_type" example="syntax-list" %}}
 
-### `list` properties
+{{< /tab >}}
+{{< tab "Map type" >}}
 
-Field | Use
------|-----
-`ELEMENT TYPE` | Creates a custom [`list`](../types/list) whose elements are of `ELEMENT TYPE`.
+{{% include-syntax file="examples/create_type" example="syntax-map" %}}
 
-### `map` properties
+{{< /tab >}}
+{{< /tabs >}}
 
-Field | Use
------|-----
-`KEY TYPE` | Creates a custom [`map`](../types/map) whose keys are of `KEY TYPE`. `KEY TYPE` must resolve to [`text`](../types/text).
-`VALUE TYPE` | Creates a custom [`map`](../types/map) whose values are of `VALUE TYPE`.
 
 ## Details
 

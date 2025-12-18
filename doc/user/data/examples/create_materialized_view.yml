@@ -1,0 +1,77 @@
+- name: "syntax"
+  code: |
+    CREATE MATERIALIZED VIEW [IF NOT EXISTS] <view_name>
+    [(<col_ident>, ...)]
+    [IN CLUSTER <cluster_name>]
+    [WITH (<with_options>)]
+    AS <select_stmt>;
+  syntax_elements:
+    - name: "`IF NOT EXISTS`"
+      description: |
+        If specified, do not generate an error if a materialized view of the
+        same name already exists.
+    - name: "`<view_name>`"
+      description: |
+        A name for the materialized view.
+    - name: "`(<col_ident>, ...)`"
+      description: |
+        Rename the `SELECT` statement's columns to the list of identifiers.
+        Both must be the same length. Note that this is required for statements
+        that return multiple columns with the same identifier.
+    - name: "`IN CLUSTER <cluster_name>`"
+      description: |
+        The cluster to maintain this materialized view. If not specified,
+        defaults to the active cluster.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `ASSERT NOT NULL` *col_ident* | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
+        | `PARTITION BY` *columns* | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details. |
+        | `RETAIN HISTORY FOR` *retention_period* | `interval` | ***Private preview.*** Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `REFRESH` *refresh_strategy* | | ***Private preview.*** The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. Default: `ON COMMIT`. |
+    - name: "`<select_stmt>`"
+      description: |
+        The [`SELECT` statement](/sql/select) whose results you want to
+        maintain incrementally updated.
+
+- name: "syntax-replace"
+  code: |
+    CREATE OR REPLACE MATERIALIZED VIEW <view_name>
+    [(<col_ident>, ...)]
+    [IN CLUSTER <cluster_name>]
+    [WITH (<with_options>)]
+    AS <select_stmt>;
+  syntax_elements:
+    - name: "`OR REPLACE`"
+      description: |
+        If a materialized view exists with the same name, replace it with the
+        view defined in this statement. You cannot replace views that other
+        views or sinks depend on, nor can you replace a non-view object with
+        a view.
+    - name: "`<view_name>`"
+      description: |
+        A name for the materialized view.
+    - name: "`(<col_ident>, ...)`"
+      description: |
+        Rename the `SELECT` statement's columns to the list of identifiers.
+    - name: "`IN CLUSTER <cluster_name>`"
+      description: |
+        The cluster to maintain this materialized view. If not specified,
+        defaults to the active cluster.
+    - name: "`WITH (<with_options>)`"
+      description: |
+        The following `<with_options>` are supported:
+
+        | Field | Value | Description |
+        |-------|-------|-------------|
+        | `ASSERT NOT NULL` *col_ident* | `text` | The column identifier for which to create a [non-null assertion](#non-null-assertions). To specify multiple columns, use the option multiple times. |
+        | `PARTITION BY` *columns* | `(ident [, ident]*)` | The key by which Materialize should internally partition this durable collection. See the [partitioning guide](/transform-data/patterns/partition-by/) for restrictions on valid values and other details. |
+        | `RETAIN HISTORY FOR` *retention_period* | `interval` | ***Private preview.*** Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). Default: `1s`. |
+        | `REFRESH` *refresh_strategy* | | ***Private preview.*** The refresh strategy for the materialized view. See [Refresh strategies](#refresh-strategies) for syntax options. Default: `ON COMMIT`. |
+    - name: "`<select_stmt>`"
+      description: |
+        The [`SELECT` statement](/sql/select) whose results you want to
+        maintain incrementally updated.

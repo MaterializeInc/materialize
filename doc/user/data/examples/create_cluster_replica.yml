@@ -1,0 +1,20 @@
+- name: "syntax"
+  code: |
+    CREATE CLUSTER REPLICA <cluster_name>.<replica_name> (
+        SIZE = <text>
+    );
+  syntax_elements:
+    - name: "`<cluster_name>`"
+      description: |
+        The cluster you want to attach a replica to.
+    - name: "`<replica_name>`"
+      description: |
+        A name for this replica.
+    - name: "`SIZE`"
+      description: |
+        The size of the resource allocations for the cluster.
+
+        {{< yaml-list column="Cluster size" data="m1_cluster_sizing" numColumns="3" >}}
+
+        See [Size](#size) for details as well as legacy sizes
+        available.

@@ -17,44 +17,28 @@ By maintaining fresh, up-to-date results in memory, indexes can significantly [o
 
 Because indexes are scoped to a single cluster, they are most useful for accelerating queries within that cluster. For results that must be shared across clusters or persisted to durable storage, consider using a [materialized view](/sql/create-materialized-view), which also maintains fresh results but is accessible system-wide.
 
-### Usage patterns
-
-#### Indexes on views vs. materialized views
-
-{{% views-indexes/table-usage-pattern-intro %}}
-{{% views-indexes/table-usage-pattern %}}
-
-#### Indexes and query optimizations
-
-You might want to create indexes when...
-
--   You want to use non-primary keys (e.g. foreign keys) as a join condition. In
-    this case, you could create an index on the columns in the join condition.
--   You want to speed up searches filtering by literal values or expressions.
-
-{{% views-indexes/index-query-optimization-specific-instances %}}
-
-#### Best practices
-
-{{% views-indexes/index-best-practices %}}
 
 ## Syntax
 
-{{< diagram "create-index.svg" >}}
+{{< tabs >}}
+{{< tab "CREATE INDEX" >}}
+### Create index
 
-### `with_options`
+Create an index using the specified columns as the index key.
 
-{{< diagram "with-options-retain-history.svg" >}}
+{{% include-syntax file="examples/create_index" example="syntax" %}}
 
-Field | Use
-------|-----
-**DEFAULT** | Creates a default index using a set of columns that uniquely identify each row. If this set of columns can't be inferred, all columns are used.
-_index&lowbar;name_ | A name for the index.
-_obj&lowbar;name_ | The name of the source, view, or materialized view on which you want to create an index.
-_cluster_name_ | The [cluster](/sql/create-cluster) to maintain this index. If not specified, defaults to the active cluster.
-_method_ | The name of the index method to use. The only supported method is [`arrangement`](/overview/arrangements).
-_col&lowbar;expr_**...** | The expressions to use as the key for the index.
-_retention_period_ | ***Private preview.** This option has known performance or stability issues and is under active development.* <br>Duration for which Materialize retains historical data, which is useful to implement [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). **Note:** Configuring indexes to retain history is not recommended. As an alternative, consider creating a materialized view for your subscription query and configuring the history retention period on the view instead. See [durable subscriptions](/transform-data/patterns/durable-subscriptions/#history-retention-period). <br>Accepts positive [interval](/sql/types/interval/) values (e.g. `'1hr'`). <br>Default: `1s`.
+{{< /tab >}}
+{{< tab "CREATE DEFAULT INDEX" >}}
+### Create default index
+
+Create a default index using a set of columns that uniquely identify each row.
+If this set of columns cannot be inferred, all columns are used.
+
+{{% include-syntax file="examples/create_index" example="syntax-default" %}}
+
+{{< /tab >}}
+{{< /tabs >}}
 
 ## Details
 
@@ -108,6 +92,28 @@ Creating an index may also force the first materialization of a view, which may
 cause Materialize to install a dataflow to determine and maintain the results of
 the view. This dataflow may have a memory footprint itself, in addition to that
 of the index.
+
+#### Best practices
+
+{{% views-indexes/index-best-practices %}}
+
+### Usage patterns
+
+#### Indexes on views vs. materialized views
+
+{{% views-indexes/table-usage-pattern-intro %}}
+{{% views-indexes/table-usage-pattern %}}
+
+#### Indexes and query optimizations
+
+You might want to create indexes when...
+
+-   You want to use non-primary keys (e.g. foreign keys) as a join condition. In
+    this case, you could create an index on the columns in the join condition.
+-   You want to speed up searches filtering by literal values or expressions.
+
+{{% views-indexes/index-query-optimization-specific-instances %}}
+
 
 ## Examples
 

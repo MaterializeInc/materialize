@@ -8,6 +8,8 @@ menu:
 
 ---
 
+[//]: # "TODO: This page could be broken up."
+
 A connection describes how to connect and authenticate to an external system you
 want Materialize to read from or write to. Once created, a connection
 is **reusable** across multiple [`CREATE SOURCE`](/sql/create-source) and
@@ -31,25 +33,7 @@ use AWS connections to perform [bulk exports to Amazon S3](/serve-results/s3/),
 perform [authentication with an Amazon MSK cluster](#kafka-aws-connection), or
 perform [authentication with an Amazon RDS MySQL database](#mysql-aws-connection).
 
-{{< diagram "create-connection-aws.svg" >}}
-
-#### Connection options {#aws-options}
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------
-| `ENDPOINT`                                | `text`           | *Advanced.* Override the default AWS endpoint URL. Allows targeting S3-compatible services like MinIO.
-| `REGION`                                  | `text`           | *For Materialize Cloud only* The AWS region to connect to. Defaults to the current Materialize region.
-| `ACCESS KEY ID`                           | secret or `text` | The access key ID to connect with. Triggers credentials-based authentication.<br><br><strong>Warning!</strong> Use of credentials-based authentication is deprecated. AWS strongly encourages the use of role assumption-based authentication instead.
-| `SECRET ACCESS KEY`                       | secret           | The secret access key corresponding to the specified access key ID.<br><br>Required and only valid when `ACCESS KEY ID` is specified.
-| `SESSION TOKEN`                           | secret or `text` | The session token corresponding to the specified access key ID.<br><br>Only valid when `ACCESS KEY ID` is specified.
-| `ASSUME ROLE ARN`                         | `text`           | The Amazon Resource Name (ARN) of the IAM role to assume. Triggers role assumption-based authentication.
-| `ASSUME ROLE SESSION NAME`                | `text`           | The session name to use when assuming the role.<br><br>Only valid when `ASSUME ROLE ARN` is specified.
-
-#### `WITH` options {#aws-with-options}
-
-Field         | Value     | Description
---------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation.<br><br>Defaults to `false`.
+{{% include-syntax file="examples/create_connection" example="syntax-aws" %}}
 
 #### Permissions {#aws-permissions}
 
@@ -200,32 +184,7 @@ connections to create [sources](/sql/create-source/kafka) and [sinks](/sql/creat
 
 #### Syntax {#kafka-syntax}
 
-{{< diagram "create-connection-kafka.svg" >}}
-
-#### Connection options {#kafka-options}
-
-| <div style="min-width:240px">Field</div>  | Value            | Description
-|-------------------------------------------|------------------|------------------------------
-| `BROKER`                                  | `text`           | The Kafka bootstrap server.<br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
-| `BROKERS`                                 | `text[]`         | A comma-separated list of Kafka bootstrap servers.<br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
-| `SECURITY PROTOCOL`                       | `text`           | The security protocol to use: `PLAINTEXT`, `SSL`, `SASL_PLAINTEXT`, or `SASL_SSL`.<br><br>Defaults to `SASL_SSL` if any `SASL ...` options are specified or if the `AWS CONNECTION` option is specified, otherwise defaults to `SSL`.
-| `SASL MECHANISMS`                         | `text`           | The SASL mechanism to use for authentication: `PLAIN`, `SCRAM-SHA-256`, or `SCRAM-SHA-512`. Despite the name, this option only allows a single mechanism to be specified.<br><br>Required if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.<br>Cannot be specified if `AWS CONNECTION` is specified.
-| `SASL USERNAME`                           | secret or `text` | Your SASL username.<br><br>Required and only valid when the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
-| `SASL PASSWORD`                           | secret           | Your SASL password.<br><br>Required and only valid when the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
-| `SSL CERTIFICATE AUTHORITY`               | secret or `text` | The certificate authority (CA) certificate in PEM format. Used to validate the brokers' TLS certificates. If unspecified, uses the system's default CA certificates.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
-| `SSL CERTIFICATE`                         | secret or `text` | Your TLS certificate in PEM format for SSL client authentication. If unspecified, no client authentication is performed.<br><br>Only valid when the security protocol is `SSL` or `SASL_SSL`.
-| `SSL KEY`                                 | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid when `SSL CERTIFICATE` is specified.
-| `SSH TUNNEL`                              | object name      | The name of an [SSH tunnel connection](#ssh-tunnel) to route network traffic through by default.
-| `AWS CONNECTION` <a name="kafka-aws-connection"></a>  | object name      | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon MSK cluster.<br><br>Only valid if the security protocol is `SASL_PLAINTEXT` or `SASL_SSL`.
-| `AWS PRIVATELINK`                         | object name      | The name of an [AWS PrivateLink connection](#aws-privatelink) to route network traffic through. <br><br>Exactly one of `BROKER`, `BROKERS`, or `AWS PRIVATELINK` must be specified.
-| `PROGRESS TOPIC`                          | `text`           | The name of a topic that Kafka sinks can use to track internal consistency metadata. Default: `_materialize-progress-{REGION ID}-{CONNECTION ID}`.
-| `PROGRESS TOPIC REPLICATION FACTOR`       | `int`            | The partition count to use when creating the progress topic (if the Kafka topic does not already exist).<br>Default: Broker's default.
-
-#### `WITH` options {#kafka-with-options}
-
-Field         | Value     | Description
---------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Whether [connection validation](#connection-validation) should be performed on connection creation.<br><br>Defaults to `true`.
+{{% include-syntax file="examples/create_connection" example="syntax-kafka" %}}
 
 To connect to a Kafka cluster with multiple bootstrap servers, use the `BROKERS`
 option:
@@ -371,15 +330,11 @@ in the `BROKERS` clause, Materialize will attempt to connect to
 those brokers without any tunneling.
 {{< /warning >}}
 
-{{< diagram "create-connection-kafka-brokers.svg" >}}
+{{% include-syntax file="examples/create_connection" example="syntax-kafka-brokers" %}}
 
 ##### `kafka_broker`
 
-{{< diagram "create-connection-kafka-broker-aws-privatelink.svg" >}}
-
-##### `broker_option`
-
-{{< diagram "broker-option.svg" >}}
+{{% include-syntax file="examples/create_connection" example="syntax-kafka-broker-aws-privatelink" %}}
 
 The `USING` clause specifies that Materialize Cloud should connect to the
 designated broker via an AWS PrivateLink service. Brokers do not need to be
@@ -430,7 +385,7 @@ PrivateLink connection and the port of the bootstrap server instead.
 
 ##### Default connection syntax {#kafka-privatelink-default-syntax}
 
-{{< diagram "create-connection-kafka-default-aws-privatelink.svg" >}}
+{{% include-syntax file="examples/create_connection" example="syntax-kafka-default-aws-privatelink" %}}
 
 ##### Default connection options {#kafka-privatelink-default-options}
 
@@ -466,28 +421,21 @@ check [this guide](/ops/network-security/privatelink/).
 ##### Syntax {#kafka-ssh-syntax}
 
 {{< warning >}}
-If you do not specify a default [`SSH TUNNEL`](#kafka-options) and your Kafka
+If you do not specify a default `SSH TUNNEL` and your Kafka
 cluster advertises brokers that are not listed in the `BROKERS` clause,
 Materialize will attempt to connect to those brokers without any tunneling.
 {{< /warning >}}
 
-{{< diagram "create-connection-kafka-brokers.svg" >}}
+{{% include-syntax file="examples/create_connection" example="syntax-kafka-brokers" %}}
 
 ##### `kafka_broker`
 
-{{< diagram "create-connection-kafka-broker-ssh-tunnel.svg" >}}
+{{% include-syntax file="examples/create_connection" example="syntax-kafka-broker-ssh-tunnel" %}}
 
 The `USING` clause specifies that Materialize should connect to the designated
 broker via an SSH bastion server. Brokers do not need to be configured the same
 way, but the clause must be individually attached to each broker that you want
 to connect to via the tunnel.
-
-##### Connection options {#kafka-ssh-options}
-
-Field           | Value            | Required | Description
-----------------|------------------|:--------:|-------------------------------
-`SSH TUNNEL`    | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic for this broker should be routed.
-
 
 ##### Example {#kafka-ssh-example}
 
@@ -536,24 +484,7 @@ Registry] server. You can use Confluent Schema Registry connections in the
 
 #### Syntax {#csr-syntax}
 
-{{< diagram "create-connection-csr.svg" >}}
-
-#### Connection options {#csr-options}
-
-| <div style="min-width:220px">Field</div>    | Value            | Description
-| --------------------------------------------|------------------|------------
-| `URL`                                       | `text`           | The schema registry URL.<br><br>Required.
-| `USERNAME`                                  | secret or `text` | The username to use for basic HTTP authentication.
-| `PASSWORD`                                  | secret           | The password to use for basic HTTP authentication.<br><br>Required and only valid if `USERNAME` is specified.
-| `SSL CERTIFICATE`                           | secret or `text` | Your TLS certificate in PEM format for TLS client authentication. If unspecified, no TLS client authentication is performed.<br><br>Only respected if the URL uses the `https` protocol.
-| `SSL KEY`                                   | secret           | Your TLS certificate's key in PEM format.<br><br>Required and only valid if `SSL CERTIFICATE` is specified.
-| `SSL CERTIFICATE AUTHORITY`                 | secret or `text` | The certificate authority (CA) certificate in PEM format. Used to validate the server's TLS certificate. If unspecified, uses the system's default CA certificates.<br><br>Only respected if the URL uses the `https` protocol.
-
-#### `WITH` options {#csr-with-options}
-
-Field         | Value     | Description
---------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
+{{% include-syntax file="examples/create_connection" example="syntax-csr" %}}
 
 #### Examples {#csr-example}
 
@@ -600,12 +531,6 @@ you can tunnel the connection through an AWS PrivateLink service (Materialize Cl
 
 {{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
-##### Connection options {#csr-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`AWS PRIVATELINK`           | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
-
 ##### Example {#csr-privatelink-example}
 
 ```mzsql
@@ -622,12 +547,6 @@ CREATE CONNECTION csr_privatelink TO CONFLUENT SCHEMA REGISTRY (
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
-
-##### Connection options {#csr-ssh-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`SSH TUNNEL`                | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic should be routed.
 
 ##### Example {#csr-ssh-example}
 
@@ -654,27 +573,7 @@ MySQL connections to create [sources](/sql/create-source/mysql).
 
 #### Syntax {#mysql-syntax}
 
-{{< diagram "create-connection-mysql.svg" >}}
-
-#### Connection options {#mysql-options}
-
-Field                                                | Value            | Required | Description
------------------------------------------------------|------------------|:--------:|-----------------------------
-`HOST`                                               | `text`           | ✓        | Database hostname.
-`PORT`                                               | `integer`        |          | Default: `3306`. Port number to connect to at the server host.
-`USER`                                               | `text`           | ✓        | Database username.
-`PASSWORD`                                           | secret           |          | Password for the connection.
-`SSL CERTIFICATE AUTHORITY`                          | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`AWS CONNECTION` <a name="mysql-aws-connection"></a> | object name      |          | The name of an [AWS connection](#aws) to use when performing IAM authentication with an Amazon RDS MySQL cluster.<br><br>Only valid if `SSL MODE` is set to `required`, `verify_ca`, or `verify_identity`. <br><br>Incompatible with `PASSWORD` being set.
-`SSL MODE`                                           | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify_identity`. See the [MySQL documentation](https://dev.mysql.com/doc/refman/8.0/en/using-encrypted-connections.html) for more details.
-`SSL CERTIFICATE`                                    | secret or `text` |          | Client SSL certificate in PEM format.
-`SSL KEY`                                            | secret           |          | Client SSL key in PEM format.
-
-#### `WITH` options {#mysql-with-options}
-
-Field         | Value     | Description
---------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
+{{% include-syntax file="examples/create_connection" example="syntax-mysql" %}}
 
 #### Example {#mysql-example}
 
@@ -700,12 +599,6 @@ SSH bastion host.
 
 {{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
-##### Connection options {#mysql-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`AWS PRIVATELINK`           | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
-
 ##### Example {#mysql-privatelink-example}
 
 ```mzsql
@@ -729,12 +622,6 @@ check [this guide](/ops/network-security/privatelink/).
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
-
-##### Connection options {#mysql-ssh-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`SSH TUNNEL`                | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic should be routed.
 
 ##### Example {#mysql-ssh-example}
 
@@ -784,27 +671,7 @@ A Postgres connection establishes a link to a single database of a
 
 #### Syntax {#postgres-syntax}
 
-{{< diagram "create-connection-postgres.svg" >}}
-
-#### Connection options {#postgres-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`HOST`                      | `text`           | ✓        | Database hostname.
-`PORT`                      | `integer`        |          | Default: `5432`. Port number to connect to at the server host.
-`DATABASE`                  | `text`           | ✓        | Target database.
-`USER`                      | `text`           | ✓        | Database username.
-`PASSWORD`                  | secret           |          | Password for the connection.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | The certificate authority (CA) certificate in PEM format. Used for both SSL client and server authentication. If unspecified, uses the system's default CA certificates.
-`SSL MODE`                  | `text`           |          | Default: `disable`. Enables SSL connections if set to `require`, `verify_ca`, or `verify_full`.
-`SSL CERTIFICATE`           | secret or `text` |          | Client SSL certificate in PEM format.
-`SSL KEY`                   | secret           |          | Client SSL key in PEM format.
-
-#### `WITH` options {#postgres-with-options}
-
-Field         | Value     | Description
---------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
+{{% include-syntax file="examples/create_connection" example="syntax-postgres" %}}
 
 #### Example {#postgres-example}
 
@@ -831,12 +698,6 @@ the connection through an AWS PrivateLink service (Materialize Cloud)or an SSH b
 
 {{< include-md file="shared-content/aws-privatelink-cloud-only-note.md" >}}
 
-##### Connection options {#postgres-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`AWS PRIVATELINK`           | object name      | ✓        | The name of an [AWS PrivateLink connection](#aws-privatelink) through which network traffic should be routed.
-
 ##### Example {#postgres-privatelink-example}
 
 ```mzsql
@@ -861,12 +722,6 @@ check [this guide](/ops/network-security/privatelink/).
 
 {{< /tab >}}
 {{< tab "SSH tunnel">}}
-
-##### Connection options {#postgres-ssh-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`SSH TUNNEL`                | object name      | ✓        | The name of an [SSH tunnel connection](#ssh-tunnel) through which network traffic should be routed.
 
 ##### Example {#postgres-ssh-example}
 
@@ -900,31 +755,7 @@ A SQL Server connection establishes a link to a single database of a
 
 #### Syntax {#sql-server-syntax}
 
-{{< diagram "create-connection-sql-server.svg" >}}
-
-#### Connection options {#sql-server-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|-----------------------------
-`HOST`                      | `text`           | ✓        | Database hostname.
-`PORT`                      | `integer`        |          | Default: `1433`. Port number to connect to at the server host.
-`DATABASE`                  | `text`           | ✓        | Target database.
-`USER`                      | `text`           | ✓        | Database username.
-`PASSWORD`                  | secret           | ✓        | Password for the connection.
-`SSL MODE`                  | `text`           |          | Default: `disabled`. Enables SSL connections if set to `required`, `verify_ca`, or `verify`. See the [SQL Server documentation](https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/configure-sql-server-encryption) for more details.
-`SSL CERTIFICATE AUTHORITY` | secret or `text` |          | One or more client SSL certificates in PEM format.
-
-##### SSL MODE
-`disabled` - no encryption.
-`required` - encryption required, no certificate validation.
-`verify` - encryption required, validate server certificate using OS configured CA.
-`verify_ca` - encryption required, validate server certificate using provided CA certificates (requires `SSL CERTIFICATE AUTHORITY`).
-
-#### `WITH` options {#sql-server-with-options}
-
-Field         | Value     | Description
---------------|-----------|-------------------------------------
-`VALIDATE`    | `boolean` | Default: `true`. Whether [connection validation](#connection-validation) should be performed on connection creation.
+{{% include-syntax file="examples/create_connection" example="syntax-sql-server" %}}
 
 #### Example {#sql-server-example}
 
@@ -954,14 +785,7 @@ You can use AWS PrivateLink connections in [Confluent Schema Registry connection
 
 #### Syntax {#aws-privatelink-syntax}
 
-{{< diagram "create-connection-aws-privatelink.svg" >}}
-
-#### Connection options {#aws-privatelink-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:| ------------
-`SERVICE NAME`              | `text`           | ✓        | The name of the AWS PrivateLink service.
-`AVAILABILITY ZONES`        | `text[]`         | ✓        | The IDs of the AWS availability zones in which the service is accessible.
+{{% include-syntax file="examples/create_connection" example="syntax-aws-privatelink" %}}
 
 #### Permissions {#aws-privatelink-permissions}
 
@@ -1022,15 +846,7 @@ and [Postgres connections](#postgresql).
 
 #### Syntax {#ssh-tunnel-syntax}
 
-{{< diagram "create-connection-ssh-tunnel.svg" >}}
-
-#### Connection options {#ssh-tunnel-options}
-
-Field                       | Value            | Required | Description
-----------------------------|------------------|:--------:|------------------------------
-`HOST`                      | `text`           | ✓        | The hostname of the SSH bastion server.
-`PORT`                      | `integer`        | ✓        | The port to connect to.
-`USER`                      | `text`           | ✓        | The name of the user to connect as.
+{{% include-syntax file="examples/create_connection" example="syntax-ssh-tunnel" %}}
 
 #### Key pairs {#ssh-tunnel-keypairs}
 

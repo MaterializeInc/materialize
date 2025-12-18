@@ -417,7 +417,7 @@ To achieve this, Materialize stores some internal metadata in an additional
 *progress topic*. This topic is shared among all sinks that use a particular
 [Kafka connection](/sql/create-connection/#kafka). The name of the progress
 topic can be specified when [creating a
-connection](/sql/create-connection/#kafka-options); otherwise, a default name of
+connection](/sql/create-connection/#kafka); otherwise, a default name of
 `_materialize-progress-{REGION ID}-{CONNECTION ID}` is used. In either case,
 Materialize will attempt to create the topic if it does not exist. The contents
 of this topic are not user-specified.

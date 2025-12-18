@@ -1,0 +1,40 @@
+- name: "syntax-row"
+  code: |
+    CREATE TYPE <type_name> AS (<field_name> <field_type>, ...);
+  syntax_elements:
+    - name: "`<type_name>`"
+      description: |
+        A name for the type.
+    - name: "`<field_name>`"
+      description: |
+        The name of a field in a row type.
+    - name: "`<field_type>`"
+      description: |
+        The data type of a field indicated by `field_name`.
+
+- name: "syntax-list"
+  code: |
+    CREATE TYPE <type_name> AS LIST (ELEMENT TYPE = <element_type>);
+  syntax_elements:
+    - name: "`<type_name>`"
+      description: |
+        A name for the type.
+    - name: "`<element_type>`"
+      description: |
+        Creates a custom [`list`](/sql/types/list) whose elements are of
+        `<element_type>`.
+
+- name: "syntax-map"
+  code: |
+    CREATE TYPE <type_name> AS MAP (KEY TYPE = <key_type>, VALUE TYPE = <value_type>);
+  syntax_elements:
+    - name: "`<type_name>`"
+      description: |
+        A name for the type.
+    - name: "`<key_type>`"
+      description: |
+        Creates a custom [`map`](/sql/types/map) whose keys are of `<key_type>`.
+        Must resolve to [`text`](/sql/types/text).
+    - name: "`<value_type>`"
+      description: |
+        Creates a custom [`map`](/sql/types/map) whose values are of `<value_type>`.
