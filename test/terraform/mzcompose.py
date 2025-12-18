@@ -561,7 +561,24 @@ class State:
         )
         run_ignore_error(["kubectl", "delete", "namespace", "materialize-environment"])
         run_ignore_error(["kubectl", "delete", "namespace", "materialize"])
-        spawn.runv(["terraform", "destroy", "-auto-approve"], cwd=self.path, env=env)
+
+        # Retry terraform destroy up to 3 times with delays
+        # Security groups may fail to delete if ENIs are still being released
+        for attempt in range(3):
+            try:
+                spawn.runv(
+                    ["terraform", "destroy", "-auto-approve"], cwd=self.path, env=env
+                )
+                break
+            except subprocess.CalledProcessError:
+                if attempt < 2:
+                    print(
+                        f"terraform destroy failed (attempt {attempt + 1}/3), "
+                        "waiting 60s for resources to be released..."
+                    )
+                    time.sleep(60)
+                else:
+                    raise
 
     def test(
         self, c: Composition, tag: str, run_testdrive_files: bool, files: list[str]
@@ -665,6 +682,12 @@ class State:
 
 
 class AWS(State):
+    base_vars: list[str]
+
+    def __init__(self, path: Path):
+        super().__init__(path)
+        self.base_vars = []
+
     def setup(
         self,
         prefix: str,
@@ -687,24 +710,26 @@ class AWS(State):
             )
             return
 
-        vars = [
+        # Build base vars (without environmentd_version) that stay constant during upgrades
+        self.base_vars = [
             "-var",
             f"operator_version={get_operator_version()}",
         ]
         if orchestratord_override:
-            vars += [
+            self.base_vars += [
                 "-var",
                 f"orchestratord_version={get_tag(orchestratord_tag or tag)}",
             ]
 
         license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
         if license_key:
-            vars += [
+            self.base_vars += [
                 "-var",
                 f"license_key={license_key}",
             ]
 
-        vars += [
+        # Full vars includes environmentd_version for initial setup
+        vars = self.base_vars + [
             "-var",
             f"environmentd_version={tag}",
         ]
@@ -748,41 +773,30 @@ class AWS(State):
         )
 
     def upgrade(self, tag: str) -> None:
-        print(f"--- Upgrading to {tag}")
-        # Following https://materialize.com/docs/installation/install-on-aws/upgrade-on-aws/
-        self.materialize_environment = {
-            "apiVersion": "materialize.cloud/v1alpha1",
-            "kind": "Materialize",
-            "metadata": {
-                "name": "12345678-1234-1234-1234-123456789012",
-                "namespace": "materialize-environment",
-            },
-            "spec": {
-                "requestRollout": f"12345678-9012-3456-7890-12345678901{self.version+3}",
-                "environmentdImageRef": f"materialize/environmentd:{tag}",
-                "environmentdResourceRequirements": {
-                    "limits": {"memory": "4Gi"},
-                    "requests": {"cpu": "2", "memory": "4Gi"},
-                },
-                "balancerdResourceRequirements": {
-                    "limits": {"memory": "256Mi"},
-                    "requests": {"cpu": "100m", "memory": "256Mi"},
-                },
-                "backendSecretName": "materialize-backend",
-            },
-        }
-        # Only supported since self-managed v25.2
-        if not tag.startswith("v") or MzVersion.parse_mz(tag) >= MzVersion.parse_mz(
-            "v0.147.0"
-        ):
-            self.materialize_environment["spec"]["authenticatorKind"] = "None"
+        """Upgrade Materialize to a new version using Terraform.
 
+        This matches how customers perform upgrades - by running terraform apply
+        with updated environmentd_version and request_rollout variables.
+        """
+        print(f"--- Upgrading to {tag}")
         self.version += 1
-        spawn.runv(
-            ["kubectl", "apply", "-f", "-"],
-            cwd=self.path,
-            stdin=yaml.dump(self.materialize_environment).encode(),
-        )
+
+        # Generate a new rollout UUID to trigger the upgrade
+        # Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (last segment must be 12 chars)
+        rollout_uuid = f"12345678-9012-3456-7890-{(self.version + 3):012d}"
+
+        # Use base_vars from setup() + updated environmentd_version and request_rollout
+        vars = self.base_vars + [
+            "-var",
+            f"environmentd_version={tag}",
+            "-var",
+            f"request_rollout={rollout_uuid}",
+        ]
+
+        # Run terraform apply to perform the upgrade
+        spawn.runv(["terraform", "apply", "-auto-approve", *vars], cwd=self.path)
+
+        # Wait for the Materialize CR to be updated
         for i in range(60):
             try:
                 spawn.runv(
@@ -800,6 +814,8 @@ class AWS(State):
                 time.sleep(1)
         else:
             raise ValueError("Never completed")
+
+        # Wait for environmentd pod to be running
         for i in range(240):
             try:
                 spawn.runv(
