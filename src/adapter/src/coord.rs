@@ -3702,7 +3702,7 @@ impl Coordinator {
         ctx_extra: ExecuteContextExtra,
     ) {
         if let Some(uuid) = ctx_extra.retire() {
-            self.end_statement_execution(uuid, reason);
+            self.end_statement_execution_from_retire(uuid, reason);
         }
     }
 
