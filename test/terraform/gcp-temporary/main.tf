@@ -202,27 +202,26 @@ module "storage" {
 }
 
 # 5. Install cert-manager for SSL certificate management and create cluster issuer
-# TEMPORARILY DISABLED for debugging
-# module "cert_manager" {
-#   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=main"
-#
-#   node_selector = local.generic_node_labels
-#
-#   depends_on = [
-#     module.gke,
-#     module.generic_nodepool,
-#   ]
-# }
-#
-# module "self_signed_cluster_issuer" {
-#   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=main"
-#
-#   name_prefix = var.name_prefix
-#
-#   depends_on = [
-#     module.cert_manager,
-#   ]
-# }
+module "cert_manager" {
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=main"
+
+  node_selector = local.generic_node_labels
+
+  depends_on = [
+    module.gke,
+    module.generic_nodepool,
+  ]
+}
+
+module "self_signed_cluster_issuer" {
+  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=main"
+
+  name_prefix = var.name_prefix
+
+  depends_on = [
+    module.cert_manager,
+  ]
+}
 
 # 6. Install Materialize Kubernetes operator for managing Materialize instances
 module "operator" {
@@ -276,7 +275,10 @@ module "materialize_instance" {
 
   license_key = var.license_key
 
-  # TLS disabled for debugging
+  # TODO: when enabled portforwarding drops with:
+  # portforward.go:406] an error occurred forwarding 6877 -> 6877: error forwarding port 6877 to pod
+  # : failed to execute portforward in network namespace: writeto tcp4 127.0.0.1:48592->127.0.0.1:6877: read tcp4 127.0.0.1:48592->127.0.0.1:6877: read: connection reset by peer
+  # portforward.go:234] lost connection to pod
   # issuer_ref = {
   #   name = module.self_signed_cluster_issuer.issuer_name
   #   kind = "ClusterIssuer"
@@ -287,7 +289,7 @@ module "materialize_instance" {
     module.database,
     module.storage,
     module.networking,
-    # module.self_signed_cluster_issuer,
+    module.self_signed_cluster_issuer,
     module.operator,
     module.materialize_nodepool,
   ]
