@@ -352,7 +352,9 @@ fn test_statement_logging_immediate() {
         JOIN
             (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) mst
             ON mpsh.sql_hash = mst.sql_hash
-        WHERE mst.sql !~~ '%mz_statement_execution_history%'
+        WHERE
+            mst.sql !~~ '%mz_statement_execution_history%' AND
+            mseh.finished_at IS NOT NULL
         ORDER BY mseh.began_at";
 
     // Statement logging happens async, retry until we get the expected number of logged
@@ -486,10 +488,11 @@ FROM
         JOIN
             (SELECT DISTINCT sql, sql_hash, redacted_sql FROM mz_internal.mz_sql_text) AS mst
             ON mpsh.sql_hash = mst.sql_hash
-WHERE mst.sql ~~ 'SELECT%'
+WHERE (mst.sql ~~ 'SELECT%'
 AND mst.sql !~~ '%unique string to prevent this query showing up in results after retries%'
 AND mst.sql !~~ '%pg_catalog.pg_type%' --this gets executed behind the scenes by tokio-postgres
-OR mst.sql ~~ 'CREATE TABLE%'
+OR mst.sql ~~ 'CREATE TABLE%')
+AND mseh.finished_at IS NOT NULL
 ORDER BY mseh.began_at",
                     &[],
                 )
@@ -699,7 +702,9 @@ fn test_statement_logging_subscribes() {
         JOIN
             mz_internal.mz_sql_text AS mst
             ON mpsh.sql_hash = mst.sql_hash
-        WHERE mst.sql ~~ 'SUBSCRIBE%'
+        WHERE
+            mst.sql ~~ 'SUBSCRIBE%' AND
+            mseh.finished_at IS NOT NULL
         ORDER BY mseh.began_at";
 
     // Statement logging happens async, retry until we get the expected number of logged
