@@ -438,7 +438,3 @@ async fn run(args: Args) -> Result<(), CliError> {
         }
     }
 }
-
-fn is_local(cmd: &Command) -> bool {
-    matches!(cmd, Command::Compile { .. } | Command::Test)
-}

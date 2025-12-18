@@ -5019,6 +5019,7 @@ impl_display_t!(ExecuteStatement);
 pub struct ExecuteUnitTestStatement<T: AstInfo> {
     pub name: Ident,
     pub target: T::ItemName,
+    pub at_time: Option<Expr<T>>,
     pub mocks: Vec<MockViewDef<T>>,
     pub expected: ExpectedResultDef<T>,
 }
@@ -5029,6 +5030,10 @@ impl<T: AstInfo> AstDisplay for ExecuteUnitTestStatement<T> {
         f.write_node(&self.name);
         f.write_str(" FOR ");
         f.write_node(&self.target);
+        if let Some(at_time) = &self.at_time {
+            f.write_str(" AT TIME ");
+            f.write_node(at_time);
+        }
         for mock in &self.mocks {
             f.write_str(" MOCK ");
             f.write_node(mock);

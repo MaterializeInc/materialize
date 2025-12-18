@@ -9277,6 +9277,13 @@ impl<'a> Parser<'a> {
         // Parse target view name
         let target = self.parse_raw_name()?;
 
+        // Parse optional AT TIME clause
+        let at_time = if self.parse_keywords(&[AT, TIME]) {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+
         // Parse MOCK definitions (0 or more)
         let mut mocks = Vec::new();
         while self.parse_keyword(MOCK) {
@@ -9339,6 +9346,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::ExecuteUnitTest(ExecuteUnitTestStatement {
             name,
             target,
+            at_time,
             mocks,
             expected,
         }))
