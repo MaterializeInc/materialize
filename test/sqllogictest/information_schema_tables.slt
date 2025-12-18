@@ -769,6 +769,10 @@ pg_attribute_all_databases
 VIEW
 materialize
 mz_internal
+pg_authid_core
+VIEW
+materialize
+mz_internal
 pg_class_all_databases
 VIEW
 materialize

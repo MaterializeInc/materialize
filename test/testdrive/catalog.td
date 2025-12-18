@@ -708,6 +708,7 @@ pg_namespace_all_databases               ""
 pg_description_all_databases             ""
 pg_attrdef_all_databases                 ""
 pg_attribute_all_databases               ""
+pg_authid_core                           ""
 
 # Check default sources, tables, and views in mz_introspection.
 
@@ -810,7 +811,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-263
+264
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

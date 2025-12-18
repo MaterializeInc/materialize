@@ -383,6 +383,7 @@ mz_wallclock_global_lag_recent_history_ind                  mz_wallclock_global_
 mz_webhook_sources_ind                                      mz_webhook_sources                           mz_catalog_server    {id}                                        ""
 pg_attrdef_all_databases_ind                                pg_attrdef_all_databases                     mz_catalog_server    {oid,adrelid,adnum,adbin,adsrc}             ""
 pg_attribute_all_databases_ind                              pg_attribute_all_databases                   mz_catalog_server    {attrelid,attname,atttypid,attlen,attnum,atttypmod,attnotnull,atthasdef,attidentity,attgenerated,attisdropped,attcollation,database_name,pg_type_database_name}    ""
+pg_authid_core_ind                                          pg_authid_core                               mz_catalog_server    {rolname}                                   ""
 pg_class_all_databases_ind                                  pg_class_all_databases                       mz_catalog_server    {relname}                                   ""
 pg_description_all_databases_ind                            pg_description_all_databases                 mz_catalog_server    {objoid,classoid,objsubid,description,oid_database_name,class_database_name}    ""
 pg_namespace_all_databases_ind                              pg_namespace_all_databases                   mz_catalog_server    {nspname}                                   ""

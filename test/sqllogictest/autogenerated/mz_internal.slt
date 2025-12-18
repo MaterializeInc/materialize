@@ -825,6 +825,7 @@ mz_wallclock_lag_history
 mz_webhook_sources
 pg_attrdef_all_databases
 pg_attribute_all_databases
+pg_authid_core
 pg_class_all_databases
 pg_description_all_databases
 pg_namespace_all_databases

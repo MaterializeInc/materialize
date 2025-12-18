@@ -10564,6 +10564,57 @@ WHERE false",
     access: vec![PUBLIC_SELECT],
 });
 
+/// Peeled version of `PG_AUTHID`: Excludes the columns rolcreaterole and rolcreatedb, to make this
+/// view indexable.
+pub static PG_AUTHID_CORE: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "pg_authid_core",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_PG_AUTHID_CORE_OID,
+    desc: RelationDesc::builder()
+        .with_column("oid", SqlScalarType::Oid.nullable(false))
+        .with_column("rolname", SqlScalarType::String.nullable(false))
+        .with_column("rolsuper", SqlScalarType::Bool.nullable(true))
+        .with_column("rolinherit", SqlScalarType::Bool.nullable(false))
+        .with_column("rolcanlogin", SqlScalarType::Bool.nullable(false))
+        .with_column("rolreplication", SqlScalarType::Bool.nullable(false))
+        .with_column("rolbypassrls", SqlScalarType::Bool.nullable(false))
+        .with_column("rolconnlimit", SqlScalarType::Int32.nullable(false))
+        .with_column("rolpassword", SqlScalarType::String.nullable(true))
+        .with_column(
+            "rolvaliduntil",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .finish(),
+    column_comments: BTreeMap::new(),
+    sql: r#"
+SELECT
+    r.oid AS oid,
+    r.name AS rolname,
+    rolsuper,
+    inherit AS rolinherit,
+    COALESCE(r.rolcanlogin, false) AS rolcanlogin,
+    -- MZ doesn't support replication in the same way Postgres does
+    false AS rolreplication,
+    -- MZ doesn't how row level security
+    false AS rolbypassrls,
+    -- MZ doesn't have a connection limit
+    -1 AS rolconnlimit,
+    a.password_hash AS rolpassword,
+    NULL::pg_catalog.timestamptz AS rolvaliduntil
+FROM mz_catalog.mz_roles r
+LEFT JOIN mz_catalog.mz_role_auth a ON r.oid = a.role_oid"#,
+    access: vec![rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID)],
+});
+
+pub const PG_AUTHID_CORE_IND: BuiltinIndex = BuiltinIndex {
+    name: "pg_authid_core_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_PG_AUTHID_CORE_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.pg_authid_core (rolname)",
+    is_retained_metrics_object: false,
+};
+
 pub static PG_AUTHID: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "pg_authid",
     schema: PG_CATALOG_SCHEMA,
@@ -10586,25 +10637,45 @@ pub static PG_AUTHID: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
         )
         .finish(),
     column_comments: BTreeMap::new(),
+    // The `has_system_privilege` invocations for `rolcreaterole` and `rolcreatedb` get expanded
+    // into very complex subqueries. If we put them into the SELECT clause directly, decorrelation
+    // produces a very complex plan that the optimizer has a hard time dealing with. In particular,
+    // the optimizer fails to reduce a query like `SELECT oid FROM pg_authid` to a simple lookup on
+    // the `pg_authid_core` index and instead produces a large plan that contains a bunch of
+    // expensive joins and arrangements.
+    //
+    // The proper fix is likely to implement `has_system_privileges` in Rust, but for now we work
+    // around the issue by manually decorrelating `rolcreaterole` and `rolcreatedb`. Note that to
+    // get the desired behavior we need to make sure that the join with `extra` doesn't change the
+    // cardinality of `pg_authid_core` (otherwise it can never be optimized away). We ensure this
+    // by:
+    //  * using a `LEFT JOIN`, so the optimizer knows that left elements are never filtered
+    //  * applying a `DISTINCT ON` to the CTE, so the optimizer knows that left elements are never
+    //    duplicated
     sql: r#"
+WITH extra AS (
+    SELECT
+        DISTINCT ON (oid)
+        oid,
+        mz_catalog.has_system_privilege(oid, 'CREATEROLE') AS rolcreaterole,
+        mz_catalog.has_system_privilege(oid, 'CREATEDB') AS rolcreatedb
+    FROM mz_internal.pg_authid_core
+)
 SELECT
-    r.oid AS oid,
-    r.name AS rolname,
+    oid,
+    rolname,
     rolsuper,
-    inherit AS rolinherit,
-    mz_catalog.has_system_privilege(r.oid, 'CREATEROLE') AS rolcreaterole,
-    mz_catalog.has_system_privilege(r.oid, 'CREATEDB') AS rolcreatedb,
-    COALESCE(r.rolcanlogin, false) AS rolcanlogin,
-    -- MZ doesn't support replication in the same way Postgres does
-    false AS rolreplication,
-    -- MZ doesn't how row level security
-    false AS rolbypassrls,
-    -- MZ doesn't have a connection limit
-    -1 AS rolconnlimit,
-    a.password_hash AS rolpassword,
-    NULL::pg_catalog.timestamptz AS rolvaliduntil
-FROM mz_catalog.mz_roles r
-LEFT JOIN mz_catalog.mz_role_auth a ON r.oid = a.role_oid"#,
+    rolinherit,
+    extra.rolcreaterole,
+    extra.rolcreatedb,
+    rolcanlogin,
+    rolreplication,
+    rolbypassrls,
+    rolconnlimit,
+    rolpassword,
+    rolvaliduntil
+FROM mz_internal.pg_authid_core
+LEFT JOIN extra USING (oid)"#,
     access: vec![rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID)],
 });
 
@@ -13967,6 +14038,8 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&PG_TABLESPACE),
         Builtin::View(&PG_ACCESS_METHODS),
         Builtin::View(&PG_LOCKS),
+        Builtin::View(&PG_AUTHID_CORE),
+        Builtin::Index(&PG_AUTHID_CORE_IND),
         Builtin::View(&PG_AUTHID),
         Builtin::View(&PG_ROLES),
         Builtin::View(&PG_USER),
