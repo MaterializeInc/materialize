@@ -1232,6 +1232,11 @@ impl TestServerWithRuntime {
     pub fn internal_sql_local_addr(&self) -> SocketAddr {
         self.server.internal_sql_local_addr()
     }
+
+    /// Returns the metrics registry for the test server.
+    pub fn metrics_registry(&self) -> &MetricsRegistry {
+        &self.server.metrics_registry
+    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]

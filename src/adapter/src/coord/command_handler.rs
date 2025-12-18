@@ -72,6 +72,7 @@ use crate::coord::{
 };
 use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
+use crate::query_tracker::QueryTrackerCmd;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::util::{ClientTransmitter, ResultExt};
 use crate::webhook::{
@@ -341,6 +342,7 @@ impl Coordinator {
                     conn_id,
                     max_result_size,
                     max_query_result_size,
+                    watch_set,
                     tx,
                 } => {
                     let result = self
@@ -355,9 +357,9 @@ impl Coordinator {
                             conn_id,
                             max_result_size,
                             max_query_result_size,
+                            watch_set,
                         )
                         .await;
-
                     let _ = tx.send(result);
                 }
 
@@ -367,6 +369,7 @@ impl Coordinator {
                     target_replica,
                     source_ids,
                     conn_id,
+                    watch_set,
                     tx,
                 } => {
                     // implement_copy_to spawns a background task that sends the response
@@ -378,6 +381,7 @@ impl Coordinator {
                         target_replica,
                         source_ids,
                         conn_id,
+                        watch_set,
                         tx,
                     )
                     .await;
@@ -393,6 +397,9 @@ impl Coordinator {
                         .execute_side_effecting_func(plan, conn_id, current_role)
                         .await;
                     let _ = tx.send(result);
+                }
+                Command::FrontendStatementLogging(event) => {
+                    self.handle_frontend_statement_logging_event(event);
                 }
             }
         }
@@ -656,15 +663,25 @@ impl Coordinator {
                 }
                 let notify = self.builtin_table_update().background(updates);
 
+                let catalog = self.owned_catalog();
+                let build_info_human_version =
+                    catalog.state().config().build_info.human_version(None);
+
+                let statement_logging_frontend = self
+                    .statement_logging
+                    .create_frontend(build_info_human_version);
+
                 let resp = Ok(StartupResponse {
                     role_id,
                     write_notify: notify,
                     session_defaults,
-                    catalog: self.owned_catalog(),
+                    catalog,
                     storage_collections: Arc::clone(&self.controller.storage_collections),
                     transient_id_gen: Arc::clone(&self.transient_id_gen),
                     optimizer_metrics: self.optimizer_metrics.clone(),
                     persist_client: self.persist_client.clone(),
+                    statement_logging_frontend,
+                    query_tracker: self.query_tracker.clone(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -1636,7 +1653,9 @@ impl Coordinator {
             ctx.retire(Err(AdapterError::Canceled));
         }
 
-        self.cancel_pending_peeks(&conn_id);
+        self.query_tracker.send(QueryTrackerCmd::CancelConn {
+            conn_id: conn_id.clone(),
+        });
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_compute_sinks_for_conn(&conn_id).await;
         self.cancel_cluster_reconfigurations_for_conn(&conn_id)
@@ -1679,7 +1698,9 @@ impl Coordinator {
             .active_sessions
             .with_label_values(&[session_type])
             .dec();
-        self.cancel_pending_peeks(conn.conn_id());
+        self.query_tracker.send(QueryTrackerCmd::CancelConn {
+            conn_id: conn_id.clone(),
+        });
         self.cancel_pending_watchsets(&conn_id);
         self.cancel_pending_copy(&conn_id);
         self.end_session_for_statement_logging(conn.uuid());

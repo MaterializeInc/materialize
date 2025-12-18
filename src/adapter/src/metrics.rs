@@ -252,11 +252,14 @@ impl Metrics {
                 .timestamp_difference_for_strict_serializable_ms
                 .clone(),
             optimization_notices: self.optimization_notices.clone(),
+            statement_logging_records: self.statement_logging_records.clone(),
+            statement_logging_unsampled_bytes: self.statement_logging_unsampled_bytes.clone(),
+            statement_logging_actual_bytes: self.statement_logging_actual_bytes.clone(),
         }
     }
 }
 
-/// Metrics associated with a [`crate::session::Session`].
+/// Metrics to be accessed from a [`crate::session::Session`].
 #[derive(Debug, Clone)]
 pub struct SessionMetrics {
     row_set_finishing_seconds: Histogram,
@@ -265,6 +268,9 @@ pub struct SessionMetrics {
     determine_timestamp: IntCounterVec,
     timestamp_difference_for_strict_serializable_ms: HistogramVec,
     optimization_notices: IntCounterVec,
+    statement_logging_records: IntCounterVec,
+    statement_logging_unsampled_bytes: IntCounter,
+    statement_logging_actual_bytes: IntCounter,
 }
 
 impl SessionMetrics {
@@ -294,6 +300,22 @@ impl SessionMetrics {
 
     pub(crate) fn optimization_notices(&self, label_values: &[&str]) -> GenericCounter<AtomicU64> {
         self.optimization_notices.with_label_values(label_values)
+    }
+
+    pub(crate) fn statement_logging_records(
+        &self,
+        label_values: &[&str],
+    ) -> GenericCounter<AtomicU64> {
+        self.statement_logging_records
+            .with_label_values(label_values)
+    }
+
+    pub(crate) fn statement_logging_unsampled_bytes(&self) -> &IntCounter {
+        &self.statement_logging_unsampled_bytes
+    }
+
+    pub(crate) fn statement_logging_actual_bytes(&self) -> &IntCounter {
+        &self.statement_logging_actual_bytes
     }
 }
 
