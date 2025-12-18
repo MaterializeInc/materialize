@@ -15,7 +15,26 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.4.0
+
+*Released to Materialize Self-Managed: 2025-12-17* <br>
+*Released to Materialize Cloud: 2025-12-18*
+
+v26.4.0 introduces several performance improvements and bugfixes.
+
+### Improvements
+- **Over 2x higher connections per second (CPS)**: We've optimized how Materialize handles inbound connection requests. In our tests, we've observed 2x - 4x improvements to the rate at which new client connections can be established. This is especially beneficial when spinning up new environments or using connection pools that frequently establish new connections.
+- **Up to 3x faster hydration times for large PostgreSQL tables**: We've reduced the overhead incurred by communication between multiple *workers* on a large cluster. We've observed up to 3x throughput improvement when ingesting 1 TB PostgreSQL tables on large clusters.
+- **More efficient source ingestion batching**: Sources now batch writes more effectively. This can result in improved freshness and lower resource utilization, especially when a source is doing a large number of writes.
+- **CloudSQL HA failover support** (Materialize Self-Managed only): Materialize Self-Managed now offers better support for handling failovers in CloudSQL HA sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
+
+### Bug Fixes
+- Fixed timestamp determination logic to handle empty read holds correctly.
+- Fixed lazy creation of temporary schemas to prevent schema-related errors.
+- Reduced SCRAM iterations in scalability framework and fixed fallback image configuration.
+
 ## v26.3.0
+
 *Released Cloud: 2025-12-12*<br>
 *Released Self-Managed: 2025-12-12*
 
