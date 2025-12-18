@@ -202,26 +202,27 @@ module "storage" {
 }
 
 # 5. Install cert-manager for SSL certificate management and create cluster issuer
-module "cert_manager" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=main"
-
-  node_selector = local.generic_node_labels
-
-  depends_on = [
-    module.gke,
-    module.generic_nodepool,
-  ]
-}
-
-module "self_signed_cluster_issuer" {
-  source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=main"
-
-  name_prefix = var.name_prefix
-
-  depends_on = [
-    module.cert_manager,
-  ]
-}
+# TEMPORARILY DISABLED for debugging
+# module "cert_manager" {
+#   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/cert-manager?ref=main"
+#
+#   node_selector = local.generic_node_labels
+#
+#   depends_on = [
+#     module.gke,
+#     module.generic_nodepool,
+#   ]
+# }
+#
+# module "self_signed_cluster_issuer" {
+#   source = "git::https://github.com/MaterializeInc/materialize-terraform-self-managed.git//kubernetes/modules/self-signed-cluster-issuer?ref=main"
+#
+#   name_prefix = var.name_prefix
+#
+#   depends_on = [
+#     module.cert_manager,
+#   ]
+# }
 
 # 6. Install Materialize Kubernetes operator for managing Materialize instances
 module "operator" {
@@ -235,15 +236,6 @@ module "operator" {
   helm_chart            = "materialize-operator-${var.operator_version}.tgz"
   operator_version      = var.operator_version
   orchestratord_version = var.orchestratord_version
-
-  # Helm values for operator configuration
-  helm_values = {
-    operator = {
-      args = {
-        enableLicenseKeyChecks = true
-      }
-    }
-  }
 
   # tolerations and node selector for all mz instance workloads on GCP
   instance_pod_tolerations = local.materialize_tolerations
@@ -284,17 +276,18 @@ module "materialize_instance" {
 
   license_key = var.license_key
 
-  issuer_ref = {
-    name = module.self_signed_cluster_issuer.issuer_name
-    kind = "ClusterIssuer"
-  }
+  # TLS disabled for debugging
+  # issuer_ref = {
+  #   name = module.self_signed_cluster_issuer.issuer_name
+  #   kind = "ClusterIssuer"
+  # }
 
   depends_on = [
     module.gke,
     module.database,
     module.storage,
     module.networking,
-    module.self_signed_cluster_issuer,
+    # module.self_signed_cluster_issuer,
     module.operator,
     module.materialize_nodepool,
   ]
