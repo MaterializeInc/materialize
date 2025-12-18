@@ -49,7 +49,7 @@ $ sql-server-execute name=sql-server
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1) FROM t1 LIMIT 1;
-"text"
+"character varying"
 
 > SELECT * FROM t1;
 "това е текст"

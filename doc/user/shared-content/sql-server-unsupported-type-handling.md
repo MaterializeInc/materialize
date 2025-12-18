@@ -5,8 +5,6 @@ following types:
 <li><code>text</code></li>
 <li><code>ntext</code></li>
 <li><code>image</code></li>
-<li><code>varchar(max)</code></li>
-<li><code>nvarchar(max)</code></li>
 <li><code>varbinary(max)</code></li>
 </ul>
 

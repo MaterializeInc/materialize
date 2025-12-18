@@ -35,9 +35,9 @@ CREATE TABLE table_geometry (good int, bad geometry);
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_geometry', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO table_geometry VALUES (42, NULL);
 
-CREATE TABLE table_varchar_max (good int, bad varchar(max));
-EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_varchar_max', @role_name = 'SA', @supports_net_changes = 0;
-INSERT INTO table_varchar_max VALUES (42, NULL);
+CREATE TABLE table_varbinary_max (good int, bad varbinary(max));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'table_varbinary_max', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO table_varbinary_max VALUES (42, NULL);
 
 
 # Exercise Materialize.
@@ -87,10 +87,10 @@ contains: SQL SERVER source validation: column dbo.table_geography.bad of type g
   FOR TABLES (dbo.table_geometry);
 contains: SQL SERVER source validation: column dbo.table_geometry.bad of type geometry is not supported
 
-! CREATE SOURCE table_varchar_max_source
+! CREATE SOURCE table_varbinary_max_source
   FROM SQL SERVER CONNECTION sql_server_test_50_connection
-  FOR TABLES (dbo.table_varchar_max);
-contains: SQL SERVER source validation: column dbo.table_varchar_max.bad of type varchar is not supported
+  FOR TABLES (dbo.table_varbinary_max);
+contains: SQL SERVER source validation: column dbo.table_varbinary_max.bad of type varbinary is not supported
 
 
 ## same tests for source tables
@@ -128,8 +128,8 @@ contains: SQL SERVER source validation: column dbo.table_geography.bad of type g
   FROM SOURCE ms_src (REFERENCE dbo.table_geometry);
 contains: SQL SERVER source validation: column dbo.table_geometry.bad of type geometry is not supported
 
-! CREATE TABLE table_varchar_max
-  FROM SOURCE ms_src (REFERENCE dbo.table_varchar_max);
-contains: SQL SERVER source validation: column dbo.table_varchar_max.bad of type varchar is not supported
+! CREATE TABLE table_varbinary_max
+  FROM SOURCE ms_src (REFERENCE dbo.table_varbinary_max);
+contains: SQL SERVER source validation: column dbo.table_varbinary_max.bad of type varbinary is not supported
 
 > DROP SOURCE ms_src CASCADE;

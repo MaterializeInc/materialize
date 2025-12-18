@@ -715,9 +715,9 @@ pub enum Operation {
     /// Row was `DELETE`-ed.
     Delete(tiberius::Row),
     /// Original value of the row when `UPDATE`-ed.
-    UpdateOld(tiberius::Row),
+    UpdateOld(Lsn, tiberius::Row),
     /// New value of the row when `UPDATE`-ed.
-    UpdateNew(tiberius::Row),
+    UpdateNew(Lsn, tiberius::Row),
 }
 
 impl Operation {
@@ -727,6 +727,7 @@ impl Operation {
     fn try_parse(data: tiberius::Row) -> Result<(Lsn, Self), SqlServerError> {
         static START_LSN_COLUMN: &str = "__$start_lsn";
         static OPERATION_COLUMN: &str = "__$operation";
+        static SEQVAL_COLUMN: &str = "__$seqval";
 
         let lsn: &[u8] = data
             .try_get(START_LSN_COLUMN)
@@ -748,16 +749,31 @@ impl Operation {
                 column_name: OPERATION_COLUMN,
                 error: "got null value".to_string(),
             })?;
+        let seqval: &[u8] = data
+            .try_get(SEQVAL_COLUMN)
+            .map_err(|e| CdcError::RequiredColumn {
+                column_name: SEQVAL_COLUMN,
+                error: e.to_string(),
+            })?
+            .ok_or_else(|| CdcError::RequiredColumn {
+                column_name: SEQVAL_COLUMN,
+                error: "got null value".to_string(),
+            })?;
 
         let lsn = Lsn::try_from(lsn).map_err(|msg| SqlServerError::InvalidData {
             column_name: START_LSN_COLUMN.to_string(),
             error: msg,
         })?;
+        let seqval = Lsn::try_from(seqval).map_err(|msg| SqlServerError::InvalidData {
+            column_name: SEQVAL_COLUMN.to_string(),
+            error: msg,
+        })?;
+
         let operation = match operation {
             1 => Operation::Delete(data),
             2 => Operation::Insert(data),
-            3 => Operation::UpdateOld(data),
-            4 => Operation::UpdateNew(data),
+            3 => Operation::UpdateOld(seqval, data),
+            4 => Operation::UpdateNew(seqval, data),
             other => {
                 return Err(SqlServerError::InvalidData {
                     column_name: OPERATION_COLUMN.to_string(),
