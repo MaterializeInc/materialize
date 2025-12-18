@@ -60,7 +60,7 @@ use crate::optimize::OptimizerError;
 use crate::statement_logging::WatchSetCreation;
 use crate::statement_logging::{StatementEndedExecutionReason, StatementExecutionStrategy};
 use crate::util::ResultExt;
-use crate::{AdapterError, ExecuteContextExtra, ExecuteResponse};
+use crate::{AdapterError, ExecuteContextGuard, ExecuteResponse};
 
 /// A peek is a request to read data from a maintained arrangement.
 #[derive(Debug)]
@@ -73,7 +73,7 @@ pub(crate) struct PendingPeek {
     pub(crate) depends_on: BTreeSet<GlobalId>,
     /// Context about the execute that produced this peek,
     /// needed by the coordinator for retiring it.
-    pub(crate) ctx_extra: ExecuteContextExtra,
+    pub(crate) ctx_extra: ExecuteContextGuard,
     /// Is this a fast-path peek, i.e. one that doesn't require a dataflow?
     pub(crate) is_fast_path: bool,
 }
@@ -629,7 +629,7 @@ impl crate::coord::Coordinator {
     #[mz_ore::instrument(level = "debug")]
     pub async fn implement_peek_plan(
         &mut self,
-        ctx_extra: &mut ExecuteContextExtra,
+        ctx_extra: &mut ExecuteContextGuard,
         plan: PlannedPeek,
         finishing: RowSetFinishing,
         compute_instance: ComputeInstanceId,
@@ -699,7 +699,7 @@ impl crate::coord::Coordinator {
                     StatementEndedExecutionReason::Errored { error },
                 ),
             };
-            self.retire_execution(reason, std::mem::take(ctx_extra));
+            self.retire_execution(reason, std::mem::take(ctx_extra).defuse());
             return ret;
         }
 
@@ -1128,7 +1128,10 @@ impl crate::coord::Coordinator {
                 .filter_map(|(uuid, _)| self.pending_peeks.remove(uuid))
                 .collect::<Vec<_>>();
             for peek in peeks {
-                self.retire_execution(StatementEndedExecutionReason::Canceled, peek.ctx_extra);
+                self.retire_execution(
+                    StatementEndedExecutionReason::Canceled,
+                    peek.ctx_extra.defuse(),
+                );
             }
         }
     }
@@ -1171,7 +1174,7 @@ impl crate::coord::Coordinator {
                 PeekNotification::Canceled => StatementEndedExecutionReason::Canceled,
             };
             otel_ctx.attach_as_parent();
-            self.retire_execution(reason, ctx_extra);
+            self.retire_execution(reason, ctx_extra.defuse());
         }
         // Cancellation may cause us to receive responses for peeks no
         // longer in `self.pending_peeks`, so we quietly ignore them.
@@ -1243,7 +1246,7 @@ impl crate::coord::Coordinator {
         // relevant parts of the old `implement_peek_plan` into this method, and remove the old
         // `implement_peek_plan`.
         self.implement_peek_plan(
-            &mut ExecuteContextExtra::new(statement_logging_id),
+            &mut ExecuteContextGuard::new(statement_logging_id, self.internal_cmd_tx.clone()),
             planned_peek,
             finishing,
             compute_instance,

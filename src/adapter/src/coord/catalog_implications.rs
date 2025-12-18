@@ -776,7 +776,7 @@ impl Coordinator {
                             .unwrap_or_terminate("unable to cancel peek");
                         self.retire_execution(
                             StatementEndedExecutionReason::Canceled,
-                            pending_peek.ctx_extra,
+                            pending_peek.ctx_extra.defuse(),
                         );
                     }
                 }

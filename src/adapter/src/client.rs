@@ -54,7 +54,7 @@ use crate::command::{
     AuthResponse, CatalogDump, CatalogSnapshot, Command, ExecuteResponse, Response,
     SASLChallengeResponse, SASLVerifyProofResponse,
 };
-use crate::coord::{Coordinator, ExecuteContextExtra};
+use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepStyle};
@@ -702,7 +702,7 @@ impl SessionClient {
         &mut self,
         portal_name: String,
         cancel_future: impl Future<Output = std::io::Error> + Send,
-        outer_ctx_extra: Option<ExecuteContextExtra>,
+        outer_ctx_extra: Option<ExecuteContextGuard>,
     ) -> Result<(ExecuteResponse, Instant), AdapterError> {
         let execute_started = Instant::now();
 
@@ -849,8 +849,13 @@ impl SessionClient {
 
     /// Tells the coordinator a statement has finished execution, in the cases
     /// where we have no other reason to communicate with the coordinator.
-    pub fn retire_execute(&self, data: ExecuteContextExtra, reason: StatementEndedExecutionReason) {
-        if !data.is_trivial() {
+    pub fn retire_execute(
+        &self,
+        guard: ExecuteContextGuard,
+        reason: StatementEndedExecutionReason,
+    ) {
+        if !guard.is_trivial() {
+            let data = guard.defuse();
             let cmd = Command::RetireExecute { data, reason };
             self.inner().send(cmd);
         }
@@ -867,7 +872,7 @@ impl SessionClient {
         target_name: String,
         columns: Vec<ColumnIndex>,
         rows: Vec<Row>,
-        ctx_extra: ExecuteContextExtra,
+        ctx_extra: ExecuteContextGuard,
     ) -> Result<ExecuteResponse, AdapterError> {
         // TODO: Remove this clone once we always have the session. It's currently needed because
         // self.session returns a mut ref, so we can't call it twice.
@@ -1133,7 +1138,7 @@ impl SessionClient {
     pub(crate) async fn try_frontend_peek(
         &mut self,
         portal_name: &str,
-        outer_ctx_extra: &mut Option<ExecuteContextExtra>,
+        outer_ctx_extra: &mut Option<ExecuteContextGuard>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
         if self.enable_frontend_peek_sequencing {
             let session = self.session.as_mut().expect("SessionClient invariant");

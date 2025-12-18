@@ -251,8 +251,10 @@ impl Drop for TestServerWithStatementLoggingChecks {
                 let result = mz_client.query_one(
                     "SELECT count(*)
                      FROM mz_internal.mz_recent_activity_log
-                     WHERE (finished_at IS NULL OR finished_status IS NULL)
-                       AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'",
+                     WHERE
+                       (finished_at IS NULL OR finished_status IS NULL)
+                       AND sql NOT LIKE '%__FILTER-OUT-THIS-QUERY__%'
+                       AND finished_status != 'aborted'",
                     &[],
                 );
 

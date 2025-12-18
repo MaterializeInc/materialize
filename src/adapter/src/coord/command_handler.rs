@@ -82,7 +82,7 @@ use crate::webhook::{
 };
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
-use super::ExecuteContextExtra;
+use super::ExecuteContextGuard;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 58KB. This would
@@ -890,7 +890,7 @@ impl Coordinator {
         // then `outer_context` should be `Some`.
         // This instructs the coordinator that the
         // outer execute should be considered finished once the inner one is.
-        outer_context: Option<ExecuteContextExtra>,
+        outer_context: Option<ExecuteContextGuard>,
     ) {
         if session.vars().emit_trace_id_notice() {
             let span_context = tracing::Span::current()
@@ -948,7 +948,7 @@ impl Coordinator {
                     lifecycle_timestamps,
                 );
 
-                ExecuteContextExtra::new(maybe_uuid)
+                ExecuteContextGuard::new(maybe_uuid, self.internal_cmd_tx.clone())
             };
             let ctx = ExecuteContext::from_parts(tx, self.internal_cmd_tx.clone(), session, extra);
             (stmt, ctx, params)
@@ -1934,7 +1934,10 @@ impl Coordinator {
                 conn_id: conn_id.clone(),
                 cluster_id,
                 depends_on,
-                ctx_extra: ExecuteContextExtra::new(statement_logging_id),
+                ctx_extra: ExecuteContextGuard::new(
+                    statement_logging_id,
+                    self.internal_cmd_tx.clone(),
+                ),
                 is_fast_path,
             },
         );
@@ -1954,7 +1957,7 @@ impl Coordinator {
         // Remove from pending_peeks (this also removes from client_pending_peeks)
         if let Some(pending_peek) = self.remove_pending_peek(&uuid) {
             // Retire `ExecuteContextExtra`, because the frontend will log the peek's error result.
-            let _ = pending_peek.ctx_extra.retire();
+            let _ = pending_peek.ctx_extra.defuse();
         }
         let _ = tx.send(());
     }
