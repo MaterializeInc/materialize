@@ -54,6 +54,16 @@ ignore = [
   "target/",
 ]
 
+[tool.ty.src]
+exclude = [
+  "**/venv",
+  "**/.terraform",
+  "target/",
+]
+
+[tool.ty.environment]
+root = ["misc/python"]
+
 [tool.pytest.ini_options]
 log_cli = true
 log_cli_level = "INFO"

@@ -32,10 +32,39 @@ def app() -> None:
     pass
 
 
+def _scenario_callback(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: str | None,
+):
+    if value is None:
+        return None
+    return Scenario(value)
+
+
+def _path_callback(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: str | None,
+) -> Path | None:
+    if value is None:
+        return None
+    return Path(value)
+
+
+def _required_path_callback(
+    ctx: click.Context,
+    param: click.Parameter,
+    value: str | None,
+) -> Path:
+    assert value is not None
+    return Path(value)
+
+
 class Arg:
     scenario = dict(
         type=click.Choice(scenarios()),
-        callback=lambda ctx, param, value: Scenario(value),
+        callback=_scenario_callback,
     )
 
     base = dict(
@@ -47,7 +76,7 @@ class Arg:
             readable=True,
             resolve_path=True,
         ),
-        callback=lambda ctx, param, value: Path(value),
+        callback=_path_callback,
     )
 
     diff = dict(
@@ -59,7 +88,7 @@ class Arg:
             readable=True,
             resolve_path=True,
         ),
-        callback=lambda ctx, param, value: Path(value),
+        callback=_path_callback,
     )
 
 
@@ -75,7 +104,7 @@ class Opt:
             resolve_path=True,
         ),
         help="Experiment results folder.",
-        callback=lambda ctx, param, value: Path(value),
+        callback=_required_path_callback,
     )
 
     samples = dict(default=11, help="Samples per query.")

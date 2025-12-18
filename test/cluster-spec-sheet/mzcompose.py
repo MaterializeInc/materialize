@@ -2405,7 +2405,9 @@ class CloudTarget(BenchTarget):
             rm=True,
         )
         self.new_app_password = output.stdout.strip()
-        assert "mzp_" in self.new_app_password
+        assert (
+            isinstance(self.new_app_password, str) and "mzp_" in self.new_app_password
+        )
 
     def new_connection(self) -> psycopg.Connection:
         assert self.new_app_password is not None

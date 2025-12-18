@@ -99,7 +99,9 @@ class WorkflowArgumentParser(argparse.ArgumentParser):
         args: Sequence[str] | None = None,
         namespace: argparse.Namespace | None = None,
     ) -> tuple[argparse.Namespace, list[str]]:
-        return super().parse_known_args(args or self.args, namespace)
+        ns, extras = super().parse_known_args(args or self.args, namespace)
+        assert ns is not None
+        return ns, extras
 
 
 class Composition:
