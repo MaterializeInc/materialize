@@ -281,11 +281,11 @@ impl<E: QueryTrackerEffects> QueryTracker<E> {
                 (
                     uuid.to_string(),
                     format!(
-                        "PendingPeek {{ conn_id: {:?}, cluster_id: {:?}, depends_on: {:?}, ctx_extra: {:?}, execution_strategy: {:?} }}",
+                        "PendingPeek {{ conn_id: {:?}, cluster_id: {:?}, depends_on: {:?}, statement_logging_id: {:?}, execution_strategy: {:?} }}",
                         peek.conn_id,
                         peek.cluster_id,
                         peek.depends_on,
-                        ExecuteContextExtra::new(peek.ctx_extra.contents()),
+                        peek.ctx_extra.contents(),
                         peek.execution_strategy,
                     ),
                 )
