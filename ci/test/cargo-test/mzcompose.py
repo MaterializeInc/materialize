@@ -351,6 +351,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     for p in metadata["packages"]
                     if p["name"] not in ("mz-environmentd", "mz-balancerd")
                 ]
+                test_threads = multiprocessing.cpu_count() * 2
+                # Slower test runs, give them more resources to have less contention
+                if c.metadata_store() == "cockroach":
+                    test_threads //= 2
+
                 spawn.runv(
                     [
                         "cargo",
@@ -361,7 +366,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "--all-features",
                         "--profile=ci",
                         "--cargo-profile=ci",
-                        f"--test-threads={multiprocessing.cpu_count() * 2}",
+                        f"--test-threads={test_threads}",
                         *(
                             (
                                 pkgs
