@@ -395,7 +395,7 @@ where
 
     /// Take ownership of the join handle for the core thread. Once taken, this will just return
     /// [`None`].
-    pub fn core_loop_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
+    pub fn take_core_loop_handle(&mut self) -> Option<std::thread::JoinHandle<()>> {
         self.handle.take()
     }
 

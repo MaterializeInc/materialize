@@ -1149,7 +1149,7 @@ mod test {
                             )
                             .unwrap();
 
-                            let handle = rocksdb_inst.core_loop_handle().expect("join handle");
+                            let handle = rocksdb_inst.take_core_loop_handle().expect("join handle");
                             tx.send(handle).expect("sent joinhandle");
                             crate::upsert::rocksdb::RocksDB::new(rocksdb_inst)
                         };
