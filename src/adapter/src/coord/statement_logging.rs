@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -69,11 +69,29 @@ pub(crate) struct StatementLogging {
     pending_session_events: Vec<Row>,
     pending_statement_lifecycle_events: Vec<Row>,
 
+    /// Buffered "end execution" records that arrived before the corresponding "begin execution".
+    ///
+    /// This can happen because statement logging events and execution retirement are delivered via
+    /// independent, asynchronous channels.
+    pending_ended_executions: BTreeMap<Uuid, PendingEndedExecution>,
+    /// Short-lived tombstones for executions that have already been ended.
+    ///
+    /// Used for debugging/detecting duplicate `end_statement_execution` invocations.
+    ended_execution_tombstones: BTreeMap<Uuid, EpochMillis>,
+
     /// Shared throttling state for rate-limiting statement logging.
     pub(crate) throttling_state: Arc<ThrottlingState>,
 
     /// Function to get the current time.
     pub(crate) now: NowFn,
+}
+
+#[derive(Debug, Clone)]
+struct PendingEndedExecution {
+    ended_record: StatementEndedExecutionRecord,
+    first_seen: EpochMillis,
+    num_ends: u64,
+    sources: BTreeSet<&'static str>,
 }
 
 impl StatementLogging {
@@ -90,6 +108,8 @@ impl StatementLogging {
             pending_prepared_statement_events: Vec::new(),
             pending_session_events: Vec::new(),
             pending_statement_lifecycle_events: Vec::new(),
+            pending_ended_executions: BTreeMap::new(),
+            ended_execution_tombstones: BTreeMap::new(),
             throttling_state: Arc::new(ThrottlingState::new(&now)),
             now,
         }
@@ -113,6 +133,24 @@ impl StatementLogging {
 }
 
 impl Coordinator {
+    const ENDED_EXECUTION_TOMBSTONE_TTL_MS: u64 = 1000 * 60 * 5;
+
+    fn expire_statement_execution_tombstones(&mut self) {
+        let now = self.now();
+
+        self.statement_logging
+            .pending_ended_executions
+            .retain(|_id, pending| {
+                now.saturating_sub(pending.first_seen) <= Self::ENDED_EXECUTION_TOMBSTONE_TTL_MS
+            });
+
+        self.statement_logging
+            .ended_execution_tombstones
+            .retain(|_id, ended_at| {
+                now.saturating_sub(*ended_at) <= Self::ENDED_EXECUTION_TOMBSTONE_TTL_MS
+            });
+    }
+
     /// Helper to write began execution events to pending buffers.
     /// Can be called from both old and new peek sequencing.
     fn write_began_execution_events(
@@ -167,7 +205,7 @@ impl Coordinator {
                 self.write_began_execution_events(record, mseh_update, prepared_statement);
             }
             FrontendStatementLoggingEvent::EndedExecution(ended_record) => {
-                self.end_statement_execution(
+                self.end_statement_execution_from_frontend(
                     StatementLoggingId(ended_record.id),
                     ended_record.reason,
                 );
@@ -391,11 +429,30 @@ impl Coordinator {
     /// (because it was not sampled). Requiring the opaque `StatementLoggingId` type,
     /// which is only instantiated by `begin_statement_execution` if the statement is actually logged,
     /// should prevent this.
-    pub(crate) fn end_statement_execution(
+    pub(crate) fn end_statement_execution_from_frontend(
         &mut self,
         id: StatementLoggingId,
         reason: StatementEndedExecutionReason,
     ) {
+        self.end_statement_execution_inner(id, reason, "frontend_ended_execution");
+    }
+
+    pub(crate) fn end_statement_execution_from_retire(
+        &mut self,
+        id: StatementLoggingId,
+        reason: StatementEndedExecutionReason,
+    ) {
+        self.end_statement_execution_inner(id, reason, "retire_execute");
+    }
+
+    fn end_statement_execution_inner(
+        &mut self,
+        id: StatementLoggingId,
+        reason: StatementEndedExecutionReason,
+        source: &'static str,
+    ) {
+        self.expire_statement_execution_tombstones();
+
         let StatementLoggingId(uuid) = id;
         let now = self.now();
         let ended_record = StatementEndedExecutionRecord {
@@ -404,13 +461,60 @@ impl Coordinator {
             ended_at: now,
         };
 
-        let began_record = self
-            .statement_logging
-            .executions_begun
-            .remove(&uuid)
-            .expect(
-                "matched `begin_statement_execution` and `end_statement_execution` invocations",
+        let Some(began_record) = self.statement_logging.executions_begun.remove(&uuid) else {
+            if let Some(prev_ended_at) =
+                self.statement_logging.ended_execution_tombstones.get(&uuid)
+            {
+                tracing::error!(
+                    statement_logging_id = %uuid,
+                    end_source = source,
+                    prev_ended_at = ?prev_ended_at,
+                    ended_at = ?ended_record.ended_at,
+                    reason = ?ended_record.reason,
+                    "received end_statement_execution for an execution that was already ended"
+                );
+                return;
+            }
+
+            if let Some(pending) = self
+                .statement_logging
+                .pending_ended_executions
+                .get_mut(&uuid)
+            {
+                pending.ended_record = ended_record.clone();
+                pending.num_ends += 1;
+                pending.sources.insert(source);
+                tracing::error!(
+                    statement_logging_id = %uuid,
+                    end_source = source,
+                    first_seen = ?pending.first_seen,
+                    num_ends = pending.num_ends,
+                    sources = ?pending.sources,
+                    reason = ?ended_record.reason,
+                    "received another end_statement_execution before begin_statement_execution"
+                );
+                return;
+            }
+
+            self.statement_logging.pending_ended_executions.insert(
+                uuid,
+                PendingEndedExecution {
+                    ended_record: ended_record.clone(),
+                    first_seen: now,
+                    num_ends: 1,
+                    sources: BTreeSet::from([source]),
+                },
             );
+            tracing::error!(
+                statement_logging_id = %uuid,
+                end_source = source,
+                ended_at = ?ended_record.ended_at,
+                reason = ?ended_record.reason,
+                "received end_statement_execution before begin_statement_execution; buffering"
+            );
+            return;
+        };
+
         for (row, diff) in
             Self::pack_statement_ended_execution_updates(&began_record, &ended_record)
         {
@@ -423,6 +527,10 @@ impl Coordinator {
             &StatementLifecycleEvent::ExecutionFinished,
             now,
         );
+
+        self.statement_logging
+            .ended_execution_tombstones
+            .insert(uuid, ended_record.ended_at);
     }
 
     fn pack_session_history_update(event: &SessionHistoryEvent) -> Row {
@@ -576,6 +684,8 @@ impl Coordinator {
         logging: &Arc<QCell<PreparedStatementLoggingInfo>>,
         lifecycle_timestamps: Option<LifecycleTimestamps>,
     ) -> Option<StatementLoggingId> {
+        self.expire_statement_execution_tombstones();
+
         let enable_internal_statement_logging = self
             .catalog()
             .system_config()
@@ -717,6 +827,26 @@ impl Coordinator {
         self.statement_logging
             .executions_begun
             .insert(execution_uuid, record);
+
+        if let Some(pending) = self
+            .statement_logging
+            .pending_ended_executions
+            .remove(&execution_uuid)
+        {
+            tracing::error!(
+                statement_logging_id = %execution_uuid,
+                first_seen = ?pending.first_seen,
+                num_ends = pending.num_ends,
+                sources = ?pending.sources,
+                reason = ?pending.ended_record.reason,
+                "received begin_statement_execution after end_statement_execution; applying buffered end"
+            );
+            self.end_statement_execution_inner(
+                StatementLoggingId(execution_uuid),
+                pending.ended_record.reason,
+                "pending_end_buffer",
+            );
+        }
 
         if let Some((sh_update, session_id)) = maybe_sh_event {
             self.statement_logging
