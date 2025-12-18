@@ -73,7 +73,7 @@ bin/environmentd -- \
 
 ### Solution proposal: Creating a user & adding roles: An admin gives a user access to Materialize
 
-By specifying an audience, we ensure an admin must explicitly give a user in the IDP access to Materialize as long as they use a client exclusively for Materialize. Otherwise when a user first logins, we create a role for them if it does not exist.
+By requiring the `aud` (audience) claim to match the configured client ID, we ensure that JWTs issued for other applications (e.g., Slack, internal tools) cannot be used to authenticate with Materialize. This means an admin must explicitly grant users access to the Materialize-specific OIDC client in their IdP. When a user first logs in with a valid token, we create a role for them if one does not already exist.
 
 ### Solution proposal: The user should be disabled from logging in when a user is de-provisioned. However, the database level role should still exist.
 
