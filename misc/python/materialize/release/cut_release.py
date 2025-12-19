@@ -56,6 +56,9 @@ def main():
     version = f"v{args.version}"
     current_branch = get_branch_name()
 
+    print("Checking if Docker is running")
+    spawn.capture(["docker", "info"])
+
     try:
         print(f"Checking out SHA {args.sha}")
         checkout(args.sha)
@@ -81,15 +84,17 @@ def main():
             )
 
         print(f"Bumping console version to {version}")
-        spawn.runv(["git", "tag", "-a", version, "-m", version], cwd=console_dir)
-        spawn.runv(["git", "push", "origin", version], cwd=console_dir)
+        existing_tag = spawn.capture(["git", "tag", "-l", version], cwd=console_dir)
+        if not existing_tag:
+            spawn.runv(["git", "tag", "-a", version, "-m", version], cwd=console_dir)
+            spawn.runv(["git", "push", "origin", version], cwd=console_dir)
 
         print("Waiting for console version to be released on DockerHub (~15 min)")
         console_version = version[1:]
         console_image = f"materialize/console:{console_version}"
         while True:
             try:
-                spawn.runv(["docker", "manifest", "inspect", console_image])
+                spawn.capture(["docker", "manifest", "inspect", console_image])
             except subprocess.CalledProcessError:
                 print(f"{console_image} not yet on DockerHub, sleeping 1 min")
                 time.sleep(60)
