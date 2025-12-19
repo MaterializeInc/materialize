@@ -1,0 +1,1972 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+"""
+Simulates workloads recorded via `bin/mz-workload-record` in a local run using
+Docker Compose.
+"""
+
+import argparse
+import datetime
+import json
+import math
+import os
+import pathlib
+import posixpath
+import random
+import re
+import string
+import threading
+import time
+import urllib.parse
+import uuid
+from textwrap import dedent
+from typing import Any
+
+import confluent_kafka  # type: ignore
+import psycopg
+import pymysql
+import pymysql.cursors
+import requests
+import yaml
+from confluent_kafka.admin import AdminClient  # type: ignore
+from confluent_kafka.schema_registry import SchemaRegistryClient  # type: ignore
+from confluent_kafka.schema_registry.avro import AvroSerializer  # type: ignore
+from confluent_kafka.serialization import (  # type: ignore
+    MessageField,
+    SerializationContext,
+)
+from pg8000.native import literal
+from psycopg.sql import SQL, Identifier, Literal
+
+from materialize import MZ_ROOT, buildkite, spawn, ui
+from materialize.mzcompose.composition import (
+    Composition,
+    Service,
+    WorkflowArgumentParser,
+)
+from materialize.mzcompose.services.azurite import Azurite
+from materialize.mzcompose.services.fivetran_destination import FivetranDestination
+from materialize.mzcompose.services.kafka import Kafka
+from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.redpanda import Redpanda
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.mzcompose.services.zookeeper import Zookeeper
+from materialize.util import PropagatingThread
+
+cluster_replica_sizes = {
+    "bootstrap": {
+        "cpu_exclusive": False,
+        "cpu_limit": 0.5,
+        "credits_per_hour": "0.25",
+        "disk_limit": "7762MiB",
+        "memory_limit": "3881MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    # M.1 cluster replica sizes
+    "M.1-nano": {
+        "cpu_exclusive": False,
+        "cpu_limit": 0.5,
+        "credits_per_hour": "0.75",
+        "disk_limit": "26624MiB",
+        "memory_limit": "3881MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "M.1-micro": {
+        "cpu_exclusive": True,
+        "cpu_limit": 1,
+        "credits_per_hour": "1.5",
+        "disk_limit": "54272MiB",
+        "memory_limit": "7762MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "M.1-xsmall": {
+        "cpu_exclusive": True,
+        "cpu_limit": 2,
+        "credits_per_hour": "3",
+        "disk_limit": "108544MiB",
+        "memory_limit": "15525MiB",
+        "scale": 1,
+        "workers": 2,
+    },
+    "M.1-small": {
+        "cpu_exclusive": True,
+        "cpu_limit": 4,
+        "credits_per_hour": "6",
+        "disk_limit": "217088MiB",
+        "memory_limit": "31050MiB",
+        "scale": 1,
+        "workers": 4,
+    },
+    "M.1-medium": {
+        "cpu_exclusive": True,
+        "cpu_limit": 6,
+        "credits_per_hour": "9",
+        "disk_limit": "325632MiB",
+        "memory_limit": "46575MiB",
+        "scale": 1,
+        "workers": 6,
+    },
+    "M.1-large": {
+        "cpu_exclusive": True,
+        "cpu_limit": 8,
+        "credits_per_hour": "12",
+        "disk_limit": "434176MiB",
+        "memory_limit": "62100MiB",
+        "scale": 1,
+        "workers": 8,
+    },
+    "M.1-1.5xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 12,
+        "credits_per_hour": "18",
+        "disk_limit": "651264MiB",
+        "memory_limit": "93150MiB",
+        "scale": 1,
+        "workers": 12,
+    },
+    "M.1-2xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 16,
+        "credits_per_hour": "24",
+        "disk_limit": "869376MiB",
+        "memory_limit": "124201MiB",
+        "scale": 1,
+        "workers": 16,
+    },
+    "M.1-3xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 24,
+        "credits_per_hour": "36",
+        "disk_limit": "1303552MiB",
+        "memory_limit": "186301MiB",
+        "scale": 1,
+        "workers": 24,
+    },
+    "M.1-4xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 31,
+        "credits_per_hour": "48",
+        "disk_limit": "1684480MiB",
+        "memory_limit": "240640MiB",
+        "scale": 1,
+        "workers": 31,
+    },
+    "M.1-8xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "96",
+        "disk_limit": "3368960MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    # Fake, just to be able to create clusters
+    "M.1-16xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "192",
+        "disk_limit": "6737920MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    "M.1-32xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "384",
+        "disk_limit": "13475840MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    "M.1-64xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "768",
+        "disk_limit": "26951680MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    "M.1-128xlarge": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "1536",
+        "disk_limit": "53719040",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    # cc cluster replica sizes
+    "25cc": {
+        "cpu_exclusive": False,
+        "cpu_limit": 0.5,
+        "credits_per_hour": "0.25",
+        "disk_limit": "7762MiB",
+        "memory_limit": "3881MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "50cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 1,
+        "credits_per_hour": "0.5",
+        "disk_limit": "15525MiB",
+        "memory_limit": "7762MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "100cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 2,
+        "credits_per_hour": "1",
+        "disk_limit": "31050MiB",
+        "memory_limit": "15525MiB",
+        "scale": 1,
+        "workers": 2,
+    },
+    "200cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 4,
+        "credits_per_hour": "2",
+        "disk_limit": "62100MiB",
+        "memory_limit": "31050MiB",
+        "scale": 1,
+        "workers": 4,
+    },
+    "300cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 6,
+        "credits_per_hour": "3",
+        "disk_limit": "93150MiB",
+        "memory_limit": "46575MiB",
+        "scale": 1,
+        "workers": 6,
+    },
+    "400cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 8,
+        "credits_per_hour": "4",
+        "disk_limit": "124201MiB",
+        "memory_limit": "62100MiB",
+        "scale": 1,
+        "workers": 8,
+    },
+    "600cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 12,
+        "credits_per_hour": "6",
+        "disk_limit": "186301MiB",
+        "memory_limit": "93150MiB",
+        "scale": 1,
+        "workers": 12,
+    },
+    "800cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 16,
+        "credits_per_hour": "8",
+        "disk_limit": "248402MiB",
+        "memory_limit": "124201MiB",
+        "scale": 1,
+        "workers": 16,
+    },
+    "1200cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 24,
+        "credits_per_hour": "12",
+        "disk_limit": "372603MiB",
+        "memory_limit": "186301MiB",
+        "scale": 1,
+        "workers": 24,
+    },
+    "1600cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 31,
+        "credits_per_hour": "16",
+        "disk_limit": "481280MiB",
+        "memory_limit": "240640MiB",
+        "scale": 1,
+        "workers": 31,
+    },
+    "3200cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "32",
+        "disk_limit": "962560MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    # Fake, just to be able to create clusters
+    "6400cc": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "32",
+        "disk_limit": "962560MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    "128C": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "32",
+        "disk_limit": "962560MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    "256C": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "32",
+        "disk_limit": "962560MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    "512C": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "32",
+        "disk_limit": "962560MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    # Internal test sizes
+    "scale=1,workers=1": {
+        "cpu_exclusive": True,
+        "cpu_limit": 1,
+        "credits_per_hour": "0.5",
+        "disk_limit": "15525MiB",
+        "memory_limit": "7762MiB",
+        "scale": 1,
+        "workers": 1,
+    },
+    "scale=1,workers=2": {
+        "cpu_exclusive": True,
+        "cpu_limit": 2,
+        "credits_per_hour": "1",
+        "disk_limit": "31050MiB",
+        "memory_limit": "15525MiB",
+        "scale": 1,
+        "workers": 2,
+    },
+    "scale=1,workers=4": {
+        "cpu_exclusive": True,
+        "cpu_limit": 4,
+        "credits_per_hour": "2",
+        "disk_limit": "62100MiB",
+        "memory_limit": "31050MiB",
+        "scale": 1,
+        "workers": 4,
+    },
+    "scale=1,workers=6": {
+        "cpu_exclusive": True,
+        "cpu_limit": 6,
+        "credits_per_hour": "3",
+        "disk_limit": "93150MiB",
+        "memory_limit": "46575MiB",
+        "scale": 1,
+        "workers": 6,
+    },
+    "scale=1,workers=8": {
+        "cpu_exclusive": True,
+        "cpu_limit": 8,
+        "credits_per_hour": "4",
+        "disk_limit": "124201MiB",
+        "memory_limit": "62100MiB",
+        "scale": 1,
+        "workers": 8,
+    },
+    "scale=1,workers=12": {
+        "cpu_exclusive": True,
+        "cpu_limit": 12,
+        "credits_per_hour": "6",
+        "disk_limit": "186301MiB",
+        "memory_limit": "93150MiB",
+        "scale": 1,
+        "workers": 12,
+    },
+    "scale=1,workers=16": {
+        "cpu_exclusive": True,
+        "cpu_limit": 16,
+        "credits_per_hour": "8",
+        "disk_limit": "248402MiB",
+        "memory_limit": "124201MiB",
+        "scale": 1,
+        "workers": 16,
+    },
+    "scale=1,workers=24": {
+        "cpu_exclusive": True,
+        "cpu_limit": 24,
+        "credits_per_hour": "12",
+        "disk_limit": "372603MiB",
+        "memory_limit": "186301MiB",
+        "scale": 1,
+        "workers": 24,
+    },
+    "scale=1,workers=31": {
+        "cpu_exclusive": True,
+        "cpu_limit": 31,
+        "credits_per_hour": "16",
+        "disk_limit": "481280MiB",
+        "memory_limit": "240640MiB",
+        "scale": 1,
+        "workers": 31,
+    },
+    "scale=1,workers=62": {
+        "cpu_exclusive": True,
+        "cpu_limit": 62,
+        "credits_per_hour": "32",
+        "disk_limit": "962560MiB",
+        "memory_limit": "481280MiB",
+        "scale": 1,
+        "workers": 62,
+    },
+    "scale=2,workers=1": {
+        "cpu_exclusive": True,
+        "cpu_limit": 1,
+        "credits_per_hour": "0.5",
+        "disk_limit": "15525MiB",
+        "memory_limit": "7762MiB",
+        "scale": 2,
+        "workers": 1,
+    },
+    "scale=4,workers=1": {
+        "cpu_exclusive": True,
+        "cpu_limit": 1,
+        "credits_per_hour": "0.5",
+        "disk_limit": "15525MiB",
+        "memory_limit": "7762MiB",
+        "scale": 4,
+        "workers": 1,
+    },
+}
+
+SERVICES = [
+    SshBastionHost(allow_any_key=True),
+    Zookeeper(),
+    Kafka(
+        auto_create_topics=False,
+        ports=["30123:30123"],
+        allow_host_ports=True,
+        environment_extra=[
+            "KAFKA_ADVERTISED_LISTENERS=HOST://localhost:30123,PLAINTEXT://kafka:9092",
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        ],
+    ),
+    SchemaRegistry(),
+    Redpanda(),
+    Postgres(),
+    MySql(),
+    Azurite(),
+    Mz(app_password=""),
+    Minio(setup_materialize=False, additional_directories=["copytos3"]),
+    Materialized(cluster_replica_size=cluster_replica_sizes),
+    FivetranDestination(volumes_extra=["tmp:/share/tmp"]),
+    Testdrive(
+        seed=1,
+        no_reset=True,
+        entrypoint_extra=[
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        ],
+    ),
+    SqlServer(),
+]
+
+LOCATION = MZ_ROOT / "test" / "workload-replay" / "recorded-workloads"
+
+
+def update_recorded_workloads_repo() -> None:
+    path = pathlib.Path(MZ_ROOT / "test" / "workload-replay" / "recorded-workloads")
+    if (path / ".git").is_dir():
+        if ui.env_is_truthy("CI"):
+            spawn.runv(["git", "-C", str(path), "pull"])
+        else:
+            spawn.runv(["git", "-C", str(path), "fetch"])
+            local = spawn.capture(["git", "-C", str(path), "rev-parse", "@"])
+            remote = spawn.capture(["git", "-C", str(path), "rev-parse", "@{upstream}"])
+            if local != remote:
+                spawn.runv(["git", "-C", str(path), "pull"])
+    else:
+        path.mkdir(exist_ok=True)
+        if ui.env_is_truthy("CI"):
+            github_token = os.environ["GITHUB_TOKEN"]
+            spawn.runv(
+                [
+                    "git",
+                    "clone",
+                    # This is currently way slower, I guess GitHub doesn't have it cached:
+                    # "--depth=1",
+                    f"https://materializebot:{urllib.parse.quote(github_token, safe='')}@github.com/MaterializeInc/recorded-workloads",
+                    str(path),
+                ]
+            )
+        else:
+            try:
+                spawn.runv(
+                    [
+                        "git",
+                        "clone",
+                        # This is currently way slower, I guess GitHub doesn't have it cached:
+                        # "--depth=1",
+                        "https://github.com/MaterializeInc/recorded-workloads",
+                        str(path),
+                    ]
+                )
+            except:
+                spawn.runv(
+                    [
+                        "git",
+                        "clone",
+                        # This is currently way slower, I guess GitHub doesn't have it cached:
+                        # "--depth=1",
+                        "git@github.com:MaterializeInc/recorded-workloads",
+                        str(path),
+                    ]
+                )
+
+
+def get_kafka_topic(source: dict[str, Any]) -> str:
+    match = re.search(
+        r"TOPIC\s*=\s*'([^']+)'",
+        source["create_sql"],
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert match, f"No topic found: {source['create_sql']}"
+    return match.group(1)
+
+
+def delivery_report(err: str, msg: Any) -> None:
+    assert err is None, f"Delivery failed for User record {msg.key()}: {err}"
+
+
+def get_postgres_reference_db_schema_table(
+    child: dict[str, Any]
+) -> tuple[str, str, str]:
+    if child["type"] == "table":
+        match = re.search(
+            r"REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find REFERENCE in {child['create_sql']}"
+    elif child["type"] == "subsource":
+        match = re.search(
+            r"EXTERNAL\s+REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find EXTERNAL REFERENCE in {child['create_sql']}"
+    else:
+        raise ValueError(f"Unhandled child type {child['type']}")
+    db, schema, table = match.group(1).split(".", 2)
+    return (db, schema, table)
+
+
+def get_mysql_reference_db_table(child: dict[str, Any]) -> tuple[str, str]:
+    if child["type"] == "table":
+        match = re.search(
+            r"REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find REFERENCE in {child['create_sql']}"
+    elif child["type"] == "subsource":
+        match = re.search(
+            r"EXTERNAL\s+REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find EXTERNAL REFERENCE in {child['create_sql']}"
+    else:
+        raise ValueError(f"Unhandled child type {child['type']}")
+    db, table = match.group(1).split(".", 1)
+    return db, table
+
+
+def get_sql_server_reference_db_schema_table(
+    child: dict[str, Any]
+) -> tuple[str, str, str]:
+    if child["type"] == "table":
+        match = re.search(
+            r"REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find REFERENCE in {child['create_sql']}"
+    elif child["type"] == "subsource":
+        match = re.search(
+            r"EXTERNAL\s+REFERENCE\s*=\s*([a-zA-Z0-9_.]+)",
+            child["create_sql"],
+        )
+        assert match, f"Couldn't find EXTERNAL REFERENCE in {child['create_sql']}"
+    else:
+        raise ValueError(f"Unhandled child type {child['type']}")
+    db, schema, table = match.group(1).split(".", 2)
+    return (db, schema, table)
+
+
+def to_sql_server_data_type(typ: str) -> str:
+    if typ == "timestamp without time zone":
+        return "datetime"
+    return typ
+
+
+# TODO: Distribution of values should be long tail by default, not random
+class Column:
+    def __init__(self, name: str, typ: str, nullable: bool, default: Any):
+        self.name = name
+        self.typ = typ
+        self.nullable = nullable
+        self.default = default
+        self.chars = string.ascii_letters + string.digits
+
+    def avro_type(self) -> str:
+        if self.typ in ("text", "bytea", "character", "character varying"):
+            return "string"
+        elif self.typ in ("smallint", "integer", "uint2", "uint4"):
+            return "int"
+        elif self.typ in ("bigint", "uint8"):
+            return "long"
+        elif self.typ in ("double precision", "numeric"):
+            return "double"
+        elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
+            return "long"
+        return self.typ
+
+    def kafka_value(self) -> Any:
+        if self.default and random.randrange(10) == 0 and self.default != "NULL":
+            return str(self.default)
+        if self.nullable and random.randrange(10) == 0:
+            return None
+
+        if self.typ == "boolean":
+            return random.choice([True, False])
+        elif self.typ == "smallint":
+            return random.randrange(-32768, 32767)
+        elif self.typ == "integer":
+            return random.randrange(-2147483648, 2147483647)
+        elif self.typ == "bigint":
+            return random.randrange(-9223372036854775808, 9223372036854775807)
+        elif self.typ == "uint2":
+            return random.randrange(0, 65535)
+        elif self.typ == "uint4":
+            return random.randrange(0, 4294967295)
+        elif self.typ == "uint8":
+            return random.randrange(0, 18446744073709551615)
+        elif self.typ in ("float", "double precision", "numeric"):
+            return random.uniform(-1_000_000_000, 1_000_000_000_00)
+        elif self.typ in ("text", "bytea"):
+            return literal("".join(random.choice(self.chars) for _ in range(100)))
+        elif self.typ in ("character", "character varying"):
+            # TODO: Get the actual max length
+            return literal("".join(random.choice(self.chars) for _ in range(10)))
+        elif self.typ == "uuid":
+            return str(uuid.UUID(int=random.getrandbits(128), version=4))
+        elif self.typ == "jsonb":
+            result = {f"key{key}": str(random.randint(-100, 100)) for key in range(20)}
+            return json.dumps(result)
+        elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
+            return random.randrange(0, 9223372036854775807)
+        elif self.typ == "mz_timestamp":
+            return literal(
+                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+        elif self.typ == "date":
+            return literal(
+                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+        elif self.typ == "time":
+            return literal(
+                f"{random.randrange(0, 24)}:{random.randrange(0, 60)}:{random.randrange(0, 60)}.{random.randrange(0, 1000000)}"
+            )
+        elif self.typ == "int2range":
+            val1 = str(random.randrange(-2147483648, 2147483647))
+            val2 = str(random.randrange(-2147483648, 2147483647))
+            return literal(f"[{val1},{val2})")
+        elif self.typ == "int4range":
+            val1 = str(random.randrange(-2147483648, 2147483647))
+            val2 = str(random.randrange(-2147483648, 2147483647))
+            return literal(f"[{val1},{val2})")
+        elif self.typ == "int8range":
+            val1 = str(random.randrange(-9223372036854775808, 9223372036854775807))
+            val2 = str(random.randrange(-9223372036854775808, 9223372036854775807))
+            return literal(f"[{val1},{val2})")
+        elif self.typ == "map":
+            return {str(i): str(random.randint(-100, 100)) for i in range(0, 20)}
+        elif self.typ == "text[]":
+            values = [
+                literal("".join(random.choice(self.chars) for _ in range(100)))
+                for i in range(0, 5)
+            ]
+            return literal(f"{{{', '.join(values)}}}")
+        else:
+            raise ValueError(f"Unhandled data type {self.typ}")
+
+    def value(self) -> str:
+        if self.default and random.randrange(10) == 0 and self.default != "NULL":
+            return str(self.default)
+        if self.nullable and random.randrange(10) == 0:
+            return "NULL"
+
+        if self.typ == "boolean":
+            return random.choice(["true", "false"])
+        elif self.typ == "smallint":
+            return str(random.randrange(-32768, 32767))
+        elif self.typ == "integer":
+            return str(random.randrange(-2147483648, 2147483647))
+        elif self.typ == "bigint":
+            return str(random.randrange(-9223372036854775808, 9223372036854775807))
+        elif self.typ == "uint2":
+            return str(random.randrange(0, 65535))
+        elif self.typ == "uint4":
+            return str(random.randrange(0, 4294967295))
+        elif self.typ == "uint8":
+            return str(random.randrange(0, 18446744073709551615))
+        elif self.typ in ("float", "double precision", "numeric"):
+            return str(random.uniform(-1_000_000_000, 1_000_000_000_00))
+        elif self.typ in ("text", "bytea"):
+            return literal("".join(random.choice(self.chars) for _ in range(100)))
+        elif self.typ in ("character", "character varying"):
+            # TODO: Get the actual max length
+            return literal("".join(random.choice(self.chars) for _ in range(10)))
+        elif self.typ == "uuid":
+            return str(uuid.UUID(int=random.getrandbits(128), version=4))
+        elif self.typ == "jsonb":
+            result = {f"key{key}": str(random.randint(-100, 100)) for key in range(20)}
+            return f"'{json.dumps(result)}'::jsonb"
+        elif self.typ in ("timestamp with time zone", "timestamp without time zone"):
+            return literal(
+                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+        elif self.typ == "mz_timestamp":
+            return literal(
+                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+        elif self.typ == "date":
+            return literal(
+                f"{random.randrange(1970, 2100)}-{random.randrange(1, 13)}-{random.randrange(1, 29)}"
+            )
+        elif self.typ == "time":
+            return literal(
+                f"{random.randrange(0, 24)}:{random.randrange(0, 60)}:{random.randrange(0, 60)}.{random.randrange(0, 1000000)}"
+            )
+        elif self.typ == "int2range":
+            val1 = str(random.randrange(-2147483648, 2147483647))
+            val2 = str(random.randrange(-2147483648, 2147483647))
+            return literal(f"[{val1},{val2})")
+        elif self.typ == "int4range":
+            val1 = str(random.randrange(-2147483648, 2147483647))
+            val2 = str(random.randrange(-2147483648, 2147483647))
+            return literal(f"[{val1},{val2})")
+        elif self.typ == "int8range":
+            val1 = str(random.randrange(-9223372036854775808, 9223372036854775807))
+            val2 = str(random.randrange(-9223372036854775808, 9223372036854775807))
+            return literal(f"[{val1},{val2})")
+        elif self.typ == "map":
+            values = [
+                f"'{i}' => {str(random.randint(-100, 100))}" for i in range(0, 20)
+            ]
+            return literal(f"{{{', '.join(values)}}}")
+        elif self.typ == "text[]":
+            values = [
+                literal("".join(random.choice(self.chars) for _ in range(100)))
+                for i in range(0, 5)
+            ]
+            return literal(f"{{{', '.join(values)}}}")
+        else:
+            raise ValueError(f"Unhandled data type {self.typ}")
+
+
+def ingest_webhook(
+    c: Composition,
+    db: str,
+    schema: str,
+    name: str,
+    source: dict[str, Any],
+    num_rows: int,
+) -> None:
+    # TODO: Also in continuous
+    url = f"http://127.0.0.1:{c.port('materialized', 6876)}/api/webhook/{urllib.parse.quote(db, safe='')}/{urllib.parse.quote(schema, safe='')}/{urllib.parse.quote(name, safe='')}"
+    body_column = None
+    headers_column = None
+    for column in source["columns"]:
+        if column["name"] == "body":
+            body_column = Column(
+                column["name"],
+                column["type"],
+                column["nullable"],
+                column["default"],
+            )
+        elif column["name"] == "headers":
+            headers_column = Column(
+                column["name"],
+                column["type"],
+                column["nullable"],
+                column["default"],
+            )
+    assert body_column
+
+    def run(sleep: int = 1) -> None:
+        result = requests.post(
+            url,
+            data=body_column.kafka_value(),
+            headers=(headers_column.kafka_value() if headers_column else None),
+        )
+        if result.status_code == 429:
+            # hard-coded limit of 500 webhook requests/s
+            time.sleep(sleep)
+            run(sleep * 2)
+        else:
+            assert (
+                result.status_code == 200
+            ), f"Webhook ingestion failed: {result.status_code}: {result.text}"
+
+    threads = [
+        PropagatingThread(target=run, name=f"{db}.{schema}.{name}-{i}", args=())
+        for i in range(num_rows)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+
+def ingest(
+    c: Composition,
+    child: dict[str, Any],
+    source: dict[str, Any],
+    columns: list[Column],
+    num_rows: int,
+) -> None:
+    batch_values = []
+    batch_values_kafka = []
+    for _ in range(num_rows):
+        if source["type"] == "kafka":
+            row = [c.kafka_value() for c in columns]
+            batch_values_kafka.append(row)
+        else:
+            row = [c.value() for c in columns]
+            batch_values.append(f"({', '.join(row)})")
+    if source["type"] == "postgres":
+        ref_database, ref_schema, ref_table = get_postgres_reference_db_schema_table(
+            child
+        )
+        c.sql(
+            SQL("INSERT INTO {}.{} VALUES ").format(
+                Identifier(ref_schema),
+                Identifier(ref_table),
+            )
+            + SQL(", ").join(map(SQL, batch_values)),
+            service="postgres",
+            user="postgres",
+            password="postgres",
+            database=ref_database,
+            port=5432,
+            print_statement=False,
+        )
+    elif source["type"] == "mysql":
+        mysql_conn = pymysql.connect(
+            host="127.0.0.1",
+            user="root",
+            password=MySql.DEFAULT_ROOT_PASSWORD,
+            database="mysql",
+            port=c.default_port("mysql"),
+        )
+        mysql_conn.autocommit(True)
+        with mysql_conn.cursor() as cur:
+            ref_database, ref_table = get_mysql_reference_db_table(child)
+            cur.execute(
+                f"INSERT INTO {ref_database}.{ref_table} VALUES "
+                + ", ".join(batch_values)
+            )
+    elif source["type"] == "kafka":
+        topic = get_kafka_topic(source)
+
+        schema = {
+            "type": "record",
+            "name": topic,
+            "namespace": "com.materialize",
+            "fields": [
+                {
+                    "name": field.name,
+                    "type": field.avro_type(),
+                }
+                for field in columns[1:]
+            ],
+        }
+
+        key_schema = {
+            "type": "record",
+            "name": topic + "_key",
+            "namespace": "com.materialize",
+            "fields": [{"name": columns[0].name, "type": columns[0].avro_type()}],
+        }
+
+        kafka_conf = {"bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"}
+
+        AdminClient(kafka_conf)
+
+        schema_registry_conf = {
+            "url": f"http://127.0.0.1:{c.default_port('schema-registry')}"
+        }
+        registry = SchemaRegistryClient(schema_registry_conf)
+
+        serializer = AvroSerializer(registry, json.dumps(schema), lambda d, ctx: d)
+
+        key_serializer = AvroSerializer(
+            registry, json.dumps(key_schema), lambda d, ctx: d
+        )
+
+        # registry.register_schema(
+        #     f"{topic}-value", Schema(json.dumps(schema), schema_type="AVRO")
+        # )
+        # registry.register_schema(
+        #     f"{topic}-key", Schema(json.dumps(key_schema), schema_type="AVRO")
+        # )
+
+        serialization_context = SerializationContext(topic, MessageField.VALUE)
+        key_serialization_context = SerializationContext(topic, MessageField.KEY)
+
+        producer = confluent_kafka.Producer(kafka_conf)
+        for row in batch_values_kafka:
+            producer.produce(
+                topic=topic,
+                key=key_serializer(
+                    {columns[0].name: row[0]},
+                    key_serialization_context,
+                ),
+                value=serializer(
+                    {column.name: value for column, value in zip(columns[1:], row[1:])},
+                    serialization_context,
+                ),
+                on_delivery=delivery_report,
+            )
+        producer.flush()
+    elif source["type"] == "sql-server":
+        ref_database, ref_schema, ref_table = get_sql_server_reference_db_schema_table(
+            child
+        )
+        c.testdrive(
+            dedent(
+                f"""
+                $ sql-server-connect name=sql-server
+                server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+                $ sql-server-execute name=sql-server
+                USE {ref_database};
+                INSERT INTO {ref_schema}.{ref_table} VALUES {', '.join(batch_values)}
+            """
+            ),
+            quiet=True,
+            silent=True,
+        )
+    elif source["type"] == "load-generator":
+        pass
+    else:
+        raise ValueError(f"Unhandled source type {source['type']}")
+
+
+PG_PARAM_RE = re.compile(r"\$(\d+)")
+
+
+def pg_params_to_psycopg(sql: str, params: list[Any]) -> tuple[str, list[Any]]:
+    out_params = []
+
+    def replace(m):
+        i = int(m.group(1)) - 1
+        out_params.append(params[i])
+        return "%s"
+
+    return PG_PARAM_RE.sub(replace, sql.replace("%", "%%")), out_params
+
+
+def run_create_objects(
+    c: Composition, services: set[str], workload: dict[str, Any]
+) -> None:
+    c.sql("DROP CLUSTER IF EXISTS quickstart CASCADE", user="mz_system", port=6877)
+    c.sql("DROP DATABASE IF EXISTS materialize CASCADE", user="mz_system", port=6877)
+    c.sql(
+        "ALTER SYSTEM SET max_schemas_per_database = 1000000",
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("ALTER SYSTEM SET max_tables = 1000000", user="mz_system", port=6877)
+    c.sql(
+        "ALTER SYSTEM SET max_materialized_views = 1000000", user="mz_system", port=6877
+    )
+    c.sql("ALTER SYSTEM SET max_sources = 1000000", user="mz_system", port=6877)
+    c.sql("ALTER SYSTEM SET max_sinks = 1000000", user="mz_system", port=6877)
+    c.sql("ALTER SYSTEM SET max_roles = 1000000", user="mz_system", port=6877)
+    c.sql("ALTER SYSTEM SET max_clusters = 1000000", user="mz_system", port=6877)
+    c.sql(
+        "ALTER SYSTEM SET max_replicas_per_cluster = 1000000",
+        user="mz_system",
+        port=6877,
+    )
+    c.sql("ALTER SYSTEM SET max_secrets = 1000000", user="mz_system", port=6877)
+    c.sql(
+        "ALTER SYSTEM SET webhook_concurrent_request_limit = 1000000",
+        user="mz_system",
+        port=6877,
+    )
+
+    print("Creating clusters")
+    for name, cluster in workload["clusters"].items():
+        if cluster["managed"]:
+            c.sql(cluster["create_sql"], user="mz_system", port=6877)
+        else:
+            raise ValueError("Handle unmanaged clusters")
+
+    print("Creating databases")
+    for db in workload["databases"]:
+        c.sql(
+            SQL("CREATE DATABASE {}").format(Identifier(db)),
+            user="mz_system",
+            port=6877,
+        )
+
+    print("Creating schemas")
+    for db, schemas in workload["databases"].items():
+        for schema in schemas:
+            if schema == "public":
+                continue
+            c.sql(
+                SQL("CREATE SCHEMA {}.{}").format(Identifier(db), Identifier(schema)),
+                user="mz_system",
+                port=6877,
+            )
+
+    print("Creating types")
+    for schemas in workload["databases"].values():
+        for items in schemas.values():
+            for typ in items["types"].values():
+                c.sql(typ["create_sql"], user="mz_system", port=6877)
+
+    print("Preparing sources")
+    if "postgres" in services:
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            CREATE DATABASE IF NOT EXISTS materialize;
+            CREATE SCHEMA IF NOT EXISTS public;
+            CREATE SECRET pgpass AS 'postgres'
+            """
+            )
+        )
+
+    if "mysql" in services:
+        c.testdrive(
+            dedent(
+                """
+            $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+            CREATE SECRET mysqlpass AS '${arg.mysql-root-password}'
+
+            $ mysql-connect name=mysql url=mysql://root@mysql password=${arg.mysql-root-password}
+            $ mysql-execute name=mysql
+            DROP DATABASE IF EXISTS public;
+            CREATE DATABASE public;
+            """
+            )
+        )
+
+    if "sql-server" in services:
+        c.testdrive(
+            dedent(
+                f"""
+            $ postgres-execute connection=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+            CREATE SECRET sql_server_pass AS '{SqlServer.DEFAULT_SA_PASSWORD}'
+                """
+            )
+        )
+        # with open(MZ_ROOT / "test" / "sql-server-cdc" / "setup" / "setup.td") as f:
+        #     c.testdrive(
+        #         f.read(),
+        #         args=[
+        #             "--max-errors=1",
+        #             f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+        #             f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        #         ],
+        #     )
+
+    print("Creating connections")
+    existing_dbs = {"postgres": {"postgres"}, "sql-server": set()}
+    for db, schemas in workload["databases"].items():
+        for schema, items in schemas.items():
+            for name, connection in items["connections"].items():
+                if connection["type"] == "postgres":
+                    match = re.search(
+                        r"DATABASE\s*=\s*('?)([a-zA-Z_][a-zA-Z0-9_]*|\w+)\1(?=\s*[,\)])",
+                        connection["create_sql"],
+                        re.IGNORECASE,
+                    )
+                    assert match, f"No database found in {connection['create_sql']}"
+                    ref_database = match.group(2)
+                    if ref_database not in existing_dbs["postgres"]:
+                        c.testdrive(
+                            dedent(
+                                f"""
+                                $ postgres-execute connection=postgres://postgres:postgres@postgres
+                                CREATE DATABASE {ref_database};
+                                """
+                            )
+                        )
+                        existing_dbs["postgres"].add(ref_database)
+                    c.sql(
+                        SQL(
+                            "CREATE CONNECTION {}.{}.{} TO POSTGRES (HOST postgres, DATABASE {}, PASSWORD SECRET pgpass, USER postgres)"
+                        ).format(
+                            Identifier(db),
+                            Identifier(schema),
+                            Identifier(name),
+                            Literal(ref_database),
+                        ),
+                        user="mz_system",
+                        port=6877,
+                    )
+                elif connection["type"] == "mysql":
+                    c.sql(
+                        SQL(
+                            "CREATE CONNECTION {}.{}.{} TO MYSQL (HOST mysql, PASSWORD SECRET mysqlpass, USER root)"
+                        ).format(Identifier(db), Identifier(schema), Identifier(name)),
+                        user="mz_system",
+                        port=6877,
+                    )
+                elif connection["type"] == "sql-server":
+                    match = re.search(
+                        r"DATABASE\s*=\s*('?)([a-zA-Z_][a-zA-Z0-9_]*|\w+)\1(?=\s*[,\)])",
+                        connection["create_sql"],
+                        re.IGNORECASE,
+                    )
+                    assert match, f"No database found in {connection['create_sql']}"
+                    ref_database = match.group(2)
+                    if ref_database not in existing_dbs["sql-server"]:
+                        c.testdrive(
+                            dedent(
+                                f"""
+                                $ sql-server-connect name=sql-server
+                                server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+                                $ sql-server-execute name=sql-server
+                                CREATE DATABASE {ref_database};
+                                USE test;
+                                EXEC sys.sp_cdc_enable_db;
+                                ALTER DATABASE {ref_database} SET ALLOW_SNAPSHOT_ISOLATION ON;
+                                """
+                            )
+                        )
+                        existing_dbs["sql-server"].add(ref_database)
+                    c.sql(
+                        SQL(
+                            "CREATE CONNECTION {}.{}.{} TO SQL SERVER (HOST 'sql-server', PASSWORD SECRET sql_server_pass, USER {}, DATABASE {}, PORT 1433)"
+                        ).format(
+                            Identifier(db),
+                            Identifier(schema),
+                            Identifier(name),
+                            Identifier(SqlServer.DEFAULT_USER),
+                            Identifier(ref_database),
+                        ),
+                        user="mz_system",
+                        port=6877,
+                    )
+                elif connection["type"] == "kafka":
+                    c.sql(
+                        SQL(
+                            "CREATE CONNECTION {}.{}.{} TO KAFKA (BROKER 'kafka', SECURITY PROTOCOL PLAINTEXT)"
+                        ).format(Identifier(db), Identifier(schema), Identifier(name)),
+                        user="mz_system",
+                        port=6877,
+                    )
+                elif connection["type"] == "confluent-schema-registry":
+                    c.sql(
+                        SQL(
+                            "CREATE CONNECTION {}.{}.{} TO CONFLUENT SCHEMA REGISTRY (URL 'http://schema-registry:8081')"
+                        ).format(Identifier(db), Identifier(schema), Identifier(name)),
+                        user="mz_system",
+                        port=6877,
+                    )
+                elif connection["type"] == "ssh-tunnel":
+                    c.sql(
+                        SQL(
+                            "CREATE CONNECTION {}.{}.{} TO SSH TUNNEL (HOST 'ssh-bastion-host', USER 'mz', PORT 22)"
+                        ).format(Identifier(db), Identifier(schema), Identifier(name)),
+                        user="mz_system",
+                        port=6877,
+                    )
+                elif connection["type"] in ("aws-privatelink", "aws"):
+                    pass  # can't run outside of cloud
+                else:
+                    raise ValueError(f"Unhandled connection type {connection['type']}")
+
+    print("Creating sources")
+    for schemas in workload["databases"].values():
+        for items in schemas.values():
+            for name, source in items["sources"].items():
+                first = True
+                for child in source.get("children", {}).values():
+                    if source["type"] == "mysql":
+                        ref_database, ref_table = get_mysql_reference_db_table(child)
+                        columns = [
+                            f"{column['name']} {column['type']} {'NULL' if column['nullable'] else 'NOT NULL'} {'' if column['default'] is None else 'DEFAULT ' + column['default']}"
+                            for column in child["columns"]
+                        ]
+                        if first:
+                            c.testdrive(
+                                dedent(
+                                    f"""
+                                    $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+                                    $ mysql-execute name=mysql
+                                    DROP DATABASE IF EXISTS `{ref_database}`;
+                                    CREATE DATABASE `{ref_database}`;
+                                    CREATE TABLE `{ref_database}`.dummy (f1 INTEGER);
+                                    """
+                                )
+                            )
+                            first = False
+                        c.testdrive(
+                            dedent(
+                                f"""
+                            $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
+                            $ mysql-execute name=mysql
+                            CREATE TABLE `{ref_database}`.`{ref_table}` ({", ".join(columns)});
+                                """
+                            )
+                        )
+                    elif source["type"] == "postgres":
+                        ref_database, ref_schema, ref_table = (
+                            get_postgres_reference_db_schema_table(child)
+                        )
+                        columns = [
+                            f"{column['name']} {column['type']} {'NULL' if column['nullable'] else 'NOT NULL'} DEFAULT {'NULL' if column['default'] is None else column['default']}"
+                            for column in child["columns"]
+                        ]
+                        if first:
+                            c.testdrive(
+                                dedent(
+                                    f"""
+                                    $ postgres-execute connection=postgres://postgres:postgres@postgres/{ref_database}
+                                    ALTER USER postgres WITH replication;
+
+                                    DROP PUBLICATION IF EXISTS mz_source;
+                                    CREATE PUBLICATION mz_source FOR ALL TABLES;
+                                    CREATE TABLE IF NOT EXISTS dummy (f1 INTEGER);
+                                    ALTER TABLE dummy REPLICA IDENTITY FULL;
+                                    INSERT INTO dummy VALUES (1);
+                                    """
+                                )
+                            )
+                            first = False
+                        c.testdrive(
+                            dedent(
+                                f"""
+                            $ postgres-execute connection=postgres://postgres:postgres@postgres/{ref_database}
+                            CREATE SCHEMA IF NOT EXISTS "{ref_schema}";
+                            CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)});
+                            ALTER TABLE "{ref_schema}"."{ref_table}" REPLICA IDENTITY FULL;
+                                """
+                            )
+                        )
+                    elif source["type"] == "sql-server":
+                        ref_database, ref_schema, ref_table = (
+                            get_sql_server_reference_db_schema_table(child)
+                        )
+                        columns = [
+                            f"{column['name']} {to_sql_server_data_type(column['type'])} {'NULL' if column['nullable'] else 'NOT NULL'} DEFAULT {'NULL' if column['default'] is None else column['default']}"
+                            for column in child["columns"]
+                        ]
+                        if first:
+                            c.testdrive(
+                                dedent(
+                                    f"""
+                                    $ sql-server-connect name=sql-server
+                                    server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+                                    $ sql-server-execute name=sql-server
+                                    IF DB_ID(N'{ref_database}') IS NULL BEGIN CREATE DATABASE {ref_database}; END
+                                    USE {ref_database};
+                                    IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'{ref_schema}')BEGIN EXEC(N'CREATE SCHEMA {ref_schema}'); END
+                                    """
+                                )
+                            )
+                            first = False
+                        c.testdrive(
+                            dedent(
+                                f"""
+                            $ sql-server-connect name=sql-server
+                            server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID={SqlServer.DEFAULT_USER};Password={SqlServer.DEFAULT_SA_PASSWORD}
+
+                            $ sql-server-execute name=sql-server
+                            USE {ref_database};
+                            CREATE TABLE "{ref_schema}"."{ref_table}" ({", ".join(columns)});
+                            EXEC sys.sp_cdc_enable_table @source_schema = '{ref_schema}', @source_name = '{ref_table}', @role_name = 'SA', @supports_net_changes = 0;
+                                """
+                            )
+                        )
+
+                if source["type"] == "kafka":
+                    topic = get_kafka_topic(source)
+                    kafka_conf = {
+                        "bootstrap.servers": f"127.0.0.1:{c.default_port('kafka')}"
+                    }
+                    a = AdminClient(kafka_conf)
+                    a.create_topics(
+                        [
+                            confluent_kafka.admin.NewTopic(  # type: ignore
+                                topic, num_partitions=1, replication_factor=1
+                            )
+                        ]
+                    )
+                    # c.testdrive(f"$ kafka-create-topic topic={topic}")
+                    # source["create_sql"] = re.sub(
+                    #     r"(TOPIC\s*=\s*)'[^']+'",
+                    #     lambda m: f"{m.group(1)}'testdrive-{topic}-1'",
+                    #     source["create_sql"],
+                    #     flags=re.IGNORECASE | re.DOTALL,
+                    # )
+
+                # if source["type"] == "mysql":
+                #    # TODO: This is weird, shouldn't it be part of the create_sql?
+                #    source["create_sql"] = re.sub(r"EXPOSE ", "FOR ALL TABLES EXPOSE ", source["create_sql"], flags=re.IGNORECASE)
+
+                if source["type"] == "webhook":
+                    # Checking secrets makes ingestion into webhooks difficult, remove the check instead
+                    source["create_sql"] = re.sub(
+                        r"\s*CHECK\s*\(.*?\)\s*;",
+                        "",
+                        source["create_sql"],
+                        flags=re.DOTALL | re.IGNORECASE,
+                    )
+                    # match = re.search(
+                    #     r'(?i)\bSECRET\s+((?:(?:[A-Za-z_][A-Za-z0-9_]*|"[^"]+")(?:\s*\.\s*(?:[A-Za-z_][A-Za-z0-9_]*|"[^"]+"))*))',
+                    #     source["create_sql"],
+                    # )
+                    # if match:
+                    #     secret = match.group(1)
+                    #     c.sql(
+                    #         f"CREATE SECRET IF NOT EXISTS {secret} AS ''",
+                    #         user="mz_system",
+                    #         port=6877,
+                    #     )
+                c.sql(source["create_sql"], user="mz_system", port=6877)
+
+                for child in source.get("children", {}).values():
+                    if child["type"] == "table":
+                        # TODO: I guess we should just create a valid CREATE TABLE command ourselves, since the provided one is full of internals
+                        create_sql = re.sub(
+                            r",?\s*DETAILS\s*=\s*'[^']*'",
+                            "",
+                            child["create_sql"],
+                            flags=re.IGNORECASE,
+                        )
+                        create_sql = re.sub(
+                            r"\sWITH \(\s*\)", "", create_sql, flags=re.IGNORECASE
+                        )
+                        if source["type"] == "load-generator":
+                            # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/10010 is fixed
+                            create_sql = re.sub(
+                                r"mz_load_generators\.",
+                                "",
+                                create_sql,
+                                flags=re.IGNORECASE,
+                            )
+                        # if source["type"] == "kafka":
+                        #     create_sql = re.sub(
+                        #         r'\s*\(REFERENCE\s*=\s*"?([^")]+)"?\s*\)',
+                        #         r' (REFERENCE = "testdrive-\1-1")',
+                        #         create_sql,
+                        #         flags=re.IGNORECASE,
+                        #     )
+                        create_sql = re.sub(
+                            r"\s*\(.*\)\s+FROM\s+",
+                            " FROM ",
+                            create_sql,
+                            flags=re.IGNORECASE | re.DOTALL,
+                        )
+                        c.sql(create_sql, user="mz_system", port=6877)
+
+    print("Creating tables")
+    for schemas in workload["databases"].values():
+        for items in schemas.values():
+            for table in items["tables"].values():
+                c.sql(table["create_sql"], user="mz_system", port=6877)
+
+    print("Creating view, materialized views, sinks")
+    pending = set()
+    for schemas in workload["databases"].values():
+        for items in schemas.values():
+            for view in items["views"].values():
+                pending.add(view["create_sql"])
+            for mv in items["materialized_views"].values():
+                pending.add(mv["create_sql"])
+            # for sink in items["sinks"].values():
+            #     create_sql = re.sub(
+            #         r'\s*\(REFERENCE\s*=\s*"?([^")]+)"?\s*\)',
+            #         r' (REFERENCE = "testdrive-\1-1")',
+            #         sink["create_sql"],
+            #         flags=re.IGNORECASE,
+            #     )
+            #     pending.add(create_sql)
+
+    # TODO: Handle sink -> source roundtrips: scan for topic names to create a dependency graph
+    while pending:
+        progress = False
+        for create in pending.copy():
+            try:
+                c.sql(create, user="mz_system", port=6877)
+            except psycopg.Error as e:
+                if "unknown catalog item" in str(e):
+                    continue
+                raise
+            pending.remove(create)
+            progress = True
+        if not progress:
+            raise RuntimeError(f"No progress, remaining creates: {pending}")
+
+
+def create_initial_data(
+    c: Composition, workload: dict[str, Any], factor_initial_data: float
+) -> None:
+    batch_size = 1000
+    for db, schemas in workload["databases"].items():
+        for schema, items in schemas.items():
+            for name, table in items["tables"].items():
+                num_rows = int(table["rows"] * factor_initial_data)
+                if not num_rows:
+                    continue
+                data_columns = [
+                    Column(c["name"], c["type"], c["nullable"], c["default"])
+                    for c in table["columns"]
+                ]
+                print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
+                for start in range(0, num_rows, batch_size):
+                    progress = min(start + batch_size, num_rows)
+                    print(
+                        f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                        end="\r",
+                        flush=True,
+                    )
+                    batch_values = []
+                    for _ in range(min(batch_size, num_rows - start)):
+                        row = [c.value() for c in data_columns]
+                        batch_values.append(f"({', '.join(row)})")
+                    c.sql(
+                        SQL(
+                            "INSERT INTO {}.{}.{} VALUES " + ", ".join(batch_values)
+                        ).format(
+                            Identifier(db),
+                            Identifier(schema),
+                            Identifier(name),
+                        ),
+                        user="mz_system",
+                        port=6877,
+                        print_statement=False,
+                    )
+                print()
+            for name, source in items["sources"].items():
+                for child_name, child in source.get("children", {}).items():
+                    num_rows = int(child["messages_total"] * factor_initial_data)
+                    if not num_rows:
+                        continue
+                    data_columns = [
+                        Column(c["name"], c["type"], c["nullable"], c["default"])
+                        for c in child["columns"]
+                    ]
+                    print(
+                        f"Creating {num_rows} rows for {db}.{schema}.{name}->{child_name}:"
+                    )
+                    for start in range(0, num_rows, batch_size):
+                        progress = min(start + batch_size, num_rows)
+                        print(
+                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                            end="\r",
+                            flush=True,
+                        )
+                        ingest(
+                            c,
+                            child,
+                            source,
+                            data_columns,
+                            min(batch_size, num_rows - start),
+                        )
+                    print()
+                if source["type"] == "webhook":
+                    num_rows = int(source["messages_total"] * factor_initial_data)
+                    print(f"Creating {num_rows} rows for {db}.{schema}.{name}:")
+                    for start in range(0, num_rows, batch_size):
+                        progress = min(start + batch_size, num_rows)
+                        print(
+                            f"{progress}/{num_rows} ({progress / num_rows:.1%})",
+                            end="\r",
+                            flush=True,
+                        )
+                        ingest_webhook(
+                            c,
+                            db,
+                            schema,
+                            name,
+                            source,
+                            min(batch_size, num_rows - start),
+                        )
+                    print()
+
+
+def create_ingestions(
+    c: Composition,
+    workload: dict[str, Any],
+    stop_event: threading.Event,
+    factor_ingestions: float,
+    verbose: bool,
+    stats: dict[str, int],
+) -> list[threading.Thread]:
+    threads = []
+    batch_size = 1000
+    for db, schemas in workload["databases"].items():
+        for schema, items in schemas.items():
+            for name, source in items["sources"].items():
+                if source["type"] == "webhook":
+                    if "messages_second" not in source:
+                        continue
+                    rate = math.ceil(source["messages_second"] * factor_ingestions)
+                    if not rate:
+                        continue
+
+                    pretty_name = f"{db}.{schema}.{name}"
+                    print(f"Starting {rate} ing./s for {pretty_name}")
+
+                    def continuous_ingestion_webhook(
+                        db: str,
+                        schema: str,
+                        name: str,
+                        source: dict[str, Any],
+                        pretty_name: str,
+                        rate: int,
+                    ) -> None:
+                        nonlocal stop_event
+                        try:
+                            while not stop_event.is_set():
+                                start_time = time.time()
+                                if verbose:
+                                    print(f"Ingesting {rate} rows for {pretty_name}")
+                                stats["total"] += 1
+                                ingest_webhook(
+                                    c,
+                                    db,
+                                    schema,
+                                    name,
+                                    source,
+                                    min(batch_size, rate),
+                                )
+                                time_to_sleep = (start_time + 1) - time.time()
+                                if time_to_sleep > 0:
+                                    stop_event.wait(timeout=time_to_sleep)
+                                    if stop_event.is_set():
+                                        return
+                                else:
+                                    stats["slow"] += 1
+                                    if verbose:
+                                        print(f"Can't keep up: {pretty_name}")
+                        except Exception as e:
+                            stats["failed"] += 1
+                            print(f"Failed: {pretty_name}")
+                            print(e)
+                            stop_event.set()
+                            raise
+
+                    threads.append(
+                        PropagatingThread(
+                            target=continuous_ingestion_webhook,
+                            name=f"ingest-{pretty_name}",
+                            args=(
+                                db,
+                                schema,
+                                name,
+                                source,
+                                pretty_name,
+                                rate,
+                            ),
+                        )
+                    )
+
+                for child_name, child in source.get("children", {}).items():
+                    if "messages_second" not in child:
+                        continue
+                    rate = math.ceil(child["messages_second"] * factor_ingestions)
+                    if not rate:
+                        continue
+
+                    data_columns = [
+                        Column(c["name"], c["type"], c["nullable"], c["default"])
+                        for c in child["columns"]
+                    ]
+                    pretty_name = f"{db}.{schema}.{name}->{child_name}"
+                    print(f"Starting {rate} ing./s for {pretty_name}")
+
+                    def continuous_ingestion(
+                        source: dict[str, Any],
+                        child: dict[str, Any],
+                        pretty_name: str,
+                        data_columns: list[Column],
+                        rate: int,
+                    ) -> None:
+                        nonlocal stop_event
+                        try:
+                            while not stop_event.is_set():
+                                start_time = time.time()
+                                if verbose:
+                                    print(f"Ingesting {rate} rows for {pretty_name}")
+                                stats["total"] += 1
+                                ingest(
+                                    c,
+                                    child,
+                                    source,
+                                    data_columns,
+                                    min(batch_size, rate),
+                                )
+                                time_to_sleep = (start_time + 1) - time.time()
+                                if time_to_sleep > 0:
+                                    stop_event.wait(timeout=time_to_sleep)
+                                    if stop_event.is_set():
+                                        return
+                                else:
+                                    stats["slow"] += 1
+                                    if verbose:
+                                        print(f"Can't keep up: {pretty_name}")
+                        except Exception as e:
+                            stats["failed"] += 1
+                            print(f"Failed: {pretty_name}")
+                            print(e)
+                            stop_event.set()
+                            raise
+
+                    threads.append(
+                        PropagatingThread(
+                            target=continuous_ingestion,
+                            name=f"ingest-{pretty_name}",
+                            args=(
+                                source,
+                                child,
+                                pretty_name,
+                                data_columns,
+                                rate,
+                            ),
+                        )
+                    )
+    return threads
+
+
+def run_query(
+    c: Composition, query: dict[str, Any], stats: dict[str, int], verbose: bool
+) -> None:
+    conn = c.sql_connection(user="mz_system", port=6877)
+    with conn.cursor() as cur:
+        cur.execute(
+            SQL("SET transaction_isolation = {}").format(
+                Literal(query["transaction_isolation"])
+            )
+        )
+        cur.execute(SQL("SET cluster = {}").format(Literal(query["cluster"])))
+        cur.execute(SQL("SET database = {}").format(Literal(query["database"])))
+        cur.execute(f"SET search_path = {','.join(query['search_path'])}".encode())
+        stats["total"] += 1
+        try:
+            sql, params = pg_params_to_psycopg(query["sql"], query["params"])
+            cur.execute(sql.encode(), params)
+            if verbose:
+                print(f"Success: {sql} (params: {params})")
+        except psycopg.Error as e:
+            stats["failed"] += 1
+            if query["finished_status"] == "success":
+                if "unknown catalog item" not in str(e):
+                    print(f"Failed: {sql} (params: {params})")
+                    print(f"{e.sqlstate}: {e}")
+            elif verbose:
+                print(f"Failed expectedly: {sql} (params: {params})")
+                print(f"{e.sqlstate}: {e}")
+        # SELECT mz_indexes.name, schema_name, database FROM mz_indexes JOIN mz_internal.mz_object_fully_qualified_names AS ofqn ON on_id = ofqn.id WHERE schema_name NOT IN ('mz_catalog', 'mz_internal', 'mz_introspection')
+
+
+def continuous_queries(
+    c: Composition,
+    workload: dict[str, Any],
+    stop_event: threading.Event,
+    factor_queries: float,
+    verbose: bool,
+    stats: dict[str, int],
+) -> None:
+    if not workload["queries"]:
+        return
+    i = 0
+    try:
+        while True:
+            i += 1
+            start = workload["queries"][0]["began_at"]
+            replay_start = datetime.datetime.now(datetime.timezone.utc)
+            for query in workload["queries"]:
+                if stop_event.is_set():
+                    return
+
+                # TODO: Support more statement types
+                if query["statement_type"] not in (
+                    "select",
+                    "delete",
+                    "show",
+                ):
+                    continue
+
+                offset = (query["began_at"] - start) / factor_queries
+                scheduled = replay_start + offset
+                sleep_seconds = (
+                    scheduled - datetime.datetime.now(datetime.timezone.utc)
+                ).total_seconds()
+                if sleep_seconds > 0:
+                    stop_event.wait(timeout=sleep_seconds)
+                    if stop_event.is_set():
+                        return
+                elif sleep_seconds < 0:
+                    stats["slow"] += 1
+                    if verbose:
+                        print(f"Can't keep up: {query}")
+                thread = PropagatingThread(
+                    target=run_query,
+                    name=f"query-{i}",
+                    args=(
+                        c,
+                        query,
+                        stats,
+                        verbose,
+                    ),
+                )
+                thread.start()
+    except Exception as e:
+        print(f"Failed: {query['sql']}")
+        print(e)
+        stop_event.set()
+        raise
+
+
+def print_stats(stats: dict[str, Any]) -> None:
+    print("Queries:")
+    print(f"   Total: {stats['queries']['total']}")
+    failed = (
+        100.0 * stats["queries"]["failed"] / stats["queries"]["total"]
+        if stats["queries"]["total"]
+        else 0
+    )
+    print(f"  Failed: {stats['queries']['failed']} ({failed:.0f}%)")
+    slow = (
+        100.0 * stats["queries"]["slow"] / stats["queries"]["total"]
+        if stats["queries"]["total"]
+        else 0
+    )
+    print(f"    Slow: {stats['queries']['slow']} ({slow:.0f}%)")
+    print("Ingestions:")
+    print(f"   Total: {stats['ingestions']['total']}")
+    failed = (
+        100.0 * stats["ingestions"]["failed"] / stats["ingestions"]["total"]
+        if stats["ingestions"]["total"]
+        else 0
+    )
+    print(f"  Failed: {stats['ingestions']['failed']} ({failed:.0f}%)")
+    slow = (
+        100.0 * stats["ingestions"]["slow"] / stats["ingestions"]["total"]
+        if stats["ingestions"]["total"]
+        else 0
+    )
+    print(f"    Slow: {stats['ingestions']['slow']} ({slow:.0f}%)")
+
+
+def test(
+    c: Composition,
+    file: pathlib.Path,
+    factor_initial_data: float,
+    factor_ingestions: float,
+    factor_queries: float,
+    runtime: int,
+    verbose: bool,
+    create_objects: bool,
+    initial_data: bool,
+    run_ingestions: bool,
+    run_queries: bool,
+) -> None:
+    print(f"--- {posixpath.relpath(file, LOCATION)}")
+    with open(file) as f:
+        workload = yaml.load(f, Loader=yaml.Loader)
+
+    services = set()
+
+    for schemas in workload["databases"].values():
+        for objs in schemas.values():
+            for connection in objs["connections"].values():
+                if connection["type"] == "postgres":
+                    services.add("postgres")
+                elif connection["type"] == "mysql":
+                    services.add("mysql")
+                elif connection["type"] == "sql-server":
+                    services.add("sql-server")
+                elif connection["type"] in ("kafka", "confluent-schema-registry"):
+                    services.update(["kafka", "schema-registry", "zookeeper"])
+                elif connection["type"] == "ssh-tunnel":
+                    services.add("ssh-bastion-host")
+                elif connection["type"] in ("aws-privatelink", "aws"):
+                    pass  # can't run outside of cloud
+                else:
+                    raise ValueError(f"Unhandled connection type {connection['type']}")
+
+    print(f"Required services for connections: {services}")
+
+    c.up(
+        "materialized",
+        "minio",
+        "fivetran-destination",
+        *services,
+        Service("testdrive", idle=True),
+    )
+
+    threads = []
+    stop_event = threading.Event()
+    stats = {
+        "queries": {"total": 0, "failed": 0, "slow": 0},
+        "ingestions": {"total": 0, "failed": 0, "slow": 0},
+    }
+    if create_objects:
+        run_create_objects(c, services, workload)
+    if initial_data:
+        print("Creating initial data")
+        create_initial_data(c, workload, factor_initial_data)
+    if run_ingestions:
+        print("Starting continuous ingestions")
+        threads.extend(
+            create_ingestions(
+                c, workload, stop_event, factor_ingestions, verbose, stats["ingestions"]
+            )
+        )
+    if run_queries:
+        print("Starting continuous queries")
+        threads.append(
+            PropagatingThread(
+                target=continuous_queries,
+                name="queries",
+                args=(
+                    c,
+                    workload,
+                    stop_event,
+                    factor_queries,
+                    verbose,
+                    stats["queries"],
+                ),
+            )
+        )
+    if threads:
+        for thread in threads:
+            thread.start()
+
+        try:
+            stop_event.wait(timeout=runtime)
+        finally:
+            stop_event.set()
+            for thread in threads:
+                thread.join()
+            print_stats(stats)
+
+    # TODO: Measure performance
+
+
+def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
+    parser.add_argument(
+        "--factor-initial-data",
+        type=float,
+        default=1,
+        help="factor for initial data generation",
+    )
+    parser.add_argument(
+        "--factor-ingestions",
+        type=float,
+        default=1,
+        help="factor for runtime data ingestion rate",
+    )
+    parser.add_argument(
+        "--factor-queries",
+        type=float,
+        default=1,
+        help="factor for runtime queries",
+    )
+    parser.add_argument(
+        "--runtime",
+        type=int,
+        default=3600,
+        help="runtime for continuous ingestion/query period, in seconds",
+    )
+    parser.add_argument(
+        "--seed",
+        metavar="SEED",
+        type=str,
+        default=str(int(time.time())),
+        help="factor for initial data generation",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=["*.yml"],
+        help="run against the specified files",
+    )
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
+    parser.add_argument(
+        "--create-objects", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--initial-data", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--run-ingestions", action=argparse.BooleanOptionalAction, default=True
+    )
+    parser.add_argument(
+        "--run-queries", action=argparse.BooleanOptionalAction, default=True
+    )
+    args = parser.parse_args()
+
+    print(f"-- Random seed is {args.seed}")
+    random.seed(args.seed)
+
+    update_recorded_workloads_repo()
+
+    files_unsharded: list[pathlib.Path] = []
+    for file in args.files:
+        files_unsharded.extend(LOCATION.rglob(file))
+    files: list[pathlib.Path] = buildkite.shard_list(
+        sorted(files_unsharded),
+        lambda file: str(file),
+    )
+    c.test_parts(
+        files,
+        lambda file: test(
+            c,
+            file,
+            args.factor_initial_data,
+            args.factor_ingestions,
+            args.factor_queries,
+            args.runtime,
+            args.verbose,
+            args.create_objects,
+            args.initial_data,
+            args.run_ingestions,
+            args.run_queries,
+        ),
+    )

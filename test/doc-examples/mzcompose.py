@@ -8,9 +8,7 @@
 # by the Apache License, Version 2.0.
 
 """
-Testdrive is the basic framework and language for defining product tests under
-the expected-result/actual-result (aka golden testing) paradigm. A query is
-retried until it produces the desired result.
+Runs examples from our customer-facing documentation as test cases.
 """
 
 import os

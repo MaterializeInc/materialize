@@ -2497,3 +2497,13 @@ steps:
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
+
+  - id: workload-replay
+    label: "Workload Replay"
+    depends_on: build-aarch64
+    timeout_in_minutes: 120
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: workload-replay
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb

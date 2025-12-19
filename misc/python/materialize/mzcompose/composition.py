@@ -43,6 +43,7 @@ import psycopg
 import sqlparse
 import yaml
 from psycopg import Connection, Cursor
+from psycopg.sql import Composed
 
 from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
 from materialize.docker import image_registry
@@ -783,7 +784,7 @@ class Composition:
 
     def sql(
         self,
-        sql: str,
+        sql: str | Composed,
         service: str | None = None,
         user: str = "materialize",
         database: str = "materialize",
@@ -801,6 +802,8 @@ class Composition:
             password=password,
             reuse_connection=reuse_connection,
         ) as cursor:
+            if isinstance(sql, Composed):
+                sql = sql.as_string(cursor)
             for statement in sqlparse.split(sql):
                 if print_statement:
                     print(f"> {statement}")
