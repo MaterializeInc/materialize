@@ -365,7 +365,6 @@ impl PersistClient {
             reader_id,
             schemas,
             reader_state,
-            heartbeat_ts,
         )
         .await;
 

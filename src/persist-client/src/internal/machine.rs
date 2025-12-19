@@ -14,12 +14,13 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use differential_dataflow::Hashable;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use futures::future::{self, BoxFuture};
 use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
@@ -1210,10 +1211,24 @@ where
         gc: GarbageCollector<K, V, T, D>,
         leased_seqnos: AwaitableState<LeaseMetadata<T>>,
     ) {
-        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 2;
+        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 4;
+        // Jitter the first tick to avoid a thundering herd when many readers are started around
+        // the same instant, like during deploys.
+        let jitter: f64 = f64::cast_lossy(reader_id.hashed()) / f64::cast_lossy(u64::MAX);
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + sleep_duration.mul_f64(jitter),
+            sleep_duration,
+        );
         loop {
             let before_sleep = Instant::now();
-            tokio::time::sleep(sleep_duration).await;
+            let _woke_by_tick = tokio::select! {
+                _tick = interval.tick() => {
+                    true
+                }
+                _whatever = leased_seqnos.wait_while(|s| !s.request_sync) => {
+                    false
+                }
+            };
 
             let elapsed_since_before_sleeping = before_sleep.elapsed();
             if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
@@ -1230,6 +1245,7 @@ where
             let current_seqno = machine.seqno();
             let (outstanding_seqno, new_since) = leased_seqnos.modify(|s| {
                 s.observe_seqno(current_seqno);
+                s.request_sync = false;
                 (s.outstanding_seqno(), s.since().clone())
             });
             let (seqno, actual_since, maintenance) = machine

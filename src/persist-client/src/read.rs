@@ -24,7 +24,6 @@ use futures_util::{StreamExt, stream};
 use mz_dyncfg::Config;
 use mz_ore::halt;
 use mz_ore::instrument;
-use mz_ore::now::EpochMillis;
 use mz_ore::task::{AbortOnDropHandle, JoinHandle, RuntimeExt};
 use mz_persist::location::{Blob, SeqNo};
 use mz_persist_types::columnar::{ColumnDecoder, Schema};
@@ -495,6 +494,11 @@ where
     }
 }
 
+/// A concurrent state - one which allows reading, writing, and waiting for changes made by
+/// another concurrent writer.
+///
+/// This is morally similar to a mutex with a condvar, but allowing asynchronous waits and with
+/// access methods that make it a little trickier to accidentally hold a lock across a yield point.
 pub(crate) struct AwaitableState<T> {
     state: Arc<RwLock<T>>,
     /// NB: we can't wrap the [Notify] in the lock since the signature of [Notify::notified]
@@ -525,6 +529,7 @@ impl<T> AwaitableState<T> {
         }
     }
 
+    #[allow(unused)]
     pub fn read<A>(&self, read_fn: impl FnOnce(&T) -> A) -> A {
         let guard = self.state.read().expect("not poisoned");
         let state = &*guard;
@@ -551,11 +556,17 @@ impl<T> AwaitableState<T> {
                 }
                 // Grab the notified future while holding the guard. This ensures that we will see any
                 // future modifications to this state, even if they happen before the first poll.
-                self.notify.notified()
+                let notified = self.notify.notified();
+                drop(guard);
+                notified
             };
 
             notified.await;
         }
+    }
+
+    pub async fn wait_while(&self, mut wait_fn: impl FnMut(&T) -> bool) {
+        self.wait_for(|s| (!wait_fn(s)).then_some(())).await
     }
 }
 
@@ -567,6 +578,7 @@ pub(crate) struct LeaseMetadata<T> {
     /// The set of active leases. We hold back the seqno to the minimum lease or
     /// the recent_seqno, whichever is earlier.
     leases: BTreeMap<SeqNo, Lease>,
+    pub request_sync: bool,
 }
 
 impl<T> LeaseMetadata<T>
@@ -636,7 +648,6 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) schema_cache: SchemaCache<K, V, T, D>,
 
     since: Antichain<T>,
-    pub(crate) last_heartbeat: EpochMillis,
     pub(crate) leased_seqnos: AwaitableState<LeaseMetadata<T>>,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
@@ -665,7 +676,6 @@ where
         reader_id: LeasedReaderId,
         read_schemas: Schemas<K, V>,
         state: LeasedReaderState<T>,
-        last_heartbeat: EpochMillis,
     ) -> Self {
         let schema_cache = machine.applier.schema_cache();
         let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
@@ -673,6 +683,7 @@ where
             held_since: state.since.clone(),
             recent_seqno: state.seqno,
             leases: Default::default(),
+            request_sync: false,
         });
         ReadHandle {
             cfg,
@@ -685,7 +696,6 @@ where
             read_schemas,
             schema_cache,
             since: state.since,
-            last_heartbeat,
             leased_seqnos: leased_seqnos.clone(),
             unexpired_state: Some(UnexpiredReadHandleState {
                 expire_fn,
@@ -710,6 +720,7 @@ where
         &self.since
     }
 
+    #[cfg(test)]
     fn outstanding_seqno(&mut self) -> SeqNo {
         let current_seqno = self.machine.seqno();
         self.leased_seqnos.modify(|s| {
@@ -730,22 +741,14 @@ where
     /// timestamp, making the call a no-op).
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn downgrade_since(&mut self, new_since: &Antichain<T>) {
-        // Guaranteed to be the smallest/oldest outstanding lease on a `SeqNo`.
-        let outstanding_seqno = self.outstanding_seqno();
-
-        let heartbeat_ts = (self.cfg.now)();
-        let (_seqno, current_reader_since, maintenance) = self
-            .machine
-            .downgrade_since(&self.reader_id, outstanding_seqno, new_since, heartbeat_ts)
-            .await;
-
-        self.since = current_reader_since.0;
+        self.since = new_since.clone();
+        self.leased_seqnos.modify(|s| {
+            s.downgrade_since(new_since);
+            s.request_sync = true;
+        });
         self.leased_seqnos
-            .modify(|s| s.downgrade_since(&self.since));
-        // A heartbeat is just any downgrade_since traffic, so update the
-        // internal rate limiter here to play nicely with `maybe_heartbeat`.
-        self.last_heartbeat = heartbeat_ts;
-        maintenance.start_performing(&self.machine, &self.gc);
+            .wait_while(|s| PartialOrder::less_than(&s.held_since, new_since))
+            .await;
     }
 
     /// Returns an ongoing subscription of updates to a shard.
@@ -906,7 +909,6 @@ where
             new_reader_id,
             self.read_schemas.clone(),
             reader_state,
-            heartbeat_ts,
         )
         .await;
         new_reader
@@ -921,13 +923,12 @@ where
     /// This is an internally rate limited helper, designed to allow users to
     /// call it as frequently as they like. Call this or [Self::downgrade_since],
     /// on some interval that is "frequent" compared to the read lease duration.
+    #[allow(clippy::unused_async)]
     pub async fn maybe_downgrade_since(&mut self, new_since: &Antichain<T>) {
-        let min_elapsed = self.heartbeat_duration();
-        let elapsed_since_last_heartbeat =
-            Duration::from_millis((self.cfg.now)().saturating_sub(self.last_heartbeat));
-        if elapsed_since_last_heartbeat >= min_elapsed {
-            self.downgrade_since(new_since).await;
-        }
+        self.since = new_since.clone();
+        self.leased_seqnos.modify(|s| {
+            s.downgrade_since(new_since);
+        });
     }
 
     /// Politely expires this reader, releasing its lease.
