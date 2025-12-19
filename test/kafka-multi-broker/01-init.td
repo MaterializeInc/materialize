@@ -12,7 +12,8 @@
 #
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": "string" } ] }
-$ set-sql-timeout duration = 60s
+
+$ set-sql-timeout duration=60s
 
 $ kafka-create-topic topic=kafka-multi-broker replication-factor=2
 
