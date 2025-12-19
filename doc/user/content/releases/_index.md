@@ -23,9 +23,9 @@ v26.5.0 enhances our SQL Server source, improves performance, and strengthens Ma
 
 ### Improvements
 - **VARCHAR(MAX) and NVARCHAR(MAX) support for SQL Server**: The Materialize SQL Server source now supports `varchar(max)` and `nvarchar(max)` data types.
-- **Faster authentication for connection poolers**: We've added an index to the `pg_authid` system catalog. This should to significantly improve the performance of default authentication queries made by connection poolers like pgbouncer.
+- **Faster authentication for connection poolers**: We've added an index to the `pg_authid` system catalog. This should significantly improve the performance of default authentication queries made by connection poolers like pgbouncer.
 - **Faster Kafka sink startup**: We've updated the default Kafka progress topic configuration (segment.bytes to 128MiB). This reduces the amount of progress data processed when creating new [Kafka sinks](/serve-results/sink/kafka/), and improves sink startup time.
-**dbt strict mode**: We've Introduced `strict_mode` to dbt-materialize, our dbt adapter. `strict_mode` enforces production-ready isolation rules and improves cluster health monitoring. It does so by validating source idempotency, schema isolation, cluster isolation and index restrictions.
+**dbt strict mode**: We've introduced `strict_mode` to dbt-materialize, our dbt adapter. `strict_mode` enforces production-ready isolation rules and improves cluster health monitoring. It does so by validating source idempotency, schema isolation, cluster isolation and index restrictions.
 - **SQL Server Always On HA failover support** (Materialize Self-Managed only): Materialize Self-Managed now offers better support for handling failovers in SQL Server Always On sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
 - **Auto-repair accidental changes** (Materialize Self-Managed only): Improvements to the controller logic allow Materialize to auto-repair changes such as deleting a StatefulSet. This means that your production setups should be more robust in the face of accidental changes.
 - **Track deployment status after upgrades** (Materialize Self-Managed only): The Materialize custom resource now displays both active and desired `environmentd` versions. This makes it easier to track deployment status after upgrades.
