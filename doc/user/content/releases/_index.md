@@ -31,7 +31,7 @@ v26.5.0 enhances our SQL Server source, improves performance, and strengthens Ma
 - **Track deployment status after upgrades** (Materialize Self-Managed only): The Materialize custom resource now displays both active and desired `environmentd` versions. This makes it easier to track deployment status after upgrades.
 
 ### Bug fixes
-- Added additional checks checks to additional string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
+- Added additional checks to string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
 - Fixed an issue which could cause panics during connection drops; this means improved stability when clients disconnect.
 - Fixed an issue where disabling console or balancers would fail if they were already running.
 
