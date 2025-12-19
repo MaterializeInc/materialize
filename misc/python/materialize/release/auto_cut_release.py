@@ -29,40 +29,43 @@ def main():
     release_version = MzVersion.parse_mz(f"{args.release_version}.0-rc.1")
     next_version = MzVersion.parse_mz(f"{args.next_version}.0-dev.0")
 
-    if latest_version >= release_version:
-        print(
-            f"Latest version ({latest_version}) is greater than or equal to release version ({release_version}); nothing to do"
-        )
-        return 0
-
     print("Pulling latest main...")
     spawn.runv(["git", "pull", remote, "main"])
 
-    print("Creating temporary release branch...")
-    git.create_branch(f"release-{release_version}")
+    if latest_version < release_version:
+        print("Creating temporary release branch...")
+        git.create_branch(f"release-{release_version}")
 
-    print(f"Bumping version to {release_version}...")
-    spawn.runv([MZ_ROOT / "bin" / "bump-version", str(release_version)])
+        print(f"Bumping version to {release_version}...")
+        spawn.runv([MZ_ROOT / "bin" / "bump-version", str(release_version)])
 
-    print("Tagging release...")
-    git.tag_annotated(str(release_version))
+        print("Tagging release...")
+        git.tag_annotated(str(release_version))
 
-    print(f"Pushing release tag ({release_version}) to {remote}...")
-    spawn.runv(["git", "push", remote, str(release_version)])
+        print(f"Pushing release tag ({release_version}) to {remote}...")
+        spawn.runv(["git", "push", remote, str(release_version)])
+
+    else:
+        print(
+            f"Latest version ({latest_version}) is greater than or equal to release version ({release_version}); nothing to cut"
+        )
 
     print("Checking out main...")
     git.checkout("main")
 
-    print(f"Bumping version on main to {next_version}...")
-    spawn.runv([MZ_ROOT / "bin" / "bump-version", str(next_version)])
+    current_version = MzVersion.parse_cargo()
 
-    # Create the release page in the docs for the next version after the one
-    # that was just cut.
-    print(f"Creating {args.next_version}.md in the docs...")
-    next_version_doc_file = doc_file_path(args.next_version)
-    if not next_version_doc_file.exists():
-        next_version_doc_file.write_text(
-            f"""---
+    if current_version < next_version:
+        print(f"Bumping version on main to {next_version}...")
+        spawn.runv([MZ_ROOT / "bin" / "bump-version", str(next_version)])
+
+        # Create the release page in the docs for the next version after the one
+        # that was just cut.
+        print(f"Creating {args.next_version}.md in the docs...")
+        next_version_doc_file = doc_file_path(args.next_version)
+        if not next_version_doc_file.exists():
+            next_version_doc_file.write_text(
+                f"""---
 title: Materialize {args.next_version}
 date: {args.next_date}
 released: false
@@ -72,13 +75,17 @@ publish_helm_chart: true
 _build:
   render: never
 ---
-"""
-        )
-        git.add_file(str(next_version_doc_file))
-        git.commit_all_changed(f"release: create doc file for {args.next_version}")
+    """
+            )
+            git.add_file(str(next_version_doc_file))
+            git.commit_all_changed(f"release: create doc file for {args.next_version}")
 
-    print(f"Pushing to {remote}...")
-    spawn.runv(["git", "push", remote, "main"])
+        print(f"Pushing to {remote}...")
+        spawn.runv(["git", "push", remote, "main"])
+    else:
+        print(
+            f"Next version ({next_version}) is greater than or equal to current main version ({current_version}); nothing to bump"
+        )
 
     return 0
 
