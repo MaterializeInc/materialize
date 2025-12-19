@@ -2253,7 +2253,6 @@ steps:
           composition: iceberg
     agents:
       queue: hetzner-aarch64-4cpu-8gb
-    skip: "database-issues#9997"
 
   - group: "Race Condition"
     key: race-condition
