@@ -28,7 +28,7 @@ v26.5.0 enhances our SQL Server source, improves performance, and strengthens Ma
 **dbt strict mode**: We've Introduced `strict_mode` to dbt-materialize, our dbt adapter. `strict_mode` enforces production-ready isolation rules and improves cluster health monitoring. It does so by validating source idempotency, schema isolation, cluster isolation and index restrictions.
 - **SQL Server Always On HA failover support** (Materialize Self-Managed only): Materialize Self-Managed now offers better support for handling failovers in SQL Server Always On sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
 - **Auto-repair accidental changes** (Materialize Self-Managed only): Improvements to the controller logic allow Materialize to auto-repair changes such as deleting a StatefulSet. This means that your production setups should be more robust in the face of accidental changes.
--**Track deployment status after upgrades** (Materialize Self-Managed only): The Materialize custom resource now displays both active and desired `environmentd` versions. This makes it easier to track deployment status after upgrades.
+- **Track deployment status after upgrades** (Materialize Self-Managed only): The Materialize custom resource now displays both active and desired `environmentd` versions. This makes it easier to track deployment status after upgrades.
 
 ### Bug fixes
 - Added additional checks checks to additional string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
