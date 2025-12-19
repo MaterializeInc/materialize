@@ -17,18 +17,37 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ## v26.5.0
 
-### Features
+v26.5.0 introduces SQL Server source improvements, performance enhancements for pgbouncer authentication, dbt strict mode, and various bug fixes.
 
-- Added memory protection for string functions like `replace`, `translate`, and `pad` to prevent out-of-memory errors when operations would produce excessively large results.
-- Reduced Kafka sink creation time by optimizing the progress topic configuration, addressing delays during source and sink initialization.
+### SQL Server Source Improvements
+
+**VARCHAR(MAX) and NVARCHAR(MAX) support**: SQL Server sources now support `varchar(max)` and `nvarchar(max)` data types (Large Object Data fields), enabling CDC replication of tables with these column types.
+
+**HA failover support**: Added a configuration option (`sql_server_source_validate_restore_history`) to control validation behavior during SQL Server high-availability failover events, plus startup checks to verify CDC is enabled and the agent is running after failover.
+
+### Improvements
+
+**Faster pgbouncer authentication**: Indexed the `pg_authid` system catalog to significantly improve the performance of pgbouncer's default authentication queries.
+
+**Faster Kafka sink startup**: Updated Kafka progress topic configuration (segment.bytes to 128MiB) to reduce the amount of progress data processed when creating new sinks, improving startup time.
+
+Added `MAX_STRING_FUNC_RESULT_BYTES` checks to additional string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
+
+**dbt strict mode**: Introduced `strict_mode` for dbt-materialize that enforces production-ready isolation rules including schema isolation, cluster isolation, and source idempotency validation.
+
+### Self-Managed
+
+The Materialize custom resource now displays both active and desired environmentd versions, making it easier to track deployment status after upgrades.
+
+Fixed an issue where disabling console or balancers would fail if they were already running.
+
+Updated to k8s-controller 0.9.0.
 
 ### Bug Fixes
 
-- Fixed a crash that could occur when modifying database objects that depend on experimental feature flags after system startup.
-- Fixed a panic when using temporary objects in certain query contexts.
-- Fixed validation for replacement materialized views to properly reject replacements whose queries reference the view being replaced, which would create a circular dependency.
-- **(Self-Managed)** Fixed an issue where disabling console or balancers would fail if they were already running.
-- **(Self-Managed)** Improved deployment visibility by showing both active and desired service versions in Kubernetes resource listings.
+Fixed a long-standing issue where `ExecuteContextExtra` could panic when dropped during connection drops, improving stability during client disconnections.
+
+Fixed a bug where replacement materialized views could incorrectly depend on their own replacement target.
 
 ## v26.4.0
 
