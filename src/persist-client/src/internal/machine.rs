@@ -620,7 +620,7 @@ where
     pub async fn downgrade_since(
         &self,
         reader_id: &LeasedReaderId,
-        outstanding_seqno: Option<SeqNo>,
+        outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
@@ -1615,7 +1615,7 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let since = args.expect_antichain("since");
-        let seqno = args.optional("seqno");
+        let seqno = args.optional("seqno").unwrap_or(datadriven.machine.seqno());
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine

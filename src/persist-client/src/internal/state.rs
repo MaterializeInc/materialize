@@ -1877,7 +1877,7 @@ where
         &mut self,
         reader_id: &LeasedReaderId,
         seqno: SeqNo,
-        outstanding_seqno: Option<SeqNo>,
+        outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
         heartbeat_timestamp_ms: u64,
     ) -> ControlFlow<NoOpStateTransition<Since<T>>, Since<T>> {
@@ -1905,18 +1905,15 @@ where
             reader_state.last_heartbeat_timestamp_ms,
         );
 
-        let seqno = match outstanding_seqno {
-            Some(outstanding_seqno) => {
-                assert!(
-                    outstanding_seqno >= reader_state.seqno,
-                    "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
+        let seqno = {
+            assert!(
+                outstanding_seqno >= reader_state.seqno,
+                "SeqNos cannot go backward; however, oldest leased SeqNo ({:?}) \
                     is behind current reader_state ({:?})",
-                    outstanding_seqno,
-                    reader_state.seqno,
-                );
-                std::cmp::min(outstanding_seqno, seqno)
-            }
-            None => seqno,
+                outstanding_seqno,
+                reader_state.seqno,
+            );
+            std::cmp::min(outstanding_seqno, seqno)
         };
 
         reader_state.seqno = seqno;
@@ -3231,7 +3228,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3243,7 +3240,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(2),
                 now()
             ),
@@ -3255,7 +3252,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(1),
                 now()
             ),
@@ -3280,7 +3277,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader2,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(3),
                 now()
             ),
@@ -3292,7 +3289,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(5),
                 now()
             ),
@@ -3324,7 +3321,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader3,
                 seqno,
-                None,
+                seqno,
                 &Antichain::from_elem(10),
                 now()
             ),
@@ -3624,7 +3621,7 @@ pub(crate) mod tests {
             state.collections.downgrade_since(
                 &reader,
                 SeqNo::minimum(),
-                None,
+                SeqNo::minimum(),
                 &Antichain::from_elem(2),
                 now()
             ),

@@ -581,15 +581,15 @@ impl LeaseMetadata {
         lease.clone()
     }
 
-    pub fn outstanding_seqno(&mut self) -> Option<SeqNo> {
+    pub fn outstanding_seqno(&mut self) -> SeqNo {
         while let Some(first) = self.leases.first_entry() {
             if first.get().count() <= 1 {
                 first.remove();
             } else {
-                return Some(*first.key());
+                return *first.key();
             }
         }
-        None
+        self.recent_seqno
     }
 }
 
@@ -700,8 +700,12 @@ where
         &self.since
     }
 
-    fn outstanding_seqno(&mut self) -> Option<SeqNo> {
-        self.leased_seqnos.modify(|s| s.outstanding_seqno())
+    fn outstanding_seqno(&mut self) -> SeqNo {
+        let current_seqno = self.machine.seqno();
+        self.leased_seqnos.modify(|s| {
+            s.observe_seqno(current_seqno);
+            s.outstanding_seqno()
+        })
     }
 
     /// Forwards the since frontier of this handle, giving up the ability to
@@ -1611,7 +1615,7 @@ mod tests {
 
             // We should expect the SeqNo to be downgraded if this part's SeqNo
             // is no longer leased to any other parts, either.
-            let expect_downgrade = subscribe.listen.handle.outstanding_seqno() > Some(part_seqno);
+            let expect_downgrade = subscribe.listen.handle.outstanding_seqno() > part_seqno;
 
             let new_seqno_since = subscribe.listen.handle.machine.applier.seqno_since();
             if expect_downgrade {
