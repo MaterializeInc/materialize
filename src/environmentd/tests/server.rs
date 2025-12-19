@@ -301,10 +301,6 @@ fn setup_statement_logging_core(
             "statement_logging_use_reproducible_rng".to_string(),
             "true".to_string(),
         )
-        .with_system_parameter_default(
-            "enable_frontend_peek_sequencing".to_string(),
-            "false".to_string(),
-        )
         .start_blocking();
     let client = server.connect(postgres::NoTls).unwrap();
     let server = TestServerWithStatementLoggingChecks { server };

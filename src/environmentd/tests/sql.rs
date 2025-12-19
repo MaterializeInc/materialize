@@ -3192,10 +3192,6 @@ fn test_pg_cancel_dropped_role() {
 fn test_peek_on_dropped_indexed_view() {
     let server = test_util::TestHarness::default().start_blocking();
 
-    // TODO(peek-seq): This needs peek cancellation to work, which is not yet implemented in the
-    // new peek sequencing.
-    server.disable_feature_flags(&["enable_frontend_peek_sequencing"]);
-
     let mut ddl_client = server.connect(postgres::NoTls).unwrap();
     let mut peek_client = server.connect(postgres::NoTls).unwrap();
 
@@ -3586,10 +3582,7 @@ async fn test_constant_materialized_view() {
 async fn test_explain_timestamp_blocking() {
     let server = test_util::TestHarness::default().start().await;
     server
-        .enable_feature_flags(&[
-            "enable_refresh_every_mvs",
-            "enable_frontend_peek_sequencing",
-        ])
+        .enable_feature_flags(&["enable_refresh_every_mvs"])
         .await;
     let client = server.connect().await.unwrap();
     // This test will break in the year 30,000 after Jan 1st. When that happens, increase the year
