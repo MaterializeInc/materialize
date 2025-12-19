@@ -22,7 +22,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 v26.5.0 enhances our SQL Server source, improves performance, and strengthens Materialize Self-Managed reliability.
 
 ### Improvements
-- **VARCHAR(MAX) and NVARCHAR(MAX) support for SQL Server**: SQL Server sources now support `varchar(max)` and `nvarchar(max)` data types (Large Object Data fields), enabling CDC replication of tables with these column types.
+- **VARCHAR(MAX) and NVARCHAR(MAX) support for SQL Server**: The Materialize SQL Server source now supports `varchar(max)` and `nvarchar(max)` data types.
 - **Faster authentication for connection poolers**: We've added an index to the `pg_authid` system catalog. This should to significantly improve the performance of default authentication queries made by connection poolers like pgbouncer.
 - **Faster Kafka sink startup**: We've updated the default Kafka progress topic configuration (segment.bytes to 128MiB). This reduces the amount of progress data processed when creating new [Kafka sinks](/serve-results/sink/kafka/), and improves sink startup time.
 **dbt strict mode**: We've Introduced `strict_mode` to dbt-materialize, our dbt adapter. `strict_mode` enforces production-ready isolation rules and improves cluster health monitoring. It does so by validating source idempotency, schema isolation, cluster isolation and index restrictions.
