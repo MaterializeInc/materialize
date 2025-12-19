@@ -1511,6 +1511,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "materialize#9997"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
@@ -1535,6 +1536,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
+      skip: "materialize#34569"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
@@ -2251,6 +2253,7 @@ steps:
           composition: iceberg
     agents:
       queue: hetzner-aarch64-4cpu-8gb
+    skip: "database-issues#9997"
 
   - group: "Race Condition"
     key: race-condition

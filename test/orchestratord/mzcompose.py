@@ -524,7 +524,7 @@ class ConsoleEnabled(Modification):
         #         assert result, f"Unexpected result: {result}"
         #     else:
         #         assert not result, f"Unexpected result: {result}"
-        # 
+        #
         # # Console can take a while to start up
         # retry(check, 120)
 
