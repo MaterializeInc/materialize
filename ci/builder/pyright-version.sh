@@ -11,4 +11,4 @@
 # pyright-version.sh — specifies version of Pyright typechecker we use
 # as a string printed to stdout, for use from other tools
 
-printf "1.1.324"
+printf "1.1.407"

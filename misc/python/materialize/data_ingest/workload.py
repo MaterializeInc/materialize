@@ -49,6 +49,7 @@ class Workload:
     def __init__(
         self,
         azurite: bool,
+        composition: Composition | None = None,
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
@@ -72,7 +73,7 @@ class SingleSensorUpdating(Workload):
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(azurite, mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -94,7 +95,7 @@ class SingleSensorUpdatingDisruptions(Workload):
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(azurite, mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -122,7 +123,7 @@ class SingleSensorUpdating0dtDeploy(Workload):
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(azurite, mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         self.cycle = [
             TransactionDef(
                 [
@@ -150,7 +151,7 @@ class DeleteDataAtEndOfDay(Workload):
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(azurite, mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -183,7 +184,7 @@ class DeleteDataAtEndOfDayDisruptions(Workload):
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(azurite, mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -223,7 +224,7 @@ class DeleteDataAtEndOfDay0dtDeploys(Workload):
         mz_service: str = "materialized",
         deploy_generation: int = 0,
     ) -> None:
-        super().__init__(azurite, mz_service, deploy_generation)
+        super().__init__(azurite, composition, mz_service, deploy_generation)
         insert = Insert(
             count=Records.SOME,
             record_size=RecordSize.SMALL,
@@ -260,7 +261,7 @@ class DeleteDataAtEndOfDay0dtDeploys(Workload):
 #    def __init__(
 #        self, azurite: bool, composition: Composition | None = None, mz_service: str = "materialized", deploy_generation: int = 0
 #    ) -> None:
-#        super().__init__(azurite, mz_service, deploy_generation)
+#        super().__init__(azurite, composition, mz_service, deploy_generation)
 #        self.cycle: list[Definition] = [
 #        ]
 
