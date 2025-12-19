@@ -16,38 +16,24 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.5.0
+*Released to Materialize Self-Managed: 2025-12-23* <br>
+*Scheduled for release to Materialize Cloud: 2026-01-08* <br>
 
-v26.5.0 introduces SQL Server source improvements, performance enhancements for pgbouncer authentication, dbt strict mode, and various bug fixes.
-
-### SQL Server Source Improvements
-
-**VARCHAR(MAX) and NVARCHAR(MAX) support**: SQL Server sources now support `varchar(max)` and `nvarchar(max)` data types (Large Object Data fields), enabling CDC replication of tables with these column types.
-
-**HA failover support**: Added a configuration option (`sql_server_source_validate_restore_history`) to control validation behavior during SQL Server high-availability failover events, plus startup checks to verify CDC is enabled and the agent is running after failover.
+v26.5.0 enhances our SQL Server source, improves performance, and strengthens Materialize Self-Managed reliability.
 
 ### Improvements
+- **VARCHAR(MAX) and NVARCHAR(MAX) support for SQL Server**: SQL Server sources now support `varchar(max)` and `nvarchar(max)` data types (Large Object Data fields), enabling CDC replication of tables with these column types.
+- **Faster authentication for connection poolers**: We've added an index to the `pg_authid` system catalog. This should to significantly improve the performance of default authentication queries made by connection poolers like pgbouncer.
+- **Faster Kafka sink startup**: We've updated the default Kafka progress topic configuration (segment.bytes to 128MiB). This reduces the amount of progress data processed when creating new [Kafka sinks](/serve-results/sink/kafka/), and improves sink startup time.
+**dbt strict mode**: We've Introduced `strict_mode` to dbt-materialize, our dbt adapter. `strict_mode` enforces production-ready isolation rules and improves cluster health monitoring. It does so by validating source idempotency, schema isolation, cluster isolation and index restrictions.
+- **SQL Server Always On HA failover support** (Materialize Self-Managed only): Materialize Self-Managed now offers better support for handling failovers in SQL Server Always On sources, without downtime. [Contact our support team](/support/) to enable this in your environment.
+- **Auto-repair accidental changes** (Materialize Self-Managed only): Improvements to the controller logic allow Materialize to auto-repair changes such as deleting a StatefulSet. This means that your production setups should be more robust in the face of accidental changes.
+-**Track deployment status after upgrades** (Materialize Self-Managed only): The Materialize custom resource now displays both active and desired `environmentd` versions. This makes it easier to track deployment status after upgrades.
 
-**Faster pgbouncer authentication**: Indexed the `pg_authid` system catalog to significantly improve the performance of pgbouncer's default authentication queries.
-
-**Faster Kafka sink startup**: Updated Kafka progress topic configuration (segment.bytes to 128MiB) to reduce the amount of progress data processed when creating new sinks, improving startup time.
-
-Added `MAX_STRING_FUNC_RESULT_BYTES` checks to additional string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
-
-**dbt strict mode**: Introduced `strict_mode` for dbt-materialize that enforces production-ready isolation rules including schema isolation, cluster isolation, and source idempotency validation.
-
-### Self-Managed
-
-The Materialize custom resource now displays both active and desired environmentd versions, making it easier to track deployment status after upgrades.
-
-Fixed an issue where disabling console or balancers would fail if they were already running.
-
-Updated to k8s-controller 0.9.0.
-
-### Bug Fixes
-
-Fixed a long-standing issue where `ExecuteContextExtra` could panic when dropped during connection drops, improving stability during client disconnections.
-
-Fixed a bug where replacement materialized views could incorrectly depend on their own replacement target.
+### Bug fixes
+- Added additional checks checks to additional string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
+- Fixed an issue which could cause panics during connection drops; this means improved stability when clients disconnect.
+- Fixed an issue where disabling console or balancers would fail if they were already running.
 
 ## v26.4.0
 
