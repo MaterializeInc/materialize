@@ -2662,15 +2662,15 @@ pub mod tests {
             .fetch_all_live_diffs(&write.machine.shard_id())
             .await;
         // Make sure we constructed the key correctly.
-        assert!(live_diffs.0.len() > 0);
+        assert!(live_diffs.len() > 0);
         // Make sure the number of entries is bounded. (I think we could work
         // out a tighter bound than this, but the point is only that it's
         // bounded).
         let max_live_diffs = 2 * usize::cast_from(NUM_BATCHES.next_power_of_two().trailing_zeros());
         assert!(
-            live_diffs.0.len() <= max_live_diffs,
+            live_diffs.len() <= max_live_diffs,
             "{} vs {}",
-            live_diffs.0.len(),
+            live_diffs.len(),
             max_live_diffs
         );
     }

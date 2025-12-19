@@ -107,9 +107,6 @@ pub struct StateVersions {
 pub struct RecentLiveDiffs(pub Vec<VersionedData>);
 
 #[derive(Debug, Clone)]
-pub struct AllLiveDiffs(pub Vec<VersionedData>);
-
-#[derive(Debug, Clone)]
 pub struct EncodedRollup {
     pub(crate) shard_id: ShardId,
     pub(crate) seqno: SeqNo,
@@ -489,16 +486,12 @@ impl StateVersions {
             .stream(Retry::persist_defaults(SystemTime::now()).into_retry_stream());
         let mut all_live_diffs = self.fetch_all_live_diffs(&shard_id).await;
         loop {
-            let earliest_live_diff = match all_live_diffs.0.first() {
+            let earliest_live_diff = match all_live_diffs.first() {
                 Some(x) => x,
                 None => return None,
             };
             let state = match self
-                .fetch_rollup_at_seqno(
-                    &shard_id,
-                    all_live_diffs.0.clone(),
-                    earliest_live_diff.seqno,
-                )
+                .fetch_rollup_at_seqno(&shard_id, all_live_diffs.clone(), earliest_live_diff.seqno)
                 .await
             {
                 Some(x) => x,
@@ -520,7 +513,6 @@ impl StateVersions {
                     // TODO: Make this an assert once we're 100% sure the above
                     // is always true.
                     let earliest_after_refetch = all_live_diffs
-                        .0
                         .first()
                         .expect("initialized shard should have at least one diff")
                         .seqno;
@@ -544,7 +536,7 @@ impl StateVersions {
                 cfg: self.cfg.clone(),
                 metrics: Arc::clone(&self.metrics),
                 state,
-                diffs: all_live_diffs.0,
+                diffs: all_live_diffs,
             });
         }
     }
@@ -554,14 +546,72 @@ impl StateVersions {
     /// the caller simply needs to fetch the latest state.
     ///
     /// Returns an empty Vec iff called on an uninitialized shard.
-    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> AllLiveDiffs {
+    pub async fn fetch_all_live_diffs(&self, shard_id: &ShardId) -> Vec<VersionedData> {
         let path = shard_id.to_string();
         let diffs = retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
             self.consensus.scan(&path, SeqNo::minimum(), SCAN_ALL).await
         })
         .instrument(debug_span!("fetch_state::scan"))
         .await;
-        AllLiveDiffs(diffs)
+        diffs
+    }
+
+    /// Fetches live diffs for a shard. This is a thin wrapper around [Consensus::scan] with the
+    /// right retry policy and instrumentation.
+    async fn fetch_live_diffs(
+        &self,
+        shard_id: &ShardId,
+        from: SeqNo,
+        limit: usize,
+    ) -> Vec<VersionedData> {
+        let path = shard_id.to_string();
+        retry_external(&self.metrics.retries.external.fetch_state_scan, || async {
+            self.consensus.scan(&path, from, limit).await
+        })
+        .instrument(debug_span!("fetch_state::scan"))
+        .await
+    }
+
+    /// Fetches all live_diffs for a shard up to and including a given threshold, allowing us to
+    /// reconstruct states up to and including that version.
+    pub async fn fetch_live_diffs_through(
+        &self,
+        shard_id: &ShardId,
+        through: SeqNo,
+    ) -> Vec<VersionedData> {
+        // Get an initial set of versions from consensus.
+        let scan_limit = STATE_VERSIONS_RECENT_LIVE_DIFFS_LIMIT.get(&self.cfg);
+        let mut versions = self
+            .fetch_live_diffs(shard_id, SeqNo::minimum(), scan_limit)
+            .await;
+
+        if versions.len() == scan_limit {
+            // Loop until our version range either covers the full set, or we stop getting data.
+            loop {
+                let Some(last_seqno) = versions.last().map(|v| v.seqno) else {
+                    break;
+                };
+                if through <= last_seqno {
+                    break;
+                }
+                let from = last_seqno.next();
+                let limit = usize::cast_from(through.0 - last_seqno.0).clamp(1, 10 * scan_limit);
+                let more_versions = self.fetch_live_diffs(shard_id, from, limit).await;
+                let more_versions_len = more_versions.len();
+                if let Some(first) = more_versions.first() {
+                    assert!(last_seqno < first.seqno);
+                }
+                versions.extend(more_versions);
+                if more_versions_len < limit {
+                    break;
+                }
+            }
+        }
+        // We may have fetched more versions than requested; find the index past the last
+        // requested version and truncate there.
+        let partition_index = versions.partition_point(|v| v.seqno <= through);
+        versions.truncate(partition_index);
+        versions
     }
 
     /// Fetches recent live_diffs for a shard. Intended for when a caller needs to fetch
@@ -925,7 +975,7 @@ impl StateVersions {
     }
 
     /// Fetches the rollup at the given key, if it exists.
-    async fn fetch_rollup_at_key<T>(
+    pub async fn fetch_rollup_at_key<T>(
         &self,
         shard_id: &ShardId,
         rollup_key: &PartialRollupKey,
@@ -965,6 +1015,22 @@ pub struct UntypedStateVersionsIter<T> {
 }
 
 impl<T: Timestamp + Lattice + Codec64> UntypedStateVersionsIter<T> {
+    pub(crate) fn new(
+        shard_id: ShardId,
+        cfg: PersistConfig,
+        metrics: Arc<Metrics>,
+        state: UntypedState<T>,
+        diffs: Vec<VersionedData>,
+    ) -> Self {
+        Self {
+            shard_id,
+            cfg,
+            metrics,
+            state,
+            diffs,
+        }
+    }
+
     pub(crate) fn check_ts_codec(self) -> Result<StateVersionsIter<T>, CodecMismatchT> {
         let key_codec = self.state.key_codec.clone();
         let val_codec = self.state.val_codec.clone();
