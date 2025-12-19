@@ -1976,33 +1976,6 @@ where
         }
     }
 
-    pub fn heartbeat_leased_reader(
-        &mut self,
-        reader_id: &LeasedReaderId,
-        heartbeat_timestamp_ms: u64,
-    ) -> ControlFlow<NoOpStateTransition<bool>, bool> {
-        // We expire all readers if the upper and since both advance to the
-        // empty antichain. Gracefully handle this. At the same time,
-        // short-circuit the cmd application so we don't needlessly create new
-        // SeqNos.
-        if self.is_tombstone() {
-            return Break(NoOpStateTransition(false));
-        }
-
-        match self.leased_readers.get_mut(reader_id) {
-            Some(reader_state) => {
-                reader_state.last_heartbeat_timestamp_ms = std::cmp::max(
-                    heartbeat_timestamp_ms,
-                    reader_state.last_heartbeat_timestamp_ms,
-                );
-                Continue(true)
-            }
-            // No-op, but we still commit the state change so that this gets
-            // linearized (maybe we're looking at old state).
-            None => Continue(false),
-        }
-    }
-
     pub fn expire_leased_reader(
         &mut self,
         reader_id: &LeasedReaderId,

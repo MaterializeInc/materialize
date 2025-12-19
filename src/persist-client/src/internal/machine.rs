@@ -31,6 +31,7 @@ use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::PartialOrder;
+use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
 use tracing::{Instrument, debug, info, trace_span, warn};
 
@@ -663,20 +664,6 @@ where
         }
     }
 
-    pub async fn heartbeat_leased_reader(
-        &self,
-        reader_id: &LeasedReaderId,
-        heartbeat_timestamp_ms: u64,
-    ) -> (SeqNo, bool, RoutineMaintenance) {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let (seqno, existed, maintenance) = self
-            .apply_unbatched_idempotent_cmd(&metrics.cmds.heartbeat_reader, |_, _, state| {
-                state.heartbeat_leased_reader(reader_id, heartbeat_timestamp_ms)
-            })
-            .await;
-        (seqno, existed, maintenance)
-    }
-
     pub async fn expire_leased_reader(
         &self,
         reader_id: &LeasedReaderId,
@@ -1199,14 +1186,14 @@ impl<K, V, T, D> Machine<K, V, T, D>
 where
     K: Debug + Codec,
     V: Debug + Codec,
-    T: Timestamp + Lattice + Codec64 + Sync,
+    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
     D: Monoid + Codec64 + Send + Sync,
 {
     pub fn start_reader_heartbeat_task(
         self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
-        leased_seqnos: AwaitableState<LeaseMetadata>,
+        leased_seqnos: AwaitableState<LeaseMetadata<T>>,
     ) -> JoinHandle<()> {
         let metrics = Arc::clone(&self.applier.metrics);
         let name = format!("persist::heartbeat_read({},{})", self.shard_id(), reader_id);
@@ -1221,7 +1208,7 @@ where
         machine: Self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
-        leased_seqnos: AwaitableState<LeaseMetadata>,
+        leased_seqnos: AwaitableState<LeaseMetadata<T>>,
     ) {
         let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 2;
         loop {
@@ -1239,8 +1226,14 @@ where
             }
 
             let before_heartbeat = Instant::now();
-            let (seqno, existed, maintenance) = machine
-                .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
+            let heartbeat_ms = (machine.applier.cfg.now)();
+            let current_seqno = machine.seqno();
+            let (outstanding_seqno, new_since) = leased_seqnos.modify(|s| {
+                s.observe_seqno(current_seqno);
+                (s.outstanding_seqno(), s.since().clone())
+            });
+            let (seqno, actual_since, maintenance) = machine
+                .downgrade_since(&reader_id, outstanding_seqno, &new_since, heartbeat_ms)
                 .await;
             leased_seqnos.modify(|s| s.observe_seqno(seqno));
             maintenance.start_performing(&machine, &gc);
@@ -1255,7 +1248,7 @@ where
                 );
             }
 
-            if !existed {
+            if actual_since.0.is_empty() {
                 // If the read handle was intentionally expired, this task
                 // *should* be aborted before it observes the expiration. So if
                 // we get here, this task somehow failed to keep the read lease
@@ -2316,18 +2309,6 @@ pub mod datadriven {
             datadriven.machine.seqno(),
             reader_state.since.elements(),
         ))
-    }
-
-    pub async fn heartbeat_leased_reader(
-        datadriven: &MachineState,
-        args: DirectiveArgs<'_>,
-    ) -> Result<String, anyhow::Error> {
-        let reader_id = args.expect("reader_id");
-        let _ = datadriven
-            .machine
-            .heartbeat_leased_reader(&reader_id, (datadriven.client.cfg.now)())
-            .await;
-        Ok(format!("{} ok\n", datadriven.machine.seqno()))
     }
 
     pub async fn expire_critical_reader(

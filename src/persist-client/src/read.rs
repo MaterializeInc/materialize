@@ -560,14 +560,23 @@ impl<T> AwaitableState<T> {
 }
 
 #[derive(Debug)]
-pub(crate) struct LeaseMetadata {
+pub(crate) struct LeaseMetadata<T> {
+    /// The frontier we should hold the time-based lease back to.
+    held_since: Antichain<T>,
     recent_seqno: SeqNo,
     /// The set of active leases. We hold back the seqno to the minimum lease or
     /// the recent_seqno, whichever is earlier.
     leases: BTreeMap<SeqNo, Lease>,
 }
 
-impl LeaseMetadata {
+impl<T> LeaseMetadata<T>
+where
+    T: Timestamp + TotalOrder + Lattice + Codec64 + Sync,
+{
+    pub fn downgrade_since(&mut self, since: &Antichain<T>) {
+        self.held_since.join_assign(since);
+    }
+
     pub fn observe_seqno(&mut self, seqno: SeqNo) {
         self.recent_seqno = seqno.max(self.recent_seqno);
     }
@@ -628,7 +637,7 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
 
     since: Antichain<T>,
     pub(crate) last_heartbeat: EpochMillis,
-    pub(crate) leased_seqnos: AwaitableState<LeaseMetadata>,
+    pub(crate) leased_seqnos: AwaitableState<LeaseMetadata<T>>,
     pub(crate) unexpired_state: Option<UnexpiredReadHandleState>,
 }
 
@@ -661,6 +670,7 @@ where
         let schema_cache = machine.applier.schema_cache();
         let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
         let leased_seqnos = AwaitableState::new(LeaseMetadata {
+            held_since: state.since.clone(),
             recent_seqno: state.seqno,
             leases: Default::default(),
         });
@@ -730,6 +740,8 @@ where
             .await;
 
         self.since = current_reader_since.0;
+        self.leased_seqnos
+            .modify(|s| s.downgrade_since(&self.since));
         // A heartbeat is just any downgrade_since traffic, so update the
         // internal rate limiter here to play nicely with `maybe_heartbeat`.
         self.last_heartbeat = heartbeat_ts;
