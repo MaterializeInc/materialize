@@ -372,8 +372,8 @@ impl StateUpdateKindJson {
                     proto::AuditLogKey {
                         event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
                             id: 1,
-                            event_type: 1,
-                            object_type: 1,
+                            event_type: proto::audit_log_event_v1::EventType::Create,
+                            object_type: proto::audit_log_event_v1::ObjectType::Cluster,
                             user: None,
                             occurred_at: proto::EpochMillis { millis: 1 },
                             details: proto::audit_log_event_v1::Details::ResetAllV1,
@@ -401,8 +401,8 @@ impl StateUpdateKindJson {
                 proto::AuditLogKey {
                     event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
                         id: 1,
-                        event_type: 1,
-                        object_type: 1,
+                        event_type: proto::audit_log_event_v1::EventType::Create,
+                        object_type: proto::audit_log_event_v1::ObjectType::Cluster,
                         user: None,
                         occurred_at: proto::EpochMillis { millis: 1 },
                         details: proto::audit_log_event_v1::Details::ResetAllV1,
@@ -837,8 +837,8 @@ mod tests {
                     proto::AuditLogKey {
                         event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
                             id: 1,
-                            event_type: 2,
-                            object_type: 3,
+                            event_type: proto::audit_log_event_v1::EventType::Create,
+                            object_type: proto::audit_log_event_v1::ObjectType::Cluster,
                             user: None,
                             occurred_at: proto::EpochMillis { millis: 4 },
                             details: proto::audit_log_event_v1::Details::ResetAllV1,
@@ -866,8 +866,8 @@ mod tests {
                     proto::AuditLogKey {
                         event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
                             id: 1,
-                            event_type: 2,
-                            object_type: 3,
+                            event_type: proto::audit_log_event_v1::EventType::Create,
+                            object_type: proto::audit_log_event_v1::ObjectType::Cluster,
                             user: None,
                             occurred_at: proto::EpochMillis { millis: 4 },
                             details: proto::audit_log_event_v1::Details::ResetAllV1,
@@ -882,8 +882,8 @@ mod tests {
                     proto::AuditLogKey {
                         event: proto::AuditLogEvent::V1(proto::AuditLogEventV1 {
                             id: 4,
-                            event_type: 5,
-                            object_type: 6,
+                            event_type: proto::audit_log_event_v1::EventType::Drop,
+                            object_type: proto::audit_log_event_v1::ObjectType::Database,
                             user: None,
                             occurred_at: proto::EpochMillis { millis: 7 },
                             details: proto::audit_log_event_v1::Details::ResetAllV1,
