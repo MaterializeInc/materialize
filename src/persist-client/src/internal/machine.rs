@@ -54,7 +54,7 @@ use crate::internal::state::{
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
-use crate::read::{LeasedReaderId, READER_LEASE_DURATION};
+use crate::read::{AwaitableState, LeaseMetadata, LeasedReaderId, READER_LEASE_DURATION};
 use crate::rpc::PubSubSender;
 use crate::schema::CaESchema;
 use crate::write::WriterId;
@@ -1206,12 +1206,13 @@ where
         self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
+        leased_seqnos: AwaitableState<LeaseMetadata>,
     ) -> JoinHandle<()> {
         let metrics = Arc::clone(&self.applier.metrics);
         let name = format!("persist::heartbeat_read({},{})", self.shard_id(), reader_id);
         mz_ore::task::spawn(|| name, {
             metrics.tasks.heartbeat_read.instrument_task(async move {
-                Self::reader_heartbeat_task(self, reader_id, gc).await
+                Self::reader_heartbeat_task(self, reader_id, gc, leased_seqnos).await
             })
         })
     }
@@ -1220,6 +1221,7 @@ where
         machine: Self,
         reader_id: LeasedReaderId,
         gc: GarbageCollector<K, V, T, D>,
+        leased_seqnos: AwaitableState<LeaseMetadata>,
     ) {
         let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 2;
         loop {
@@ -1237,9 +1239,10 @@ where
             }
 
             let before_heartbeat = Instant::now();
-            let (_seqno, existed, maintenance) = machine
+            let (seqno, existed, maintenance) = machine
                 .heartbeat_leased_reader(&reader_id, (machine.applier.cfg.now)())
                 .await;
+            leased_seqnos.modify(|s| s.observe_seqno(seqno));
             maintenance.start_performing(&machine, &gc);
 
             let elapsed_since_heartbeat = before_heartbeat.elapsed();

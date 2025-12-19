@@ -227,8 +227,6 @@ pub enum ListenEvent<T, D> {
 #[derive(Debug)]
 pub struct Listen<K: Codec, V: Codec, T, D> {
     handle: ReadHandle<K, V, T, D>,
-    watch: StateWatch<K, V, T, D>,
-
     as_of: Antichain<T>,
     since: Antichain<T>,
     frontier: Antichain<T>,
@@ -257,11 +255,8 @@ where
         // (initially as_of although the frontier is inclusive and the as_of
         // isn't). Be a good citizen and downgrade early.
         handle.downgrade_since(&since).await;
-
-        let watch = handle.machine.applier.watch();
         Ok(Listen {
             handle,
-            watch,
             since,
             frontier: as_of.clone(),
             as_of,
@@ -289,7 +284,7 @@ where
             let min_elapsed = self.handle.heartbeat_duration();
             let next_batch = self.handle.machine.next_listen_batch(
                 &self.frontier,
-                &mut self.watch,
+                &mut self.handle.watch,
                 Some(&self.handle.reader_id),
                 retry,
             );
@@ -625,6 +620,8 @@ pub struct ReadHandle<K: Codec, V: Codec, T, D> {
     pub(crate) machine: Machine<K, V, T, D>,
     pub(crate) gc: GarbageCollector<K, V, T, D>,
     pub(crate) blob: Arc<dyn Blob>,
+    watch: StateWatch<K, V, T, D>,
+
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) read_schemas: Schemas<K, V>,
     pub(crate) schema_cache: SchemaCache<K, V, T, D>,
@@ -673,6 +670,7 @@ where
             machine: machine.clone(),
             gc: gc.clone(),
             blob,
+            watch: machine.applier.watch(),
             reader_id: reader_id.clone(),
             read_schemas,
             schema_cache,
@@ -681,9 +679,11 @@ where
             leased_seqnos: leased_seqnos.clone(),
             unexpired_state: Some(UnexpiredReadHandleState {
                 expire_fn,
-                _heartbeat_tasks: JoinHandle::abort_on_drop(
-                    machine.start_reader_heartbeat_task(reader_id, gc),
-                ),
+                _heartbeat_tasks: JoinHandle::abort_on_drop(machine.start_reader_heartbeat_task(
+                    reader_id,
+                    gc,
+                    leased_seqnos,
+                )),
             }),
         }
     }
@@ -827,7 +827,7 @@ where
             let blob = Arc::clone(&self.blob);
             let metrics = Arc::clone(&self.metrics);
             let desc = batch.desc.clone();
-            let lease = self.lease_seqno();
+            let lease = self.lease_seqno().await;
             for await part in batch.part_stream(self.shard_id(), &*blob, &*metrics) {
                 yield LeasedBatchPart {
                     metrics: Arc::clone(&self.metrics),
@@ -845,12 +845,18 @@ where
     /// Tracks that the `ReadHandle`'s machine's current `SeqNo` is being
     /// "leased out" to a `LeasedBatchPart`, and cannot be garbage
     /// collected until its lease has been returned.
-    fn lease_seqno(&mut self) -> Lease {
+    async fn lease_seqno(&mut self) -> Lease {
         let current_seqno = self.machine.seqno();
-        self.leased_seqnos.modify(|s| {
+        let lease = self.leased_seqnos.modify(|s| {
             s.observe_seqno(current_seqno);
             s.lease_seqno()
-        })
+        });
+        // The seqno we've leased may be the seqno observed by our heartbeat task, which could be
+        // ahead of the last state we saw. Ensure we only observe states in the future of our hold.
+        // (Since these are backed by the same state in the same process, this should all be pretty
+        // fast.)
+        self.watch.wait_for_seqno_ge(lease.seqno()).await;
+        lease
     }
 
     /// Returns an independent [ReadHandle] with a new [LeasedReaderId] but the
@@ -1083,7 +1089,7 @@ where
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
     ) -> Result<Cursor<K, V, T, D>, Since<T>> {
         let batches = self.machine.snapshot(&as_of).await?;
-        let lease = self.lease_seqno();
+        let lease = self.lease_seqno().await;
 
         Self::read_batches_consolidated(
             &self.cfg,
