@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use num_enum::{IntoPrimitive, TryFromPrimitive};
 use proptest_derive::Arbitrary;
 use serde::{Deserialize, Serialize};
+use serde_repr::{Deserialize_repr, Serialize_repr};
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct ConfigKey {
@@ -44,15 +44,15 @@ pub struct IdAllocValue {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct GidMappingKey {
     pub schema_name: String,
-    pub object_type: i32,
+    pub object_type: CatalogItemType,
     pub object_name: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct GidMappingValue {
-    pub id: u64,
-    pub fingerprint: String,
+    pub catalog_id: SystemCatalogItemId,
     pub global_id: SystemGlobalId,
+    pub fingerprint: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -76,9 +76,9 @@ pub struct ClusterIntrospectionSourceIndexKey {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct ClusterIntrospectionSourceIndexValue {
-    pub index_id: u64,
-    pub oid: u32,
+    pub catalog_id: IntrospectionSourceIndexCatalogItemId,
     pub global_id: IntrospectionSourceIndexGlobalId,
+    pub oid: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
@@ -321,14 +321,10 @@ pub enum CatalogItemId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct SystemCatalogItemId {
-    pub value: u64,
-}
+pub struct SystemCatalogItemId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct IntrospectionSourceIndexCatalogItemId {
-    pub value: u64,
-}
+pub struct IntrospectionSourceIndexCatalogItemId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum GlobalId {
@@ -340,14 +336,10 @@ pub enum GlobalId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct SystemGlobalId {
-    pub value: u64,
-}
+pub struct SystemGlobalId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct IntrospectionSourceIndexGlobalId {
-    pub value: u64,
-}
+pub struct IntrospectionSourceIndexGlobalId(pub u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub enum ClusterId {
@@ -553,7 +545,7 @@ pub struct DefaultPrivilegesKey {
     pub role_id: RoleId,
     pub database_id: Option<DatabaseId>,
     pub schema_id: Option<SchemaId>,
-    pub object_type: i32,
+    pub object_type: ObjectType,
     pub grantee: RoleId,
 }
 
@@ -576,8 +568,8 @@ pub struct SystemPrivilegesValue {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct AuditLogEventV1 {
     pub id: u64,
-    pub event_type: i32,
-    pub object_type: i32,
+    pub event_type: audit_log_event_v1::EventType,
+    pub object_type: audit_log_event_v1::ObjectType,
     pub user: Option<StringWrapper>,
     pub occurred_at: EpochMillis,
     pub details: audit_log_event_v1::Details,
@@ -936,11 +928,11 @@ pub mod audit_log_event_v1 {
         Hash,
         PartialOrd,
         Ord,
+        Serialize_repr,
+        Deserialize_repr,
         Arbitrary,
-        IntoPrimitive,
-        TryFromPrimitive,
     )]
-    #[repr(i32)]
+    #[repr(u8)]
     pub enum EventType {
         Unknown = 0,
         Create = 1,
@@ -960,11 +952,11 @@ pub mod audit_log_event_v1 {
         Hash,
         PartialOrd,
         Ord,
+        Serialize_repr,
+        Deserialize_repr,
         Arbitrary,
-        IntoPrimitive,
-        TryFromPrimitive,
     )]
-    #[repr(i32)]
+    #[repr(u8)]
     pub enum ObjectType {
         Unknown = 0,
         Cluster = 1,
@@ -1204,11 +1196,11 @@ pub struct TxnWalShard {
     Hash,
     PartialOrd,
     Ord,
+    Serialize_repr,
+    Deserialize_repr,
     Arbitrary,
-    IntoPrimitive,
-    TryFromPrimitive,
 )]
-#[repr(i32)]
+#[repr(u8)]
 pub enum CatalogItemType {
     Unknown = 0,
     Table = 1,
@@ -1233,11 +1225,11 @@ pub enum CatalogItemType {
     Hash,
     PartialOrd,
     Ord,
+    Serialize_repr,
+    Deserialize_repr,
     Arbitrary,
-    IntoPrimitive,
-    TryFromPrimitive,
 )]
-#[repr(i32)]
+#[repr(u8)]
 pub enum ObjectType {
     Unknown = 0,
     Table = 1,

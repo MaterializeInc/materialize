@@ -1387,8 +1387,8 @@ impl RustType<crate::objects::AuditLogEventV1> for EventV1 {
     fn into_proto(&self) -> crate::objects::AuditLogEventV1 {
         crate::objects::AuditLogEventV1 {
             id: self.id,
-            event_type: self.event_type.into_proto().into(),
-            object_type: self.object_type.into_proto().into(),
+            event_type: self.event_type.into_proto(),
+            object_type: self.object_type.into_proto(),
             user: self.user.as_ref().map(|u| crate::objects::StringWrapper {
                 inner: u.to_string(),
             }),
@@ -1400,15 +1400,10 @@ impl RustType<crate::objects::AuditLogEventV1> for EventV1 {
     }
 
     fn from_proto(proto: crate::objects::AuditLogEventV1) -> Result<Self, TryFromProtoError> {
-        let event_type = crate::objects::audit_log_event_v1::EventType::try_from(proto.event_type)
-            .map_err(|_| TryFromProtoError::unknown_enum_variant("EventType"))?;
-        let object_type =
-            crate::objects::audit_log_event_v1::ObjectType::try_from(proto.object_type)
-                .map_err(|_| TryFromProtoError::unknown_enum_variant("ObjectType"))?;
         Ok(EventV1 {
             id: proto.id,
-            event_type: event_type.into_rust()?,
-            object_type: object_type.into_rust()?,
+            event_type: proto.event_type.into_rust()?,
+            object_type: proto.object_type.into_rust()?,
             details: proto.details.into_rust()?,
             user: proto.user.map(|u| u.inner),
             occurred_at: proto.occurred_at.into_rust()?,

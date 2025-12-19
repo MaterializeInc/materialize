@@ -215,17 +215,15 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
     fn into_proto(&self) -> proto::GidMappingKey {
         proto::GidMappingKey {
             schema_name: self.schema_name.to_string(),
-            object_type: self.object_type.into_proto().into(),
+            object_type: self.object_type.into_proto(),
             object_name: self.object_name.to_string(),
         }
     }
 
     fn from_proto(proto: proto::GidMappingKey) -> Result<Self, TryFromProtoError> {
-        let object_type = proto::CatalogItemType::try_from(proto.object_type)
-            .map_err(|_| TryFromProtoError::unknown_enum_variant("CatalogItemType"))?;
         Ok(GidMappingKey {
             schema_name: proto.schema_name,
-            object_type: object_type.into_rust()?,
+            object_type: proto.object_type.into_rust()?,
             object_name: proto.object_name,
         })
     }
@@ -234,7 +232,7 @@ impl RustType<proto::GidMappingKey> for GidMappingKey {
 impl RustType<proto::GidMappingValue> for GidMappingValue {
     fn into_proto(&self) -> proto::GidMappingValue {
         proto::GidMappingValue {
-            id: self.catalog_id.0,
+            catalog_id: self.catalog_id.into_proto(),
             global_id: self.global_id.into_proto(),
             fingerprint: self.fingerprint.to_string(),
         }
@@ -242,7 +240,7 @@ impl RustType<proto::GidMappingValue> for GidMappingValue {
 
     fn from_proto(proto: proto::GidMappingValue) -> Result<Self, TryFromProtoError> {
         Ok(GidMappingValue {
-            catalog_id: SystemCatalogItemId(proto.id),
+            catalog_id: proto.catalog_id.into_rust()?,
             global_id: proto.global_id.into_rust()?,
             fingerprint: proto.fingerprint,
         })
@@ -306,7 +304,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
 {
     fn into_proto(&self) -> proto::ClusterIntrospectionSourceIndexValue {
         proto::ClusterIntrospectionSourceIndexValue {
-            index_id: self.catalog_id.0,
+            catalog_id: self.catalog_id.into_proto(),
             global_id: self.global_id.into_proto(),
             oid: self.oid,
         }
@@ -316,7 +314,7 @@ impl RustType<proto::ClusterIntrospectionSourceIndexValue>
         proto: proto::ClusterIntrospectionSourceIndexValue,
     ) -> Result<Self, TryFromProtoError> {
         Ok(ClusterIntrospectionSourceIndexValue {
-            catalog_id: IntrospectionSourceIndexCatalogItemId(proto.index_id),
+            catalog_id: proto.catalog_id.into_rust()?,
             global_id: proto.global_id.into_rust()?,
             oid: proto.oid,
         })
@@ -812,7 +810,7 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
             role_id: self.role_id.into_proto(),
             database_id: self.database_id.map(|database_id| database_id.into_proto()),
             schema_id: self.schema_id.map(|schema_id| schema_id.into_proto()),
-            object_type: self.object_type.into_proto().into(),
+            object_type: self.object_type.into_proto(),
             grantee: self.grantee.into_proto(),
         }
     }
@@ -822,9 +820,7 @@ impl RustType<proto::DefaultPrivilegesKey> for DefaultPrivilegesKey {
             role_id: proto.role_id.into_rust()?,
             database_id: proto.database_id.into_rust()?,
             schema_id: proto.schema_id.into_rust()?,
-            object_type: proto::ObjectType::try_from(proto.object_type)
-                .map_err(|_| TryFromProtoError::unknown_enum_variant("ObjectType"))?
-                .into_rust()?,
+            object_type: proto.object_type.into_rust()?,
             grantee: proto.grantee.into_rust()?,
         })
     }
@@ -876,11 +872,11 @@ impl RustType<proto::SystemPrivilegesValue> for SystemPrivilegesValue {
 
 impl RustType<proto::SystemCatalogItemId> for SystemCatalogItemId {
     fn into_proto(&self) -> proto::SystemCatalogItemId {
-        proto::SystemCatalogItemId { value: self.0 }
+        proto::SystemCatalogItemId(self.0)
     }
 
     fn from_proto(proto: proto::SystemCatalogItemId) -> Result<Self, TryFromProtoError> {
-        Ok(SystemCatalogItemId(proto.value))
+        Ok(SystemCatalogItemId(proto.0))
     }
 }
 
@@ -888,35 +884,35 @@ impl RustType<proto::IntrospectionSourceIndexCatalogItemId>
     for IntrospectionSourceIndexCatalogItemId
 {
     fn into_proto(&self) -> proto::IntrospectionSourceIndexCatalogItemId {
-        proto::IntrospectionSourceIndexCatalogItemId { value: self.0 }
+        proto::IntrospectionSourceIndexCatalogItemId(self.0)
     }
 
     fn from_proto(
         proto: proto::IntrospectionSourceIndexCatalogItemId,
     ) -> Result<Self, TryFromProtoError> {
-        Ok(IntrospectionSourceIndexCatalogItemId(proto.value))
+        Ok(IntrospectionSourceIndexCatalogItemId(proto.0))
     }
 }
 
 impl RustType<proto::SystemGlobalId> for SystemGlobalId {
     fn into_proto(&self) -> proto::SystemGlobalId {
-        proto::SystemGlobalId { value: self.0 }
+        proto::SystemGlobalId(self.0)
     }
 
     fn from_proto(proto: proto::SystemGlobalId) -> Result<Self, TryFromProtoError> {
-        Ok(SystemGlobalId(proto.value))
+        Ok(SystemGlobalId(proto.0))
     }
 }
 
 impl RustType<proto::IntrospectionSourceIndexGlobalId> for IntrospectionSourceIndexGlobalId {
     fn into_proto(&self) -> proto::IntrospectionSourceIndexGlobalId {
-        proto::IntrospectionSourceIndexGlobalId { value: self.0 }
+        proto::IntrospectionSourceIndexGlobalId(self.0)
     }
 
     fn from_proto(
         proto: proto::IntrospectionSourceIndexGlobalId,
     ) -> Result<Self, TryFromProtoError> {
-        Ok(IntrospectionSourceIndexGlobalId(proto.value))
+        Ok(IntrospectionSourceIndexGlobalId(proto.0))
     }
 }
 
