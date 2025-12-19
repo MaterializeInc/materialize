@@ -298,11 +298,6 @@ pub struct EpochMillis {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
-pub struct Timestamp {
-    pub internal: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Arbitrary)]
 pub struct Version {
     pub value: u64,
 }
