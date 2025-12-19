@@ -99,7 +99,8 @@ We have an `mz` CLI that’s catered to Cloud and no longer supported. We can po
 
 ### Solution proposal: The end user is able to visit the Materialize console, and sign in with their IdP
 
-A generic Frontend SSO redirect flow would need to be implemented to retrieve an access token and refresh token. However once retrieved, the SQL HTTP / WS API endpoints can use bearer authorization like Cloud and accept the access token. The Console would be in charge of refreshing the access token. The Console work is out of scope for this design document.
+**Out of scope**:
+A generic Frontend SSO redirect flow would need to be implemented to retrieve an access token and refresh token. However once retrieved, the SQL HTTP / WS API endpoints can use bearer authorization like Cloud and accept the access token. The Console would be in charge of refreshing the access token.
 
 ### Work items:
 
