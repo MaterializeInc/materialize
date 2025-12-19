@@ -21,7 +21,7 @@ use mz_proto::{ProtoMapEntry, ProtoType, RustType, TryFromProtoError};
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId, RelationVersion, Timestamp};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{CatalogItemType, ObjectType, RoleAttributes, RoleMembership, RoleVars};
 use mz_sql::names::{
     CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId, SchemaSpecifier,
@@ -519,18 +519,6 @@ impl RustType<crate::objects::EpochMillis> for u64 {
 
     fn from_proto(proto: crate::objects::EpochMillis) -> Result<Self, TryFromProtoError> {
         Ok(proto.millis)
-    }
-}
-
-impl RustType<crate::objects::Timestamp> for Timestamp {
-    fn into_proto(&self) -> crate::objects::Timestamp {
-        crate::objects::Timestamp {
-            internal: self.into(),
-        }
-    }
-
-    fn from_proto(proto: crate::objects::Timestamp) -> Result<Self, TryFromProtoError> {
-        Ok(Timestamp::new(proto.internal))
     }
 }
 
