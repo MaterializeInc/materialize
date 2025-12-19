@@ -75,7 +75,7 @@ publish_helm_chart: true
 _build:
   render: never
 ---
-    """
+"""
             )
             git.add_file(str(next_version_doc_file))
             git.commit_all_changed(f"release: create doc file for {args.next_version}")
