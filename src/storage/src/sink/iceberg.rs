@@ -295,7 +295,11 @@ async fn load_or_create_table(
             Ok(table)
         }
         Err(err) => {
-            if matches!(err.kind(), ErrorKind::TableNotFound { .. }) {
+            if matches!(err.kind(), ErrorKind::TableNotFound { .. })
+                || err
+                    .message()
+                    .contains("Tried to load a table that does not exist")
+            {
                 // Table doesn't exist, create it
                 // Note: location is not specified, letting the catalog determine the default location
                 // based on its warehouse configuration
@@ -842,6 +846,7 @@ where
                 );
                 let data_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
                     data_parquet_writer,
+                    Arc::clone(&current_schema),
                     file_io.clone(),
                     location_generator.clone(),
                     file_name_generator.clone(),
@@ -858,6 +863,7 @@ where
                     ParquetWriterBuilder::new(writer_properties.clone(), pos_schema);
                 let pos_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
                     pos_parquet_writer,
+                    Arc::clone(&current_schema),
                     file_io.clone(),
                     location_generator.clone(),
                     file_name_generator.clone(),
@@ -881,6 +887,7 @@ where
                     ParquetWriterBuilder::new(writer_properties.clone(), eq_schema);
                 let eq_rolling_writer = RollingFileWriterBuilder::new_with_default_file_size(
                     eq_parquet_writer,
+                    Arc::clone(&current_schema),
                     file_io.clone(),
                     location_generator.clone(),
                     file_name_generator.clone(),
