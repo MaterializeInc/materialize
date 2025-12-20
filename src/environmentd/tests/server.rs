@@ -1566,7 +1566,7 @@ fn test_storage_usage_updates_between_restarts() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5584
+#[cfg_attr(coverage, ignore)]
 #[ignore] // TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9989 is fixed
 fn test_storage_usage_doesnt_update_between_restarts() {
     let data_dir = tempfile::tempdir().unwrap();

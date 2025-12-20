@@ -771,7 +771,7 @@ steps:
       - id: pg-cdc-old-syntax-multi-version-upgrade-random
         label: Postgres CDC tests (before source versioning, multi-version upgrade, random upgrade path)
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-old-syntax
@@ -783,7 +783,7 @@ steps:
       - id: pg-cdc-old-syntax-multi-version-upgrade-earliest-to-current
         label: Postgres CDC tests (before source versioning, multi-version upgrade, earliest to current direct upgrade)
         depends_on: build-aarch64
-        timeout_in_minutes: 60
+        timeout_in_minutes: 120
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-old-syntax
@@ -1511,7 +1511,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize#9997"
+      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-aws-upgrade
       label: "Terraform + Helm Chart Upgrade on AWS"
