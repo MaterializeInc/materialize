@@ -230,7 +230,7 @@ RUN mkdir rust \
     && rm -rf rust.asc rust.tar.gz rust \
     && cargo install --root /usr/local --version "=0.8.2" --locked cargo-about \
     && cargo install --root /usr/local --version "=3.6.2" --locked cargo-deb \
-    && cargo install --root /usr/local --version "=0.18.5" --locked cargo-deny \
+    && cargo install --root /usr/local --version "=0.18.9" --locked cargo-deny \
     && cargo install --root /usr/local --version "=0.1.0" --locked cargo-deplint \
     && cargo install --root /usr/local --version "=0.9.36" --locked cargo-hakari \
     && cargo install --root /usr/local --version "=0.9.114" --locked cargo-nextest \

@@ -14,6 +14,7 @@
 
 
 $ set schema={"type": "record", "name": "schema", "fields": [ {"name": "f1", "type": "string" } ] }
+$ set-sql-timeout duration = 60s
 
 $ kafka-ingest format=avro topic=kafka-multi-broker schema=${schema} timestamp=21
 {"f1": "04-01" }
