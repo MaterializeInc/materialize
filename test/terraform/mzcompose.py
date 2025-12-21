@@ -1377,14 +1377,27 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 f"orchestratord_version={get_tag(tag)}",
             ]
 
+        license_key = os.getenv("MZ_CI_LICENSE_KEY", "")
+        if license_key:
+            vars += [
+                "-var",
+                f"license_key={license_key}",
+            ]
+
+        vars += [
+            "-var",
+            f"environmentd_version={tag}",
+        ]
+
         if args.setup:
+            print("--- Setup")
             spawn.runv(
                 ["helm", "package", "../../../misc/helm-charts/operator/"],
                 cwd=path,
             )
             spawn.runv(["terraform", "init"], cwd=path, env=venv_env)
             spawn.runv(["terraform", "validate"], cwd=path, env=venv_env)
-            spawn.runv(["terraform", "plan"], cwd=path, env=venv_env)
+            spawn.runv(["terraform", "plan", *vars], cwd=path, env=venv_env)
             try:
                 spawn.runv(
                     ["terraform", "apply", "-auto-approve", *vars],
@@ -1436,7 +1449,33 @@ def workflow_azure_temporary(c: Composition, parser: WorkflowArgumentParser) -> 
                 tag,
                 connection_strings["metadata_backend_url"],
                 connection_strings["persist_backend_url"],
+                skip_materialize_cr=True,
             )
+            print("--- Waiting for environmentd pod to be ready...")
+            for i in range(60):
+                try:
+                    ready = spawn.capture(
+                        [
+                            "kubectl",
+                            "get",
+                            "pods",
+                            "-l",
+                            "app=environmentd",
+                            "-n",
+                            "materialize-environment",
+                            "-o",
+                            "jsonpath={.items[0].status.conditions[?(@.type=='Ready')].status}",
+                        ],
+                        cwd=path,
+                    ).strip()
+                    if ready == "True":
+                        print("environmentd pod is ready!")
+                        break
+                except subprocess.CalledProcessError:
+                    pass
+                time.sleep(5)
+            else:
+                print("Warning: Timed out waiting for environmentd to be ready")
 
         if args.test:
             state.test(c, tag, args.run_testdrive_files, args.files)
