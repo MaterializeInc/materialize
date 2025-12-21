@@ -28,41 +28,89 @@ terraform {
 }
 ```
 
-## Provider configuration
+## Configuration
 
-The Materialize provider supports two distinct configuration modes depending on
-your deployment type:
+The provider auto-detects your deployment type based on the configuration you
+provide:
+- **Materialize Cloud**: Use `password` and `default_region`
+- **Self-managed**: Use `host`, `username`, `password`, and other connection parameters
+
+{{< warning >}}
+Switching between Materialize Cloud and self-managed configuration **breaks your
+Terraform state file**. Choose your deployment type during initial setup and do
+not change it afterward.
+{{< /warning >}}
 
 {{< tabs >}}
 {{< tab "Materialize Cloud" >}}
 ### Materialize Cloud
 
-For Materialize Cloud environments, configure the provider with your app password
-and region. This configuration provides access to **all provider resources**,
-including:
-
-- App passwords, users, SSO, and SCIM resources
-- All database resources (clusters, sources, sinks, schemas, etc.)
+Configure the provider with your [app password](/security/cloud/users-service-accounts/create-service-accounts/)
+and region. This provides access to all provider resources, including
+organization-level resources (users, SSO, SCIM) and database resources.
 
 We recommend saving sensitive input variables as environment variables to avoid
-checking secrets into source control. In Terraform, you can export variables as
-[Terraform environment variables](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
+checking secrets into source control. In Terraform, you can export Materialize
+app passwords as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
 with the `TF_VAR_<name>` format.
 
 ```shell
-export TF_VAR_materialize_password=<app_password>
+export TF_VAR_MZ_PASSWORD=<app_password>
 ```
 
-In your `main.tf` file, add the provider configuration:
+In the `main.tf` file, add the provider configuration and any variable
+references:
 
 ```hcl
-variable "materialize_password" {
-  sensitive = true
-}
+variable "MZ_PASSWORD" {}
 
 provider "materialize" {
-  password       = var.materialize_password  # or use MZ_PASSWORD env var
-  default_region = "aws/us-east-1"           # or use MZ_DEFAULT_REGION env var
+  password       = var.MZ_PASSWORD
+  default_region = <region>
+  database       = <database>
+}
+```
+
+### Creating service accounts
+
+**Minimum requirements:** `terraform-provider-materialize` v0.8.1+
+
+As a best practice, we strongly recommend using [service accounts](/security/users-service-accounts/create-service-accounts/)
+to connect external applications to Materialize. To create a
+service account, create a new [`materialize_role`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/role)
+and associate it with a new [`materialize_app_password`](https://registry.terraform.io/providers/MaterializeInc/materialize/latest/docs/resources/app_password)
+of type `service`. More granular permissions for the service account can then
+be configured using [role-based access control (RBAC)](/security/cloud/access-control/#role-based-access-control-rbac).
+
+```hcl
+# Create a service user in the aws/us-east-1 region.
+resource "materialize_role" "production_dashboard" {
+  name   = "svc_production_dashboard"
+  region = "aws/us-east-1"
+}
+
+# Create an app password for the service user.
+resource "materialize_app_password" "production_dashboard" {
+  name = "production_dashboard_app_password"
+  type = "service"
+  user = materialize_role.production_dashboard.name
+  roles = ["Member"]
+}
+
+# Allow the service user to use the "production_analytics" database.
+resource "materialize_database_grant" "database_usage" {
+  role_name     = materialize_role.production_dashboard.name
+  privilege     = "USAGE"
+  database_name = "production_analytics"
+  region        = "aws/us-east-1"
+}
+
+# Export the user and password for use in the external tool.
+output "production_dashboard_user" {
+  value = materialize_role.production_dashboard.name
+}
+output "production_dashboard_password" {
+  value = materialize_app_password.production_dashboard.password
 }
 ```
 
@@ -71,27 +119,18 @@ provider "materialize" {
 {{< tab "Self-managed" >}}
 ### Self-managed Materialize
 
-For self-managed Materialize instances, configure the provider with connection
-parameters similar to a standard PostgreSQL connection.
+Configure the provider with connection parameters similar to a standard
+PostgreSQL connection. Only database resources are available (clusters, sources,
+sinks, etc.). Organization-level resources like `materialize_app_password`,
+`materialize_user`, and SSO/SCIM resources are not supported.
 
-{{< warning >}}
-**Important limitations for self-managed mode:**
-
-The following resources apply only to Materialize Cloud's identity provider and are not supported in self-managed configurations:
-- `materialize_app_password`
-- `materialize_user`
-- `materialize_sso_config` and related SSO resources
-- `materialize_scim_config` and related SCIM resources
-
-Only database resources are available (clusters, sources, sinks, schemas, etc.).
-These organization and identity management resources require Materialize Cloud's
-identity provider and will produce error messages if used in self-managed mode.
-{{< /warning >}}
-
-Configure the provider for self-managed deployments:
+We recommend saving sensitive input variables as environment variables to avoid
+checking secrets into source control. In Terraform, you can export Materialize
+app passwords as a [Terraform environment variable](https://developer.hashicorp.com/terraform/cli/config/environment-variables#tf_var_name)
+with the `TF_VAR_<name>` format.
 
 ```shell
-export TF_VAR_materialize_password=<database_password>
+export TF_VAR_MZ_PASSWORD=<app_password>
 ```
 
 In your `main.tf` file:
@@ -102,18 +141,16 @@ variable "materialize_password" {
 }
 
 provider "materialize" {
-  host     = "materialized"        # or use MZ_HOST env var
-  port     = 6875                  # or use MZ_PORT env var
-  username = "materialize"         # or use MZ_USER env var
-  database = "materialize"         # or use MZ_DATABASE env var
+  host     = "materialized"            # or use MZ_HOST env var
+  port     = 6875                      # or use MZ_PORT env var
+  username = "materialize"             # or use MZ_USER env var
+  database = "materialize"             # or use MZ_DATABASE env var
   password = var.materialize_password  # or use MZ_PASSWORD env var
-  sslmode  = "disable"             # or use MZ_SSLMODE env var
+  sslmode  = "disable"                 # or use MZ_SSLMODE env var
 }
 ```
 
-#### Configuration parameters
-
-The following parameters are available for self-managed configurations:
+### Provider configuration parameters
 
 | Parameter | Description | Environment Variable | Default |
 |-----------|-------------|---------------------|---------|
@@ -126,12 +163,3 @@ The following parameters are available for self-managed configurations:
 
 {{< /tab >}}
 {{< /tabs >}}
-
-{{< warning >}}
-**Migration warning:**
-
-Switching between Materialize Cloud and self-managed modes requires careful state
-file management, as resource references and regional configurations differ between
-the two. To avoid complex state migrations, we recommend choosing consistent configuration
-mode from the beginning to avoid complex state migrations.
-{{< /warning >}}
