@@ -198,6 +198,7 @@ IGNORE_RE = re.compile(
     | comm="containerd"\ exe="/usr/local/bin/containerd"\ sig=11
     # TODO: Reenable when https://github.com/MaterializeInc/database-issues/issues/9970 is fixed
     | limits-materialized-.* \| .* very\ slow\ coordinator\ message
+    | zippy-materialized.* \| .* very\ slow\ coordinator\ message
     )
     """,
     re.VERBOSE | re.MULTILINE,

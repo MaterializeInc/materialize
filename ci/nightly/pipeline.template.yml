@@ -1536,7 +1536,7 @@ steps:
             args: [--no-cleanup]
             ci-builder: stable
       branches: "main v*.* *aws* *tf* *terraform* *helm* *self-managed* *orchestratord*"
-      skip: "materialize#34569"
+      skip: "materialize-terraform-self-managed#131"
 
     - id: terraform-gcp
       label: "Terraform + Helm Chart E2E on GCP"
