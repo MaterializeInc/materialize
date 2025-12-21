@@ -63,7 +63,7 @@ proptest-derive = { version = "0.7.0", features = ["boxed_union"] }
 prost = { version = "0.13.5", features = ["no-recursion-limit"] }
 rdkafka = { version = "0.29.0", features = ["cmake-build", "ssl-vendored", "libz-static", "zstd"] }
 regex = "1.12.2"
-reqwest = "0.12.25"
+reqwest = "0.12.26"
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
 thiserror = "2.0.17"
@@ -71,7 +71,7 @@ tiberius = { version = "0.12", features = ["sql-browser-tokio", "tds73", "native
 timely = "0.25.1"
 tokio = { version = "1.48.0", features = ["fs", "rt", "sync", "test-util", "time"] }
 tokio-postgres = { version = "0.7.15", features = ["serde"] }
-tracing = "0.1.43"
+tracing = "0.1.44"
 url = { version = "2.5.7", features = ["serde"] }
 uuid = { version = "1.19.0", features = ["serde", "v4"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
