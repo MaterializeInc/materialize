@@ -122,6 +122,7 @@ pub enum DatabaseValidationError {
         missing_createcluster: bool,
     },
     MissingSources(Vec<ObjectId>),
+    MissingConnections(Vec<ObjectId>),
     MissingTableDependencies {
         objects_needing_tables: Vec<(ObjectId, Vec<ObjectId>)>,
     },
@@ -296,6 +297,23 @@ impl fmt::Display for DatabaseValidationError {
                 writeln!(
                     f,
                     "Please ensure all sources are created before running this command."
+                )?;
+                Ok(())
+            }
+            DatabaseValidationError::MissingConnections(connections) => {
+                writeln!(
+                    f,
+                    "{}: The following connections are referenced but do not exist:",
+                    "error".bright_red().bold()
+                )?;
+                for conn in connections {
+                    writeln!(f, "  - {}.{}.{}", conn.database, conn.schema, conn.object)?;
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "{} Connections are not managed by mz-deploy and must be created separately.",
+                    "help:".bright_cyan().bold()
                 )?;
                 Ok(())
             }

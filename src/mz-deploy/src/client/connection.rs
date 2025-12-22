@@ -963,6 +963,27 @@ impl Client {
         introspection::check_sinks_exist(&self.client, sinks).await
     }
 
+    /// Find sinks that depend on objects in the specified schemas.
+    ///
+    /// Used during apply to identify sinks that need to be repointed
+    /// before old schemas are dropped with CASCADE.
+    pub async fn find_sinks_depending_on_schemas(
+        &self,
+        schemas: &[(String, String)],
+    ) -> Result<Vec<introspection::DependentSink>, ConnectionError> {
+        introspection::find_sinks_depending_on_schemas(&self.client, schemas).await
+    }
+
+    /// Check if an object (MV, table, source) exists in the specified schema.
+    pub async fn object_exists(
+        &self,
+        database: &str,
+        schema: &str,
+        object: &str,
+    ) -> Result<bool, ConnectionError> {
+        introspection::object_exists(&self.client, database, schema, object).await
+    }
+
     /// Get staging schema names for a specific deployment.
     pub async fn get_staging_schemas(
         &self,
@@ -1044,6 +1065,17 @@ impl Client {
         planned_project: &planned::Project,
     ) -> Result<(), DatabaseValidationError> {
         validation::validate_sources_exist_impl(&self.client, planned_project).await
+    }
+
+    /// Validate that all connections referenced by CREATE SINK statements exist.
+    ///
+    /// Sinks reference connections (Kafka, Iceberg) that are not managed by mz-deploy.
+    /// This validates they exist before attempting deployment.
+    pub async fn validate_sink_connections_exist(
+        &mut self,
+        planned_project: &planned::Project,
+    ) -> Result<(), DatabaseValidationError> {
+        validation::validate_sink_connections_exist_impl(&self.client, planned_project).await
     }
 
     /// Validate that all tables referenced by objects to be deployed exist in the database.

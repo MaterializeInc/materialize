@@ -85,6 +85,10 @@ pub enum CliError {
         source: ConnectionError,
     },
 
+    /// Failed to repoint a sink to a new upstream object
+    #[error("failed to repoint sink {sink}: {reason}")]
+    SinkRepointFailed { sink: String, reason: String },
+
     /// Failed to write deployment state
     #[error("failed to write deployment state to tracking table: {source}")]
     DeploymentStateWriteFailed { source: ConnectionError },
@@ -237,6 +241,14 @@ impl CliError {
             Self::SqlExecutionFailed { statement, .. } => Some(format!(
                 "SQL statement:\n  {}",
                 statement.lines().take(5).collect::<Vec<_>>().join("\n  ")
+            )),
+            Self::SinkRepointFailed { sink, .. } => Some(format!(
+                "the sink '{}' could not be repointed to the new upstream object.\n\
+                 This may happen if:\n  \
+                 - The new object has an incompatible schema (e.g., Avro schema mismatch)\n  \
+                 - The replacement object doesn't exist in the new schema\n\n\
+                 To proceed, you may need to manually drop and recreate the sink",
+                sink.yellow()
             )),
             Self::DeploymentStateWriteFailed { .. } => Some(
                 "the SQL was applied successfully, but deployment tracking failed.\n\

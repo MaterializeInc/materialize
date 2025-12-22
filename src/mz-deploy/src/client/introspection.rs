@@ -11,6 +11,21 @@ use std::collections::BTreeSet;
 use tokio_postgres::Client as PgClient;
 use tokio_postgres::types::ToSql;
 
+/// A sink that depends on an object in a schema being dropped.
+///
+/// Used during apply to identify sinks that need to be repointed to new
+/// upstream objects before the old schemas are dropped with CASCADE.
+#[derive(Debug, Clone)]
+pub struct DependentSink {
+    pub sink_database: String,
+    pub sink_schema: String,
+    pub sink_name: String,
+    pub dependency_database: String,
+    pub dependency_schema: String,
+    pub dependency_name: String,
+    pub dependency_type: String,
+}
+
 /// Check if a schema exists in the specified database.
 pub async fn schema_exists(
     client: &PgClient,
@@ -393,6 +408,111 @@ pub async fn check_sinks_exist(
     }
 
     Ok(existing)
+}
+
+/// Find sinks that depend on objects in the specified schemas.
+///
+/// This is used during apply to identify sinks that need to be repointed
+/// before old schemas are dropped with CASCADE. Only returns sinks whose
+/// upstream object (FROM clause) is in one of the specified schemas.
+pub async fn find_sinks_depending_on_schemas(
+    client: &PgClient,
+    schemas: &[(String, String)],
+) -> Result<Vec<DependentSink>, ConnectionError> {
+    if schemas.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Build WHERE clause for (database, schema) pairs
+    let mut conditions = Vec::new();
+    let mut param_idx = 1;
+
+    for _ in schemas {
+        conditions.push(format!(
+            "(dep_db.name = ${} AND dep_schema.name = ${})",
+            param_idx,
+            param_idx + 1
+        ));
+        param_idx += 2;
+    }
+
+    let where_clause = conditions.join(" OR ");
+
+    let query = format!(
+        r#"
+        SELECT
+            sink_db.name as sink_database,
+            sink_schema.name as sink_schema,
+            sinks.name as sink_name,
+            dep_db.name as dependency_database,
+            dep_schema.name as dependency_schema,
+            dep_obj.name as dependency_name,
+            dep_obj.type as dependency_type
+        FROM mz_sinks sinks
+        JOIN mz_schemas sink_schema ON sinks.schema_id = sink_schema.id
+        JOIN mz_databases sink_db ON sink_schema.database_id = sink_db.id
+        JOIN mz_object_dependencies deps ON sinks.id = deps.object_id
+        JOIN mz_objects dep_obj ON deps.referenced_object_id = dep_obj.id
+        JOIN mz_schemas dep_schema ON dep_obj.schema_id = dep_schema.id
+        JOIN mz_databases dep_db ON dep_schema.database_id = dep_db.id
+        WHERE ({})
+          AND dep_obj.type IN ('materialized-view', 'table', 'source')
+        ORDER BY sink_db.name, sink_schema.name, sinks.name
+        "#,
+        where_clause
+    );
+
+    // Build params vector with references to the schema tuples
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+    for (database, schema) in schemas {
+        params.push(database);
+        params.push(schema);
+    }
+
+    let rows = client
+        .query(&query, &params)
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(rows
+        .iter()
+        .map(|row| DependentSink {
+            sink_database: row.get("sink_database"),
+            sink_schema: row.get("sink_schema"),
+            sink_name: row.get("sink_name"),
+            dependency_database: row.get("dependency_database"),
+            dependency_schema: row.get("dependency_schema"),
+            dependency_name: row.get("dependency_name"),
+            dependency_type: row.get("dependency_type"),
+        })
+        .collect())
+}
+
+/// Check if an object (MV, table, source) exists in the specified schema.
+///
+/// Used to verify that a replacement object exists before repointing a sink.
+pub async fn object_exists(
+    client: &PgClient,
+    database: &str,
+    schema: &str,
+    object: &str,
+) -> Result<bool, ConnectionError> {
+    let query = r#"
+        SELECT EXISTS(
+            SELECT 1 FROM mz_objects o
+            JOIN mz_schemas s ON o.schema_id = s.id
+            JOIN mz_databases d ON s.database_id = d.id
+            WHERE d.name = $1 AND s.name = $2 AND o.name = $3
+              AND o.type IN ('materialized-view', 'table', 'source')
+        ) AS exists
+    "#;
+
+    let row = client
+        .query_one(query, &[&database, &schema, &object])
+        .await
+        .map_err(ConnectionError::Query)?;
+
+    Ok(row.get("exists"))
 }
 
 /// Get staging schema names for a specific deployment.
