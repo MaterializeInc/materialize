@@ -17,25 +17,17 @@ use std::collections::BTreeSet;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 
+use crate::netio::tcp::ToSocketAddrs;
+
 use super::turmoil_override;
-
-#[cfg(not(feature = "turmoil"))]
-pub trait ToSocketAddrs: tokio::net::ToSocketAddrs {}
-#[cfg(not(feature = "turmoil"))]
-impl<T> ToSocketAddrs for T where T: tokio::net::ToSocketAddrs {}
-
-#[cfg(feature = "turmoil")]
-pub trait ToSocketAddrs: tokio::net::ToSocketAddrs + turmoil::ToSocketAddrs {}
-#[cfg(feature = "turmoil")]
-impl<T> ToSocketAddrs for T where T: tokio::net::ToSocketAddrs + turmoil::ToSocketAddrs {}
 
 /// Performs a DNS resolution.
 ///
 /// The returned set may not actually contain any values, depending on the outcome of any
 /// resolution performed.
-pub async fn lookup_host<T>(host: T) -> io::Result<impl Iterator<Item = SocketAddr>>
+pub async fn lookup_host<A>(host: A) -> io::Result<impl Iterator<Item = SocketAddr>>
 where
-    T: ToSocketAddrs,
+    A: ToSocketAddrs,
 {
     let addrs: Vec<_> = turmoil_override! {
         tokio => {

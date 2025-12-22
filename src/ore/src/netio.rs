@@ -22,6 +22,8 @@ mod read_exact;
 mod socket;
 mod timeout;
 
+pub mod tcp;
+
 pub use crate::netio::async_ready::AsyncReady;
 pub use crate::netio::dns::{DnsResolutionError, lookup_host, resolve_address};
 pub use crate::netio::framed::{FrameTooBig, MAX_FRAME_SIZE};
