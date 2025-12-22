@@ -120,7 +120,7 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
-reqwest = { version = "0.12.25", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest = { version = "0.12.26", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 schemars = { version = "1.1.0", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
@@ -128,7 +128,7 @@ serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
 serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
-simd-adler32 = { version = "0.3.7", default-features = false, features = ["std"] }
+simd-adler32 = { version = "0.3.8", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
@@ -144,11 +144,11 @@ toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.8", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
-tracing = { version = "0.1.43", features = ["log"] }
-tracing-core = { version = "0.1.35" }
+tracing = { version = "0.1.44", features = ["log"] }
+tracing-core = { version = "0.1.36" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 tungstenite = { version = "0.27.0" }
-twox-hash = { version = "2.1.0", default-features = false, features = ["xxhash32", "xxhash64"] }
+twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32", "xxhash64"] }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }
@@ -267,7 +267,7 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
-reqwest = { version = "0.12.25", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest = { version = "0.12.26", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 schemars = { version = "1.1.0", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
@@ -275,7 +275,7 @@ serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
 serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
-simd-adler32 = { version = "0.3.7", default-features = false, features = ["std"] }
+simd-adler32 = { version = "0.3.8", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["const_new", "serde", "union"] }
 subtle = { version = "2.6.1" }
@@ -293,11 +293,11 @@ toml_edit = { version = "0.22.26", features = ["serde"] }
 tonic = { version = "0.12.3", features = ["gzip"] }
 tower = { version = "0.5.2", default-features = false, features = ["balance", "buffer", "filter", "limit", "load-shed", "log", "retry", "timeout"] }
 tower-http = { version = "0.6.8", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
-tracing = { version = "0.1.43", features = ["log"] }
-tracing-core = { version = "0.1.35" }
+tracing = { version = "0.1.44", features = ["log"] }
+tracing-core = { version = "0.1.36" }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "json"] }
 tungstenite = { version = "0.27.0" }
-twox-hash = { version = "2.1.0", default-features = false, features = ["xxhash32", "xxhash64"] }
+twox-hash = { version = "2.1.2", default-features = false, features = ["xxhash32", "xxhash64"] }
 uncased = { version = "0.9.10" }
 unicode-bidi = { version = "0.3.18" }
 unicode-normalization = { version = "0.1.25" }

@@ -26,7 +26,7 @@ tempfile = "3.23.0"
 thiserror = { version = "2.0.17" }
 tokio = "1.48.0"
 tokio-stream = "0.1.17"
-tracing = "0.1.43"
+tracing = "0.1.44"
 zeroize = { version = "1.8.2", features = ["serde"] }
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
