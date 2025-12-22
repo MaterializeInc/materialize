@@ -37,7 +37,7 @@ use mz_mysql_util::{MySqlConn, MySqlError};
 use mz_ore::assert_none;
 use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
-use mz_ore::netio::resolve_address;
+use mz_ore::netio::{self, resolve_address};
 use mz_ore::num::NonNeg;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
@@ -51,7 +51,6 @@ use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
-use tokio::net;
 use tokio::runtime::Handle;
 use tokio_postgres::config::SslMode;
 use tracing::{debug, warn};
@@ -1422,7 +1421,7 @@ impl CsrConnection {
                     connection.connection_id,
                     connection.availability_zone.as_deref(),
                 );
-                let addrs: Vec<_> = net::lookup_host((privatelink_host, 0))
+                let addrs: Vec<_> = netio::lookup_host((privatelink_host, 0))
                     .await
                     .context("resolving PrivateLink host")?
                     .collect();

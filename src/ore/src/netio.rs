@@ -23,8 +23,34 @@ mod socket;
 mod timeout;
 
 pub use crate::netio::async_ready::AsyncReady;
-pub use crate::netio::dns::{DnsResolutionError, resolve_address};
+pub use crate::netio::dns::{DnsResolutionError, lookup_host, resolve_address};
 pub use crate::netio::framed::{FrameTooBig, MAX_FRAME_SIZE};
 pub use crate::netio::read_exact::{ReadExactOrEof, read_exact_or_eof};
 pub use crate::netio::socket::{Listener, SocketAddr, SocketAddrType, Stream, UnixSocketAddr};
 pub use crate::netio::timeout::{TimedReader, TimedWriter};
+
+/// Conditionally override a tokio API with the equivalent turmoil API.
+///
+/// The given `turmoil_logic` is executed if (a) the "turmoil" feature is enabled and (b) the code
+/// is currently running inside a turmoil simulation. Otherwise, the `tokio_logic` is executed
+/// instead.
+macro_rules! turmoil_override {
+    (
+        tokio => $tokio_logic:block
+        turmoil => $turmoil_logic:block
+    ) => {{
+        #[cfg(not(feature = "turmoil"))]
+        let result = $tokio_logic;
+
+        #[cfg(feature = "turmoil")]
+        let result = if turmoil::in_simulation() {
+            $turmoil_logic
+        } else {
+            $tokio_logic
+        };
+
+        result
+    }};
+}
+
+use turmoil_override;

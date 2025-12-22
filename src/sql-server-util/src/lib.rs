@@ -17,6 +17,7 @@ use anyhow::Context;
 use derivative::Derivative;
 use futures::future::BoxFuture;
 use futures::{FutureExt, Stream, StreamExt, TryStreamExt};
+use mz_ore::netio;
 use mz_ore::result::ResultExt;
 use mz_repr::SqlScalarType;
 use smallvec::{SmallVec, smallvec};
@@ -93,7 +94,7 @@ impl Client {
             } => {
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
                 let mut privatelink_addrs =
-                    tokio::net::lookup_host((privatelink_host.clone(), 0)).await?;
+                    netio::lookup_host((privatelink_host.clone(), 0)).await?;
 
                 let Some(mut addr) = privatelink_addrs.next() else {
                     return Err(SqlServerError::InvariantViolated(format!(

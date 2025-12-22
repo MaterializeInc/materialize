@@ -4090,7 +4090,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -10126,12 +10126,12 @@ dependencies = [
 
 [[package]]
 name = "rand_distr"
-version = "0.4.3"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32cb0b9bc82b0a0876c2dd994a7e7a2683d3e7390ca40e6886785ef0c7e3ee31"
+checksum = "6a8615d50dcf34fa31f7ab52692afec947c4dd0ab803cc87cb3b0b4570ff7463"
 dependencies = [
  "num-traits",
- "rand 0.8.5",
+ "rand 0.9.2",
 ]
 
 [[package]]
@@ -12612,12 +12612,11 @@ dependencies = [
 [[package]]
 name = "turmoil"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85cd2d56e2ec74ade0b5c61c3a435df11aa8584cb1f672b36feb4d2980f956b3"
+source = "git+https://github.com/teskje/turmoil.git?branch=mz#3c5e37778fcd01783e17767cc4165fa274b5436f"
 dependencies = [
  "bytes",
  "indexmap 2.11.4",
- "rand 0.8.5",
+ "rand 0.9.2",
  "rand_distr",
  "scoped-tls",
  "tokio",

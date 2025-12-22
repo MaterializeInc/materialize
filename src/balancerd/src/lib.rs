@@ -1046,7 +1046,7 @@ async fn cancel_request(
         if addr.is_empty() {
             continue;
         }
-        match tokio::net::lookup_host(addr).await {
+        match netio::lookup_host(addr).await {
             Ok(ips) => all_ips.extend(ips),
             Err(err) => {
                 error!("{addr} failed resolution: {err}");
@@ -1439,7 +1439,7 @@ impl Resolver {
 
 /// Returns the first IP address resolved from the provided hostname.
 async fn lookup(name: &str) -> Result<SocketAddr, anyhow::Error> {
-    let mut addrs = tokio::net::lookup_host(name).await?;
+    let mut addrs = netio::lookup_host(name).await?;
     match addrs.next() {
         Some(addr) => Ok(addr),
         None => {
