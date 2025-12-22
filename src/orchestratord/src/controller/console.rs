@@ -7,6 +7,8 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
+use std::sync::Arc;
+
 use k8s_openapi::{
     api::{
         apps::v1::{Deployment, DeploymentSpec},
@@ -28,19 +30,21 @@ use k8s_openapi::{
 };
 use kube::{
     Api, Client, Resource, ResourceExt,
-    api::{ObjectMeta, PostParams},
+    api::{DeleteParams, ObjectMeta, PostParams},
     runtime::{
+        conditions::is_deployment_completed,
         controller::Action,
         reflector::{ObjectRef, Store},
+        wait::await_condition,
     },
 };
 use maplit::btreemap;
 use serde::Serialize;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::{
     Error,
-    k8s::{apply_resource, make_reflector},
+    k8s::{apply_resource, make_reflector, replace_resource},
     tls::{DefaultCertificateSpecs, create_certificate, issuer_ref_defined},
 };
 use mz_cloud_resources::crd::{
@@ -100,7 +104,7 @@ impl Context {
         client: &Client,
         console: &Console,
     ) -> Result<(), kube::Error> {
-        let namespace = console.namespace().unwrap();
+        let namespace = console.namespace();
         let console_api: Api<Console> = Api::namespaced(client.clone(), &namespace);
 
         let Some(deployment) = self
@@ -472,6 +476,109 @@ ssl_certificate_key /nginx/tls/tls.key;",
             status: None,
         }
     }
+
+    // TODO: remove this once everyone is upgraded to an orchestratord
+    // version with the separate console operator
+    async fn fix_deployment(
+        &self,
+        deployment_api: &Api<Deployment>,
+        new_deployment: &Deployment,
+    ) -> Result<(), Error> {
+        let Some(mut existing_deployment) = self
+            .deployments
+            .get(
+                &ObjectRef::new(&new_deployment.name_unchecked())
+                    .within(&new_deployment.namespace().unwrap()),
+            )
+            .map(Arc::unwrap_or_clone)
+        else {
+            return Ok(());
+        };
+
+        if existing_deployment.spec.as_ref().unwrap().selector
+            == new_deployment.spec.as_ref().unwrap().selector
+        {
+            return Ok(());
+        }
+
+        warn!("found existing deployment with old label selector, fixing");
+
+        // this is sufficient because the new labels are a superset of the
+        // old labels, so the existing label selector should still be valid
+        existing_deployment
+            .spec
+            .as_mut()
+            .unwrap()
+            .template
+            .metadata
+            .as_mut()
+            .unwrap()
+            .labels = new_deployment
+            .spec
+            .as_ref()
+            .unwrap()
+            .template
+            .metadata
+            .as_ref()
+            .unwrap()
+            .labels
+            .clone();
+
+        // using await_condition is not ideal in a controller loop, but this
+        // is very temporary and will only ever happen once, so this feels
+        // simpler than trying to introduce an entire state machine here
+        replace_resource(deployment_api, &existing_deployment).await?;
+        await_condition(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            |deployment: Option<&Deployment>| {
+                let observed_generation = deployment
+                    .and_then(|deployment| deployment.status.as_ref())
+                    .and_then(|status| status.observed_generation)
+                    .unwrap_or(0);
+                let current_generation = deployment
+                    .and_then(|deployment| deployment.meta().generation)
+                    .unwrap_or(0);
+                let previous_generation = existing_deployment.meta().generation.unwrap_or(0);
+                observed_generation == current_generation
+                    && current_generation > previous_generation
+            },
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+        await_condition(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            is_deployment_completed(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!(e))?;
+
+        // delete the deployment but leave the pods around (via
+        // DeleteParams::orphan)
+        match kube::runtime::wait::delete::delete_and_finalize(
+            deployment_api.clone(),
+            &existing_deployment.name_unchecked(),
+            &DeleteParams::orphan(),
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(kube::runtime::wait::delete::Error::Delete(kube::Error::Api(e)))
+                if e.code == 404 =>
+            {
+                // the resource already doesn't exist
+            }
+            Err(e) => return Err(anyhow::anyhow!(e).into()),
+        }
+
+        // now, the normal apply of the new deployment (in the main loop)
+        // will take over the existing pods from the old deployment we just
+        // deleted, since we already updated the pod labels to be the same as
+        // the new label selector
+
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -502,7 +609,7 @@ impl k8s_controller::Context for Context {
             return Ok(None);
         }
 
-        let namespace = console.namespace().unwrap();
+        let namespace = console.namespace();
         let network_policy_api: Api<NetworkPolicy> = Api::namespaced(client.clone(), &namespace);
         let configmap_api: Api<ConfigMap> = Api::namespaced(client.clone(), &namespace);
         let deployment_api: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
@@ -521,6 +628,8 @@ impl k8s_controller::Context for Context {
 
         trace!("creating new console deployment");
         let console_deployment = self.create_console_deployment_object(console);
+        self.fix_deployment(&deployment_api, &console_deployment)
+            .await?;
         apply_resource(&deployment_api, &console_deployment).await?;
 
         trace!("creating new console service");

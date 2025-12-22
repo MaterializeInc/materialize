@@ -13,7 +13,8 @@ use futures::StreamExt;
 use k8s_openapi::apiextensions_apiserver::pkg::apis::apiextensions::v1::CustomResourceColumnDefinition;
 use kube::{
     Api, Client, CustomResourceExt, Resource, ResourceExt,
-    api::{DeleteParams, Patch, PatchParams},
+    api::{DeleteParams, Patch, PatchParams, PostParams},
+    core::ErrorResponse,
     runtime::{reflector, watcher},
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -46,6 +47,24 @@ where
             &PatchParams::apply(FIELD_MANAGER).force(),
             &Patch::Apply(resource),
         )
+        .await?)
+}
+
+pub async fn replace_resource<K>(api: &Api<K>, resource: &K) -> Result<K, anyhow::Error>
+where
+    K: Resource + Clone + Send + DeserializeOwned + Serialize + std::fmt::Debug + 'static,
+    <K as Resource>::DynamicType: Default,
+{
+    if resource.meta().resource_version.is_none() {
+        return Err(kube::Error::Api(ErrorResponse {
+            status: "Failure".to_string(),
+            message: "Must use apply_resource instead of replace_resource to apply fully created resources.".to_string(),
+            reason: "BadRequest".to_string(),
+            code: 400,
+        }).into());
+    }
+    Ok(api
+        .replace(&resource.name_unchecked(), &PostParams::default(), resource)
         .await?)
 }
 
