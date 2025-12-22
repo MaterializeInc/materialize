@@ -9,7 +9,7 @@
 
 use std::str::FromStr;
 use tokio_postgres::{
-    Client,
+    Client, SimpleQueryRow,
     types::{Oid, PgLsn},
 };
 
@@ -218,6 +218,174 @@ pub async fn get_timeline_id(client: &Client) -> Result<u64, PostgresError> {
             "IDENTIFY_SYSTEM did not return a result row"
         )))
     }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct MzPgTimelineHistoryEntry {
+    pub timeline_id: u64, // TODO (maz) should declare a type of timeline id
+    pub switchpoint_lsn: Option<PgLsn>,
+}
+
+#[derive(Debug)]
+pub struct MzPgTimelineHistory {
+    pub history: Vec<MzPgTimelineHistoryEntry>,
+}
+
+impl Default for MzPgTimelineHistory {
+    fn default() -> Self {
+        Self {
+            history: Default::default(),
+        }
+    }
+}
+
+impl MzPgTimelineHistory {
+    // TODO (maz): a Result with where this went awry would be better than a bool... just sayin..
+    pub fn is_prefix_of(&self, other: &MzPgTimelineHistory) -> bool {
+        if other.history.len() < self.history.len() {
+            return false;
+        }
+        // we can use zip here because other must be the same length or longer
+        #[allow(clippy::disallowed_methods)]
+        self.history
+            .iter()
+            .zip(other.history.iter())
+            .all(|(a, b)| *a == *b)
+    }
+
+    // returns the timelime id of the resume_lsn or None if the lsn does not occur in the history
+    // MZ has seen all LSNs up to, but not including, the resume_lsn.  This function
+    // determins the timeline using lsn <= switchpoint_lsn
+    pub fn timeline_of_resume_lsn(&self, lsn: &PgLsn) -> Option<u64> {
+        let mut timeline_id = None;
+        for entry in self.history.iter().rev() {
+            if entry
+                .switchpoint_lsn
+                .is_some_and(|switchpoint| *lsn <= switchpoint)
+            {
+                break;
+            }
+            timeline_id = Some(entry.timeline_id);
+        }
+        timeline_id
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.history.is_empty()
+    }
+}
+
+impl FromIterator<MzPgTimelineHistoryEntry> for MzPgTimelineHistory {
+    fn from_iter<T: IntoIterator<Item = MzPgTimelineHistoryEntry>>(iter: T) -> Self {
+        MzPgTimelineHistory {
+            history: iter.into_iter().collect(),
+        }
+    }
+}
+
+impl TryFrom<SimpleQueryRow> for MzPgTimelineHistory {
+    type Error = PostgresError;
+
+    fn try_from(value: SimpleQueryRow) -> Result<Self, Self::Error> {
+        let [filename_col, content_col] = value.columns() else {
+            return Err(PostgresError::Generic(anyhow::anyhow!(
+                "Timeline history row should only contain 2 columns"
+            )));
+        };
+        if (filename_col.name(), content_col.name()) != ("filename", "content") {
+            return Err(PostgresError::Generic(anyhow::anyhow!(
+                "Timeline history expected columns [filename, content], got [{col1},{col2}]",
+                col1 = filename_col.name(),
+                col2 = content_col.name()
+            )));
+        }
+        let Some(filename) = value.get(0).map(|s| s.to_string()) else {
+            return Err(PostgresError::Generic(anyhow::anyhow!(
+                "Missing timeline history filename"
+            )));
+        };
+        // valid name is <zero_padded_hex_timeline_id>.history
+        let Some(ext_idx) = filename.find(".history") else {
+            return Err(PostgresError::Generic(anyhow::anyhow!(
+                "Invalid timeline history filename: {filename}"
+            )));
+        };
+        // extract the current timeline from the filename
+        let current_timeline_id = u64::from_str_radix(&filename[..ext_idx], 16).map_err(|_| {
+            PostgresError::Generic(anyhow::anyhow!(
+                "Invalid timeline history filename: {filename}"
+            ))
+        })?;
+
+        let mut history = if let Some(content) = value.get(1) {
+            let mut history = vec![];
+            for line in content.lines() {
+                // skip whitespace
+                let line = line.trim();
+
+                // skip comments and blank lines
+                if line.starts_with("#") || line.is_empty() {
+                    continue;
+                }
+
+                // the remaining lines must be a in a tab separated format
+                // <timeline_id>\t<switchpoint_hi>/<switchpoint_lo>\t<reason_string>
+                //
+                // The reason string is ignored. It is meant to give humans context as to why the
+                // switch happened, but is not relevant in making decisions about timeline
+                // continuity.
+                let mut parts = line.split('\t');
+                history.push(MzPgTimelineHistoryEntry {
+                    timeline_id: parts
+                        .next()
+                        .ok_or_else(|| {
+                            PostgresError::Generic(anyhow::anyhow!("Missing timeline_id"))
+                        })?
+                        .parse::<u64>()
+                        .map_err(|_| {
+                            PostgresError::Generic(anyhow::anyhow!("timeline_id must be u64"))
+                        })?,
+                    switchpoint_lsn: Some(
+                        parts
+                            .next()
+                            .ok_or_else(|| {
+                                PostgresError::Generic(anyhow::anyhow!("Missing switchpoint"))
+                            })?
+                            .parse::<PgLsn>()
+                            .map_err(|_| {
+                                PostgresError::Generic(anyhow::anyhow!("switchpoint must be LSN"))
+                            })?,
+                    ),
+                });
+            }
+            history
+        } else {
+            return Err(PostgresError::Generic(anyhow::anyhow!(
+                "Missing timeline history content"
+            )));
+        };
+        // append the current timeline to maintain the ordering
+        history.push(MzPgTimelineHistoryEntry {
+            timeline_id: current_timeline_id,
+            switchpoint_lsn: None,
+        });
+        Ok(MzPgTimelineHistory { history })
+    }
+}
+
+/// This should return the timeline history contents, which is ordered by timeline id.
+/// TODO: add more docs
+pub async fn get_timeline_history(
+    client: &Client,
+    current_timeline: u64,
+) -> Result<MzPgTimelineHistory, PostgresError> {
+    let cmd = format!("TIMELINE_HISTORY {current_timeline}");
+    let Some(raw_history) = simple_query_opt(client, &cmd).await? else {
+        return Err(PostgresError::Generic(anyhow::anyhow!(
+            "Failed to retrieve timeline history for timeline {current_timeline}"
+        )));
+    };
+    MzPgTimelineHistory::try_from(raw_history)
 }
 
 pub async fn get_current_wal_lsn(client: &Client) -> Result<PgLsn, PostgresError> {

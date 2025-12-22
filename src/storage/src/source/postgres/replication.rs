@@ -83,14 +83,26 @@ use differential_dataflow::AsCollection;
 use futures::{FutureExt, Stream as AsyncStream, StreamExt, TryStreamExt};
 use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
+use mz_ore::collections::CollectionExt;
 use mz_ore::future::InTask;
+use mz_persist_client::Diagnostics;
+use mz_persist_client::read::ReadHandle;
+use mz_persist_client::write::WriteHandle;
+use mz_persist_types::ShardId;
+use mz_persist_types::codec_impls::UnitSchema;
 use mz_postgres_util::PostgresError;
+use mz_postgres_util::replication::MzPgTimelineHistory;
+use mz_postgres_util::replication::MzPgTimelineHistoryEntry;
 use mz_postgres_util::{Client, simple_query_opt};
+use mz_repr::RelationDesc;
+use mz_repr::SqlScalarType;
+use mz_repr::Timestamp;
 use mz_repr::{Datum, DatumVec, Diff, Row};
 use mz_sql_parser::ast::{Ident, display::AstDisplay};
-use mz_storage_types::dyncfgs::PG_SOURCE_VALIDATE_TIMELINE;
+use mz_storage_types::StorageDiff;
 use mz_storage_types::dyncfgs::{PG_OFFSET_KNOWN_INTERVAL, PG_SCHEMA_VALIDATION_INTERVAL};
 use mz_storage_types::errors::DataflowError;
+use mz_storage_types::sources::SourceData;
 use mz_storage_types::sources::{MzOffset, PostgresSourceConnection};
 use mz_timely_util::builder_async::{
     AsyncOutputHandle, Event as AsyncEvent, OperatorBuilder as AsyncOperatorBuilder,
@@ -107,10 +119,12 @@ use timely::dataflow::operators::Operator;
 use timely::dataflow::operators::core::Map;
 use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
+use timely::progress::Timestamp as _;
 use tokio::sync::{mpsc, watch};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::PgLsn;
 use tracing::{error, trace};
+use uuid::Uuid;
 
 use crate::metrics::source::postgres::PgSourceMetrics;
 use crate::source::RawSourceCreationConfig;
@@ -152,6 +166,54 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
     PressOnDropButton,
 ) {
     let op_name = format!("ReplicationReader({})", config.id);
+
+    let timeline_relation_desc = RelationDesc::builder()
+        .with_column("timeline_id", SqlScalarType::UInt64.nullable(false))
+        .with_column("switchpoint_lsn", SqlScalarType::UInt64.nullable(true))
+        .finish();
+
+    let timeline_handles_fn = {
+        let cfg = config.clone();
+        let persist = cfg.persist_clients;
+        let relation_desc = timeline_relation_desc.clone();
+        let shard_meta = cfg
+            .source_exports
+            .first_key_value()
+            .unwrap()
+            .1
+            .storage_metadata
+            .clone();
+        let uuid = shard_meta.data_shard.to_string();
+        let uuid = uuid.strip_prefix('s').unwrap();
+        let uuid = Uuid::parse_str(uuid).expect("valid shard_id").as_u128();
+        let uuid = match uuid.checked_add(1) {
+            Some(inc_uuid) => inc_uuid,
+            None => uuid - 1,
+        };
+        let uuid = Uuid::from_u128(uuid);
+        let timeline_history_shard_id =
+            ShardId::from_str(&format!("s{}", uuid)).expect("timeline shard_id");
+        async move {
+            let client = persist.open(shard_meta.persist_location.clone()).await?;
+            let handles = client
+                .open::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                    timeline_history_shard_id,
+                    Arc::new(relation_desc),
+                    Arc::new(UnitSchema),
+                    Diagnostics::from_purpose("timeline_history"),
+                    false,
+                )
+                .await?;
+            Ok::<
+                (
+                    WriteHandle<SourceData, (), mz_repr::Timestamp, i64>,
+                    ReadHandle<SourceData, (), mz_repr::Timestamp, i64>,
+                ),
+                anyhow::Error,
+            >(handles)
+        }
+    };
+
     let mut builder = AsyncOperatorBuilder::new(op_name, scope.clone());
 
     let slot_reader = u64::cast_from(config.responsible_worker("slot"));
@@ -375,6 +437,7 @@ pub(crate) fn render<G: Scope<Timestamp = MzOffset>>(
                 committed_uppers.as_mut(),
                 &probe_output,
                 &probe_cap[0],
+                timeline_handles_fn,
             )
             .await?;
 
@@ -616,6 +679,15 @@ async fn raw_stream<'a>(
     uppers: impl futures::Stream<Item = Antichain<MzOffset>> + 'a,
     probe_output: &'a AsyncOutputHandle<MzOffset, CapacityContainerBuilder<Vec<Probe<MzOffset>>>>,
     probe_cap: &'a Capability<MzOffset>,
+    timeline_handles_fn: impl Future<
+        Output = Result<
+            (
+                WriteHandle<SourceData, (), mz_repr::Timestamp, i64>,
+                ReadHandle<SourceData, (), mz_repr::Timestamp, i64>,
+            ),
+            anyhow::Error,
+        >,
+    >,
 ) -> Result<
     Result<
         impl AsyncStream<Item = Result<ReplicationMessage<LogicalReplicationMessage>, TransientError>>
@@ -637,6 +709,8 @@ async fn raw_stream<'a>(
             &replication_client,
             expected_timeline_id,
             config.config.config_set(),
+            &resume_lsn,
+            timeline_handles_fn,
         )
         .await?
         {
@@ -1073,25 +1147,201 @@ async fn ensure_publication_exists(
 /// connection issues and an inner definite error if the timeline id does not match.
 async fn ensure_replication_timeline_id(
     replication_client: &Client,
-    expected_timeline_id: &u64,
-    config_set: &ConfigSet,
+    _expected_timeline_id: &u64,
+    _config_set: &ConfigSet,
+    resume_lsn: &MzOffset,
+    timeline_handles_fn: impl Future<
+        Output = Result<
+            (
+                WriteHandle<SourceData, (), mz_repr::Timestamp, i64>,
+                ReadHandle<SourceData, (), mz_repr::Timestamp, i64>,
+            ),
+            anyhow::Error,
+        >,
+    >,
 ) -> Result<Result<(), DefiniteError>, TransientError> {
+    const PG_FIRST_TIMELINE_ID: u64 = 1;
     let timeline_id = mz_postgres_util::get_timeline_id(replication_client).await?;
-    if timeline_id == *expected_timeline_id {
-        Ok(Ok(()))
+    tracing::info!("upstream timeline = {timeline_id}");
+
+    // TODO (maz): we need to always write out the timeline history. Should controller write it out
+    // when the source is created? For now, if there's not history, we assume we need to write it out.
+    let (mut write_handle, mut read_handle) = timeline_handles_fn.await?;
+    let upper_ts = write_handle
+        .fetch_recent_upper()
+        .await
+        .clone()
+        .into_element();
+
+    let since_ts = upper_ts.step_back().unwrap_or_else(Timestamp::minimum);
+    tracing::info!("timeline_history upper = {upper_ts} since = {since_ts}");
+
+    // I expect this should be an empty Vec, but maybe this panics if the shard doesn't exist?
+    // The descriton of snapshot_and_fetch is underspecified in this case, so we experiment!
+    let mz_timeline_history = if since_ts == upper_ts && since_ts == Timestamp::minimum() {
+        vec![]
     } else {
-        if PG_SOURCE_VALIDATE_TIMELINE.get(config_set) {
-            Ok(Err(DefiniteError::InvalidTimelineId {
-                expected: *expected_timeline_id,
-                actual: timeline_id,
-            }))
-        } else {
-            tracing::warn!(
-                "Timeline ID mismatch ignored: expected={expected_timeline_id} actual={timeline_id}"
-            );
-            Ok(Ok(()))
+        read_handle
+            .snapshot_and_fetch(Antichain::from_elem(since_ts))
+            .await
+            .expect("snapshot")
+    };
+
+    // I'm a gud citizen
+    read_handle.expire().await;
+
+    // if mz_timeline_history.is_empty() {
+    //     // the timeline history has never been written, so we can skip timeline history checks
+    //     // as we've never ingested data before now.  We do have to write out the history though!
+    //     let timeline_history =
+    //         mz_postgres_util::get_timeline_history(&replication_client, timeline_id).await?;
+    // }
+
+    let mz_timeline_history = mz_timeline_history
+        .into_iter()
+        .map(|((data, _val), _ts, _diff)| {
+            data.0.map(|row| {
+                // TODO (maz): implement From<Row> for MzPgTimelineHistoryEntry
+                let mut iter = row.into_iter();
+                match (iter.next(), iter.next()) {
+                    (Some(Datum::UInt64(tli)), Some(Datum::UInt64(lsn))) => {
+                        MzPgTimelineHistoryEntry {
+                            timeline_id: tli,
+                            switchpoint_lsn: Some(PgLsn::from(lsn)),
+                        }
+                    }
+                    (Some(Datum::UInt64(tli)), Some(Datum::Null)) => MzPgTimelineHistoryEntry {
+                        timeline_id: tli,
+                        switchpoint_lsn: None,
+                    },
+                    _ => panic!("invalid timeline history schema"),
+                }
+            })
+        })
+        .collect::<Result<MzPgTimelineHistory, _>>()
+        .map_err(|e| TransientError::Generic(anyhow::anyhow!("persist error: {e:?}")))?;
+
+    tracing::info!("mz timeline history = {mz_timeline_history:?}");
+
+    let upstream_timeline_history = if timeline_id == PG_FIRST_TIMELINE_ID {
+        MzPgTimelineHistory::default()
+    } else {
+        mz_postgres_util::get_timeline_history(replication_client, timeline_id).await?
+    };
+
+    tracing::info!("upstream timeline history = {upstream_timeline_history:?}");
+
+    let result = is_it_valid(
+        &mz_timeline_history,
+        &upstream_timeline_history,
+        &resume_lsn.offset.into(),
+    )?;
+
+    // TODO: We don't want to write anything if they're the same.. but the current validation check
+    // doesn't
+    if result.is_ok() {
+        let new_upper_ts = upper_ts.step_forward();
+        let mut updates = vec![];
+        let mut row = Row::default();
+        let mut as_of_timeline = None;
+
+        // retraction for the last entry in mz_timeline_history, if this is not the first update
+        // this might be None because we've never written out a timeline history
+        if let Some(last_mz_entry) = mz_timeline_history.history.last() {
+            as_of_timeline = Some(last_mz_entry.timeline_id);
+            updates.push((
+                (
+                    SourceData(encode_timeline_entry(last_mz_entry, &mut row)),
+                    (),
+                ),
+                new_upper_ts,
+                -1,
+            ));
         }
+
+        // inserts for upstream timeline history
+        updates.extend(
+            upstream_timeline_history
+                .history
+                .iter()
+                .filter_map(|entry| {
+                    if as_of_timeline.is_none_or(|last_tli| last_tli <= entry.timeline_id) {
+                        Some((
+                            (SourceData(encode_timeline_entry(entry, &mut row)), ()),
+                            upper_ts,
+                            1,
+                        ))
+                    } else {
+                        None
+                    }
+                }),
+        );
+
+        // generate the new history and write it out
+        write_handle
+            .compare_and_append(
+                updates,
+                Antichain::from_elem(upper_ts),
+                Antichain::from_elem(new_upper_ts),
+            )
+            .await
+            .map_err(|e| TransientError::Generic(anyhow::anyhow!("persist error: {e:?}")))?
+            .map_err(|e| TransientError::Generic(anyhow::anyhow!("upper mismatch error: {e:?}")))?;
     }
+    write_handle.expire().await;
+    Ok(result)
+}
+
+fn encode_timeline_entry(
+    entry: &MzPgTimelineHistoryEntry,
+    row: &mut Row,
+) -> Result<Row, DataflowError> {
+    let mut packer = row.packer();
+
+    packer.push(Datum::UInt64(entry.timeline_id));
+    packer.push(
+        entry
+            .switchpoint_lsn
+            .map(|lsn| Datum::UInt64(lsn.into()))
+            .unwrap_or(Datum::Null),
+    );
+    Ok(row.clone())
+}
+
+fn is_it_valid(
+    mz_timeline_history: &MzPgTimelineHistory,
+    upstream_timeline_history: &MzPgTimelineHistory,
+    resume_lsn: &PgLsn,
+) -> Result<Result<(), DefiniteError>, TransientError> {
+    if mz_timeline_history.is_empty() {
+        // there is no existing history, so we have no checks to perform
+        return Ok(Ok(()));
+    }
+
+    if !mz_timeline_history.is_prefix_of(upstream_timeline_history) {
+        return Ok(Err(DefiniteError::TimelineHistoryMismatch));
+    }
+
+    // which timeline is the resume_lsn from, i.e. the resume_timeline
+    let resume_timeline = mz_timeline_history
+        .timeline_of_resume_lsn(resume_lsn)
+        .expect("read from a valid timeline");
+
+    // validate the resume_timeline and resume_lsn against the timeline history
+    // at this point, the failure condition should be that MZ was consuming event from some
+    // timeline, lets say 3.  The upstream timeline ID changed, and when MZ reconnected,
+    // timeline 3 in the new history shows a switchpoint LSN that is less than the resume_lsn.
+    let resolved_upstream_timeline = upstream_timeline_history.timeline_of_resume_lsn(resume_lsn);
+
+    if resolved_upstream_timeline.is_none_or(|actual_timeline| resume_timeline != actual_timeline) {
+        return Ok(Err(DefiniteError::TimelineLsnMismatch {
+            lsn: (*resume_lsn).into(),
+            expected: resume_timeline,
+            actual: resolved_upstream_timeline,
+        }));
+    }
+
+    Ok(Ok(()))
 }
 
 enum SchemaValidationError {
