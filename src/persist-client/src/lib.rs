@@ -2010,7 +2010,7 @@ mod tests {
             .take()
             .expect("handle should have unexpired state");
         read.expire().await;
-        read_unexpired_state._heartbeat_tasks.await
+        read_unexpired_state.heartbeat_task.await
     }
 
     /// Verify that shard finalization works with empty shards, shards that have

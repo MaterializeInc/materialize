@@ -33,9 +33,8 @@ use serde::{Deserialize, Serialize};
 use timely::PartialOrder;
 use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tokio::runtime::Handle;
 use tokio::sync::Notify;
-use tracing::{Instrument, debug_span, warn};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::batch::BLOB_TARGET_SIZE;
@@ -43,7 +42,7 @@ use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
 use crate::fetch::FetchConfig;
 use crate::fetch::{FetchBatchFilter, FetchedPart, Lease, LeasedBatchPart, fetch_leased_part};
 use crate::internal::encoding::Schemas;
-use crate::internal::machine::{ExpireFn, Machine};
+use crate::internal::machine::Machine;
 use crate::internal::metrics::{Metrics, ReadMetrics, ShardMetrics};
 use crate::internal::state::{HollowBatch, LeasedReaderState};
 use crate::internal::watch::StateWatch;
@@ -578,6 +577,7 @@ pub(crate) struct LeaseMetadata<T> {
     /// The set of active leases. We hold back the seqno to the minimum lease or
     /// the recent_seqno, whichever is earlier.
     leases: BTreeMap<SeqNo, Lease>,
+    pub expired: bool,
     pub request_sync: bool,
 }
 
@@ -678,11 +678,11 @@ where
         state: LeasedReaderState<T>,
     ) -> Self {
         let schema_cache = machine.applier.schema_cache();
-        let expire_fn = Self::expire_fn(machine.clone(), gc.clone(), reader_id.clone());
         let leased_seqnos = AwaitableState::new(LeaseMetadata {
             held_since: state.since.clone(),
             recent_seqno: state.seqno,
             leases: Default::default(),
+            expired: false,
             request_sync: false,
         });
         ReadHandle {
@@ -698,12 +698,7 @@ where
             since: state.since,
             leased_seqnos: leased_seqnos.clone(),
             unexpired_state: Some(UnexpiredReadHandleState {
-                expire_fn,
-                _heartbeat_tasks: JoinHandle::abort_on_drop(machine.start_reader_heartbeat_task(
-                    reader_id,
-                    gc,
-                    leased_seqnos,
-                )),
+                heartbeat_task: machine.start_reader_heartbeat_task(reader_id, gc, leased_seqnos),
             }),
         }
     }
@@ -941,27 +936,14 @@ where
     /// happens.
     #[instrument(level = "debug", fields(shard = %self.machine.shard_id()))]
     pub async fn expire(mut self) {
-        // We drop the unexpired state before expiring the reader to ensure the
-        // heartbeat tasks can never observe the expired state. This doesn't
-        // matter for correctness, but avoids confusing log output if the
-        // heartbeat task were to discover that its lease has been expired.
+        self.leased_seqnos.modify(|s| {
+            s.expired = true;
+            s.request_sync = true;
+        });
         let Some(unexpired_state) = self.unexpired_state.take() else {
             return;
         };
-        unexpired_state.expire_fn.0().await;
-    }
-
-    fn expire_fn(
-        machine: Machine<K, V, T, D>,
-        gc: GarbageCollector<K, V, T, D>,
-        reader_id: LeasedReaderId,
-    ) -> ExpireFn {
-        ExpireFn(Box::new(move || {
-            Box::pin(async move {
-                let (_, maintenance) = machine.expire_leased_reader(&reader_id).await;
-                maintenance.start_performing(&machine, &gc);
-            })
-        }))
+        unexpired_state.heartbeat_task.await;
     }
 
     /// Test helper for a [Self::listen] call that is expected to succeed.
@@ -977,8 +959,7 @@ where
 /// State for a read handle that has not been explicitly expired.
 #[derive(Debug)]
 pub(crate) struct UnexpiredReadHandleState {
-    expire_fn: ExpireFn,
-    pub(crate) _heartbeat_tasks: AbortOnDropHandle<()>,
+    pub(crate) heartbeat_task: JoinHandle<()>,
 }
 
 /// An incremental cursor through a particular shard, returned from [ReadHandle::snapshot_cursor].
@@ -1319,34 +1300,10 @@ where
 
 impl<K: Codec, V: Codec, T, D> Drop for ReadHandle<K, V, T, D> {
     fn drop(&mut self) {
-        // We drop the unexpired state before expiring the reader to ensure the
-        // heartbeat tasks can never observe the expired state. This doesn't
-        // matter for correctness, but avoids confusing log output if the
-        // heartbeat task were to discover that its lease has been expired.
-        let Some(unexpired_state) = self.unexpired_state.take() else {
-            return;
-        };
-
-        let handle = match Handle::try_current() {
-            Ok(x) => x,
-            Err(_) => {
-                warn!(
-                    "ReadHandle {} dropped without being explicitly expired, falling back to lease timeout",
-                    self.reader_id
-                );
-                return;
-            }
-        };
-        // Spawn a best-effort task to expire this read handle. It's fine if
-        // this doesn't run to completion, we'd just have to wait out the lease
-        // before the shard-global since is unblocked.
-        //
-        // Intentionally create the span outside the task to set the parent.
-        let expire_span = debug_span!("drop::expire");
-        handle.spawn_named(
-            || format!("ReadHandle::expire ({})", self.reader_id),
-            unexpired_state.expire_fn.0().instrument(expire_span),
-        );
+        self.leased_seqnos.modify(|s| {
+            s.expired = true;
+            s.request_sync = true;
+        });
     }
 }
 

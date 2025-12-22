@@ -1219,6 +1219,7 @@ where
             tokio::time::Instant::now() + sleep_duration.mul_f64(jitter),
             sleep_duration,
         );
+        let mut held_since = leased_seqnos.read(|s| s.since().clone());
         loop {
             let before_sleep = Instant::now();
             let _woke_by_tick = tokio::select! {
@@ -1243,16 +1244,32 @@ where
             let before_heartbeat = Instant::now();
             let heartbeat_ms = (machine.applier.cfg.now)();
             let current_seqno = machine.seqno();
-            let (outstanding_seqno, new_since) = leased_seqnos.modify(|s| {
-                s.observe_seqno(current_seqno);
-                s.request_sync = false;
-                (s.outstanding_seqno(), s.since().clone())
+            let result = leased_seqnos.modify(|s| {
+                if s.expired {
+                    Err(())
+                } else {
+                    s.observe_seqno(current_seqno);
+                    s.request_sync = false;
+                    held_since.join_assign(s.since());
+                    Ok(s.outstanding_seqno())
+                }
             });
-            let (seqno, actual_since, maintenance) = machine
-                .downgrade_since(&reader_id, outstanding_seqno, &new_since, heartbeat_ms)
-                .await;
-            leased_seqnos.modify(|s| s.observe_seqno(seqno));
-            maintenance.start_performing(&machine, &gc);
+            let actual_since = match result {
+                Ok(held_seqno) => {
+                    let (seqno, actual_since, maintenance) = machine
+                        .downgrade_since(&reader_id, held_seqno, &held_since, heartbeat_ms)
+                        .await;
+                    leased_seqnos.modify(|s| s.observe_seqno(seqno));
+                    maintenance.start_performing(&machine, &gc);
+                    actual_since
+                }
+                Err(()) => {
+                    let (seqno, maintenance) = machine.expire_leased_reader(&reader_id).await;
+                    leased_seqnos.modify(|s| s.observe_seqno(seqno));
+                    maintenance.start_performing(&machine, &gc);
+                    break;
+                }
+            };
 
             let elapsed_since_heartbeat = before_heartbeat.elapsed();
             if elapsed_since_heartbeat > Duration::from_secs(60) {
@@ -1264,7 +1281,7 @@ where
                 );
             }
 
-            if actual_since.0.is_empty() {
+            if PartialOrder::less_than(&held_since, &actual_since.0) {
                 // If the read handle was intentionally expired, this task
                 // *should* be aborted before it observes the expiration. So if
                 // we get here, this task somehow failed to keep the read lease
@@ -2583,9 +2600,12 @@ pub mod tests {
         let client = new_test_client(&dyncfgs).await;
         // set a low rollup threshold so GC/truncation is more aggressive
         client.cfg.set_config(&ROLLUP_THRESHOLD, 5);
-        let (mut write, _) = client
+        let (mut write, read) = client
             .expect_open::<String, (), u64, i64>(ShardId::new())
             .await;
+
+        // Ensure the reader is not holding back the since.
+        read.expire().await;
 
         // Write a bunch of batches. This should result in a bounded number of
         // live entries in consensus.
