@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use k8s_openapi::{
     api::core::v1::ResourceRequirements, apimachinery::pkg::apis::meta::v1::Condition,
 };
-use kube::CustomResource;
+use kube::{CustomResource, Resource, ResourceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +91,10 @@ pub mod v1alpha1 {
             &self.status.as_ref().unwrap().resource_id
         }
 
+        pub fn namespace(&self) -> String {
+            self.meta().namespace.clone().unwrap()
+        }
+
         pub fn deployment_name(&self) -> String {
             self.name_prefixed("console")
         }
@@ -143,6 +147,14 @@ pub mod v1alpha1 {
     impl ManagedResource for Console {
         fn default_labels(&self) -> BTreeMap<String, String> {
             BTreeMap::from_iter([
+                (
+                    "materialize.cloud/organization-name".to_owned(),
+                    self.name_unchecked(),
+                ),
+                (
+                    "materialize.cloud/organization-namespace".to_owned(),
+                    self.namespace(),
+                ),
                 (
                     "materialize.cloud/mz-resource-id".to_owned(),
                     self.resource_id().to_owned(),
