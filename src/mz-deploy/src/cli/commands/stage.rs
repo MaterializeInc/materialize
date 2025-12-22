@@ -211,6 +211,9 @@ pub async fn run(
     client.validate_project(&planned_project, directory).await?;
     client.validate_cluster_isolation(&planned_project).await?;
     client.validate_privileges(&planned_project).await?;
+    client
+        .validate_sink_connections_exist(&planned_project)
+        .await?;
     let validate_duration = validate_start.elapsed();
     progress::stage_success("All validations passed", validate_duration);
 

@@ -7,6 +7,7 @@ use crate::client::errors::DatabaseValidationError;
 use crate::project::ast::Statement;
 use crate::project::object_id::ObjectId;
 use crate::project::planned;
+use mz_sql_parser::ast::CreateSinkConnection;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::path::PathBuf;
@@ -374,6 +375,83 @@ pub(crate) async fn validate_sources_exist_impl(
 
     if !missing_sources.is_empty() {
         return Err(DatabaseValidationError::MissingSources(missing_sources));
+    }
+
+    Ok(())
+}
+
+/// Internal implementation of validate_sink_connections_exist.
+///
+/// Validates that all connections referenced by sinks exist in the database.
+/// Sinks reference connections (Kafka, Iceberg) that are not managed by mz-deploy.
+pub(crate) async fn validate_sink_connections_exist_impl(
+    client: &PgClient,
+    planned_project: &planned::Project,
+) -> Result<(), DatabaseValidationError> {
+    let mut missing_connections = Vec::new();
+    let mut checked = BTreeSet::new(); // Avoid duplicate checks
+
+    // Collect all connection references from CREATE SINK statements
+    for obj in planned_project.iter_objects() {
+        if let Statement::CreateSink(ref stmt) = obj.typed_object.stmt {
+            // Extract connection ObjectId(s) based on sink type
+            let connection_ids = match &stmt.connection {
+                CreateSinkConnection::Kafka { connection, .. } => {
+                    vec![ObjectId::from_raw_item_name(
+                        connection,
+                        &obj.id.database,
+                        &obj.id.schema,
+                    )]
+                }
+                CreateSinkConnection::Iceberg {
+                    connection,
+                    aws_connection,
+                    ..
+                } => {
+                    vec![
+                        ObjectId::from_raw_item_name(connection, &obj.id.database, &obj.id.schema),
+                        ObjectId::from_raw_item_name(
+                            aws_connection,
+                            &obj.id.database,
+                            &obj.id.schema,
+                        ),
+                    ]
+                }
+            };
+
+            // Check each connection exists
+            for conn_id in connection_ids {
+                if checked.contains(&conn_id) {
+                    continue;
+                }
+                checked.insert(conn_id.clone());
+
+                let query = r#"
+                    SELECT c.name
+                    FROM mz_connections c
+                    JOIN mz_schemas s ON c.schema_id = s.id
+                    JOIN mz_databases d ON s.database_id = d.id
+                    WHERE c.name = $1 AND s.name = $2 AND d.name = $3"#;
+
+                let rows = client
+                    .query(
+                        query,
+                        &[&conn_id.object, &conn_id.schema, &conn_id.database],
+                    )
+                    .await
+                    .map_err(DatabaseValidationError::QueryError)?;
+
+                if rows.is_empty() {
+                    missing_connections.push(conn_id);
+                }
+            }
+        }
+    }
+
+    if !missing_connections.is_empty() {
+        return Err(DatabaseValidationError::MissingConnections(
+            missing_connections,
+        ));
     }
 
     Ok(())

@@ -104,6 +104,12 @@ pub async fn run(profile: &Profile, deploy_id: &str, force: bool) -> Result<(), 
     // Execute pending sinks (skip any already executed)
     execute_pending_sinks(&client, deploy_id).await?;
 
+    // Repoint existing sinks that depend on objects being dropped
+    // This must happen before drop_old_resources to prevent CASCADE from dropping sinks
+    if !staging_schemas.is_empty() {
+        repoint_dependent_sinks(&client, &staging_schemas, &staging_suffix).await?;
+    }
+
     // Update promoted_at timestamp
     verbose!("\nUpdating deployment table...");
     client
@@ -424,6 +430,106 @@ async fn execute_pending_sinks(client: &Client, deploy_id: &str) -> Result<(), C
             .await?;
 
         println!("  ✓ {}.{}.{}", stmt.database, stmt.schema, stmt.object);
+    }
+
+    Ok(())
+}
+
+/// Repoint sinks that depend on objects in schemas about to be dropped.
+///
+/// After the swap, old production objects are in schemas with the staging suffix.
+/// Before dropping those schemas, we need to ALTER SINK any sinks that depend
+/// on those objects to point to the new production objects instead.
+///
+/// This prevents sinks from being transitively dropped by CASCADE when the
+/// old schemas are dropped.
+async fn repoint_dependent_sinks(
+    client: &Client,
+    staging_schemas: &BTreeSet<(String, String)>,
+    staging_suffix: &str,
+) -> Result<(), CliError> {
+    // Build list of old schema names (database, old_schema_with_suffix)
+    // After swap, old production schemas have the staging suffix
+    let old_schemas: Vec<(String, String)> = staging_schemas
+        .iter()
+        .map(|(db, staging_schema)| {
+            let prod_schema = staging_schema.trim_end_matches(staging_suffix);
+            let old_schema = format!("{}{}", prod_schema, staging_suffix);
+            (db.clone(), old_schema)
+        })
+        .collect();
+
+    // Find sinks depending on objects in old schemas
+    let dependent_sinks = client
+        .find_sinks_depending_on_schemas(&old_schemas)
+        .await
+        .map_err(CliError::Connection)?;
+
+    if dependent_sinks.is_empty() {
+        verbose!("No sinks depend on objects in schemas being dropped");
+        return Ok(());
+    }
+
+    println!(
+        "\nRepointing {} sink(s) to new upstream objects...",
+        dependent_sinks.len()
+    );
+
+    for sink in dependent_sinks {
+        // Compute new schema name (strip suffix to get production schema name)
+        let new_schema = sink.dependency_schema.trim_end_matches(staging_suffix);
+
+        // Check if replacement object exists in new schema
+        let replacement_exists = client
+            .object_exists(&sink.dependency_database, new_schema, &sink.dependency_name)
+            .await
+            .map_err(CliError::Connection)?;
+
+        if !replacement_exists {
+            return Err(CliError::SinkRepointFailed {
+                sink: format!(
+                    "{}.{}.{}",
+                    sink.sink_database, sink.sink_schema, sink.sink_name
+                ),
+                reason: format!(
+                    "replacement object {}.{}.{} does not exist",
+                    sink.dependency_database, new_schema, sink.dependency_name
+                ),
+            });
+        }
+
+        // Execute ALTER SINK ... SET FROM
+        let alter_sql = format!(
+            r#"ALTER SINK "{}"."{}"."{}". SET FROM "{}"."{}"."{}""#,
+            sink.sink_database,
+            sink.sink_schema,
+            sink.sink_name,
+            sink.dependency_database,
+            new_schema,
+            sink.dependency_name
+        );
+
+        verbose!("  {}", alter_sql);
+        if let Err(e) = client.execute(&alter_sql, &[]).await {
+            return Err(CliError::SinkRepointFailed {
+                sink: format!(
+                    "{}.{}.{}",
+                    sink.sink_database, sink.sink_schema, sink.sink_name
+                ),
+                reason: e.to_string(),
+            });
+        }
+
+        println!(
+            "  {} {}.{}.{} -> {}.{}.{}",
+            "✓".green(),
+            sink.sink_database,
+            sink.sink_schema,
+            sink.sink_name,
+            sink.dependency_database,
+            new_schema,
+            sink.dependency_name
+        );
     }
 
     Ok(())
