@@ -21,7 +21,7 @@ junit-xml==1.9
 junitparser==4.0.2
 jupyterlab==4.5.1
 jupyter-black==0.4.0
-kubernetes==25.3.0
+kubernetes==34.1.0
 kubernetes-stubs==22.6.0.post1
 launchdarkly-api==17.2.0
 matplotlib==3.10.8
