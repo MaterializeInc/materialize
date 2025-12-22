@@ -13,6 +13,7 @@ use std::ops::{Deref, DerefMut};
 use std::time::Duration;
 
 use mz_ore::future::{InTask, OreFutureExt};
+use mz_ore::netio;
 use mz_ore::option::OptionExt;
 use mz_ore::task::{self, AbortOnDropHandle};
 use mz_repr::CatalogItemId;
@@ -284,7 +285,7 @@ impl Config {
                 // the singular host in place.
 
                 let privatelink_host = mz_cloud_resources::vpc_endpoint_name(*connection_id);
-                let privatelink_addrs = tokio::net::lookup_host((privatelink_host, 0)).await?;
+                let privatelink_addrs = netio::lookup_host((privatelink_host, 0)).await?;
 
                 // Override the actual IPs to connect to for the TCP connection, leaving the original host in-place
                 // for TLS verification

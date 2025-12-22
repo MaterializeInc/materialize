@@ -21,6 +21,7 @@ use mz_frontegg_mock::models::{UserConfig, UserRole};
 use mz_frontegg_mock::server::FronteggMockServer;
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
+use mz_ore::netio;
 use mz_ore::now::SYSTEM_TIME;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -77,7 +78,7 @@ async fn main() {
 }
 
 async fn run(args: Args) -> Result<(), anyhow::Error> {
-    let mut addrs = tokio::net::lookup_host(&args.listen_addr)
+    let mut addrs = netio::lookup_host(&args.listen_addr)
         .await
         .unwrap_or_else(|_| panic!("could not resolve {}", args.listen_addr));
     let Some(addr) = addrs.next() else {
