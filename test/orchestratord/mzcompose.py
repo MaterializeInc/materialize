@@ -498,35 +498,33 @@ class ConsoleEnabled(Modification):
         definition["operator"]["console"]["enabled"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
-        pass
-        # # TODO: Should this work with older versions? Fails in upgrade chain: AssertionError: Unexpected result: pod/mz9bvcfyoxae-console-654bd7f8f5-fbv4q
-        # if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
-        #     "v0.148.0"
-        # ):
-        #     return
+        # TODO: Should this work with older versions? Fails in upgrade chain: AssertionError: Unexpected result: pod/mz9bvcfyoxae-console-654bd7f8f5-fbv4q
+        if MzVersion.parse_mz(mods[EnvironmentdImageRef]) < MzVersion.parse_mz(
+            "v0.148.0"
+        ):
+            return
 
-        # def check() -> None:
-        #     result = spawn.capture(
-        #         [
-        #             "kubectl",
-        #             "get",
-        #             "pods",
-        #             "-l",
-        #             "app=console",
-        #             "-n",
-        #             "materialize-environment",
-        #             "-o",
-        #             "name",
-        #         ],
-        #     )
-        #     if self.value:
-        #         assert result, f"Unexpected result: {result}"
-        #     else:
-        #         assert not result, f"Unexpected result: {result}"
-        #
-        # # Console can take a while to start up
-        # retry(check, 120)
+        def check() -> None:
+            result = spawn.capture(
+                [
+                    "kubectl",
+                    "get",
+                    "pods",
+                    "-l",
+                    "app=console",
+                    "-n",
+                    "materialize-environment",
+                    "-o",
+                    "name",
+                ],
+            )
+            if self.value:
+                assert result, f"Unexpected result: {result}"
+            else:
+                assert not result, f"Unexpected result: {result}"
+
+        # Console can take a while to start up
+        retry(check, 120)
 
 
 class EnableRBAC(Modification):
@@ -580,11 +578,29 @@ class EnvironmentdImageRef(Modification):
     def validate(self, mods: dict[type[Modification], Any]) -> None:
         def check() -> None:
             environmentd = get_environmentd_data()
-            image = environmentd["items"][0]["spec"]["containers"][0]["image"]
-            expected = f"materialize/environmentd:{self.value}"
-            assert (
-                image == expected or f"ghcr.io/materializeinc/{image}" == expected
-            ), f"Expected environmentd image {expected}, but found {image}"
+            for item in environmentd["items"]:
+                image = item["spec"]["containers"][0]["image"]
+                expected = f"materialize/environmentd:{self.value}"
+                assert (
+                    image == expected or f"ghcr.io/materializeinc/{image}" == expected
+                ), f"Expected environmentd image {expected}, but found {image}"
+
+            balancerd = get_balancerd_data()
+            for item in balancerd["items"]:
+                image = item["spec"]["containers"][0]["image"]
+                expected = f"materialize/balancerd:{self.value}"
+                assert (
+                    image == expected or f"ghcr.io/materializeinc/{image}" == expected
+                ), f"Expected balancerd image {expected}, but found {image}"
+
+            # TODO: Console version is currently set via --console-image-tag-default
+            # console = get_console_data()
+            # for item in console["items"]:
+            #     image = item["spec"]["containers"][0]["image"]
+            #     expected = f"materialize/console:{self.value}"
+            #     assert (
+            #         image == expected or f"ghcr.io/materializeinc/{image}" == expected
+            #     ), f"Expected console image {expected}, but found {image}"
 
         retry(check, 240)
 
@@ -826,21 +842,19 @@ class ConsoleReplicas(Modification):
             definition["materialize"]["spec"]["consoleReplicas"] = self.value
 
     def validate(self, mods: dict[type[Modification], Any]) -> None:
-        # TODO: https://github.com/MaterializeInc/database-issues/issues/9984
-        pass
-        # if not mods[ConsoleEnabled]:
-        #     return
+        if not mods[ConsoleEnabled]:
+            return
 
-        # def check_replicas():
-        #     console = get_console_data()
-        #     num_pods = len(console["items"])
-        #     expected = self.value if self.value is not None else 2
-        #     assert (
-        #         num_pods == expected
-        #     ), f"Expected {expected} console pods, but found {num_pods}"
+        def check_replicas():
+            console = get_console_data()
+            num_pods = len(console["items"])
+            expected = self.value if self.value is not None else 2
+            assert (
+                num_pods == expected
+            ), f"Expected {expected} console pods, but found {num_pods}"
 
-        # # console doesn't get launched until last
-        # retry(check_replicas, 120)
+        # console doesn't get launched until last
+        retry(check_replicas, 120)
 
 
 class SystemParamConfigMap(Modification):
