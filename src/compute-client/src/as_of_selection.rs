@@ -867,12 +867,10 @@ mod tests {
     use mz_storage_client::controller::{CollectionDescription, StorageMetadata, StorageTxn};
     use mz_storage_client::storage_collections::{CollectionFrontiers, SnapshotCursor};
     use mz_storage_types::StorageDiff;
-    use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::controller::{CollectionMetadata, StorageError};
     use mz_storage_types::errors::CollectionMissing;
     use mz_storage_types::parameters::StorageParameters;
-    use mz_storage_types::sources::{GenericSourceConnection, SourceDesc};
-    use mz_storage_types::sources::{SourceData, SourceExportDataConfig};
+    use mz_storage_types::sources::SourceData;
     use mz_storage_types::time_dependence::{TimeDependence, TimeDependenceError};
     use timely::progress::Timestamp as TimelyTimestamp;
 
@@ -1037,28 +1035,6 @@ mod tests {
             _register_ts: Option<Self::Timestamp>,
             _collections: Vec<(GlobalId, CollectionDescription<Self::Timestamp>)>,
             _migrated_storage_collections: &BTreeSet<GlobalId>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn alter_ingestion_source_desc(
-            &self,
-            _ingestion_id: GlobalId,
-            _source_desc: SourceDesc,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn alter_ingestion_export_data_configs(
-            &self,
-            _source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
-        ) -> Result<(), StorageError<Self::Timestamp>> {
-            unimplemented!()
-        }
-
-        async fn alter_ingestion_connections(
-            &self,
-            _source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
         ) -> Result<(), StorageError<Self::Timestamp>> {
             unimplemented!()
         }

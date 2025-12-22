@@ -1252,11 +1252,6 @@ where
         &mut self,
         source_connections: BTreeMap<GlobalId, GenericSourceConnection<InlinedConnection>>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        // Also have to let StorageCollections know!
-        self.storage_collections
-            .alter_ingestion_connections(source_connections.clone())
-            .await?;
-
         let mut ingestions_to_run = BTreeSet::new();
 
         for (id, conn) in source_connections {
@@ -1297,11 +1292,6 @@ where
         &mut self,
         source_exports: BTreeMap<GlobalId, SourceExportDataConfig>,
     ) -> Result<(), StorageError<Self::Timestamp>> {
-        // Also have to let StorageCollections know!
-        self.storage_collections
-            .alter_ingestion_export_data_configs(source_exports.clone())
-            .await?;
-
         let mut ingestions_to_run = BTreeSet::new();
 
         for (source_export_id, new_data_config) in source_exports {
