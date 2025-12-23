@@ -435,7 +435,6 @@ mod tests {
 
     use super::*;
 
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     async fn azure_blob() -> Result<(), ExternalError> {
         let config = match AzureBlobConfig::new_for_test()? {

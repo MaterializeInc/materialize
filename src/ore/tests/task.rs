@@ -16,7 +16,6 @@
 use mz_ore::task::JoinSetExt;
 
 #[tokio::test] // allow(test-attribute)
-#[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
 async fn join_set_exts() {
     let mut js = tokio::task::JoinSet::new();
     js.spawn_named(|| "test".to_string(), async {

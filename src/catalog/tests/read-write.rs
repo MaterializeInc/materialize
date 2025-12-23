@@ -29,7 +29,6 @@ use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
 use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_confirm_leadership() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -77,7 +76,6 @@ async fn test_confirm_leadership(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_allocate_id() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -119,7 +117,6 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_audit_logs() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -196,7 +193,6 @@ async fn test_audit_logs(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_items() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -279,7 +275,6 @@ async fn test_items(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_schemas() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -344,7 +339,6 @@ async fn test_schemas(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_non_writer_commits() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);

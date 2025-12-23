@@ -1021,7 +1021,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn sanity_check(dyncfgs: ConfigUpdates) {
         let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1069,7 +1068,6 @@ mod tests {
 
     // Sanity check that the open_reader and open_writer calls work.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn open_reader_writer(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1394,7 +1392,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn multiple_shards(dyncfgs: ConfigUpdates) {
         let data1 = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1435,7 +1432,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_upper(dyncfgs: ConfigUpdates) {
         let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1467,7 +1463,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn append_with_invalid_upper(dyncfgs: ConfigUpdates) {
         let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1531,7 +1526,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1588,7 +1582,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn overlapping_append(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging_default("info");
 
@@ -1639,7 +1632,6 @@ mod tests {
     // Appends need to be contiguous for a shard, meaning the lower of an appended batch must not
     // be in advance of the current shard upper.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_append(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1687,7 +1679,6 @@ mod tests {
     // Per-writer appends can be non-contiguous, as long as appends to the shard from all writers
     // combined are contiguous.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_append_per_writer(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1730,7 +1721,6 @@ mod tests {
     // Compare_and_appends need to be contiguous for a shard, meaning the lower of an appended
     // batch needs to match the current shard upper.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn contiguous_compare_and_append(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1777,7 +1767,6 @@ mod tests {
     // Per-writer compare_and_appends can be non-contiguous, as long as appends to the shard from
     // all writers combined are contiguous.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn noncontiguous_compare_and_append_per_writer(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1822,7 +1811,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn concurrency(dyncfgs: ConfigUpdates) {
         let data = DataGenerator::small();
 
@@ -1920,7 +1908,6 @@ mod tests {
     // immediately return the data currently available instead of waiting for
     // upper to advance past as_of.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_blocking_reads(dyncfgs: ConfigUpdates) {
         let waker = noop_waker();
         let mut cx = Context::from_waker(&waker);
@@ -1992,7 +1979,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn heartbeat_task_shutdown(dyncfgs: ConfigUpdates) {
         // Verify that the ReadHandle and WriteHandle background heartbeat tasks
         // shut down cleanly after the handle is expired.
@@ -2020,7 +2006,6 @@ mod tests {
     /// Verify that shard finalization works with empty shards, shards that have
     /// an empty write up to the empty upper Antichain.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn finalize_empty_shard(dyncfgs: ConfigUpdates) {
         let persist_client = new_test_client(&dyncfgs).await;
 
@@ -2070,7 +2055,6 @@ mod tests {
     /// written to them, plus then an empty batch to bring their upper to the
     /// empty Antichain.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn finalize_shard(dyncfgs: ConfigUpdates) {
         const DATA: &[(((), ()), u64, i64)] = &[(((), ()), 0, 1)];
         let persist_client = new_test_client(&dyncfgs).await;

@@ -433,7 +433,6 @@ pub fn twos_complement_be_to_numeric_inner<D: Dec<N>, const N: usize>(
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_twos_complement_roundtrip() {
     fn inner(s: &str) {
         let mut cx = cx_datum();

@@ -111,7 +111,6 @@ fn default_true() -> bool {
 
 #[mz_ore::test]
 // We test this particularly because we deserialize values from strings.
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
 fn test_replica_allocation_deserialization() {
     use bytesize::ByteSize;
     use mz_ore::{assert_err, assert_ok};

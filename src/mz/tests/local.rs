@@ -62,7 +62,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_version() {
         // We don't make assertions about the build SHA because caching in CI can
         // cause the test binary and `mz` to have different embedded SHAs.
@@ -103,7 +102,6 @@ mod tests {
 
     /// Tests local commands that do not requires interacting with any API.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn test_local() {
         let unique_id = Uuid::new_v4().to_string();
         let config_file_name = format!("test_local_config_{}.toml", unique_id);

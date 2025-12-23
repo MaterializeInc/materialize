@@ -157,7 +157,6 @@ impl Debug for StableTrace<'_> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_debug() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -342,7 +341,6 @@ async fn test_debug(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_debug_edit_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -437,7 +435,6 @@ async fn test_debug_edit_fencing(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_debug_delete_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -529,7 +526,6 @@ async fn test_debug_delete_fencing(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_concurrent_debugs() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);

@@ -173,7 +173,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `deflateInit2_` on OS `linux`
     fn deflate_compress_and_decompress() {
         let codec = Codec::Deflate;
         let mut stream = INPUT.to_vec();

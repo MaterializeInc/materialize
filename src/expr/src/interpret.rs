@@ -1371,7 +1371,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn test_trivial_spec_matches() {
         fn check(datum: PropDatum) -> Result<(), TestCaseError> {
             let datum: Datum = (&datum).into();
@@ -1392,7 +1391,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn test_equivalence() {
         fn check(data: ExpressionData) -> Result<(), TestCaseError> {
             let ExpressionData {
@@ -1566,7 +1564,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_jsonb() {
         let arena = RowArena::new();
 

@@ -1664,7 +1664,6 @@ mod tests {
     use prost::Message;
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     fn smoktest_at_version() {
         let desc = RelationDesc::builder()
             .with_column("a", SqlScalarType::Bool.nullable(true))

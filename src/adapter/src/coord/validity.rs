@@ -191,7 +191,6 @@ mod tests {
     use crate::session::{Session, SessionConfig};
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn test_plan_validity() {
         Catalog::with_debug(|mut catalog| async move {
             let conn_id = ConnectionId::Static(1);

@@ -2171,7 +2171,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn state_diff_migration_rollups(dyncfgs: ConfigUpdates) {
         let r1_rollup = HollowRollup {
             key: PartialRollupKey("foo".to_owned()),

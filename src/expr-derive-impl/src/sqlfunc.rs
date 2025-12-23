@@ -122,7 +122,6 @@ fn generate_test(attr: TokenStream, item: TokenStream, name: &Ident) -> TokenStr
 
     quote! {
         #[cfg(test)]
-        #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
         #[mz_ore::test]
         fn #test_name() {
             let (output, input) = mz_expr_derive_impl::test_sqlfunc_str(#attr, #item);

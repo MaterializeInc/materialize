@@ -1427,7 +1427,6 @@ mod tests {
     /// - The unblock read waits for this write to be applied before doing the
     ///   empty CaA, but this write never existed so it hangs forever.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_compact_latest_write() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;
@@ -1463,7 +1462,6 @@ mod tests {
     // cache. This caused them to be applied in a surprising order (e.g. forget
     // before register).
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_ts_sort() {
         let client = PersistClient::new_for_tests().await;
         let txns = TxnsHandle::expect_open(client.clone()).await;
@@ -1483,7 +1481,6 @@ mod tests {
     /// Tests that `data_snapshot` and `data_listen_next` properly handle an
     /// `init_ts` > 0.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn data_compacted() {
         let d0 = ShardId::new();
         let mut c = TxnsCacheState::new(ShardId::new(), 10, None);

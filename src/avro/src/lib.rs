@@ -369,7 +369,6 @@ mod tests {
 
     //TODO: move where it fits better
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_default() {
         let writer_raw_schema = r#"
             {
@@ -423,7 +422,6 @@ mod tests {
 
     //TODO: move where it fits better
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_string_value() {
         let raw_schema = r#"
             {
@@ -467,7 +465,6 @@ mod tests {
 
     //TODO: move where it fits better
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: inline assembly is not supported
     fn test_enum_resolution() {
         let writer_raw_schema = r#"
             {
