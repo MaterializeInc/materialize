@@ -76,7 +76,8 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
+hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
@@ -222,7 +223,8 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
+hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
