@@ -23,7 +23,7 @@ EXISTENCE_OF_IMAGE_NAMES_FROM_EARLIER_CHECK: dict[str, bool] = dict()
 IMAGE_TAG_OF_DEV_VERSION_METADATA_SEPARATOR = "--"
 LATEST_IMAGE_TAG = "latest"
 LEGACY_IMAGE_TAG_COMMIT_PREFIX = "devel-"
-MZ_GHCR_DEFAULT = "1" if ui.env_is_truthy("CI") else "0"
+MZ_GHCR_DEFAULT = "0" if ui.env_is_truthy("CI") else "0"
 
 # Examples:
 # * v0.114.0
@@ -213,6 +213,6 @@ def _select_image_name_from_candidates(
 def image_registry() -> str:
     return (
         "ghcr.io/materializeinc/materialize"
-        if ui.env_is_truthy("MZ_GHCR", "1")
+        if ui.env_is_truthy("MZ_GHCR", "0")
         else "materialize"
     )
