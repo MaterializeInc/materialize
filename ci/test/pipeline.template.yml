@@ -737,13 +737,14 @@ steps:
         label: Documentation Examples Code
         inputs:
           - doc/user/data/examples
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 30
         plugins:
           - ./ci/plugins/mzcompose:
               composition: doc-examples
         agents:
-          queue: hetzner-aarch64-4cpu-8gb
+          # SQL Server doesn't support ARM: https://github.com/microsoft/mssql-docker/issues/944
+          queue: hetzner-x86-64-4cpu-8gb
 
   - id: deploy-website
     label: Deploy website
