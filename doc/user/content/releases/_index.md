@@ -34,6 +34,7 @@ v26.5.0 enhances our SQL Server source, improves performance, and strengthens Ma
 - Added additional checks to string functions (`replace`, `translate`, etc.) to help prevent out-of-memory errors from inflationary string operations.
 - Fixed an issue which could cause panics during connection drops; this means improved stability when clients disconnect.
 - Fixed an issue where disabling console or balancers would fail if they were already running.
+- Fixed an issue where balancerd failed to upgrade and remained stuck on its pre-upgrade version.
 
 ## v26.4.0
 
