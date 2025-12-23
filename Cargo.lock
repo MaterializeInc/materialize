@@ -4285,7 +4285,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
 dependencies = [
  "equivalent",
- "hashbrown 0.16.1",
+ "hashbrown 0.15.3",
  "serde",
  "serde_core",
 ]
@@ -4577,9 +4577,9 @@ dependencies = [
 
 [[package]]
 name = "k8s-openapi"
-version = "0.26.1"
+version = "0.26.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06d9e5e61dd037cdc51da0d7e2b2be10f497478ea7e120d85dad632adb99882b"
+checksum = "d13f06d5326a915becaffabdfab75051b8cdc260c2a5c06c0e90226ede89a692"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -13453,6 +13453,7 @@ dependencies = [
  "getrandom 0.3.3",
  "half 2.6.0",
  "hashbrown 0.14.5",
+ "hashbrown 0.15.3",
  "hyper 0.14.27",
  "hyper 1.8.1",
  "hyper-util",
