@@ -101,6 +101,15 @@ parent = "about"
 url = "https://materialize.com/securitydisclosure"
 weight = 55
 
+#
+# Custom output format for Claude skill generation
+#
+[outputFormats.skill]
+  mediaType = "text/markdown"
+  baseName = "index"
+  isPlainText = true
+  notAlternative = true
+
 [markup.goldmark.renderer]
 # allow <a name="link-target">, the old syntax no longer works
 unsafe = true
