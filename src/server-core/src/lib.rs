@@ -27,6 +27,7 @@ use mz_dyncfg::{Config, ConfigSet};
 use mz_ore::channel::trigger;
 use mz_ore::error::ErrorExt;
 use mz_ore::netio::AsyncReady;
+use mz_ore::netio::tcp::{TcpKeepalive, TcpListener, TcpStream};
 use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
 use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
@@ -34,13 +35,11 @@ use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
 use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
 use serde::{Deserialize, Serialize};
-use socket2::{SockRef, TcpKeepalive};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Interest, ReadBuf, Ready};
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio_metrics::TaskMetrics;
-use tokio_stream::wrappers::{IntervalStream, TcpListenerStream};
+use tokio_stream::wrappers::IntervalStream;
 use tracing::{debug, error, warn};
 use uuid::Uuid;
 
@@ -244,9 +243,7 @@ pub async fn listen(
         local_addr,
         _trigger: trigger,
     };
-    // TODO(benesch): replace `TCPListenerStream`s with `listener.incoming()` if
-    // that is restored when the `Stream` trait stabilizes.
-    let stream = TcpListenerStream::new(listener).take_until(trigger_rx);
+    let stream = listener.into_incoming().take_until(trigger_rx);
     Ok((handle, Box::pin(stream)))
 }
 
@@ -305,23 +302,11 @@ where
                         continue;
                     }
                 };
-                // Set TCP_NODELAY to disable tinygram prevention (Nagle's
-                // algorithm), which forces a 40ms delay between each query
-                // on linux. According to John Nagle [0], the true problem
-                // is delayed acks, but disabling those is a receive-side
-                // operation (TCP_QUICKACK), and we can't always control the
-                // client. PostgreSQL sets TCP_NODELAY on both sides of its
-                // sockets, so it seems sane to just do the same.
-                //
-                // If set_nodelay fails, it's a programming error, so panic.
-                //
-                // [0]: https://news.ycombinator.com/item?id=10608356
-                conn.set_nodelay(true).expect("set_nodelay failed");
                 // Enable TCP keepalives to avoid any idle connection timeouts that may
                 // be enforced by networking devices between us and the client. Idle SQL
                 // connections are expected--e.g., a `SUBSCRIBE` to a view containing
                 // critical alerts will ideally be producing no data most of the time.
-                if let Err(e) = SockRef::from(&conn).set_tcp_keepalive(&KEEPALIVE) {
+                if let Err(e) = conn.set_tcp_keepalive(&KEEPALIVE) {
                     error!("failed enabling keepalive: {e}");
                     continue;
                 }

@@ -31,9 +31,13 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::{fmt, io};
 
+use futures::stream::BoxStream;
+use socket2::SockRef;
 use tokio::io::{AsyncRead, AsyncWrite, Interest, ReadBuf, Ready};
 
 use crate::netio::turmoil_override;
+
+pub use socket2::TcpKeepalive;
 
 #[cfg(not(feature = "turmoil"))]
 /// Converts or resolves to a [`SocketAddr`].
@@ -102,6 +106,19 @@ impl TcpListener {
             #[cfg(feature = "turmoil")]
             Self::Turmoil(listener) => listener.local_addr(),
         }
+    }
+
+    /// Turn this listener into a stream of the connections being received.
+    ///
+    /// The returned iterator will never return `None` and will also not yield the peer's
+    /// [`SocketAddr`] . Iterating over it is equivalent to calling [`TcpListener::accept`] in a
+    /// loop.
+    pub fn into_incoming(self) -> BoxStream<'static, io::Result<TcpStream>> {
+        let stream = futures::stream::unfold(self, async |listener| {
+            let next = listener.accept().await.map(|(s, _)| s);
+            Some((next, listener))
+        });
+        Box::pin(stream)
     }
 }
 
@@ -221,6 +238,15 @@ impl TcpStream {
                 let (rx, tx) = stream.into_split();
                 (OwnedReadHalf::Turmoil(rx), OwnedWriteHalf::Turmoil(tx))
             }
+        }
+    }
+
+    /// Set parameters configuring TCP keepalive probes for this TCP stream.
+    pub fn set_tcp_keepalive(&self, params: &TcpKeepalive) -> io::Result<()> {
+        match self {
+            Self::Tokio(stream) => SockRef::from(stream).set_tcp_keepalive(params),
+            #[cfg(feature = "turmoil")]
+            Self::Turmoil(_) => Ok(()),
         }
     }
 }
