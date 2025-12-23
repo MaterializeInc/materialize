@@ -1587,6 +1587,15 @@ where
         };
         *cur_export = new_export;
 
+        // For `ALTER SINK`, the snapshot should only occur if the sink has not made any progress.
+        // This prevents unnecessary decoding in the sink.
+        // If the write frontier of the sink is strictly larger than its read hold, it must have at
+        // least written out its snapshot, and we can skip reading it; otherwise assume we may have
+        // to replay from the beginning.
+        // TODO(database-issues#10002): unify this with run_export, if possible
+        let with_snapshot = new_description.sink.with_snapshot
+            && !PartialOrder::less_than(&new_description.sink.as_of, &cur_export.write_frontier);
+
         let cmd = RunSinkCommand {
             id,
             description: StorageSinkDesc {
@@ -1597,7 +1606,7 @@ where
                 as_of: new_description.sink.as_of,
                 version: new_description.sink.version,
                 from_storage_metadata,
-                with_snapshot: new_description.sink.with_snapshot,
+                with_snapshot,
                 to_storage_metadata,
                 commit_interval: new_description.sink.commit_interval,
             },

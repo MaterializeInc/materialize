@@ -89,7 +89,6 @@ use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_transform::dataflow::DataflowMetainfo;
 use smallvec::SmallVec;
-use timely::PartialOrder;
 use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, Span, info, warn};
@@ -3407,13 +3406,6 @@ impl Coordinator {
             &**write_frontier
         );
 
-        // For `ALTER SINK`, the snapshot should only occur if the sink has not made any progress.
-        // This prevents unnecessary decoding in the sink.
-        // If the write frontier of the sink is strictly larger than its read hold, it must have at
-        // least written out its snapshot, and we can skip reading it; otherwise assume we may have
-        // to replay from the beginning.
-        let alter_sink_snapshot = with_snapshot && !PartialOrder::less_than(&as_of, write_frontier);
-
         // Parse the `create_sql` so we can update it to the new sink definition.
         //
         // Note that we need to use the `create_sql` from the catalog here, not the one from the
@@ -3492,7 +3484,7 @@ impl Coordinator {
                 .into_inline_connection(self.catalog().state()),
             envelope: sink_plan.envelope,
             as_of,
-            with_snapshot: alter_sink_snapshot,
+            with_snapshot,
             version: sink_plan.version,
             from_storage_metadata: (),
             to_storage_metadata: (),
