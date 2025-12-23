@@ -1945,15 +1945,6 @@ pub static MZ_PEEK_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> = LazyLock::new
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW: LazyLock<BuiltinLog> =
-    LazyLock::new(|| BuiltinLog {
-        name: "mz_dataflow_shutdown_durations_histogram_raw",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::LOG_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW_OID,
-        variant: LogVariant::Compute(ComputeLog::ShutdownDuration),
-        access: vec![PUBLIC_SELECT],
-    });
-
 pub static MZ_ARRANGEMENT_HEAP_SIZE_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_arrangement_heap_size_raw",
     schema: MZ_INTROSPECTION_SCHEMA,
@@ -7963,62 +7954,6 @@ GROUP BY type, duration_ns",
     access: vec![PUBLIC_SELECT],
 });
 
-pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
-        name: "mz_dataflow_shutdown_durations_histogram_per_worker",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER_OID,
-        desc: RelationDesc::builder()
-            .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-            .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
-            .with_column("count", SqlScalarType::Int64.nullable(false))
-            .with_key(vec![0, 1])
-            .finish(),
-        column_comments: BTreeMap::new(),
-        sql: "SELECT
-    worker_id, duration_ns, pg_catalog.count(*) AS count
-FROM
-    mz_introspection.mz_dataflow_shutdown_durations_histogram_raw
-GROUP BY
-    worker_id, duration_ns",
-        access: vec![PUBLIC_SELECT],
-    });
-
-pub static MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
-        name: "mz_dataflow_shutdown_durations_histogram",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::VIEW_MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_OID,
-        desc: RelationDesc::builder()
-            .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
-            .with_column(
-                "count",
-                SqlScalarType::Numeric {
-                    max_scale: Some(NumericMaxScale::ZERO),
-                }
-                .nullable(false),
-            )
-            .with_key(vec![0])
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            (
-                "duration_ns",
-                "The upper bound of the bucket in nanoseconds.",
-            ),
-            (
-                "count",
-                "The (noncumulative) count of dataflows in this bucket.",
-            ),
-        ]),
-        sql: "
-SELECT
-    duration_ns,
-    pg_catalog.sum(count) AS count
-FROM mz_introspection.mz_dataflow_shutdown_durations_histogram_per_worker
-GROUP BY duration_ns",
-        access: vec![PUBLIC_SELECT],
-    });
-
 pub static MZ_SCHEDULING_ELAPSED_PER_WORKER: LazyLock<BuiltinView> =
     LazyLock::new(|| BuiltinView {
         name: "mz_scheduling_elapsed_per_worker",
@@ -13855,7 +13790,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_MESSAGE_BATCH_COUNTS_SENT_RAW),
         Builtin::Log(&MZ_ACTIVE_PEEKS_PER_WORKER),
         Builtin::Log(&MZ_PEEK_DURATIONS_HISTOGRAM_RAW),
-        Builtin::Log(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_CAPACITY_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_ALLOCATIONS_RAW),
         Builtin::Log(&MZ_ARRANGEMENT_HEAP_SIZE_RAW),
@@ -13980,8 +13914,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_RECORDS_PER_DATAFLOW),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM_PER_WORKER),
         Builtin::View(&MZ_PEEK_DURATIONS_HISTOGRAM),
-        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM_PER_WORKER),
-        Builtin::View(&MZ_DATAFLOW_SHUTDOWN_DURATIONS_HISTOGRAM),
         Builtin::View(&MZ_SCHEDULING_ELAPSED_PER_WORKER),
         Builtin::View(&MZ_SCHEDULING_ELAPSED),
         Builtin::View(&MZ_SCHEDULING_PARKS_HISTOGRAM_PER_WORKER),

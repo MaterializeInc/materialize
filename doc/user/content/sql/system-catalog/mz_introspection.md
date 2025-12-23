@@ -275,19 +275,6 @@ The `mz_dataflow_operator_parents` view describes how [dataflow] operators are n
 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_operator_parents_per_worker -->
 
-## `mz_dataflow_shutdown_durations_histogram`
-
-The `mz_dataflow_shutdown_durations_histogram` view describes a histogram of the time in nanoseconds required to fully shut down dropped [dataflows][dataflow].
-
-<!-- RELATION_SPEC mz_introspection.mz_dataflow_shutdown_durations_histogram -->
-| Field          | Type        | Meaning                                                |
-| -------------- |-------------| --------                                               |
-| `duration_ns`  | [`uint8`]   | The upper bound of the bucket in nanoseconds.          |
-| `count`        | [`numeric`] | The (noncumulative) count of dataflows in this bucket. |
-
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_shutdown_durations_histogram_per_worker -->
-<!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_dataflow_shutdown_durations_histogram_raw -->
-
 ## `mz_expected_group_size_advice`
 
 The `mz_expected_group_size_advice` view provides advice on opportunities to set [query hints].
