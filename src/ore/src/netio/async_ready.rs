@@ -15,8 +15,9 @@
 
 use async_trait::async_trait;
 use tokio::io::{self, Interest, Ready};
-use tokio::net::TcpStream;
 use tokio_openssl::SslStream;
+
+use crate::netio::tcp::TcpStream;
 
 /// Asynchronous IO readiness.
 ///
@@ -34,6 +35,7 @@ pub trait AsyncReady {
 impl AsyncReady for TcpStream {
     async fn ready(&self, interest: Interest) -> io::Result<Ready> {
         self.ready(interest).await
+
     }
 }
 
