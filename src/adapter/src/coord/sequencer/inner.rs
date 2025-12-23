@@ -3409,6 +3409,9 @@ impl Coordinator {
 
         // For `ALTER SINK`, the snapshot should only occur if the sink has not made any progress.
         // This prevents unnecessary decoding in the sink.
+        // If the write frontier of the sink is strictly larger than its read hold, it must have at
+        // least written out its snapshot, and we can skip reading it; otherwise assume we may have
+        // to replay from the beginning.
         let alter_sink_snapshot = with_snapshot && !PartialOrder::less_than(&as_of, write_frontier);
 
         // Parse the `create_sql` so we can update it to the new sink definition.
