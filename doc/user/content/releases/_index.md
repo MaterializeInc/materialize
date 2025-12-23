@@ -15,11 +15,11 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
-## v26.5.0
+## v26.5.1
 *Released to Materialize Self-Managed: 2025-12-23* <br>
 *Scheduled for release to Materialize Cloud: 2026-01-08* <br>
 
-v26.5.0 enhances our SQL Server source, improves performance, and strengthens Materialize Self-Managed reliability.
+v26.5.1 enhances our SQL Server source, improves performance, and strengthens Materialize Self-Managed reliability.
 
 ### Improvements
 - **VARCHAR(MAX) and NVARCHAR(MAX) support for SQL Server**: The Materialize SQL Server source now supports `varchar(max)` and `nvarchar(max)` data types.
