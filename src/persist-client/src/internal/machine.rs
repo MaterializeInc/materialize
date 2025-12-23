@@ -14,17 +14,15 @@ use std::ops::ControlFlow::{self, Break, Continue};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-use differential_dataflow::Hashable;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::FutureExt;
 use futures::future::{self, BoxFuture};
 use mz_dyncfg::{Config, ConfigSet};
-use mz_ore::cast::{CastFrom, CastLossy};
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 #[allow(unused_imports)] // False positive.
 use mz_ore::fmt::FormatBuffer;
-use mz_ore::task::JoinHandle;
 use mz_ore::{assert_none, soft_assert_no_log};
 use mz_persist::location::{ExternalError, Indeterminate, SeqNo};
 use mz_persist::retry::Retry;
@@ -32,9 +30,8 @@ use mz_persist_types::schema::SchemaId;
 use mz_persist_types::{Codec, Codec64, Opaque};
 use semver::Version;
 use timely::PartialOrder;
-use timely::order::TotalOrder;
 use timely::progress::{Antichain, Timestamp};
-use tracing::{Instrument, debug, info, trace_span, warn};
+use tracing::{Instrument, debug, info, trace_span};
 
 use crate::async_runtime::IsolatedRuntime;
 use crate::batch::INLINE_WRITES_TOTAL_MAX_BYTES;
@@ -44,7 +41,6 @@ use crate::critical::CriticalReaderId;
 use crate::error::{CodecMismatch, InvalidUsage};
 use crate::internal::apply::Applier;
 use crate::internal::compact::CompactReq;
-use crate::internal::gc::GarbageCollector;
 use crate::internal::maintenance::{RoutineMaintenance, WriterMaintenance};
 use crate::internal::metrics::{CmdMetrics, Metrics, MetricsRetryStream, RetryMetrics};
 use crate::internal::paths::PartialRollupKey;
@@ -56,7 +52,7 @@ use crate::internal::state::{
 use crate::internal::state_versions::StateVersions;
 use crate::internal::trace::{ApplyMergeResult, FueledMergeRes};
 use crate::internal::watch::StateWatch;
-use crate::read::{AwaitableState, LeaseMetadata, LeasedReaderId, READER_LEASE_DURATION};
+use crate::read::LeasedReaderId;
 use crate::rpc::PubSubSender;
 use crate::schema::CaESchema;
 use crate::write::WriterId;
@@ -1179,124 +1175,6 @@ impl<T: Debug> CompareAndAppendRes<T> {
         match self {
             CompareAndAppendRes::Success(seqno, maintenance) => (seqno, maintenance),
             x => panic!("{:?}", x),
-        }
-    }
-}
-
-impl<K, V, T, D> Machine<K, V, T, D>
-where
-    K: Debug + Codec,
-    V: Debug + Codec,
-    T: Timestamp + Lattice + TotalOrder + Codec64 + Sync,
-    D: Monoid + Codec64 + Send + Sync,
-{
-    pub fn start_reader_heartbeat_task(
-        self,
-        reader_id: LeasedReaderId,
-        gc: GarbageCollector<K, V, T, D>,
-        leased_seqnos: AwaitableState<LeaseMetadata<T>>,
-    ) -> JoinHandle<()> {
-        let metrics = Arc::clone(&self.applier.metrics);
-        let name = format!("persist::heartbeat_read({},{})", self.shard_id(), reader_id);
-        mz_ore::task::spawn(|| name, {
-            metrics.tasks.heartbeat_read.instrument_task(async move {
-                Self::reader_heartbeat_task(self, reader_id, gc, leased_seqnos).await
-            })
-        })
-    }
-
-    async fn reader_heartbeat_task(
-        machine: Self,
-        reader_id: LeasedReaderId,
-        gc: GarbageCollector<K, V, T, D>,
-        leased_seqnos: AwaitableState<LeaseMetadata<T>>,
-    ) {
-        let sleep_duration = READER_LEASE_DURATION.get(&machine.applier.cfg) / 4;
-        // Jitter the first tick to avoid a thundering herd when many readers are started around
-        // the same instant, like during deploys.
-        let jitter: f64 = f64::cast_lossy(reader_id.hashed()) / f64::cast_lossy(u64::MAX);
-        let mut interval = tokio::time::interval_at(
-            tokio::time::Instant::now() + sleep_duration.mul_f64(jitter),
-            sleep_duration,
-        );
-        let mut held_since = leased_seqnos.read(|s| s.since().clone());
-        loop {
-            let before_sleep = Instant::now();
-            let _woke_by_tick = tokio::select! {
-                _tick = interval.tick() => {
-                    true
-                }
-                _whatever = leased_seqnos.wait_while(|s| !s.request_sync) => {
-                    false
-                }
-            };
-
-            let elapsed_since_before_sleeping = before_sleep.elapsed();
-            if elapsed_since_before_sleeping > sleep_duration + Duration::from_secs(60) {
-                warn!(
-                    "reader ({}) of shard ({}) went {}s between heartbeats",
-                    reader_id,
-                    machine.shard_id(),
-                    elapsed_since_before_sleeping.as_secs_f64()
-                );
-            }
-
-            let before_heartbeat = Instant::now();
-            let heartbeat_ms = (machine.applier.cfg.now)();
-            let current_seqno = machine.seqno();
-            let result = leased_seqnos.modify(|s| {
-                if s.expired {
-                    Err(())
-                } else {
-                    s.observe_seqno(current_seqno);
-                    s.request_sync = false;
-                    held_since.join_assign(s.since());
-                    Ok(s.outstanding_seqno())
-                }
-            });
-            let actual_since = match result {
-                Ok(held_seqno) => {
-                    let (seqno, actual_since, maintenance) = machine
-                        .downgrade_since(&reader_id, held_seqno, &held_since, heartbeat_ms)
-                        .await;
-                    leased_seqnos.modify(|s| s.observe_seqno(seqno));
-                    maintenance.start_performing(&machine, &gc);
-                    actual_since
-                }
-                Err(()) => {
-                    let (seqno, maintenance) = machine.expire_leased_reader(&reader_id).await;
-                    leased_seqnos.modify(|s| s.observe_seqno(seqno));
-                    maintenance.start_performing(&machine, &gc);
-                    break;
-                }
-            };
-
-            let elapsed_since_heartbeat = before_heartbeat.elapsed();
-            if elapsed_since_heartbeat > Duration::from_secs(60) {
-                warn!(
-                    "reader ({}) of shard ({}) heartbeat call took {}s",
-                    reader_id,
-                    machine.shard_id(),
-                    elapsed_since_heartbeat.as_secs_f64(),
-                );
-            }
-
-            if PartialOrder::less_than(&held_since, &actual_since.0) {
-                // If the read handle was intentionally expired, this task
-                // *should* be aborted before it observes the expiration. So if
-                // we get here, this task somehow failed to keep the read lease
-                // alive. Warn loudly, because there's now a live read handle to
-                // an expired shard that will panic if used, but don't panic,
-                // just in case there is some edge case that results in this
-                // task observing the intentional expiration of a read handle.
-                warn!(
-                    "heartbeat task for reader ({}) of shard ({}) exiting due to expired lease \
-                     while read handle is live",
-                    reader_id,
-                    machine.shard_id(),
-                );
-                return;
-            }
         }
     }
 }
