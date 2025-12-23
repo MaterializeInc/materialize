@@ -141,6 +141,7 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::{Antichain, Timestamp as _};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
+use crate::metrics::sink::iceberg::IcebergSinkMetrics;
 use crate::render::sinks::SinkRender;
 use crate::storage_state::StorageState;
 
@@ -757,6 +758,7 @@ fn write_data_files<G>(
     connection: IcebergSinkConnection,
     storage_configuration: StorageConfiguration,
     materialize_arrow_schema: Arc<ArrowSchema>,
+    metrics: IcebergSinkMetrics,
 ) -> (
     Stream<G, BoundedDataFile>,
     Stream<G, HealthStatusMessage>,
@@ -948,6 +950,7 @@ where
                                     {
                                         if let Some(rows) = stashed_rows.remove(&row_ts) {
                                             for (_row, diff_pair) in rows {
+                                                metrics.stashed_rows.dec();
                                                 let record_batch = row_to_recordbatch(
                                                     diff_pair.clone(),
                                                     Arc::clone(&arrow_schema),
@@ -1008,6 +1011,7 @@ where
                                 if !written {
                                     // ...otherwise stash it for later
                                     let entry = stashed_rows.entry(row_ts).or_default();
+                                    metrics.stashed_rows.inc();
                                     entry.push((row, diff_pair));
                                 }
                             }
@@ -1040,6 +1044,18 @@ where
                                 .await
                                 .context("Failed to close DeltaWriter")?;
                             for data_file in data_files {
+                                match data_file.content_type() {
+                                    iceberg::spec::DataContentType::Data => {
+                                        metrics.data_files_written.inc();
+                                        metrics.rows_written.inc_by(data_file.record_count());
+                                    }
+                                    iceberg::spec::DataContentType::PositionDeletes
+                                    | iceberg::spec::DataContentType::EqualityDeletes => {
+                                        metrics.delete_files_written.inc();
+                                        metrics.rows_deleted.inc_by(data_file.record_count());
+                                    }
+                                }
+                                metrics.bytes_written.inc_by(data_file.file_size_in_bytes());
                                 let file = BoundedDataFile::new(
                                     data_file,
                                     current_schema.as_ref().clone(),
@@ -1084,6 +1100,7 @@ fn commit_to_iceberg<G>(
     write_handle: impl Future<
         Output = anyhow::Result<WriteHandle<SourceData, (), Timestamp, StorageDiff>>,
     > + 'static,
+    metrics: IcebergSinkMetrics,
 ) -> (Stream<G, HealthStatusMessage>, PressOnDropButton)
 where
     G: Scope<Timestamp = Timestamp>,
@@ -1233,6 +1250,7 @@ where
                         let new_table = tx.clone().commit(catalog.as_ref()).await;
                         match new_table {
                             Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
+                                metrics.commit_conflicts.inc();
                                 let table = reload_table(
                                     catalog.as_ref(),
                                     connection.namespace.clone(),
@@ -1265,10 +1283,15 @@ where
 
                                 RetryResult::Ok(table)
                             }
-                            Err(e) => RetryResult::RetryableErr(anyhow!(e)),
+                            Err(e) => {
+                                metrics.commit_failures.inc();
+                                RetryResult::RetryableErr(anyhow!(e))
+                            },
                             Ok(table) => RetryResult::Ok(table)
                         }
                     }).await.context("failed to commit to iceberg")?;
+
+                    metrics.snapshots_committed.inc();
 
                     let mut expect_upper = write_handle.shared_upper();
                     loop {
@@ -1368,6 +1391,10 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
                 }
             };
 
+        let metrics = storage_state
+            .metrics
+            .get_iceberg_sink_metrics(sink_id, scope.index());
+
         let connection_for_minter = self.clone();
         let (minted_input, batch_descriptions, mint_status, mint_button) = mint_batch_descriptions(
             format!("{sink_id}-iceberg-mint"),
@@ -1387,6 +1414,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             connection_for_writer,
             storage_state.storage_configuration.clone(),
             Arc::new(arrow_schema_with_ids.clone()),
+            metrics.clone(),
         );
 
         let connection_for_committer = self.clone();
@@ -1400,6 +1428,7 @@ impl<G: Scope<Timestamp = Timestamp>> SinkRender<G> for IcebergSinkConnection {
             connection_for_committer,
             storage_state.storage_configuration.clone(),
             write_handle,
+            metrics.clone(),
         );
 
         let running_status = Some(HealthStatusMessage {

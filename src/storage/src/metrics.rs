@@ -194,4 +194,13 @@ impl StorageMetrics {
     ) -> sink::kafka::KafkaSinkMetrics {
         sink::kafka::KafkaSinkMetrics::new(&self.sink_defs.kafka_defs, sink_id)
     }
+
+    /// Get an `IcebergSinkMetrics` for the given configuration.
+    pub(crate) fn get_iceberg_sink_metrics(
+        &self,
+        sink_id: GlobalId,
+        worker_id: usize,
+    ) -> sink::iceberg::IcebergSinkMetrics {
+        sink::iceberg::IcebergSinkMetrics::new(&self.sink_defs.iceberg_defs, sink_id, worker_id)
+    }
 }
