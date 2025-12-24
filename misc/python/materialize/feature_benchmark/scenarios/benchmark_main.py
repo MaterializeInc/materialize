@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 import random
 import re
+import uuid
 from math import ceil, floor
 from pathlib import Path
 from textwrap import dedent
@@ -28,6 +29,7 @@ from materialize.feature_benchmark.scenario import (
     ScenarioDisabled,
 )
 from materialize.feature_benchmark.scenario_version import ScenarioVersion
+from materialize.mz_version import MzVersion
 from materialize.mzcompose.services.sql_server import SqlServer
 
 # for pdoc ignores
@@ -1427,6 +1429,111 @@ $ kafka-verify-topic sink=materialize.public.sink1 await-value-schema=true await
   /* B */
 """
             + str(self.n())
+        )
+
+
+class IcebergSink(Sink):
+    """Measure time to emit 1M records to an Iceberg sink.
+    Verification via DuckDB querying the Iceberg table from S3.
+    """
+
+    FIXED_SCALE = True
+
+    def __init__(
+        self, scale: float, mz_version: MzVersion, default_size: int, seed: int
+    ) -> None:
+        super().__init__(scale, mz_version, default_size, seed)
+        self._run_counter = 0
+        self._invocation_id = uuid.uuid4()
+
+    @classmethod
+    def can_run(cls, version: MzVersion) -> bool:
+        return version > MzVersion.create(26, 6, 0)
+
+    def version(self) -> ScenarioVersion:
+        return ScenarioVersion.create(1, 0, 0)
+
+    def init(self) -> Action:
+        # Enable feature flag, create source table, and set up connections
+        return TdAction(
+            f"""
+$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET enable_iceberg_sink = true;
+
+> CREATE TABLE iceberg_source (pk BIGINT, data BIGINT);
+
+> INSERT INTO iceberg_source SELECT x, x * 2 FROM generate_series(1, {self.n()}) AS x;
+
+> SELECT COUNT(*) FROM iceberg_source;
+{self.n()}
+
+> CREATE SECRET iceberg_secret AS '${{arg.s3-access-key}}';
+
+> CREATE CONNECTION aws_conn TO AWS (
+    ACCESS KEY ID = 'tduser',
+    SECRET ACCESS KEY = SECRET iceberg_secret,
+    ENDPOINT = '${{arg.aws-endpoint}}',
+    REGION = 'us-east-1'
+  );
+
+> CREATE CONNECTION polaris_conn TO ICEBERG CATALOG (
+    CATALOG TYPE = 'REST',
+    URL = 'http://polaris:8181/api/catalog',
+    CREDENTIAL = 'root:root',
+    WAREHOUSE = 'default_catalog',
+    SCOPE = 'PRINCIPAL_ROLE:ALL'
+  );
+
+> DROP CLUSTER IF EXISTS sink_cluster CASCADE
+
+> CREATE CLUSTER sink_cluster SIZE 'scale={self._default_size},workers=1', REPLICATION FACTOR 1;
+"""
+        )
+
+    def benchmark(self) -> MeasurementSource:
+        # Increment run counter to generate unique table names per benchmark run.
+        # This ensures each run writes to a fresh Iceberg table, avoiding issues
+        # where the sink resumes from the previous run's committed frontier.
+        # Include version to avoid conflicts between THIS and OTHER benchmark runs.
+        self._run_counter += 1
+        version_str = f"v{self._mz_version.major}_{self._mz_version.minor}_{self._mz_version.patch}"
+        table_name = f"benchmark_${{testdrive.seed}}_{self._invocation_id}_{version_str}_{self._run_counter}"
+        return Td(
+            f"""
+> DROP SINK IF EXISTS iceberg_sink;
+  /* A */
+
+> CREATE SINK iceberg_sink
+  IN CLUSTER sink_cluster
+  FROM iceberg_source
+  INTO ICEBERG CATALOG CONNECTION polaris_conn (
+    NAMESPACE 'default_namespace',
+    TABLE '{table_name}'
+  )
+  USING AWS CONNECTION aws_conn
+  KEY (pk) NOT ENFORCED
+  ENVELOPE UPSERT
+  WITH (COMMIT INTERVAL '1s');
+
+> SELECT messages_committed
+  FROM mz_internal.mz_sink_statistics
+  JOIN mz_internal.mz_sink_statuses
+    ON mz_sink_statistics.id = mz_sink_statuses.id
+  WHERE name = 'iceberg_sink';
+  /* B */
+{self.n()}
+
+$ duckdb-execute name=iceberg
+CREATE SECRET s3_secret (TYPE S3, KEY_ID 'tduser', SECRET '${{arg.s3-access-key}}', ENDPOINT '${{arg.aws-endpoint}}', URL_STYLE 'path', USE_SSL false, REGION 'minio');
+SET unsafe_enable_version_guessing = true;
+
+$ duckdb-query name=iceberg
+SELECT COUNT(*) FROM iceberg_scan('s3://test-bucket/default_namespace/{table_name}')
+{self.n()}
+
+> DROP SINK iceberg_sink;
+"""
         )
 
 

@@ -290,6 +290,7 @@ trufflehog_jq_filter_common() {
 trufflehog_jq_filter_files() {
   trufflehog_jq_filter_common | jq -c '
   select(
+    .Raw != "{SqlSe" and
     .Raw != "ghp_9fK8sL3x7TqR1vEzYm2pDaN4WjXbQzUtV0aN"
   )'
 }
