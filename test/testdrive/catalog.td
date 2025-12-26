@@ -737,7 +737,6 @@ mz_dataflow_addresses_per_worker             log   <null>    ""
 mz_dataflow_channels_per_worker              log   <null>    ""
 mz_dataflow_operator_reachability_raw        log   <null>    ""
 mz_dataflow_operators_per_worker             log   <null>    ""
-mz_dataflow_shutdown_durations_histogram_raw log   <null>    ""
 mz_message_counts_received_raw               log   <null>    ""
 mz_message_counts_sent_raw                   log   <null>    ""
 mz_message_batch_counts_received_raw         log   <null>    ""
@@ -774,8 +773,6 @@ mz_dataflow_operator_parents_per_worker ""
 mz_dataflow_operator_reachability ""
 mz_dataflow_operator_reachability_per_worker ""
 mz_dataflow_operators ""
-mz_dataflow_shutdown_durations_histogram ""
-mz_dataflow_shutdown_durations_histogram_per_worker ""
 mz_dataflows ""
 mz_dataflows_per_worker ""
 mz_expected_group_size_advice ""
@@ -811,7 +808,7 @@ test_table ""
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-264
+258
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

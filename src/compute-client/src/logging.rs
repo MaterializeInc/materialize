@@ -128,8 +128,6 @@ pub enum ComputeLog {
     ArrangementHeapCapacity,
     /// Arrangement heap allocations.
     ArrangementHeapAllocations,
-    /// A histogram over dataflow shutdown durations.
-    ShutdownDuration,
     /// Counts of errors in exported collections.
     ErrorCount,
     /// Hydration times of exported collections.
@@ -297,11 +295,6 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::PeekDuration) => RelationDesc::builder()
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("type", SqlScalarType::String.nullable(false))
-                .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
-                .finish(),
-
-            LogVariant::Compute(ComputeLog::ShutdownDuration) => RelationDesc::builder()
-                .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("duration_ns", SqlScalarType::UInt64.nullable(false))
                 .finish(),
 

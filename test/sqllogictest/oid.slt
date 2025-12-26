@@ -809,7 +809,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16682  mz_compute_error_counts_raw
 16683  mz_active_peeks_per_worker
 16684  mz_peek_durations_histogram_raw
-16685  mz_dataflow_shutdown_durations_histogram_raw
 16686  mz_arrangement_heap_size_raw
 16687  mz_arrangement_heap_capacity_raw
 16688  mz_arrangement_heap_allocations_raw
@@ -942,8 +941,6 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 16816  mz_timezone_names
 16817  mz_peek_durations_histogram_per_worker
 16818  mz_peek_durations_histogram
-16819  mz_dataflow_shutdown_durations_histogram_per_worker
-16820  mz_dataflow_shutdown_durations_histogram
 16821  mz_scheduling_elapsed_per_worker
 16822  mz_scheduling_elapsed
 16823  mz_compute_operator_durations_histogram_per_worker
