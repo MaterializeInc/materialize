@@ -351,10 +351,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                     for p in metadata["packages"]
                     if p["name"] not in ("mz-environmentd", "mz-balancerd")
                 ]
-                test_threads = multiprocessing.cpu_count() * 2
-                # Slower test runs, give them more resources to have less contention
-                if c.metadata_store() == "cockroach":
-                    test_threads //= 2
 
                 spawn.runv(
                     [
@@ -366,7 +362,11 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
                         "--all-features",
                         "--profile=ci",
                         "--cargo-profile=ci",
-                        f"--test-threads={test_threads}",
+                        # Be careful about raising this since it will cause
+                        # contention in cargo test when running against CRDB
+                        # for tagged builds. Also increases test flakiness in
+                        # general.
+                        f"--test-threads={multiprocessing.cpu_count()}",
                         *(
                             (
                                 pkgs
