@@ -139,6 +139,7 @@ pub struct Config {
     /// Enable outer join lowering implemented in database-issues#7561.
     pub enable_variadic_left_join_lowering: bool,
     pub enable_guard_subquery_tablefunc: bool,
+    pub enable_cast_elimination: bool,
 }
 
 impl From<&SystemVars> for Config {
@@ -147,6 +148,7 @@ impl From<&SystemVars> for Config {
             enable_new_outer_join_lowering: vars.enable_new_outer_join_lowering(),
             enable_variadic_left_join_lowering: vars.enable_variadic_left_join_lowering(),
             enable_guard_subquery_tablefunc: vars.enable_guard_subquery_tablefunc(),
+            enable_cast_elimination: vars.enable_cast_elimination(),
         }
     }
 }
@@ -970,6 +972,13 @@ impl HirScalarExpr {
                 }
                 CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
                 CallUnary {
+                    func: func::UnaryFunc::CastVarCharToString(_),
+                    expr,
+                    name: _,
+                } if context.config.enable_cast_elimination => {
+                    expr.applied_to(id_gen, col_map, cte_map, inner, subquery_map, context)?
+                }
+                CallUnary {
                     func,
                     expr,
                     name: _,
@@ -1656,7 +1665,12 @@ impl HirScalarExpr {
     /// - a window function call
     ///
     /// Should succeed if [`HirScalarExpr::is_constant`] would return true on `self`.
-    pub fn lower_uncorrelated(self) -> Result<MirScalarExpr, PlanError> {
+    ///
+    /// Set `enable_cast_elimination` to remove casts that are noops in MIR.
+    pub fn lower_uncorrelated(
+        self,
+        enable_cast_elimination: bool,
+    ) -> Result<MirScalarExpr, PlanError> {
         use MirScalarExpr as SS;
 
         use HirScalarExpr::*;
@@ -1666,12 +1680,17 @@ impl HirScalarExpr {
             Literal(datum, typ, _name) => SS::Literal(Ok(datum), typ),
             CallUnmaterializable(func, _name) => SS::CallUnmaterializable(func),
             CallUnary {
+                func: func::UnaryFunc::CastVarCharToString(_),
+                expr,
+                name: _,
+            } if enable_cast_elimination => expr.lower_uncorrelated(enable_cast_elimination)?,
+            CallUnary {
                 func,
                 expr,
                 name: _,
             } => SS::CallUnary {
                 func,
-                expr: Box::new(expr.lower_uncorrelated()?),
+                expr: Box::new(expr.lower_uncorrelated(enable_cast_elimination)?),
             },
             CallBinary {
                 func,
@@ -1680,8 +1699,8 @@ impl HirScalarExpr {
                 name: _,
             } => SS::CallBinary {
                 func,
-                expr1: Box::new(expr1.lower_uncorrelated()?),
-                expr2: Box::new(expr2.lower_uncorrelated()?),
+                expr1: Box::new(expr1.lower_uncorrelated(enable_cast_elimination)?),
+                expr2: Box::new(expr2.lower_uncorrelated(enable_cast_elimination)?),
             },
             CallVariadic {
                 func,
@@ -1691,7 +1710,7 @@ impl HirScalarExpr {
                 func,
                 exprs: exprs
                     .into_iter()
-                    .map(|expr| expr.lower_uncorrelated())
+                    .map(|expr| expr.lower_uncorrelated(enable_cast_elimination))
                     .collect::<Result<_, _>>()?,
             },
             If {
@@ -1700,9 +1719,9 @@ impl HirScalarExpr {
                 els,
                 name: _,
             } => SS::If {
-                cond: Box::new(cond.lower_uncorrelated()?),
-                then: Box::new(then.lower_uncorrelated()?),
-                els: Box::new(els.lower_uncorrelated()?),
+                cond: Box::new(cond.lower_uncorrelated(enable_cast_elimination)?),
+                then: Box::new(then.lower_uncorrelated(enable_cast_elimination)?),
+                els: Box::new(els.lower_uncorrelated(enable_cast_elimination)?),
             },
             Select { .. } | Exists { .. } | Parameter(..) | Column(..) | Windowing(..) => {
                 sql_bail!(

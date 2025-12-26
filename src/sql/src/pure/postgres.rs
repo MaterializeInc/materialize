@@ -622,7 +622,7 @@ pub(crate) fn generate_column_casts(
                                 ),
                             ],
                         )
-                        .lower_uncorrelated()
+                        .lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())
                         .expect("no correlation"),
                     ));
                     continue;
@@ -670,18 +670,20 @@ pub(crate) fn generate_column_casts(
         // This is acceptable because we don't expect the OIDs from
         // an external PG source to be unilaterally usable in
         // resolving item names in MZ.
-        let mir_cast = cast.lower_uncorrelated().map_err(|_e| {
-            tracing::info!(
-                "cannot ingest {:?} data from PG source because cast is correlated",
-                scalar_type
-            );
+        let mir_cast = cast
+            .lower_uncorrelated(scx.catalog.system_vars().enable_cast_elimination())
+            .map_err(|_e| {
+                tracing::info!(
+                    "cannot ingest {:?} data from PG source because cast is correlated",
+                    scalar_type
+                );
 
-            PlanError::TableContainsUningestableTypes {
-                name: table.name.to_string(),
-                type_: scx.humanize_scalar_type(&scalar_type, false),
-                column: column.name.to_string(),
-            }
-        })?;
+                PlanError::TableContainsUningestableTypes {
+                    name: table.name.to_string(),
+                    type_: scx.humanize_scalar_type(&scalar_type, false),
+                    column: column.name.to_string(),
+                }
+            })?;
 
         table_cast.push((cast_type, mir_cast));
     }

@@ -52,7 +52,13 @@ impl Coordinator {
                 session: ctx.session(),
                 catalog_state: self.catalog().state(),
             };
-            let mut from = from.lower_uncorrelated()?;
+
+            let mut from = from.lower_uncorrelated(
+                self.catalog()
+                    .state()
+                    .system_config()
+                    .enable_cast_elimination(),
+            )?;
             prep_scalar_expr(&mut from, style)?;
 
             // TODO(cf3): Add structured errors for the below uses of `coord_bail!`
