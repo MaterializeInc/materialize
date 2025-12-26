@@ -91,6 +91,16 @@ impl Pretty {
             Statement::Copy(v) => self.doc_copy(v),
             Statement::Subscribe(v) => self.doc_subscribe(v),
             Statement::CreateSource(v) => self.doc_create_source(v),
+            Statement::CreateWebhookSource(v) => self.doc_create_webhook_source(v),
+            Statement::CreateTable(v) => self.doc_create_table(v),
+            Statement::CreateTableFromSource(v) => self.doc_create_table_from_source(v),
+            Statement::CreateConnection(v) => self.doc_create_connection(v),
+            Statement::CreateSink(v) => self.doc_create_sink(v),
+            Statement::CreateSubsource(v) => self.doc_create_subsource(v),
+            Statement::CreateCluster(v) => self.doc_create_cluster(v),
+            Statement::CreateClusterReplica(v) => self.doc_create_cluster_replica(v),
+            Statement::CreateNetworkPolicy(v) => self.doc_create_network_policy(v),
+            Statement::CreateIndex(v) => self.doc_create_index(v),
             _ => self.doc_display(v, "statement"),
         }
     }

@@ -181,7 +181,7 @@ ALTER INDEX i SET (RETAIN HISTORY = FOR '1000 hours')
 query T
 SELECT create_sql FROM (SHOW CREATE INDEX i)
 ----
-CREATE INDEX i IN CLUSTER quickstart ON materialize.public.t (a) WITH (RETAIN HISTORY = FOR '1000 hours');
+CREATE INDEX i⏎IN CLUSTER quickstart⏎ON materialize.public.t (a)⏎WITH (RETAIN HISTORY = FOR '1000 hours');
 
 statement ok
 ALTER INDEX i RESET (RETAIN HISTORY)
