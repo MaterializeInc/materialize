@@ -40,6 +40,7 @@ use mz_cloud_resources::crd::{
     ManagedResource,
     balancer::v1alpha1::{Balancer, BalancerSpec},
     console::v1alpha1::{BalancerdRef, Console, ConsoleSpec, HttpConnectionScheme},
+    environment::v1alpha1::{Environment, EnvironmentSpec},
     materialize::v1alpha1::{Materialize, MaterializeRolloutStrategy, MaterializeStatus},
 };
 use mz_license_keys::validate;
@@ -66,7 +67,6 @@ pub struct Config {
     pub console_image_tag_map: Vec<KeyValueArg<String, String>>,
 
     pub aws_account_id: Option<String>,
-    pub environmentd_iam_role_arn: Option<String>,
     pub environmentd_connection_role_arn: Option<String>,
     pub aws_secrets_controller_tags: Vec<String>,
     pub environmentd_availability_zones: Option<Vec<String>>,
@@ -77,7 +77,6 @@ pub struct Config {
     pub enable_internal_statement_logging: bool,
     pub disable_statement_logging: bool,
 
-    pub orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
     pub environmentd_node_selector: Vec<KeyValueArg<String, String>>,
     pub environmentd_affinity: Option<Affinity>,
     pub environmentd_tolerations: Option<Vec<Toleration>>,
@@ -86,11 +85,6 @@ pub struct Config {
     pub clusterd_affinity: Option<Affinity>,
     pub clusterd_tolerations: Option<Vec<Toleration>>,
     pub image_pull_policy: KubernetesImagePullPolicy,
-    pub network_policies_internal_enabled: bool,
-    pub network_policies_ingress_enabled: bool,
-    pub network_policies_ingress_cidrs: Vec<String>,
-    pub network_policies_egress_enabled: bool,
-    pub network_policies_egress_cidrs: Vec<String>,
 
     pub environmentd_cluster_replica_sizes: Option<String>,
     pub bootstrap_default_cluster_replica_size: Option<String>,
@@ -118,7 +112,6 @@ pub struct Config {
     pub disable_license_key_checks: bool,
 
     pub tracing: TracingCliArgs,
-    pub orchestratord_namespace: String,
 }
 
 pub struct Context {
@@ -272,6 +265,7 @@ impl k8s_controller::Context for Context {
         mz: &Self::Resource,
     ) -> Result<Option<Action>, Self::Error> {
         let mz_api: Api<Materialize> = Api::namespaced(client.clone(), &mz.namespace());
+        let environment_api: Api<Environment> = Api::namespaced(client.clone(), &mz.namespace());
         let balancer_api: Api<Balancer> = Api::namespaced(client.clone(), &mz.namespace());
         let console_api: Api<Console> = Api::namespaced(client.clone(), &mz.namespace());
         let secret_api: Api<Secret> = Api::namespaced(client.clone(), &mz.namespace());
@@ -359,6 +353,20 @@ impl k8s_controller::Context for Context {
         }
 
         self.check_environment_id_conflicts(mz)?;
+
+        let environment = Environment {
+            metadata: mz.managed_resource_meta(mz.name_unchecked()),
+            spec: EnvironmentSpec {
+                environmentd_iam_role_arn: mz.spec.environmentd_iam_role_arn.clone(),
+                service_account_name: mz.spec.service_account_name.clone(),
+                service_account_annotations: mz.spec.service_account_annotations.clone(),
+                service_account_labels: mz.spec.service_account_labels.clone(),
+                internal_certificate_spec: mz.spec.internal_certificate_spec.clone(),
+                resource_id: Some(status.resource_id.clone()),
+            },
+            status: None,
+        };
+        apply_resource(&environment_api, &environment).await?;
 
         // we compare the hash against the environment resources generated
         // for the current active generation, since that's what we expect to
