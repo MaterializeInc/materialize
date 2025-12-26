@@ -200,6 +200,11 @@ else
   # for dir in aws/modules/operator azure/modules/operator gcp/modules/operator kubernetes/modules/materialize-instance; do
   #   terraform-docs --config .terraform-docs.yml $dir > $dir/README.md
   # done
+  # curl -LsSf https://astral.sh/uv/install.sh | sh
+  # source $HOME/.local/bin/env
+  # uv install python 3.14
+  # uv run python scripts/generate_terraform_types.py
+  # uv run python scripts/check_schema_sync.py
   # git config user.email "noreply@materialize.com"
   # git config user.name "Buildkite"
   # git add aws/modules/operator/variables.tf azure/modules/operator/variables.tf gcp/modules/operator/variables.tf kubernetes/modules/materialize-instance/variables.tf aws/modules/operator/README.md azure/modules/operator/README.md gcp/modules/operator/README.md kubernetes/modules/materialize-instance/README.md
