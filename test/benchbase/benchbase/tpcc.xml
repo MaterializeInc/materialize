@@ -1,0 +1,55 @@
+<?xml version="1.0"?>
+<parameters>
+
+    <!-- Connection details -->
+    <type>POSTGRES</type>
+    <driver>org.postgresql.Driver</driver>
+    <url>jdbc:postgresql://postgres:5432/postgres?sslmode=disable&amp;ApplicationName=tpcc&amp;reWriteBatchedInserts=true</url>
+    <username>postgres</username>
+    <password>postgres</password>
+    <reconnectOnConnectionFailure>true</reconnectOnConnectionFailure>
+    <isolation>TRANSACTION_SERIALIZABLE</isolation>
+    <batchsize>128</batchsize>
+
+    <!-- Scale factor is the number of warehouses in TPCC -->
+    <scalefactor>10</scalefactor>
+
+    <!-- The workload -->
+    <terminals>10</terminals>
+    <works>
+        <work>
+            <time>6</time>
+            <rate>10000</rate>
+            <weights>45,43,4</weights>
+        </work>
+    </works>
+
+    <!-- TPCC specific -->
+    <transactiontypes>
+        <transactiontype>
+            <name>NewOrder</name>
+            <!--<preExecutionWait>18000</preExecutionWait>-->
+            <!--<postExecutionWait>12000</postExecutionWait>-->
+        </transactiontype>
+        <transactiontype>
+            <name>Payment</name>
+            <!--<preExecutionWait>3000</preExecutionWait>-->
+            <!--<postExecutionWait>12000</postExecutionWait>-->
+        </transactiontype>
+        <!--
+        <transactiontype>
+            <name>OrderStatus</name>
+        </transactiontype>
+        -->
+        <transactiontype>
+            <name>Delivery</name>
+            <!--<preExecutionWait>2000</preExecutionWait>-->
+            <!--<postExecutionWait>5000</postExecutionWait>-->
+        </transactiontype>
+        <!--
+        <transactiontype>
+            <name>StockLevel</name>
+        </transactiontype>
+        -->
+    </transactiontypes>
+</parameters>
