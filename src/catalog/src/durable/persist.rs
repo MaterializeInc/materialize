@@ -11,7 +11,7 @@
 mod tests;
 
 use std::cmp::max;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -359,6 +359,9 @@ pub(crate) trait ApplyUpdate<T: IntoStateUpdateKindJson> {
 /// before opening we cache all config updates but don't cache them after opening. These behaviors
 /// are customizable via the `T: TryIntoStateUpdateKind` and `U: ApplyUpdate<T>` generic parameters
 /// respectively.
+///
+/// The [`PersistHandle`] allows for a single subscriber per handle, that can subscribe to catalog
+/// changes via [`PersistHandle::sync_to_current_updates`] or [`PersistHandle::sync_updates`].
 #[derive(Debug)]
 pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     /// The [`Mode`] that this catalog was opened in.
@@ -377,6 +380,8 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     ///
     /// We use a tuple instead of [`StateUpdate`] to make consolidation easier.
     pub(crate) snapshot: Vec<(T, Timestamp, Diff)>,
+    /// Times less than or equal to this have been consumed by the subscriber.
+    subscriber_upper: Antichain<Timestamp>,
     /// Applies custom processing, filtering, and fencing for each individual update.
     update_applier: U,
     /// The current upper of the persist shard.
@@ -391,7 +396,7 @@ pub(crate) struct PersistHandle<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> {
     metrics: Arc<Metrics>,
 }
 
-impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
+impl<T: TryIntoStateUpdateKind + 'static, U: ApplyUpdate<T>> PersistHandle<T, U> {
     /// Increment the version in the catalog upgrade shard to the code's current version.
     async fn increment_catalog_upgrade_shard_version(&self, organization_id: Uuid) {
         let upgrade_shard_id = shard_id(organization_id, UPGRADE_SEED);
@@ -687,18 +692,31 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
             self.snapshot
         );
 
-        let new_ts = self
+        // Only consolidate updates that have been consumed by the subscriber.
+        let max_consumed_ts = self
             .snapshot
-            .last()
+            .iter()
+            .rfind(|(_, ts, _)| {
+                timely::order::PartialOrder::less_than(
+                    &Antichain::from_elem(*ts),
+                    &self.subscriber_upper,
+                )
+            })
             .map(|(_, ts, _)| *ts)
             .unwrap_or_else(Timestamp::minimum);
         for (_, ts, _) in &mut self.snapshot {
-            *ts = new_ts;
+            if self.subscriber_upper.less_equal(ts) {
+                break;
+            }
+            *ts = max_consumed_ts;
         }
         differential_dataflow::consolidation::consolidate_updates(&mut self.snapshot);
+        self.snapshot.sort_by_key(|(_, ts, _)| *ts);
     }
 
     /// Execute and return the results of `f` on the current catalog trace.
+    ///
+    /// IMPORTANT: The trace WILL NOT be consolidated.
     ///
     /// Will return an error if the catalog has been fenced out.
     async fn with_trace<R>(
@@ -1064,6 +1082,9 @@ impl UnopenedPersistCatalogState {
             shard_id: catalog_shard_id,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
+            // Unopened catalogs do not support subscribers, so we mark all times as already
+            // consumed with an empty `Antichain`.
+            subscriber_upper: Antichain::new(),
             update_applier: UnopenedCatalogStateInner::new(organization_id),
             upper,
             fenceable_token: FenceableToken::new(deploy_generation),
@@ -1222,6 +1243,7 @@ impl UnopenedPersistCatalogState {
             fenceable_token: self.fenceable_token,
             // Initialize empty in-memory state.
             snapshot: Vec::new(),
+            subscriber_upper: Antichain::from_elem(Timestamp::minimum()),
             update_applier: CatalogStateInner::new(),
             catalog_content_version: self.catalog_content_version,
             bootstrap_complete: false,
@@ -1528,16 +1550,11 @@ impl OpenableDurableCatalogState for UnopenedPersistCatalogState {
 
 /// Applies updates for an opened catalog.
 #[derive(Debug)]
-struct CatalogStateInner {
-    /// A trace of all catalog updates that can be consumed by some higher layer.
-    updates: VecDeque<memory::objects::StateUpdate>,
-}
+struct CatalogStateInner {}
 
 impl CatalogStateInner {
     fn new() -> CatalogStateInner {
-        CatalogStateInner {
-            updates: VecDeque::new(),
-        }
+        CatalogStateInner {}
     }
 }
 
@@ -1553,15 +1570,6 @@ impl ApplyUpdate<StateUpdateKind> for CatalogStateInner {
                 .collection_entries
                 .with_label_values(&[&collection_type.to_string()])
                 .add(update.diff.into_inner());
-        }
-
-        {
-            let update: Option<memory::objects::StateUpdate> = (&update)
-                .try_into()
-                .expect("invalid persisted update: {update:#?}");
-            if let Some(update) = update {
-                self.updates.push_back(update);
-            }
         }
 
         match (update.kind, update.diff) {
@@ -1641,8 +1649,8 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
             Ok(trace
                 .into_iter()
                 .rev()
-                .filter_map(|(kind, _, _)| match kind {
-                    StateUpdateKind::IdAllocator(key, value) if key.name == id_type => {
+                .filter_map(|(kind, _, diff)| match (kind, diff) {
+                    (StateUpdateKind::IdAllocator(key, value), 1) if key.name == id_type => {
                         Some(value.next_id)
                     }
                     _ => None,
@@ -1681,20 +1689,26 @@ impl ReadOnlyDurableCatalogState for PersistCatalogState {
         &mut self,
         target_upper: mz_repr::Timestamp,
     ) -> Result<Vec<memory::objects::StateUpdate>, CatalogError> {
+        // TODO(jkosh44) Once a subscriber has consumed an audit log, we no longer want to keep it
+        // in memory for opened catalogs but we do want to keep it in memory for unopened catalogs.
+
         self.sync(target_upper).await?;
         let mut updates = Vec::new();
-        while let Some(update) = self.update_applier.updates.front() {
-            if update.ts >= target_upper {
-                break;
+        for (kind, update_ts, diff) in self.snapshot.iter().filter(|(_, update_ts, _)| {
+            self.subscriber_upper.less_equal(update_ts) && update_ts < &target_upper
+        }) {
+            let kind: Option<memory::objects::StateUpdateKind> = kind.try_into()?;
+            let update = kind.map(|kind| memory::objects::StateUpdate {
+                kind,
+                ts: update_ts.clone(),
+                diff: diff.clone().try_into().expect("invalid diff"),
+            });
+            if let Some(update) = update {
+                updates.push(update);
             }
-
-            let update = self
-                .update_applier
-                .updates
-                .pop_front()
-                .expect("peeked above");
-            updates.push(update);
         }
+        self.subscriber_upper = Antichain::from_elem(target_upper);
+        self.consolidate();
         Ok(updates)
     }
 
@@ -2105,13 +2119,23 @@ impl UnopenedPersistCatalogState {
     /// Generates a [`Vec<StateUpdate>`] that contain all updates to the catalog
     /// state.
     ///
-    /// The output is consolidated and sorted by timestamp in ascending order and the current upper.
+    /// The output is consolidated and sorted by timestamp in ascending order.
     async fn current_snapshot(
         &mut self,
     ) -> Result<impl IntoIterator<Item = StateUpdate> + '_, CatalogError> {
         self.sync_to_current_upper().await?;
-        self.consolidate();
-        Ok(self.snapshot.iter().cloned().map(|(kind, ts, diff)| {
+        let mut snapshot = self.snapshot.clone();
+
+        let new_ts = snapshot
+            .last()
+            .map(|(_, ts, _)| *ts)
+            .unwrap_or_else(Timestamp::minimum);
+        for (_, ts, _) in &mut snapshot {
+            *ts = new_ts;
+        }
+        differential_dataflow::consolidation::consolidate_updates(&mut snapshot);
+
+        Ok(snapshot.into_iter().map(|(kind, ts, diff)| {
             let kind = TryIntoStateUpdateKind::try_into(kind).expect("kind decoding error");
             StateUpdate { kind, ts, diff }
         }))
