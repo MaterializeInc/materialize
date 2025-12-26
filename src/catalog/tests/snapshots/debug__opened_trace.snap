@@ -9,31 +9,25 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 1,
-                                    event_type: 4,
-                                    object_type: 1,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        AlterDefaultPrivilegeV1(
-                                            AlterDefaultPrivilegeV1 {
-                                                role_id: "p",
-                                                database_id: None,
-                                                schema_id: None,
-                                                grantee_id: "s2",
-                                                privileges: "U",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 1,
+                                event_type: Grant,
+                                object_type: Cluster,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: AlterDefaultPrivilegeV1(
+                                    AlterDefaultPrivilegeV1 {
+                                        role_id: "p",
+                                        database_id: None,
+                                        schema_id: None,
+                                        grantee_id: "s2",
+                                        privileges: "U",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -46,31 +40,25 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 2,
-                                    event_type: 4,
-                                    object_type: 4,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        AlterDefaultPrivilegeV1(
-                                            AlterDefaultPrivilegeV1 {
-                                                role_id: "p",
-                                                database_id: None,
-                                                schema_id: None,
-                                                grantee_id: "s2",
-                                                privileges: "U",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 2,
+                                event_type: Grant,
+                                object_type: Database,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: AlterDefaultPrivilegeV1(
+                                    AlterDefaultPrivilegeV1 {
+                                        role_id: "p",
+                                        database_id: None,
+                                        schema_id: None,
+                                        grantee_id: "s2",
+                                        privileges: "U",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -83,31 +71,25 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 3,
-                                    event_type: 4,
-                                    object_type: 10,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        AlterDefaultPrivilegeV1(
-                                            AlterDefaultPrivilegeV1 {
-                                                role_id: "p",
-                                                database_id: None,
-                                                schema_id: None,
-                                                grantee_id: "s2",
-                                                privileges: "U",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 3,
+                                event_type: Grant,
+                                object_type: Schema,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: AlterDefaultPrivilegeV1(
+                                    AlterDefaultPrivilegeV1 {
+                                        role_id: "p",
+                                        database_id: None,
+                                        schema_id: None,
+                                        grantee_id: "s2",
+                                        privileges: "U",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -120,31 +102,25 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 4,
-                                    event_type: 4,
-                                    object_type: 14,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        AlterDefaultPrivilegeV1(
-                                            AlterDefaultPrivilegeV1 {
-                                                role_id: "p",
-                                                database_id: None,
-                                                schema_id: None,
-                                                grantee_id: "p",
-                                                privileges: "U",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 4,
+                                event_type: Grant,
+                                object_type: Type,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: AlterDefaultPrivilegeV1(
+                                    AlterDefaultPrivilegeV1 {
+                                        role_id: "p",
+                                        database_id: None,
+                                        schema_id: None,
+                                        grantee_id: "p",
+                                        privileges: "U",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -157,28 +133,22 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 5,
-                                    event_type: 1,
-                                    object_type: 4,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        IdNameV1(
-                                            IdNameV1 {
-                                                id: "u1",
-                                                name: "materialize",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 5,
+                                event_type: Create,
+                                object_type: Database,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: IdNameV1(
+                                    IdNameV1 {
+                                        id: "u1",
+                                        name: "materialize",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -191,30 +161,24 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 6,
-                                    event_type: 4,
-                                    object_type: 4,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        UpdatePrivilegeV1(
-                                            UpdatePrivilegeV1 {
-                                                object_id: "Du1",
-                                                grantee_id: "p",
-                                                grantor_id: "s1",
-                                                privileges: "U",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 6,
+                                event_type: Grant,
+                                object_type: Database,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: UpdatePrivilegeV1(
+                                    UpdatePrivilegeV1 {
+                                        object_id: "Du1",
+                                        grantee_id: "p",
+                                        grantor_id: "s1",
+                                        privileges: "U",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -227,33 +191,25 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 7,
-                                    event_type: 1,
-                                    object_type: 10,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        SchemaV2(
-                                            SchemaV2 {
-                                                id: "3",
-                                                name: "public",
-                                                database_name: Some(
-                                                    StringWrapper {
-                                                        inner: "materialize",
-                                                    },
-                                                ),
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 7,
+                                event_type: Create,
+                                object_type: Schema,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: SchemaV2(
+                                    SchemaV2 {
+                                        id: "3",
+                                        name: "public",
+                                        database_name: Some(
+                                            "materialize",
+                                        ),
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -266,28 +222,22 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 8,
-                                    event_type: 1,
-                                    object_type: 18,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        IdNameV1(
-                                            IdNameV1 {
-                                                id: "u1",
-                                                name: "default",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 8,
+                                event_type: Create,
+                                object_type: NetworkPolicy,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: IdNameV1(
+                                    IdNameV1 {
+                                        id: "u1",
+                                        name: "default",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -300,28 +250,22 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 9,
-                                    event_type: 1,
-                                    object_type: 1,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        IdNameV1(
-                                            IdNameV1 {
-                                                id: "u1",
-                                                name: "quickstart",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 9,
+                                event_type: Create,
+                                object_type: Cluster,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: IdNameV1(
+                                    IdNameV1 {
+                                        id: "u1",
+                                        name: "quickstart",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -334,30 +278,24 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 10,
-                                    event_type: 4,
-                                    object_type: 1,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        UpdatePrivilegeV1(
-                                            UpdatePrivilegeV1 {
-                                                object_id: "Cu1",
-                                                grantee_id: "p",
-                                                grantor_id: "s1",
-                                                privileges: "U",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 10,
+                                event_type: Grant,
+                                object_type: Cluster,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: UpdatePrivilegeV1(
+                                    UpdatePrivilegeV1 {
+                                        object_id: "Cu1",
+                                        grantee_id: "p",
+                                        grantor_id: "s1",
+                                        privileges: "U",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -370,47 +308,31 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 11,
-                                    event_type: 1,
-                                    object_type: 2,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        CreateClusterReplicaV4(
-                                            CreateClusterReplicaV4 {
-                                                cluster_id: "u1",
-                                                cluster_name: "quickstart",
-                                                replica_id: Some(
-                                                    StringWrapper {
-                                                        inner: "u1",
-                                                    },
-                                                ),
-                                                replica_name: "r1",
-                                                logical_size: "scale=1,workers=1",
-                                                billed_as: None,
-                                                internal: false,
-                                                reason: Some(
-                                                    CreateOrDropClusterReplicaReasonV1 {
-                                                        reason: Some(
-                                                            System(
-                                                                Empty,
-                                                            ),
-                                                        ),
-                                                    },
-                                                ),
-                                                scheduling_policies: None,
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 11,
+                                event_type: Create,
+                                object_type: ClusterReplica,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: CreateClusterReplicaV4(
+                                    CreateClusterReplicaV4 {
+                                        cluster_id: "u1",
+                                        cluster_name: "quickstart",
+                                        replica_id: Some(
+                                            "u1",
+                                        ),
+                                        replica_name: "r1",
+                                        logical_size: "scale=1,workers=1",
+                                        billed_as: None,
+                                        internal: false,
+                                        reason: System,
+                                        scheduling_policies: None,
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -423,30 +345,24 @@ Trace {
             (
                 (
                     AuditLogKey {
-                        event: Some(
-                            V1(
-                                AuditLogEventV1 {
-                                    id: 12,
-                                    event_type: 4,
-                                    object_type: 16,
-                                    user: None,
-                                    occurred_at: Some(
-                                        EpochMillis {
-                                            millis: 0,
-                                        },
-                                    ),
-                                    details: Some(
-                                        UpdatePrivilegeV1(
-                                            UpdatePrivilegeV1 {
-                                                object_id: "SYSTEM",
-                                                grantee_id: "s1",
-                                                grantor_id: "s1",
-                                                privileges: "RBNP",
-                                            },
-                                        ),
-                                    ),
+                        event: V1(
+                            AuditLogEventV1 {
+                                id: 12,
+                                event_type: Grant,
+                                object_type: System,
+                                user: None,
+                                occurred_at: EpochMillis {
+                                    millis: 0,
                                 },
-                            ),
+                                details: UpdatePrivilegeV1(
+                                    UpdatePrivilegeV1 {
+                                        object_id: "SYSTEM",
+                                        grantee_id: "s1",
+                                        grantor_id: "s1",
+                                        privileges: "RBNP",
+                                    },
+                                ),
+                            },
                         ),
                     },
                     (),
@@ -463,139 +379,69 @@ Trace {
             (
                 (
                     ClusterKey {
-                        id: Some(
-                            ClusterId {
-                                value: Some(
-                                    User(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        id: User(
+                            1,
                         ),
                     },
                     ClusterValue {
                         name: "quickstart",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
-                        config: Some(
-                            ClusterConfig {
-                                workload_class: None,
-                                variant: Some(
-                                    Managed(
-                                        ManagedCluster {
-                                            size: "scale=1,workers=1",
-                                            replication_factor: 1,
-                                            availability_zones: [],
-                                            logging: Some(
-                                                ReplicaLogging {
-                                                    log_logging: false,
-                                                    interval: Some(
-                                                        Duration {
-                                                            secs: 1,
-                                                            nanos: 0,
-                                                        },
-                                                    ),
-                                                },
-                                            ),
-                                            optimizer_feature_overrides: [],
-                                            schedule: Some(
-                                                ClusterSchedule {
-                                                    value: Some(
-                                                        Manual(
-                                                            Empty,
-                                                        ),
-                                                    ),
-                                                },
-                                            ),
-                                        },
-                                    ),
-                                ),
-                            },
-                        ),
+                        config: ClusterConfig {
+                            workload_class: None,
+                            variant: Managed(
+                                ManagedCluster {
+                                    size: "scale=1,workers=1",
+                                    replication_factor: 1,
+                                    availability_zones: [],
+                                    logging: ReplicaLogging {
+                                        log_logging: false,
+                                        interval: Some(
+                                            Duration {
+                                                secs: 1,
+                                                nanos: 0,
+                                            },
+                                        ),
+                                    },
+                                    optimizer_feature_overrides: [],
+                                    schedule: Manual,
+                                },
+                            ),
+                        },
                     },
                 ),
                 2,
@@ -613,61 +459,37 @@ Trace {
             (
                 (
                     ClusterReplicaKey {
-                        id: Some(
-                            ReplicaId {
-                                value: Some(
-                                    User(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        id: User(
+                            1,
                         ),
                     },
                     ClusterReplicaValue {
-                        cluster_id: Some(
-                            ClusterId {
-                                value: Some(
-                                    User(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        cluster_id: User(
+                            1,
                         ),
                         name: "r1",
-                        config: Some(
-                            ReplicaConfig {
-                                logging: Some(
-                                    ReplicaLogging {
-                                        log_logging: false,
-                                        interval: Some(
-                                            Duration {
-                                                secs: 1,
-                                                nanos: 0,
-                                            },
-                                        ),
+                        config: ReplicaConfig {
+                            logging: ReplicaLogging {
+                                log_logging: false,
+                                interval: Some(
+                                    Duration {
+                                        secs: 1,
+                                        nanos: 0,
                                     },
                                 ),
-                                location: Some(
-                                    Managed(
-                                        ManagedLocation {
-                                            size: "scale=1,workers=1",
-                                            availability_zone: None,
-                                            internal: false,
-                                            billed_as: None,
-                                            pending: false,
-                                        },
-                                    ),
-                                ),
                             },
-                        ),
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                            location: Managed(
+                                ManagedLocation {
+                                    size: "scale=1,workers=1",
+                                    availability_zone: None,
+                                    internal: false,
+                                    billed_as: None,
+                                    pending: false,
+                                },
+                            ),
+                        },
+                        owner_id: System(
+                            1,
                         ),
                     },
                 ),
@@ -704,102 +526,46 @@ Trace {
             (
                 (
                     DatabaseKey {
-                        id: Some(
-                            DatabaseId {
-                                value: Some(
-                                    User(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        id: User(
+                            1,
                         ),
                     },
                     DatabaseValue {
                         name: "materialize",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 20000,
@@ -816,35 +582,17 @@ Trace {
         values: [
             (
                 (
-                    DefaultPrivilegesKey {
-                        role_id: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
+                    DefaultPrivilegeKey {
+                        role_id: Public,
                         database_id: None,
                         schema_id: None,
-                        object_type: 7,
-                        grantee: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
+                        object_type: Type,
+                        grantee: Public,
                     },
-                    DefaultPrivilegesValue {
-                        privileges: Some(
-                            AclMode {
-                                bitflags: 256,
-                            },
-                        ),
+                    DefaultPrivilegeValue {
+                        privileges: AclMode {
+                            bitflags: 256,
+                        },
                     },
                 ),
                 2,
@@ -854,35 +602,19 @@ Trace {
             ),
             (
                 (
-                    DefaultPrivilegesKey {
-                        role_id: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
+                    DefaultPrivilegeKey {
+                        role_id: Public,
                         database_id: None,
                         schema_id: None,
-                        object_type: 9,
-                        grantee: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        2,
-                                    ),
-                                ),
-                            },
+                        object_type: Cluster,
+                        grantee: System(
+                            2,
                         ),
                     },
-                    DefaultPrivilegesValue {
-                        privileges: Some(
-                            AclMode {
-                                bitflags: 256,
-                            },
-                        ),
+                    DefaultPrivilegeValue {
+                        privileges: AclMode {
+                            bitflags: 256,
+                        },
                     },
                 ),
                 2,
@@ -892,35 +624,19 @@ Trace {
             ),
             (
                 (
-                    DefaultPrivilegesKey {
-                        role_id: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
+                    DefaultPrivilegeKey {
+                        role_id: Public,
                         database_id: None,
                         schema_id: None,
-                        object_type: 13,
-                        grantee: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        2,
-                                    ),
-                                ),
-                            },
+                        object_type: Database,
+                        grantee: System(
+                            2,
                         ),
                     },
-                    DefaultPrivilegesValue {
-                        privileges: Some(
-                            AclMode {
-                                bitflags: 256,
-                            },
-                        ),
+                    DefaultPrivilegeValue {
+                        privileges: AclMode {
+                            bitflags: 256,
+                        },
                     },
                 ),
                 2,
@@ -930,35 +646,19 @@ Trace {
             ),
             (
                 (
-                    DefaultPrivilegesKey {
-                        role_id: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
+                    DefaultPrivilegeKey {
+                        role_id: Public,
                         database_id: None,
                         schema_id: None,
-                        object_type: 14,
-                        grantee: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        2,
-                                    ),
-                                ),
-                            },
+                        object_type: Schema,
+                        grantee: System(
+                            2,
                         ),
                     },
-                    DefaultPrivilegesValue {
-                        privileges: Some(
-                            AclMode {
-                                bitflags: 256,
-                            },
-                        ),
+                    DefaultPrivilegeValue {
+                        privileges: AclMode {
+                            bitflags: 256,
+                        },
                     },
                 ),
                 2,
@@ -972,10 +672,10 @@ Trace {
         values: [
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "auditlog",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 13,
                     },
                 ),
@@ -986,10 +686,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "database",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 2,
                     },
                 ),
@@ -1000,10 +700,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "oid",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 20002,
                     },
                 ),
@@ -1014,10 +714,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "replica",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 2,
                     },
                 ),
@@ -1028,10 +728,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "schema",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 9,
                     },
                 ),
@@ -1042,10 +742,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "storage_usage",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 1,
                     },
                 ),
@@ -1056,10 +756,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "system",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 1,
                     },
                 ),
@@ -1070,10 +770,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "system_compute",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 1,
                     },
                 ),
@@ -1084,10 +784,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "system_replica",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 1,
                     },
                 ),
@@ -1098,10 +798,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "user",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 1,
                     },
                 ),
@@ -1112,10 +812,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "user_compute",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 2,
                     },
                 ),
@@ -1126,10 +826,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "user_network_policy",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 2,
                     },
                 ),
@@ -1140,10 +840,10 @@ Trace {
             ),
             (
                 (
-                    IdAllocKey {
+                    IdAllocatorKey {
                         name: "user_role",
                     },
-                    IdAllocValue {
+                    IdAllocatorValue {
                         next_id: 1,
                     },
                 ),
@@ -1162,14 +862,8 @@ Trace {
             (
                 (
                     NetworkPolicyKey {
-                        id: Some(
-                            NetworkPolicyId {
-                                value: Some(
-                                    User(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        id: User(
+                            1,
                         ),
                     },
                     NetworkPolicyValue {
@@ -1178,52 +872,24 @@ Trace {
                             NetworkPolicyRule {
                                 name: "open_ingress",
                                 address: "0.0.0.0/0",
-                                action: Some(
-                                    Allow(
-                                        Empty,
-                                    ),
-                                ),
-                                direction: Some(
-                                    Ingress(
-                                        Empty,
-                                    ),
-                                ),
+                                action: Allow,
+                                direction: Ingress,
                             },
                         ],
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                         ],
                         oid: 17048,
@@ -1241,39 +907,27 @@ Trace {
             (
                 (
                     RoleKey {
-                        id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            1,
                         ),
                     },
                     RoleValue {
                         name: "mz_system",
-                        attributes: Some(
-                            RoleAttributes {
-                                inherit: true,
-                                superuser: Some(
-                                    true,
-                                ),
-                                login: Some(
-                                    true,
-                                ),
-                            },
-                        ),
-                        membership: Some(
-                            RoleMembership {
-                                map: [],
-                            },
-                        ),
-                        vars: Some(
-                            RoleVars {
-                                entries: [],
-                            },
-                        ),
+                        attributes: RoleAttributes {
+                            inherit: true,
+                            superuser: Some(
+                                true,
+                            ),
+                            login: Some(
+                                true,
+                            ),
+                        },
+                        membership: RoleMembership {
+                            map: [],
+                        },
+                        vars: RoleVars {
+                            entries: [],
+                        },
                         oid: 16661,
                     },
                 ),
@@ -1285,35 +939,23 @@ Trace {
             (
                 (
                     RoleKey {
-                        id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        2,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            2,
                         ),
                     },
                     RoleValue {
                         name: "mz_support",
-                        attributes: Some(
-                            RoleAttributes {
-                                inherit: true,
-                                superuser: None,
-                                login: None,
-                            },
-                        ),
-                        membership: Some(
-                            RoleMembership {
-                                map: [],
-                            },
-                        ),
-                        vars: Some(
-                            RoleVars {
-                                entries: [],
-                            },
-                        ),
+                        attributes: RoleAttributes {
+                            inherit: true,
+                            superuser: None,
+                            login: None,
+                        },
+                        membership: RoleMembership {
+                            map: [],
+                        },
+                        vars: RoleVars {
+                            entries: [],
+                        },
                         oid: 16662,
                     },
                 ),
@@ -1325,35 +967,23 @@ Trace {
             (
                 (
                     RoleKey {
-                        id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        3,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            3,
                         ),
                     },
                     RoleValue {
                         name: "mz_analytics",
-                        attributes: Some(
-                            RoleAttributes {
-                                inherit: true,
-                                superuser: None,
-                                login: None,
-                            },
-                        ),
-                        membership: Some(
-                            RoleMembership {
-                                map: [],
-                            },
-                        ),
-                        vars: Some(
-                            RoleVars {
-                                entries: [],
-                            },
-                        ),
+                        attributes: RoleAttributes {
+                            inherit: true,
+                            superuser: None,
+                            login: None,
+                        },
+                        membership: RoleMembership {
+                            map: [],
+                        },
+                        vars: RoleVars {
+                            entries: [],
+                        },
                         oid: 16984,
                     },
                 ),
@@ -1365,35 +995,21 @@ Trace {
             (
                 (
                     RoleKey {
-                        id: Some(
-                            RoleId {
-                                value: Some(
-                                    Public(
-                                        Empty,
-                                    ),
-                                ),
-                            },
-                        ),
+                        id: Public,
                     },
                     RoleValue {
                         name: "public",
-                        attributes: Some(
-                            RoleAttributes {
-                                inherit: true,
-                                superuser: None,
-                                login: None,
-                            },
-                        ),
-                        membership: Some(
-                            RoleMembership {
-                                map: [],
-                            },
-                        ),
-                        vars: Some(
-                            RoleVars {
-                                entries: [],
-                            },
-                        ),
+                        attributes: RoleAttributes {
+                            inherit: true,
+                            superuser: None,
+                            login: None,
+                        },
+                        membership: RoleMembership {
+                            map: [],
+                        },
+                        vars: RoleVars {
+                            entries: [],
+                        },
                         oid: 16944,
                     },
                 ),
@@ -1405,35 +1021,23 @@ Trace {
             (
                 (
                     RoleKey {
-                        id: Some(
-                            RoleId {
-                                value: Some(
-                                    Predefined(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        id: Predefined(
+                            1,
                         ),
                     },
                     RoleValue {
                         name: "mz_monitor",
-                        attributes: Some(
-                            RoleAttributes {
-                                inherit: true,
-                                superuser: None,
-                                login: None,
-                            },
-                        ),
-                        membership: Some(
-                            RoleMembership {
-                                map: [],
-                            },
-                        ),
-                        vars: Some(
-                            RoleVars {
-                                entries: [],
-                            },
-                        ),
+                        attributes: RoleAttributes {
+                            inherit: true,
+                            superuser: None,
+                            login: None,
+                        },
+                        membership: RoleMembership {
+                            map: [],
+                        },
+                        vars: RoleVars {
+                            entries: [],
+                        },
                         oid: 16663,
                     },
                 ),
@@ -1445,35 +1049,23 @@ Trace {
             (
                 (
                     RoleKey {
-                        id: Some(
-                            RoleId {
-                                value: Some(
-                                    Predefined(
-                                        2,
-                                    ),
-                                ),
-                            },
+                        id: Predefined(
+                            2,
                         ),
                     },
                     RoleValue {
                         name: "mz_monitor_redacted",
-                        attributes: Some(
-                            RoleAttributes {
-                                inherit: true,
-                                superuser: None,
-                                login: None,
-                            },
-                        ),
-                        membership: Some(
-                            RoleMembership {
-                                map: [],
-                            },
-                        ),
-                        vars: Some(
-                            RoleVars {
-                                entries: [],
-                            },
-                        ),
+                        attributes: RoleAttributes {
+                            inherit: true,
+                            superuser: None,
+                            login: None,
+                        },
+                        membership: RoleMembership {
+                            map: [],
+                        },
+                        vars: RoleVars {
+                            entries: [],
+                        },
                         oid: 16664,
                     },
                 ),
@@ -1492,103 +1084,47 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            1,
                         ),
                     },
                     SchemaValue {
                         database_id: None,
                         name: "mz_catalog",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 16656,
@@ -1602,103 +1138,47 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    System(
-                                        2,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            2,
                         ),
                     },
                     SchemaValue {
                         database_id: None,
                         name: "pg_catalog",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 16657,
@@ -1712,103 +1192,47 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    System(
-                                        4,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            4,
                         ),
                     },
                     SchemaValue {
                         database_id: None,
                         name: "mz_internal",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 16658,
@@ -1822,103 +1246,47 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    System(
-                                        5,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            5,
                         ),
                     },
                     SchemaValue {
                         database_id: None,
                         name: "information_schema",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 16659,
@@ -1932,103 +1300,47 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    System(
-                                        6,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            6,
                         ),
                     },
                     SchemaValue {
                         database_id: None,
                         name: "mz_unsafe",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 16660,
@@ -2042,103 +1354,47 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    System(
-                                        7,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            7,
                         ),
                     },
                     SchemaValue {
                         database_id: None,
                         name: "mz_catalog_unstable",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 16972,
@@ -2152,103 +1408,47 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    System(
-                                        8,
-                                    ),
-                                ),
-                            },
+                        id: System(
+                            8,
                         ),
                     },
                     SchemaValue {
                         database_id: None,
                         name: "mz_introspection",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 16973,
@@ -2262,111 +1462,51 @@ Trace {
             (
                 (
                     SchemaKey {
-                        id: Some(
-                            SchemaId {
-                                value: Some(
-                                    User(
-                                        3,
-                                    ),
-                                ),
-                            },
+                        id: User(
+                            3,
                         ),
                     },
                     SchemaValue {
                         database_id: Some(
-                            DatabaseId {
-                                value: Some(
-                                    User(
-                                        1,
-                                    ),
-                                ),
-                            },
+                            User(
+                                1,
+                            ),
                         ),
                         name: "public",
-                        owner_id: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        owner_id: System(
+                            1,
                         ),
                         privileges: [
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            Public(
-                                                Empty,
-                                            ),
-                                        ),
-                                    },
+                                grantee: Public,
+                                grantor: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
-                                ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                2,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    2,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 256,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 256,
+                                },
                             },
                             MzAclItem {
-                                grantee: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantee: System(
+                                    1,
                                 ),
-                                grantor: Some(
-                                    RoleId {
-                                        value: Some(
-                                            System(
-                                                1,
-                                            ),
-                                        ),
-                                    },
+                                grantor: System(
+                                    1,
                                 ),
-                                acl_mode: Some(
-                                    AclMode {
-                                        bitflags: 768,
-                                    },
-                                ),
+                                acl_mode: AclMode {
+                                    bitflags: 768,
+                                },
                             },
                         ],
                         oid: 20001,
@@ -2410,32 +1550,18 @@ Trace {
         values: [
             (
                 (
-                    SystemPrivilegesKey {
-                        grantee: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                    SystemPrivilegeKey {
+                        grantee: System(
+                            1,
                         ),
-                        grantor: Some(
-                            RoleId {
-                                value: Some(
-                                    System(
-                                        1,
-                                    ),
-                                ),
-                            },
+                        grantor: System(
+                            1,
                         ),
                     },
-                    SystemPrivilegesValue {
-                        acl_mode: Some(
-                            AclMode {
-                                bitflags: 8053063680,
-                            },
-                        ),
+                    SystemPrivilegeValue {
+                        acl_mode: AclMode {
+                            bitflags: 8053063680,
+                        },
                     },
                 ),
                 2,

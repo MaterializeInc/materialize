@@ -13,7 +13,7 @@ use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{DurableType, IdAlloc};
+use mz_catalog::durable::objects::{DurableType, IdAllocator};
 use mz_catalog::durable::{
     CatalogError, DurableCatalogError, FenceError, Item, TestCatalogStateBuilder,
     USER_ITEM_ALLOC_KEY, test_bootstrap_args,
@@ -108,10 +108,10 @@ async fn test_allocate_id(state_builder: TestCatalogStateBuilder) {
         .id_allocator
         .into_iter()
         .map(RustType::from_proto)
-        .map_ok(|(k, v)| IdAlloc::from_key_value(k, v))
+        .map_ok(|(k, v)| IdAllocator::from_key_value(k, v))
         .collect::<Result<_, _>>()
         .unwrap();
-    assert!(snapshot_id_allocs.contains(&IdAlloc {
+    assert!(snapshot_id_allocs.contains(&IdAllocator {
         name: id_type.to_string(),
         next_id: start_id + 3,
     }));
@@ -403,7 +403,7 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         let roles = writer_state.snapshot().await.unwrap().roles;
         let role = roles
             .get(&proto::RoleKey {
-                id: Some(role_id.into_proto()),
+                id: role_id.into_proto(),
             })
             .unwrap();
         assert_eq!(role_name, &role.name);
@@ -432,16 +432,14 @@ async fn test_non_writer_commits(state_builder: TestCatalogStateBuilder) {
         // writes from writer catalogs, so it should not see the new role.
         let roles = snapshot.roles;
         let role = roles.get(&proto::RoleKey {
-            id: Some(role_id.into_proto()),
+            id: role_id.into_proto(),
         });
         assert_eq!(None, role);
 
         let dbs = snapshot.databases;
         let db = dbs
             .get(&proto::DatabaseKey {
-                id: Some(proto::DatabaseId {
-                    value: Some(proto::database_id::Value::User(db_id)),
-                }),
+                id: proto::DatabaseId::User(db_id),
             })
             .unwrap();
         assert_eq!(db_name, &db.name);

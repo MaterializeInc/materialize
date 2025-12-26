@@ -5782,6 +5782,7 @@ dependencies = [
  "proptest-derive",
  "serde",
  "serde_json",
+ "serde_repr",
  "similar-asserts",
  "workspace-hack",
 ]

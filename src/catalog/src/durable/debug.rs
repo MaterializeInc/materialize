@@ -55,13 +55,13 @@ pub trait Collection: Debug {
 pub enum CollectionType {
     AuditLog,
     ComputeInstance,
-    ComputeIntrospectionSourceIndex,
+    IntrospectionSourceIndex,
     ComputeReplicas,
     Comments,
     Config,
     Database,
-    DefaultPrivileges,
-    IdAlloc,
+    DefaultPrivilege,
+    IdAllocator,
     Item,
     NetworkPolicy,
     Role,
@@ -70,8 +70,8 @@ pub enum CollectionType {
     Setting,
     SourceReferences,
     SystemConfiguration,
-    SystemGidMapping,
-    SystemPrivileges,
+    SystemObjectMapping,
+    SystemPrivilege,
     StorageCollectionMetadata,
     UnfinalizedShard,
     TxnWalShard,
@@ -137,10 +137,10 @@ collection_impl!({
     update: StateUpdateKind::Cluster,
 });
 collection_impl!({
-    name: ClusterIntrospectionSourceIndexCollection,
-    key: proto::ClusterIntrospectionSourceIndexKey,
-    value: proto::ClusterIntrospectionSourceIndexValue,
-    collection_type: CollectionType::ComputeIntrospectionSourceIndex,
+    name: IntrospectionSourceIndexCollection,
+    key: proto::IntrospectionSourceIndexKey,
+    value: proto::IntrospectionSourceIndexValue,
+    collection_type: CollectionType::IntrospectionSourceIndex,
     trace_field: introspection_sources,
     update: StateUpdateKind::IntrospectionSourceIndex,
 });
@@ -178,17 +178,17 @@ collection_impl!({
 });
 collection_impl!({
     name: DefaultPrivilegeCollection,
-    key: proto::DefaultPrivilegesKey,
-    value: proto::DefaultPrivilegesValue,
-    collection_type: CollectionType::DefaultPrivileges,
+    key: proto::DefaultPrivilegeKey,
+    value: proto::DefaultPrivilegeValue,
+    collection_type: CollectionType::DefaultPrivilege,
     trace_field: default_privileges,
     update: StateUpdateKind::DefaultPrivilege,
 });
 collection_impl!({
     name: IdAllocatorCollection,
-    key: proto::IdAllocKey,
-    value: proto::IdAllocValue,
-    collection_type: CollectionType::IdAlloc,
+    key: proto::IdAllocatorKey,
+    value: proto::IdAllocatorValue,
+    collection_type: CollectionType::IdAllocator,
     trace_field: id_allocator,
     update: StateUpdateKind::IdAllocator,
 });
@@ -250,25 +250,25 @@ collection_impl!({
 });
 collection_impl!({
     name: SystemConfigurationCollection,
-    key: proto::ServerConfigurationKey,
-    value: proto::ServerConfigurationValue,
+    key: proto::SystemConfigurationKey,
+    value: proto::SystemConfigurationValue,
     collection_type: CollectionType::SystemConfiguration,
     trace_field: system_configurations,
     update: StateUpdateKind::SystemConfiguration,
 });
 collection_impl!({
-    name: SystemItemMappingCollection,
-    key: proto::GidMappingKey,
-    value: proto::GidMappingValue,
-    collection_type: CollectionType::SystemGidMapping,
+    name: SystemObjectMappingCollection,
+    key: proto::SystemObjectMappingKey,
+    value: proto::SystemObjectMappingValue,
+    collection_type: CollectionType::SystemObjectMapping,
     trace_field: system_object_mappings,
     update: StateUpdateKind::SystemObjectMapping,
 });
 collection_impl!({
     name: SystemPrivilegeCollection,
-    key: proto::SystemPrivilegesKey,
-    value: proto::SystemPrivilegesValue,
-    collection_type: CollectionType::SystemPrivileges,
+    key: proto::SystemPrivilegeKey,
+    value: proto::SystemPrivilegeValue,
+    collection_type: CollectionType::SystemPrivilege,
     trace_field: system_privileges,
     update: StateUpdateKind::SystemPrivilege,
 });
@@ -330,7 +330,7 @@ where
 pub struct Trace {
     pub audit_log: CollectionTrace<AuditLogCollection>,
     pub clusters: CollectionTrace<ClusterCollection>,
-    pub introspection_sources: CollectionTrace<ClusterIntrospectionSourceIndexCollection>,
+    pub introspection_sources: CollectionTrace<IntrospectionSourceIndexCollection>,
     pub cluster_replicas: CollectionTrace<ClusterReplicaCollection>,
     pub comments: CollectionTrace<CommentCollection>,
     pub configs: CollectionTrace<ConfigCollection>,
@@ -344,7 +344,7 @@ pub struct Trace {
     pub schemas: CollectionTrace<SchemaCollection>,
     pub settings: CollectionTrace<SettingCollection>,
     pub source_references: CollectionTrace<SourceReferencesCollection>,
-    pub system_object_mappings: CollectionTrace<SystemItemMappingCollection>,
+    pub system_object_mappings: CollectionTrace<SystemObjectMappingCollection>,
     pub system_configurations: CollectionTrace<SystemConfigurationCollection>,
     pub system_privileges: CollectionTrace<SystemPrivilegeCollection>,
     pub storage_collection_metadata: CollectionTrace<StorageCollectionMetadataCollection>,
