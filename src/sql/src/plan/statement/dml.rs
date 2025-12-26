@@ -276,6 +276,8 @@ fn plan_select_inner(
             .expect("checked in offset_into_value that it is not negative")
     };
 
+    let in_cluster = select.in_cluster.as_ref().map(|cluster| cluster.id);
+
     let plan = SelectPlan {
         source: expr,
         when,
@@ -287,6 +289,7 @@ fn plan_select_inner(
         },
         copy_to,
         select: Some(Box::new(select)),
+        in_cluster,
     };
 
     Ok((plan, desc))
@@ -2147,7 +2150,11 @@ pub fn plan_copy(
                         limit: None,
                         offset: None,
                     };
-                    SelectStatement { query, as_of: None }
+                    SelectStatement {
+                        query,
+                        as_of: None,
+                        in_cluster: None,
+                    }
                 }
                 CopyRelation::Select(stmt) => {
                     if !stmt.query.order_by.is_empty() {
