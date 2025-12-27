@@ -13,7 +13,7 @@ workspace = true
 anyhow = "1.0.100"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 axum = "0.7.5"
-axum-extra = { version = "0.9.3", features = ["typed-header"] }
+axum-extra = { version = "0.12.2", features = ["typed-header"] }
 headers = "0.4.1"
 http = "1.4.0"
 hyper = { version = "1.4.1", features = ["http1", "server"] }
