@@ -115,7 +115,6 @@ pub fn channel() -> (Trigger, Receiver) {
 mod tests {
     use crate::channel::trigger;
 
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: returning ready events from epoll_wait is not yet implemented
     #[mz_ore::test(tokio::test)]
     async fn test_trigger_channel() {
         let (trigger1, mut trigger1_rx) = trigger::channel();

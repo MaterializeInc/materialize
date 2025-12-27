@@ -1148,7 +1148,6 @@ mod tests {
     // made it to main) where batches written by compaction would always have a
     // since of the minimum timestamp.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn regression_minimum_since(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1224,7 +1223,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn disable_compaction(dyncfgs: ConfigUpdates) {
         let data = [
             (("0".to_owned(), "zero".to_owned()), 0, 1),

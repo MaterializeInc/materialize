@@ -11,7 +11,6 @@ use mz_sqllogictest::ast::{Location, Record};
 use mz_sqllogictest::parser;
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `llvm.x86.avx2.pshuf.b` on OS `linux`
 fn test_parser() {
     struct TestCase {
         input: &'static str,

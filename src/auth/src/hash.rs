@@ -324,7 +324,6 @@ mod tests {
     const DEFAULT_ITERATIONS: NonZeroU32 = NonZeroU32::new(60).expect("Trust me on this");
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
     fn test_hash_password() {
         let password = "password".to_string();
         let iterations = NonZeroU32::new(100).expect("Trust me on this");
@@ -336,7 +335,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
     fn test_scram256_hash() {
         let password = "password".into();
         let scram_hash =

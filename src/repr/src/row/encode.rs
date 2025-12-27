@@ -2426,7 +2426,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn proptest_datums() {
         let strat = any::<SqlColumnType>().prop_flat_map(|ty| {
             proptest::collection::vec(arb_datum_for_column(ty.clone()), 0..16)
@@ -2440,7 +2439,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn proptest_non_empty_relation_descs() {
         let strat = arb_relation_desc(1..8).prop_flat_map(|desc| {
             proptest::collection::vec(arb_row_for_relation(&desc), 0..12)
@@ -2639,7 +2637,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn roundtrip() {
         let mut row = Row::default();
         let mut packer = row.packer();

@@ -5114,7 +5114,6 @@ mod tests {
 
     proptest! {
         #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn array_packing_unpacks_correctly(array in arb_array(arb_datum())) {
             let PropArray(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();
@@ -5123,7 +5122,6 @@ mod tests {
         }
 
         #[mz_ore::test]
-        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
         fn list_packing_unpacks_correctly(array in arb_list(arb_datum())) {
             let PropList(row, elts) = array;
             let datums: Vec<Datum<'_>> = elts.iter().map(|e| e.into()).collect();

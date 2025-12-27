@@ -110,7 +110,6 @@ mod tests {
     use crate::{ApiTokenArgs, Client};
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     async fn response_retries() {
         let count = Arc::new(AtomicUsize::new(0));
         let count_ = Arc::clone(&count);

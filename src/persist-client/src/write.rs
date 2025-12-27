@@ -1161,7 +1161,6 @@ mod tests {
     use super::*;
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn empty_batches(dyncfgs: ConfigUpdates) {
         let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1201,7 +1200,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn compare_and_append_batch_multi(dyncfgs: ConfigUpdates) {
         let data0 = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1278,7 +1276,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn hollow_batch_roundtrip(dyncfgs: ConfigUpdates) {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1314,7 +1311,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn wait_for_upper_past(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         let (mut write, _) = client.expect_open::<(), (), u64, i64>(ShardId::new()).await;
@@ -1348,7 +1344,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn fetch_recent_upper_linearized() {
         type Timestamp = u64;
         let max_upper = 1000;

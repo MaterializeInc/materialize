@@ -206,7 +206,6 @@ fn parse_query_when(s: &str) -> QueryWhen {
 // adding the new Durable TimestampOracle based on Postgres/CRDB.
 #[allow(clippy::disallowed_methods)]
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
 fn test_timestamp_selection() {
     datadriven::walk("tests/testdata/timestamp_selection", |tf| {
         let mut f = Frontiers {

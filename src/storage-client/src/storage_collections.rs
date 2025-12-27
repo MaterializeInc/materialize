@@ -3220,7 +3220,6 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr`
     async fn test_snapshot_stats(&self) {
         let persist_location = PersistLocation {
             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),

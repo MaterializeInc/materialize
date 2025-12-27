@@ -381,7 +381,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[ignore] // TODO: Reenable against minio so it can run locally
     async fn multi_part_upload_success() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
@@ -433,7 +432,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[ignore] // TODO: Reenable against minio so it can run locally
     async fn multi_part_upload_buffer() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;
@@ -492,7 +490,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[ignore] // TODO: Reenable against minio so it can run locally
     async fn multi_part_upload_no_data() -> Result<(), S3MultiPartUploadError> {
         let sdk_config = defaults().load().await;

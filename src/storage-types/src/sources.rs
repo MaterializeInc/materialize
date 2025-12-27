@@ -1852,7 +1852,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn all_source_data_roundtrips() {
         let mut weights = vec![(500, Just(0..8)), (50, Just(8..32))];
         if std::env::var("PROPTEST_LARGE_DATA").is_ok() {
@@ -2033,7 +2032,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn empty_relation_desc_roundtrips() {
         let empty = RelationDesc::empty();
         let rows = proptest::collection::vec(arb_source_data_for_relation_desc(&empty), 0..8)
@@ -2047,7 +2045,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
     fn arrow_datatype_consistent() {
         fn test_case(desc: RelationDesc, datas: Vec<SourceData>) {
             let half = datas.len() / 2;

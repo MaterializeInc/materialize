@@ -439,7 +439,6 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn expression_cache() {
         let first_version = Version::new(0, 1, 0);
         let second_version = Version::new(0, 2, 0);

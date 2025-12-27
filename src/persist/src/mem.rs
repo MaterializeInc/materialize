@@ -341,7 +341,6 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn mem_blob() -> Result<(), ExternalError> {
         let registry = Arc::new(tokio::sync::Mutex::new(MemMultiRegistry::new(false)));
         blob_impl_test(move |path| {
@@ -363,7 +362,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn mem_consensus() -> Result<(), ExternalError> {
         consensus_impl_test(|| async { Ok(MemConsensus::default()) }).await
     }

@@ -448,7 +448,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn apply_and_tidy() {
         let mut txns = TxnsHandle::expect_open(PersistClient::new_for_tests().await).await;
         let log = txns.new_log();
@@ -652,7 +651,6 @@ mod tests {
     // Regression test for a bug caught during code review, where it was
     // possible to commit to an unregistered data shard.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn commit_unregistered_table() {
         let client = PersistClient::new_for_tests().await;
         let mut txns = TxnsHandle::expect_open(client.clone()).await;

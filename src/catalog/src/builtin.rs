@@ -14307,7 +14307,6 @@ pub static BUILTIN_LOOKUP: LazyLock<
 });
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_builtin_type_schema() {
     use mz_pgrepr::oid::FIRST_MATERIALIZE_OID;
 

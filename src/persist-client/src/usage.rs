@@ -734,7 +734,6 @@ mod tests {
     use super::*;
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn size(dyncfgs: ConfigUpdates) {
         let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -847,7 +846,6 @@ mod tests {
     /// This is just a sanity check for the overall flow of computing ShardUsage.
     /// The edge cases are exercised in separate tests.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn usage_sanity(dyncfgs: ConfigUpdates) {
         let data = [
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -916,7 +914,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn usage_referenced(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
 
@@ -1237,7 +1234,6 @@ mod tests {
     /// initial rollup is written for a shard, but the initial CaS hasn't yet
     /// succeeded.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn usage_regression_shard_in_blob_not_consensus(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         let shard_id = ShardId::new();

@@ -332,7 +332,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_basic_usage() {
         let (mut operator, _) =
             make_test_operator(ShardId::new(), Antichain::from_elem(0.into())).await;
@@ -377,7 +376,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_compaction() {
         let persist_location = PersistLocation {
             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
@@ -468,7 +466,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_concurrency() {
         // Create two operators pointing to the same shard
         let shared_shard = ShardId::new();
@@ -544,7 +541,6 @@ mod tests {
     // Regression test for
     // https://github.com/MaterializeInc/database-issues/issues/4216.
     #[mz_ore::test(tokio::test(start_paused = true))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     async fn test_since_hold() {
         let binding_shard = ShardId::new();
 

@@ -65,7 +65,6 @@ mod tests {
 
     // Assert equivalency to postgres and generate TestCases.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     fn test_pg_regexp_split_array() {
         let Ok(postgres_url) = std::env::var("POSTGRES_URL") else {
             return;

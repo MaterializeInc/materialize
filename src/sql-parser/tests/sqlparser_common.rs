@@ -34,7 +34,6 @@ use mz_sql_parser::parser::{
 };
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn datadriven() {
     walk("tests/testdata", |f| {
         f.run(|tc| -> String { datadriven_testcase(tc) })
@@ -42,7 +41,6 @@ fn datadriven() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn op_precedence() -> Result<(), Box<dyn Error>> {
     struct RemoveParens;
 
@@ -117,7 +115,6 @@ fn format_ident() {
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_basic_visitor() -> Result<(), Box<dyn Error>> {
     struct Visitor<'a> {
         seen_idents: Vec<&'a str>,

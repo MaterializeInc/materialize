@@ -28,7 +28,6 @@ pub static SCHEMA_REGISTRY_URL: LazyLock<reqwest::Url> =
 
 #[mz_ore::test(tokio::test)]
 #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5588
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_client() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
@@ -147,7 +146,6 @@ async fn test_client() -> Result<(), anyhow::Error> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
     let client = mz_ccsr::ClientConfig::new(SCHEMA_REGISTRY_URL.clone()).build()?;
 
@@ -253,7 +251,6 @@ async fn test_client_subject_and_references() -> Result<(), anyhow::Error> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 #[ignore] // TODO: Reenable when database-issues#6818 is fixed
 async fn test_client_errors() -> Result<(), anyhow::Error> {
     let invalid_schema_registry_url: reqwest::Url = "data::text/plain,Info".parse().unwrap();
@@ -298,7 +295,6 @@ async fn test_client_errors() -> Result<(), anyhow::Error> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 async fn test_server_errors() -> Result<(), anyhow::Error> {
     // When the schema registry gracefully reports an error by including a
     // properly-formatted JSON document in the response, the specific error code
@@ -439,7 +435,6 @@ async fn count_schemas(client: &Client, subject_prefix: &str) -> Result<usize, a
 }
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_method` on OS `linux`
 fn test_stack_from_pem_error() {
     // Note that this file has file has a malformed certificate after the end of
     // the private key. This is also not a private key in use anywhere to our

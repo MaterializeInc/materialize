@@ -1512,7 +1512,6 @@ mod tests {
     }
 
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn smoketest_numeric_conversion() {
         let a = tiberius::numeric::Numeric::new_with_scale(12345, 2);
         let rnd = tiberius_numeric_to_mz_numeric(a);

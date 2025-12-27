@@ -54,7 +54,6 @@ pub fn test_sqlfunc_str(attr: &str, item: &str) -> (String, String) {
 mod test {
     use quote::quote;
 
-    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_add_int16() {
         let attr = quote! {
@@ -76,7 +75,6 @@ mod test {
         insta::assert_snapshot!("add_int16", output, &input);
     }
 
-    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary() {
         let attr = quote! {};
@@ -89,7 +87,6 @@ mod test {
         insta::assert_snapshot!("unary_fn", output, &input);
     }
 
-    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary_arena() {
         let attr = quote! {};
@@ -102,7 +99,6 @@ mod test {
         insta::assert_snapshot!("unary_arena_fn", output, &input);
     }
 
-    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_unary_ref() {
         let attr = quote! {};
@@ -115,7 +111,6 @@ mod test {
         insta::assert_snapshot!("unary_ref", output, &input);
     }
 
-    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_complex_output_type() {
         let attr = quote! {
@@ -134,7 +129,6 @@ mod test {
         insta::assert_snapshot!("complex_type", output, &input);
     }
 
-    #[cfg_attr(miri, ignore)] // unsupported operation: extern static `pidfd_spawnp` is not supported by Miri
     #[mz_ore::test]
     fn insta_test_binary_arena() {
         let attr = quote! {};

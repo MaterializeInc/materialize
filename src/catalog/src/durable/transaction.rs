@@ -3959,7 +3959,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn test_savepoint() {
         const VERSION: Version = Version::new(26, 0, 0);
         let mut persist_cache = PersistClientCache::new_no_metrics();

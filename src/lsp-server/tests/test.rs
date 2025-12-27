@@ -67,7 +67,6 @@ mod tests {
     ///
     /// The server must always initialize before parsing or using any other capability.
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`
     async fn test_lsp() {
         build_file();
         let (mut req_client, mut resp_client) = start_server();

@@ -571,7 +571,6 @@ mod tests {
     use super::*;
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn postgres_consensus() -> Result<(), ExternalError> {
         let config = match PostgresConsensusConfig::new_for_test()? {
             Some(config) => config,

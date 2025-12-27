@@ -428,7 +428,6 @@ async fn run_tests<'a>(header: &str, server: &test_util::TestServer, tests: &[Te
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_expiry() {
     // This function verifies that the background expiry refresh task runs. This
     // is done by starting a web server that awaits the refresh request, which the
@@ -558,7 +557,6 @@ async fn test_auth_expiry() {
 
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_base_require_tls_frontegg() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1269,7 +1267,6 @@ async fn test_auth_base_require_tls_frontegg() {
 
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_base_disable_tls() {
     let no_headers = HeaderMap::new();
 
@@ -1354,7 +1351,6 @@ async fn test_auth_base_disable_tls() {
 
 #[allow(clippy::unit_arg)]
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_base_require_tls() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1476,7 +1472,6 @@ async fn test_auth_base_require_tls() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_intermediate_ca_no_intermediary() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
@@ -1527,7 +1522,6 @@ async fn test_auth_intermediate_ca_no_intermediary() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_intermediate_ca() {
     // Create a CA, an intermediate CA, and a server key pair signed by the
     // intermediate CA.
@@ -1588,7 +1582,6 @@ async fn test_auth_intermediate_ca() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_admin_non_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1733,7 +1726,6 @@ async fn test_auth_admin_non_superuser() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_admin_superuser() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -1878,7 +1870,6 @@ async fn test_auth_admin_superuser() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_admin_superuser_revoked() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2038,7 +2029,6 @@ async fn test_auth_admin_superuser_revoked() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_auth_deduplication() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2210,7 +2200,6 @@ async fn test_auth_deduplication() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_refresh_task_metrics() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2346,7 +2335,6 @@ async fn test_refresh_task_metrics() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_superuser_can_alter_cluster() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2497,7 +2485,6 @@ async fn test_superuser_can_alter_cluster() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_refresh_dropped_session() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2664,7 +2651,6 @@ async fn test_refresh_dropped_session() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_refresh_dropped_session_lru() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2865,7 +2851,6 @@ async fn test_refresh_dropped_session_lru() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_transient_auth_failures() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -2989,7 +2974,6 @@ async fn test_transient_auth_failures() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_transient_auth_failure_on_refresh() {
     let ca = Ca::new_root("test ca").unwrap();
     let (server_cert, server_key) = ca
@@ -3124,7 +3108,6 @@ async fn test_transient_auth_failure_on_refresh() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_password_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3214,7 +3197,6 @@ async fn test_password_auth() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_sasl_auth() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3269,7 +3251,6 @@ async fn test_sasl_auth() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_sasl_auth_failure() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3315,7 +3296,6 @@ async fn test_sasl_auth_failure() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_password_auth_superuser() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3370,7 +3350,6 @@ async fn test_password_auth_superuser() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_password_auth_alter_role() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3510,7 +3489,6 @@ async fn test_password_auth_alter_role() {
 }
 
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_password_auth_http() {
     let metrics_registry = MetricsRegistry::new();
 
@@ -3655,7 +3633,6 @@ async fn test_password_auth_http() {
 /// This is a regression test for a bug where WebSocket connections always had superuser=false
 /// because internal_user_metadata was hardcoded to None.
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `OPENSSL_init_ssl` on OS `linux`
 async fn test_password_auth_http_superuser() {
     let metrics_registry = MetricsRegistry::new();
 

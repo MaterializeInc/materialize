@@ -1513,7 +1513,6 @@ mod tests {
     use crate::tests::{all_ok, new_test_client};
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn batch_builder_flushing() {
         let data = vec![
             (("1".to_owned(), "one".to_owned()), 1, 1),
@@ -1599,7 +1598,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn batch_builder_keys() {
         let cache = PersistClientCache::new_no_metrics();
         // Set blob_target_size to 0 so that each row gets forced into its own batch part
@@ -1643,7 +1641,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn batch_delete() {
         let cache = PersistClientCache::new_no_metrics();
         cache.cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
@@ -1743,7 +1740,6 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn structured_lowers() {
         let cache = PersistClientCache::new_no_metrics();
         // Ensure structured data is calculated, and that we give some budget for a key lower.

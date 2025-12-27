@@ -47,7 +47,6 @@ fn instance_metrics_for_tests() -> Result<Box<RocksDBInstanceMetrics>, anyhow::E
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 async fn basic() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;
@@ -131,7 +130,6 @@ async fn basic() -> Result<(), anyhow::Error> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;
@@ -260,7 +258,6 @@ async fn associative_merge_operator_test() -> Result<(), anyhow::Error> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 async fn update_operation_stats_test() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;
@@ -309,7 +306,6 @@ async fn update_operation_stats_test() -> Result<(), anyhow::Error> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
     // If the test aborts, this may not be cleaned up.
     let t = tempfile::tempdir()?;
@@ -413,7 +409,6 @@ async fn shared_write_buffer_manager() -> Result<(), anyhow::Error> {
 
 /// A small validation test; Ensure that if a directory is empty, we don't fail to destroy.
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rocksdb_create_default_env` on OS `linux`
 async fn destroy() -> Result<(), anyhow::Error> {
     let t = tempfile::tempdir()?;
     DB::destroy(&Default::default(), t.path())?;

@@ -1149,7 +1149,6 @@ mod tests {
 
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(coverage, ignore)] // https://github.com/MaterializeInc/database-issues/issues/5586
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[ignore] // TODO: Reenable against minio so it can run locally
     async fn s3_blob() -> Result<(), ExternalError> {
         let config = match S3BlobConfig::new_for_test().await? {

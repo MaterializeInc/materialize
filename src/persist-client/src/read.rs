@@ -1292,7 +1292,6 @@ mod tests {
 
     // Verifies `Subscribe` can be dropped while holding snapshot batches.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn drop_unused_subscribe(dyncfgs: ConfigUpdates) {
         let data = [
             (("0".to_owned(), "zero".to_owned()), 0, 1),
@@ -1322,7 +1321,6 @@ mod tests {
 
     // Verifies that we streaming-consolidate away identical key-values in the same batch.
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn streaming_consolidate(dyncfgs: ConfigUpdates) {
         let data = &[
             // Identical records should sum together...
@@ -1368,7 +1366,6 @@ mod tests {
     }
 
     #[mz_persist_proc::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait is not yet implemented
     async fn snapshot_and_stream(dyncfgs: ConfigUpdates) {
         let data = &mut [
             (("k1".to_owned(), "v1".to_owned()), 0, 1),

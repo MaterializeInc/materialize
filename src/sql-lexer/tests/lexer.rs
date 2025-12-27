@@ -22,7 +22,6 @@ use datadriven::walk;
 use mz_sql_lexer::lexer::lex;
 
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_datadriven() {
     walk("tests/testdata", |f| {
         f.run(|tc| -> String {

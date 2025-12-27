@@ -132,7 +132,6 @@ impl Debug for StableSnapshot<'_> {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_is_initialized() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -168,7 +167,6 @@ async fn test_is_initialized(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_get_deployment_generation() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -222,7 +220,6 @@ async fn test_get_deployment_generation(state_builder: TestCatalogStateBuilder) 
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_savepoint() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -391,7 +388,6 @@ async fn test_open_savepoint(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open_read_only() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -479,7 +475,6 @@ async fn test_open_read_only(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_open() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -569,7 +564,6 @@ async fn test_open(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_unopened_deploy_generation_fencing() {
     let mut persist_cache = PersistClientCache::new_no_metrics();
     persist_cache.cfg.build_version = semver::Version::new(0, 1, 0);
@@ -675,7 +669,6 @@ async fn test_persist_unopened_deploy_generation_fencing() {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_opened_epoch_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -725,7 +718,6 @@ async fn test_opened_epoch_fencing(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_opened_deploy_generation_fencing() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -780,7 +772,6 @@ async fn test_opened_deploy_generation_fencing(state_builder: TestCatalogStateBu
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_fencing_during_write() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);
@@ -856,7 +847,6 @@ async fn test_fencing_during_write(state_builder: TestCatalogStateBuilder) {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_version_fencing() {
     async fn testcase(catalog: &str, reader: &str, expected: Result<(), ()>) {
         let catalog_version = semver::Version::parse(catalog).unwrap();
@@ -916,7 +906,6 @@ async fn test_persist_version_fencing() {
 }
 
 #[mz_ore::test(tokio::test)]
-#[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
 async fn test_persist_concurrent_open() {
     let persist_client = PersistClient::new_for_tests().await;
     let state_builder = TestCatalogStateBuilder::new(persist_client);

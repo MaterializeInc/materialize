@@ -2927,7 +2927,6 @@ async fn test_leader_promotion_mixed_code_version() {
 
 // Test that websockets observe cancellation.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_ws() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -3210,7 +3209,6 @@ fn test_webhook_duplicate_headers() {
 
 // Test that websockets observe cancellation and leave the transaction in an idle state.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_github_20262() {
     let server = test_util::TestHarness::default().start_blocking();
     let mut client = server.connect(postgres::NoTls).unwrap();
@@ -3277,7 +3275,6 @@ fn test_github_20262() {
 // Test that the server properly handles cancellation requests of read-then-write queries.
 // See database-issues#6134.
 #[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
 fn test_cancel_read_then_write() {
     let server = test_util::TestHarness::default()
         .unsafe_mode()

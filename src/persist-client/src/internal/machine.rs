@@ -2612,7 +2612,6 @@ pub mod tests {
     use crate::{Diagnostics, PersistClient, ShardId};
 
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn apply_unbatched_cmd_truncate(dyncfgs: ConfigUpdates) {
         mz_ore::test::init_logging();
 
@@ -2679,7 +2678,6 @@ pub mod tests {
     // state invariant being violated which resulted in gc being permanently
     // wedged for the shard.
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn regression_gc_skipped_req_and_interrupted(dyncfgs: ConfigUpdates) {
         let mut client = new_test_client(&dyncfgs).await;
         let intercept = InterceptHandle::default();
@@ -2729,7 +2727,6 @@ pub mod tests {
     // a write that could succeed if retried on the latest state would instead
     // return an UpperMismatch.
     #[mz_persist_proc::test(tokio::test(flavor = "multi_thread"))]
-    #[cfg_attr(miri, ignore)] // error: unsupported operation: integer-to-pointer casts and `ptr::from_exposed_addr` are not supported with `-Zmiri-strict-provenance`
     async fn regression_update_state_after_upper_mismatch(dyncfgs: ConfigUpdates) {
         let client = new_test_client(&dyncfgs).await;
         let mut client2 = client.clone();
