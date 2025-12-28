@@ -76,8 +76,7 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
-hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
@@ -89,7 +88,7 @@ log = { version = "0.4.29", default-features = false, features = ["std"] }
 lru = { version = "0.12.5" }
 memchr = { version = "2.7.6" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
-moka = { version = "0.12.11", features = ["future", "sync"] }
+moka = { version = "0.12.12", features = ["future", "sync"] }
 mysql_async = { version = "0.36.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }
@@ -191,7 +190,7 @@ bstr = { version = "1.12.1" }
 bytemuck = { version = "1.24.0", default-features = false, features = ["latest_stable_rust"] }
 bytes = { version = "1.10.1", features = ["serde"] }
 cast = { version = "0.3.0", default-features = false, features = ["std"] }
-cc = { version = "1.2.49", default-features = false, features = ["parallel"] }
+cc = { version = "1.2.50", default-features = false, features = ["parallel"] }
 chrono = { version = "0.4.41", features = ["serde"] }
 clang-sys = { version = "1.8.1", default-features = false, features = ["clang_11_0", "runtime"] }
 clap = { version = "4.5.23", features = ["derive", "env", "string", "wrap_help"] }
@@ -223,8 +222,7 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
-hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
@@ -236,7 +234,7 @@ log = { version = "0.4.29", default-features = false, features = ["std"] }
 lru = { version = "0.12.5" }
 memchr = { version = "2.7.6" }
 minimal-lexical = { version = "0.2.1", default-features = false, features = ["std"] }
-moka = { version = "0.12.11", features = ["future", "sync"] }
+moka = { version = "0.12.12", features = ["future", "sync"] }
 mysql_async = { version = "0.36.1", default-features = false, features = ["binlog", "minimal", "native-tls-tls", "tracing"] }
 mysql_common = { version = "0.35.5", default-features = false, features = ["binlog", "chrono"] }
 native-tls = { version = "0.2.14", default-features = false, features = ["alpn"] }

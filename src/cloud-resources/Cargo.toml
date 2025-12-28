@@ -18,7 +18,7 @@ anyhow = "1.0.100"
 chrono = { version = "0.4.39", default-features = false }
 futures = "0.3.31"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
-k8s-openapi = { version = "0.26.0", features = ["schemars", "v1_31"] }
+k8s-openapi = { version = "0.26.1", features = ["schemars", "v1_31"] }
 kube = { version = "2.0.1", default-features = false, features = ["client", "derive", "openssl-tls", "ws", "runtime"] }
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
 mz-server-core = { path = "../server-core", default-features = false }
