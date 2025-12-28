@@ -26,8 +26,9 @@ use mz_compute_client::controller::ComputeControllerTimestamp;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
-    ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ARRANGEMENT_EXERT_PROPORTIONALITY, CLUSTERD_MALLOC_CONF,
+    CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL, ENABLE_TIMELY_ZERO_COPY,
+    ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -664,6 +665,10 @@ where
             });
         }
 
+        let clusterd_malloc_conf = CLUSTERD_MALLOC_CONF.get(&self.dyncfg);
+        let clusterd_malloc_conf =
+            (!clusterd_malloc_conf.is_empty()).then_some(clusterd_malloc_conf);
+
         let service = self.orchestrator.ensure_service(
             &service_name,
             ServiceConfig {
@@ -828,6 +833,7 @@ where
                 }],
                 disk_limit,
                 node_selector: location.allocation.selectors,
+                clusterd_malloc_conf,
             },
         )?;
 
