@@ -76,8 +76,7 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
-hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
@@ -121,13 +120,13 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
-reqwest = { version = "0.12.26", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest = { version = "0.12.28", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 schemars = { version = "1.1.0", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
-serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
+serde_json = { version = "1.0.147", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 simd-adler32 = { version = "0.3.8", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
@@ -223,8 +222,7 @@ futures-util = { version = "0.3.31", features = ["channel", "io", "sink"] }
 getrandom-468e82937335b1c9 = { package = "getrandom", version = "0.3.3", default-features = false, features = ["std", "wasm_js"] }
 getrandom-6f8ce4dd05d13bba = { package = "getrandom", version = "0.2.16", default-features = false, features = ["std"] }
 half = { version = "2.6.0", features = ["num-traits"] }
-hashbrown-3575ec1268b04181 = { package = "hashbrown", version = "0.15.3" }
-hashbrown-582f2526e08bb6a0 = { package = "hashbrown", version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
+hashbrown = { version = "0.14.5", default-features = false, features = ["allocator-api2", "inline-more", "raw"] }
 hyper-582f2526e08bb6a0 = { package = "hyper", version = "0.14.27", features = ["client", "http1", "http2", "stream", "tcp"] }
 hyper-util = { version = "0.1.19", features = ["client-legacy", "server-auto", "service", "tracing"] }
 insta = { version = "1.44.3", features = ["json"] }
@@ -269,13 +267,13 @@ rdkafka-sys = { git = "https://github.com/MaterializeInc/rust-rdkafka.git", feat
 regex = { version = "1.12.2" }
 regex-automata = { version = "0.4.13", default-features = false, features = ["dfa", "hybrid", "meta", "nfa", "perf", "std", "unicode"] }
 regex-syntax = { version = "0.8.8" }
-reqwest = { version = "0.12.26", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
+reqwest = { version = "0.12.28", features = ["blocking", "cookies", "json", "native-tls-vendored", "stream"] }
 schemars = { version = "1.1.0", features = ["uuid1"] }
 scopeguard = { version = "1.2.0" }
 semver = { version = "1.0.27", features = ["serde"] }
 serde = { version = "1.0.228", features = ["alloc", "derive", "rc"] }
 serde_core = { version = "1.0.228", features = ["alloc", "rc"] }
-serde_json = { version = "1.0.145", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
+serde_json = { version = "1.0.147", features = ["alloc", "arbitrary_precision", "float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = { version = "0.10.9", features = ["asm", "oid"] }
 simd-adler32 = { version = "0.3.8", default-features = false, features = ["std"] }
 similar = { version = "2.7.0", features = ["inline", "unicode"] }
