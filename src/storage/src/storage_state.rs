@@ -111,7 +111,7 @@ use timely::progress::frontier::Antichain;
 use timely::worker::Worker as TimelyWorker;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::internal_control::{
@@ -737,7 +737,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
                 // management being a bit of a mess. we should clean this up and remove weird if
                 // statements like this.
                 if resume_uppers.values().all(|frontier| frontier.is_empty()) || as_of.is_empty() {
-                    tracing::info!(
+                    info!(
                         ?resume_uppers,
                         ?as_of,
                         "worker {}/{} skipping building ingestion dataflow \
@@ -985,7 +985,7 @@ impl<'w, A: Allocate> Worker<'w, A> {
         }
 
         for ingestion_id in to_remove {
-            tracing::info!(?ingestion_id, "removing oneshot ingestion");
+            info!(?ingestion_id, "removing oneshot ingestion");
             self.storage_state.oneshot_ingestions.remove(&ingestion_id);
         }
     }
@@ -1302,7 +1302,7 @@ impl StorageState {
             }
             StorageCommand::UpdateConfiguration(params) => {
                 // These can be done from all workers safely.
-                tracing::info!("Applying configuration update: {params:?}");
+                debug!("Applying configuration update: {params:?}");
 
                 // We serialize the dyncfg updates in StorageParameters, but configure
                 // persist separately.
@@ -1452,6 +1452,6 @@ impl StorageState {
     /// Drop the identified oneshot ingestion from the storage state.
     fn drop_oneshot_ingestion(&mut self, ingestion_id: uuid::Uuid) {
         let prev = self.oneshot_ingestions.remove(&ingestion_id);
-        tracing::info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
+        info!(%ingestion_id, existed = %prev.is_some(), "dropping oneshot ingestion");
     }
 }
