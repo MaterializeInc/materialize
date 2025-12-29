@@ -14,7 +14,7 @@ workspace = true
 humantime = "2.3.0"
 mz-ore = { path = "../ore", default-features = false, features = ["proptest", "test"] }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
-serde_json = "1.0.145"
+serde_json = "1.0.147"
 tracing = "0.1.44"
 workspace-hack = { version = "0.0.0", path = "../workspace-hack", optional = true }
 
