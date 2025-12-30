@@ -224,7 +224,7 @@ cleanup() {
     mzcompose down --volumes || true
   else
     # Ignore failures, we still want the rest of the cleanup
-    mzcompose down --timeout=0 --volumes || true
+    mzcompose down --timeout=5 --volumes || true
   fi
 
   echo "Finding core files"
