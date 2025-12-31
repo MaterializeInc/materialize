@@ -32,16 +32,45 @@ Output:
 <!-- EDIT: Added priority tiers. Without prioritization, an LLM or human
      might treat all steps equally when some deliver far more value.
      This enables incremental improvement rather than all-or-nothing. -->
+
+<!-- Based on AWS Prescriptive Guidance: Tables break left-to-right reading
+     flow that RAG chunking relies on. Step 4's table-to-list transformation
+     is critical for retrieval accuracy.
+     https://docs.aws.amazon.com/prescriptive-guidance/latest/writing-best-practices-rag/best-practices.html -->
+
 ## Priority Tiers
 
 Execute steps in priority order. If constrained, complete higher tiers first.
 
-| Tier | Steps | Rationale |
-|------|-------|-----------|
-| **P0 (Critical)** | 1, 2, 8 | Metadata and preambles enable routing; index files enable discovery |
-| **P1 (High)** | 3, 5, 10 | Structure and validation ensure consistency |
-| **P2 (Medium)** | 4, 6, 7 | Polish for edge cases |
-| **P3 (Optional)** | 9 | Manifest is useful but not required for basic functionality |
+- **P0 (Critical)**: Steps 0, 1, 2, 4 — Shortcode resolution enables all else; metadata and preambles enable routing; table-to-list transformation is highest RAG impact
+- **P1 (High)**: Steps 2b, 3, 4b, 10 — Section summaries, structure enforcement, document splitting, and validation ensure retrievability and consistency
+- **P2 (Medium)**: Steps 5, 6, 7, 8 — Code blocks, links, search hints, and routing artifacts (SKILL.md integration, vocabulary)
+- **P3 (Polish)**: Step 9 — Manifest is useful but not required for basic functionality
+
+---
+
+## Step 0: Resolve Hugo Shortcodes (PREREQUISITE)
+
+<!-- Based on analysis of materialize-docs: Hugo templates in the source docs
+     don't render in plain Markdown. These must be resolved before any other
+     processing can begin. -->
+
+### Action
+Before processing any documentation file, resolve all Hugo shortcodes to plain Markdown equivalents.
+
+### Resolution Rules
+
+- **`{{< include-md file="..." >}}`**: Inline the referenced file content directly
+- **`{{< diagram "..." >}}`**: Convert to `[See diagram: name]` with link to diagram file
+- **`{{< tabs >}}...{{< /tabs >}}`**: Flatten to sequential H4 sections (one per tab)
+- **`{{< warning >}}`**: Convert to `> **Warning:** ...`
+- **`{{< note >}}`**: Convert to `> **Note:** ...`
+- **`{{< tip >}}`**: Convert to `> **Tip:** ...`
+- **`{{< private-preview >}}`**: Convert to `> **Private Preview:** This feature is in private preview.`
+- **`{{< public-preview >}}`**: Convert to `> **Public Preview:** This feature is in public preview.`
+
+### Validation
+After resolution, grep for `{{<` and `{{%` patterns. No Hugo shortcodes should remain.
 
 ---
 
@@ -55,6 +84,10 @@ Prefer YAML front matter. If unavailable, insert a synthetic `Metadata` section 
 ### Required Fields
 Add or normalize the following fields:
 
+<!-- Based on Bluestream metadata strategy: Complexity levels help LLMs filter
+     by user expertise. Typed relationships explain WHY docs are related.
+     https://bluestream.com/blog/how-to-build-a-metadata-strategy-for-ai-ready-documentation/ -->
+
 ```yaml
 ---
 title: "<page title>"
@@ -63,15 +96,28 @@ doc_type: "<overview | concept | howto | reference | troubleshooting | tutorial>
 product_area: "<SQL | Sources | Sinks | Security | Deployment | Clusters | Indexes | Views | Connections | ...>"
 audience: "<developer | dba | operator | data-engineer>"
 status: "<stable | beta | deprecated | experimental>"
+complexity: "<beginner | intermediate | advanced>"
 keywords:
   - "<primary term>"
   - "<synonym>"
   - "<grep-friendly token>"
-see_also:
-  - "<relative path to related doc>"
+prerequisites:
+  - path: "<relative path>"
+    reason: "<why this must be read/done first>"
+related_concepts:
+  - path: "<relative path>"
+    relationship: "<explains-theory | provides-context | deep-dive>"
+alternatives:
+  - path: "<relative path>"
+    when: "<condition when alternative is preferred>"
 canonical_url: "<original docs.materialize.com URL>"
 ---
 ```
+
+### Complexity Guidelines
+- **beginner**: No prior Materialize knowledge required; basic SQL familiarity
+- **intermediate**: Assumes understanding of sources, views, and clusters
+- **advanced**: Requires knowledge of dataflows, arrangements, or operational concerns
 
 <!-- EDIT: Removed `repo_paths` field. Asking an LLM to "best-guess" code paths
      invites hallucination—the very problem we're trying to prevent. If code
@@ -90,21 +136,35 @@ canonical_url: "<original docs.materialize.com URL>"
 
 ## Step 2: Add a Progressive-Disclosure Preamble
 
-Immediately after the title, insert a short orienting section.
+<!-- Based on Nielsen Norman Group: >2 levels of progressive disclosure
+     negatively affects user experience. Limit preamble to 2 sections.
+     https://www.nngroup.com/articles/progressive-disclosure/ -->
 
-### Required Sections
-Add the following headings (even if brief):
+<!-- Based on AWS RAG research: Session starters (contextual transitions)
+     create high semantic matching for RAG retrieval.
+     https://docs.aws.amazon.com/prescriptive-guidance/latest/writing-best-practices-rag/best-practices.html -->
+
+Immediately after the title, insert a short orienting section with **exactly 2 sections** plus a session starter.
+
+### Required Sections (2 max)
 
 ```markdown
 ## Purpose
 <1–2 sentences describing what this page explains>
 
-## Use this when
-- <specific situation>
+<Session starter: A contextual sentence that helps users confirm they're in the right place>
+Example: "If you are looking to ingest data from Kafka, PostgreSQL, or webhooks, this command is your starting point."
 
-## Do not use this when
-- <common misapplication>
+## When to use
+- <specific situation where this applies>
+- <another situation>
+- **Not for**: <common misapplication — merged from "Do not use this when">
+```
 
+### Key Takeaways (Move to End)
+Move "Key takeaways" to the **end** of the document, after all technical content. This prevents front-loading cognitive load while preserving the summary for quick reference.
+
+```markdown
 ## Key takeaways
 - <invariant or rule>
 - <important semantic guarantee>
@@ -115,6 +175,32 @@ Add the following headings (even if brief):
      removing repo_paths: guessing code paths invites hallucination. If an
      agent needs to find related code, it should grep for SQL keywords or
      function names mentioned in the doc, not rely on pre-guessed paths. -->
+
+---
+
+## Step 2b: Add Section Summaries
+
+<!-- Based on AWS RAG research: Section summaries after headings significantly
+     improve semantic search matching and retrieval accuracy.
+     https://docs.aws.amazon.com/prescriptive-guidance/latest/writing-best-practices-rag/best-practices.html -->
+
+After every H2 heading, add a 1-2 sentence summary explaining what the section covers. This improves RAG chunking by ensuring each chunk has self-contained context.
+
+### Example
+
+```markdown
+## Syntax
+This section defines the SQL syntax for CREATE SOURCE, including all required and optional clauses.
+
+` ` `sql
+CREATE SOURCE name
+FROM KAFKA CONNECTION conn_name (TOPIC 'topic')
+...
+` ` `
+```
+
+### Validation
+Every H2 section should have descriptive text within the first 3 lines after the heading (before any code blocks, tables, or sub-headings).
 
 ---
 
@@ -148,10 +234,40 @@ Reorder or lightly refactor content so it follows a consistent structure.
 
 ---
 
-## Step 4: Normalize Admonitions and Tables
+## Step 4: Convert Tables to Bulleted Lists
+
+<!-- Based on AWS Prescriptive Guidance: Tables break RAG chunking because
+     rows get separated from headers during retrieval. Bulleted lists maintain
+     context within each item.
+     https://docs.aws.amazon.com/prescriptive-guidance/latest/writing-best-practices-rag/best-practices.html -->
+
+### Why This Matters
+Tables break left-to-right reading flow that RAG chunking relies on. When a table is chunked, rows often get separated from headers, making them incomprehensible.
+
+### Transformation Rules
+
+**Before (problematic):**
+```markdown
+| Field | Type | Description |
+|-------|------|-------------|
+| id | text | The unique identifier |
+| name | text | The display name |
+```
+
+**After (RAG-friendly):**
+```markdown
+### Fields
+- **`id`** (`text`): The unique identifier
+- **`name`** (`text`): The display name
+```
+
+### Exceptions
+Tables with ≤5 rows may be kept if they serve a clear comparative purpose (e.g., feature comparison matrix). In this case:
+- Add a 1-2 sentence explanation **before** the table
+- Ensure headers are descriptive
 
 ### Admonitions
-Convert all Hugo shortcodes or HTML admonitions into plain Markdown:
+Convert all Hugo shortcodes or HTML admonitions into plain Markdown blockquotes:
 
 ```markdown
 > **Warning:** ...
@@ -160,10 +276,31 @@ Convert all Hugo shortcodes or HTML admonitions into plain Markdown:
 > **Pitfall:** ...
 ```
 
-### Tables
-For every table:
-- Add a 1–2 sentence explanation **before** the table explaining what it is for.
-- Avoid tables without surrounding prose.
+---
+
+## Step 4b: Document Splitting by Size
+
+<!-- Based on LLM chunking research: Documents >10,000 tokens should be split
+     to avoid context dilution and improve retrieval precision. -->
+
+Large documents dilute retrieval precision. Use these guidelines:
+
+### Size Thresholds
+
+- **< 2,000 tokens**: Keep as single file (no action needed)
+- **2,000-5,000 tokens**: Add section anchors for deep linking
+- **5,000-10,000 tokens**: Consider splitting into logical sub-documents
+- **> 10,000 tokens**: **Must split** into multiple files
+
+### How to Split
+
+1. Identify natural boundaries (major H2 sections)
+2. Create a parent index file with links to sub-documents
+3. Each sub-document should be self-contained with its own metadata
+4. Update cross-references in related documents
+
+### Token Estimation
+Rough guide: ~4 characters per token in English technical text. A 10,000-token document is approximately 40,000 characters or ~250 lines of dense content.
 
 ---
 
@@ -195,24 +332,16 @@ When a page discusses overloaded or ambiguous terms, add:
 
 ## Step 8: Generate Routing Artifacts
 
-Create the following new files at the root of `materialize-docs`:
+Create the following files at the root of `materialize-docs`:
 
-### `_INDEX.md`
-A structured table of contents grouped by product_area and doc_type:
-```markdown
-# Materialize Documentation Index
+<!-- Note: SKILL.md already serves as the primary index/entry point.
+     Do NOT create _INDEX.md as it would duplicate SKILL.md functionality. -->
 
-## By Product Area
-### SQL
-- [CREATE SOURCE](sql/create-source.md) - reference
-- [SELECT](sql/select.md) - reference
-...
-
-## By Task
-### Getting Started
-- [Quickstart](getting-started/quickstart.md) - tutorial
-...
-```
+### Integrate with SKILL.md
+The existing `SKILL.md` file serves as the primary entry point and index. Ensure it:
+- Contains accurate links to all major documentation sections
+- Groups content by product_area and task type
+- Stays in sync with new/removed documents
 
 ### `_GLOSSARY.md`
 Definitions of Materialize-specific terms with links to detailed docs:
@@ -226,15 +355,53 @@ Definitions of Materialize-specific terms with links to detailed docs:
 **Materialized View**: A view whose results are persisted and incrementally updated. See [CREATE MATERIALIZED VIEW](sql/create-materialized-view.md).
 ```
 
+### `_VOCABULARY.yaml`
+
+<!-- Based on Bluestream research: Controlled vocabularies reduce ambiguity
+     and enable consistent term usage across documents.
+     https://bluestream.com/blog/how-to-build-a-metadata-strategy-for-ai-ready-documentation/ -->
+
+Machine-readable controlled vocabulary for Materialize-specific terms:
+```yaml
+# _VOCABULARY.yaml
+terms:
+  source:
+    canonical: "source"
+    aliases: ["data source", "ingestion source"]
+    definition: "Connection to external system streaming data into Materialize"
+    not_to_be_confused_with: ["table", "view"]
+
+  materialized_view:
+    canonical: "materialized view"
+    aliases: ["matview", "MV"]
+    definition: "A view whose results are persisted and incrementally updated"
+    not_to_be_confused_with: ["view", "index"]
+
+  cluster:
+    canonical: "cluster"
+    aliases: []
+    definition: "A pool of compute resources that runs dataflows"
+    not_to_be_confused_with: ["replica", "database cluster"]
+
+  arrangement:
+    canonical: "arrangement"
+    aliases: []
+    definition: "An indexed, incrementally maintained collection in memory"
+
+  dataflow:
+    canonical: "dataflow"
+    aliases: ["data flow"]
+    definition: "A computation graph that processes streaming data"
+```
+
 ### `_SQL_COMMANDS.md`
-Quick reference of all SQL commands with one-line descriptions:
+Quick reference of all SQL commands with one-line descriptions (use bulleted list format):
 ```markdown
 # SQL Command Reference
 
-| Command | Description | Link |
-|---------|-------------|------|
-| `CREATE SOURCE` | Define an external data source | [docs](sql/create-source.md) |
-| `CREATE MATERIALIZED VIEW` | Create an incrementally maintained view | [docs](sql/create-materialized-view.md) |
+- **`CREATE SOURCE`**: Define an external data source — [docs](sql/create-source.md)
+- **`CREATE MATERIALIZED VIEW`**: Create an incrementally maintained view — [docs](sql/create-materialized-view.md)
+- **`CREATE INDEX`**: Create an index on a view for faster queries — [docs](sql/create-index.md)
 ```
 
 <!-- EDIT: Removed _CODE_MAP.md. Mapping docs to code requires actually
@@ -272,12 +439,18 @@ Ensure:
      by inspection. -->
 
 ### Structural Requirements (Automated Checks)
-- [ ] Every `.md` file has YAML front matter with all required fields
+- [ ] No Hugo shortcodes remain (grep for `{{<` and `{{%` returns empty)
+- [ ] Every `.md` file has YAML front matter with all required fields including `complexity`
 - [ ] Every `.md` file has a `## Purpose` section within the first 20 lines
+- [ ] Every H2 section has summary text within 3 lines (before code/tables/sub-headings)
+- [ ] Every howto document has a session starter in the Purpose section
+- [ ] No files exceed 10,000 tokens (~40,000 characters)
+- [ ] No tables with > 5 rows (convert to bulleted lists)
 - [ ] Every code block specifies a language
-- [ ] `_INDEX.md`, `_GLOSSARY.md`, and `_SQL_COMMANDS.md` exist
+- [ ] `_GLOSSARY.md`, `_VOCABULARY.yaml`, and `_SQL_COMMANDS.md` exist
+- [ ] `_VOCABULARY.yaml` covers all terms defined in `_GLOSSARY.md`
+- [ ] SKILL.md is in sync with actual documentation structure
 - [ ] No broken internal links (relative paths resolve to existing files)
-- [ ] No Hugo shortcodes remain (e.g., `{{< ... >}}`)
 
 ### Semantic Requirements (Manual Spot-Check)
 An LLM agent reading a random doc should be able to:
@@ -361,6 +534,7 @@ doc_type: reference
 product_area: Sources
 audience: developer
 status: stable
+complexity: beginner
 keywords:
   - CREATE SOURCE
   - source
@@ -368,10 +542,15 @@ keywords:
   - Kafka
   - PostgreSQL
   - webhook
-see_also:
-  - sql/create-connection.md
-  - sql/create-materialized-view.md
-  - concepts/sources.md
+prerequisites:
+  - path: "sql/create-connection.md"
+    reason: "A CONNECTION must exist before creating a source"
+related_concepts:
+  - path: "concepts/sources.md"
+    relationship: "explains-theory"
+alternatives:
+  - path: "sql/create-source/webhook.md"
+    when: "For HTTP push-based ingestion instead of pull-based"
 canonical_url: "https://materialize.com/docs/sql/create-source/"
 ---
 
@@ -380,23 +559,18 @@ canonical_url: "https://materialize.com/docs/sql/create-source/"
 ## Purpose
 Defines an external data source that Materialize continuously ingests from. Sources are the primary way to get data into Materialize.
 
-## Use this when
+If you are looking to ingest data from Kafka, PostgreSQL, MySQL, or webhooks, this command is your starting point.
+
+## When to use
 - Ingesting streaming data from Kafka, Redpanda, or other message brokers
-- Replicating data from PostgreSQL via logical replication
+- Replicating data from PostgreSQL or MySQL via CDC
 - Receiving data via webhooks
-
-## Do not use this when
-- You want to query data without persisting it (use a direct SELECT instead, if supported)
-- You need to transform data before ingestion (create a source first, then a view)
-
-## Key takeaways
-- Sources are append-only by default; updates require upsert semantics
-- Each source requires a CONNECTION object to be created first
-- Sources consume cluster resources continuously, even when not queried
+- **Not for**: Querying data without persistence (use SELECT on existing objects) or transforming before ingestion (create source first, then a view)
 
 **Search terms:** CREATE SOURCE, source, ingestion, Kafka, PostgreSQL, webhook, mz_sources
 
 ## Syntax
+This section defines the SQL syntax for CREATE SOURCE, including connection and format options.
 
 ` ` `sql
 CREATE SOURCE name
@@ -405,23 +579,25 @@ FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn;
 ` ` `
 
 ## Parameters
+The following parameters configure the CREATE SOURCE command.
 
-The following table describes the parameters for CREATE SOURCE:
-
-| Parameter | Description |
-|-----------|-------------|
-| `name` | The name of the source to create |
-| `conn_name` | A Kafka connection created with CREATE CONNECTION |
+- **`name`** (identifier): The name of the source to create
+- **`conn_name`** (identifier): A Kafka connection created with CREATE CONNECTION
+- **`TOPIC`** (string): The Kafka topic to consume from
+- **`FORMAT`** (clause): Data format specification (AVRO, JSON, PROTOBUF, etc.)
 
 ## Examples
+Common patterns for creating sources from different external systems.
 
 ` ` `sql
+-- Basic Kafka source with JSON format
 CREATE SOURCE my_source
 FROM KAFKA CONNECTION kafka_conn (TOPIC 'events')
 FORMAT JSON;
 ` ` `
 
-## See also
-- [CREATE CONNECTION](create-connection.md)
-- [Sources concept guide](../concepts/sources.md)
+## Key takeaways
+- Sources are append-only by default; updates require upsert semantics
+- Each source requires a CONNECTION object to be created first
+- Sources consume cluster resources continuously, even when not queried
 ```
