@@ -45,7 +45,9 @@ pub static WELL_KNOWN_TYPES: &[(&str, &str)] = &[
 /// well-known types like `google/protobuf/timestamp.proto`.
 pub fn add_well_known_types(mut source_tree: Pin<&mut VirtualSourceTree>) {
     for (path, content) in WELL_KNOWN_TYPES {
-        source_tree.as_mut().add_file(Path::new(path), content.as_bytes().to_vec());
+        source_tree
+            .as_mut()
+            .add_file(Path::new(path), content.as_bytes().to_vec());
     }
 }
 
